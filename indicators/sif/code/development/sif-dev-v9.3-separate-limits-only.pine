@@ -1,0 +1,2161 @@
+//@version=6
+indicator('SIF Hunter° [Pro+] [v9.3-separate-limits-only]', overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENUMS & CONSTANTS - CLEAN STRUCTURE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Gap source constants
+GAP_TYPE_FVG = "fvg"
+GAP_TYPE_IMPLIED = "implied"
+GAP_TYPE_VOLUME = "volume"
+GAP_TYPE_TRUE = "true"
+
+// SIF Subtype Constants
+SUBTYPE_STANDARD = "standard"
+SUBTYPE_INCLUSION = "inclusion"
+SUBTYPE_REFLECTION = "reflection"
+SUBTYPE_IMPLIED = "implied"
+SUBTYPE_VOLUME = "volume"
+SUBTYPE_TRUE = "true"
+SUBTYPE_IMPLIED_INCLUSION = "implied_inclusion"
+SUBTYPE_IMPLIED_REFLECTION = "implied_reflection"
+SUBTYPE_VOLUME_INCLUSION = "volume_inclusion"
+SUBTYPE_VOLUME_REFLECTION = "volume_reflection"
+SUBTYPE_TRUE_INCLUSION = "true_inclusion"
+SUBTYPE_TRUE_REFLECTION = "true_reflection"
+
+// Display Mode Constants
+DISPLAY_ARROW_ONLY = "Arrow Only"
+DISPLAY_TEXT_ONLY = "Text Only"
+DISPLAY_ARROW_TEXT = "Arrow + Text"
+
+// Wick Tier Constants
+WICK_TIER_STANDARD = "standard"
+WICK_TIER_RELAXED = "relaxed"
+WICK_TIER_RISKY = "risky"
+WICK_TIER_NONE = "none"
+
+// SIF Strength Constants
+STRENGTH_NORMAL = "normal"
+STRENGTH_SUPER = "super"
+
+// Breach Confirmation Mode Constants
+CONFIRMATION_DISTANCE_ONLY = "Distance Only"
+CONFIRMATION_TIME_ONLY = "Time Only"
+CONFIRMATION_HYBRID_OR = "Hybrid (Distance OR Time)"
+CONFIRMATION_HYBRID_AND = "Hybrid (Distance AND Time)"
+
+// Invalidated SIF Display Constants
+INVALIDATED_DISPLAY_OFF = "Off"
+INVALIDATED_DISPLAY_LABELS = "Labels Only"
+INVALIDATED_DISPLAY_LABELS_ZONES = "Labels + Zones"
+
+// SIF Invalidation Mode Constants
+INVALIDATION_STRICT = "Strict (55%)"
+INVALIDATION_LENIENT = "Lenient (85%)"
+INVALIDATION_CUSTOM = "Custom"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PERFORMANCE & THRESHOLD CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Array Size Limits (Optimized through performance testing)
+MAX_ACTIVE_GAPS = 100           // Active gap tracking limit (performance optimized)
+MAX_SIF_RECORDS = 75            // SIF history limit (visual clarity + performance)
+MAX_BODY_HIGHLIGHTS = 100       // Body highlight boxes limit
+MAX_WICK_HIGHLIGHTS = 100       // Wick highlight boxes limit
+MAX_EXTENDED_BOXES = 100        // Extension boxes limit
+MAX_PROJECTION_LINES = 200      // Projection lines limit
+MAX_PROJECTION_LABELS = 200     // Projection labels limit
+
+// Default Optimal Values (Based on observed performance)
+DEFAULT_DISPLACEMENT_MULTIPLIER = 1.5    // Displacement detection threshold (testing optimized)
+DEFAULT_TRANSPARENCY = 80               // Default visual transparency level
+DEFAULT_CONFIRMATION_DISTANCE = 1.0    // Confirmation distance percentage
+DEFAULT_CONFIRMATION_TIME = 3          // Confirmation time in bars
+DEFAULT_CUSTOM_THRESHOLD = 50.0        // Default custom invalidation threshold
+
+// Separate Limits System Defaults (v9.3 Feature)
+DEFAULT_MAX_VALID_SIFS = 20     // Default maximum valid SIFs to display
+DEFAULT_MAX_INVALIDATED_SIFS = 5 // Default maximum invalidated SIFs to display
+MAX_VALID_SIFS_LIMIT = 100      // Maximum allowed valid SIF limit (UI constraint)
+MAX_INVALIDATED_SIFS_LIMIT = 50 // Maximum allowed invalidated SIF limit (UI constraint)
+
+// Invalidation Thresholds
+STRICT_INVALIDATION_PERCENT = 55.0      // Strict invalidation threshold
+LENIENT_INVALIDATION_PERCENT = 85.0     // Lenient invalidation threshold
+MIN_THRESHOLD_PERCENT = 1.0             // Minimum custom threshold percentage
+MAX_THRESHOLD_PERCENT = 99.0            // Maximum custom threshold percentage
+
+// Projection System Defaults
+DEFAULT_PROJECTION_BARS = 20            // Default number of projection bars
+DEFAULT_LINE_WIDTH = 1                  // Default projection line width
+MIN_PROJECTION_BARS = 5                 // Minimum projection bars
+MAX_PROJECTION_BARS = 100               // Maximum projection bars
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT SETTINGS - OPTIMIZED LAYOUT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === 🎯 DETECTION ===
+// SEPARATE LIMITS SYSTEM: Independent control over valid vs invalidated SIF display counts
+// This allows fine-tuned control over chart clutter while maintaining important breach information
+max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, 'Max Valid SIFs', minval=0, maxval=MAX_VALID_SIFS_LIMIT, group='🎯 Detection', inline='det1', tooltip='Maximum number of valid (non-breached) SIFs to display on chart\n\n• 0 = Show no valid SIFs\n• Higher values show more valid SIFs\n• Independent of invalidated SIF limit')
+max_invalidated_sifs = input.int(DEFAULT_MAX_INVALIDATED_SIFS, 'Max Invalidated SIFs', minval=0, maxval=MAX_INVALIDATED_SIFS_LIMIT, group='🎯 Detection', inline='det1', tooltip='Maximum number of invalidated (breached) SIFs to display when Invalidated Style is enabled\n\n• 0 = Show no invalidated SIFs\n• Only applies when Invalidated Style ≠ Off\n• Independent of valid SIF limit')
+invalidated_sif_display = input.string(INVALIDATED_DISPLAY_OFF, 'Show Invalidated SIFs', options=[INVALIDATED_DISPLAY_OFF, INVALIDATED_DISPLAY_LABELS, INVALIDATED_DISPLAY_LABELS_ZONES], group='🎯 Detection', inline='det1', tooltip='Off: hide invalidated SIFs\nLabels Only: show just labels with [X] marker\nLabels + Zones: show labels and zone extensions\n\nNote: [BREACH] appears in real-time when threshold exceeded, [X] appears after candle closes')
+sif_invalidation_mode = input.string(INVALIDATION_STRICT, 'Invalidation Threshold', options=[INVALIDATION_STRICT, INVALIDATION_LENIENT, INVALIDATION_CUSTOM], group='🎯 Detection', inline='det2', tooltip='Zone fill threshold for invalidation and breach detection\nStrict: 55% fill (more sensitive, faster invalidation and breach alerts)\nLenient: 85% fill (less sensitive, slower invalidation and breach alerts)\nCustom: set your own percentage (1-99%)\n\n[BREACH] shows immediately when threshold exceeded\n[X] shows after candle closes with confirmation')
+custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, 'Custom %', minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=1.0, group='🎯 Detection', inline='det2')
+
+// === 🎯 DIRECTIONAL FILTER ===
+show_bullish_sifs = input.bool(true, 'Show SIF+', group='🎯 Directional Filter', inline='dir1', tooltip='Display bullish (upward) SIF zones and labels')
+show_bearish_sifs = input.bool(true, 'Show SIF-', group='🎯 Directional Filter', inline='dir1', tooltip='Display bearish (downward) SIF zones and labels')
+
+// === 🚨 BREACH CONFIRMATION SYSTEM ===
+enable_breach_confirmation = input.bool(true, 'Enable Breach Confirmation System', group='🚨 Breach Confirmation System', inline='conf1', tooltip='Prevents false [BREACH] alerts on newly formed SIFs\nSIFs must be "confirmed" before breach detection becomes active\nEliminates immediate false positives from normal price consolidation around formation')
+confirmation_mode = input.string(CONFIRMATION_HYBRID_OR, 'Confirmation Method', options=[CONFIRMATION_DISTANCE_ONLY, CONFIRMATION_TIME_ONLY, CONFIRMATION_HYBRID_OR, CONFIRMATION_HYBRID_AND], group='🚨 Breach Confirmation System', inline='conf1', tooltip='How SIFs become confirmed:\nDistance Only: price must move away from zone\nTime Only: wait minimum bars after formation\nHybrid OR: confirmed when EITHER distance OR time met (recommended)\nHybrid AND: confirmed only when BOTH distance AND time met (strictest)')
+confirmation_distance_percent = input.float(1.0, 'Distance %', minval=0.1, maxval=10.0, step=0.1, group='🚨 Breach Confirmation System', inline='conf2', tooltip='Percentage of zone height that price must move away for distance confirmation\nBullish SIF: price must drop below zone bottom by this amount\nBearish SIF: price must rise above zone top by this amount')
+confirmation_time_bars = input.int(3, 'Time Bars', minval=1, maxval=10, group='🚨 Breach Confirmation System', inline='conf2', tooltip='Minimum bars that must pass after SIF formation for time confirmation\nRecommended: 2-3 bars for most timeframes')
+
+// === 🎨 SIF LABELLING (TYPE, SIZE & COLOR)===
+sif_symbol_type = input.string('Arrow + Text', 'Label Style', options=['Arrow Only', 'Text Only', 'Arrow + Text'], group='🎨 SIF Labelling (Type, Size & Color)', inline='sif2', tooltip='What to display on SIF candles')
+sif_label_size = input.string('Tiny', 'Valid SIF', options=['Tiny', 'Small', 'Normal', 'Large'], group='🎨 SIF Labelling (Type, Size & Color)', inline='sif1', tooltip='Size of valid SIF labels')
+sif_invalidated_size = input.string('Tiny', 'Invalidated SIF', options=['Tiny', 'Small', 'Normal', 'Large'], group='🎨 SIF Labelling (Type, Size & Color)', inline='sif1', tooltip='Size of invalidated SIF labels')
+sif_bullish_color = input.color(color.green, 'SIF+', group='🎨 SIF Labelling (Type, Size & Color)', inline='sif2', tooltip='Color for bullish SIF labels')
+sif_bearish_color = input.color(color.red, 'SIF-', group='🎨 SIF Labelling (Type, Size & Color)', inline='sif2', tooltip='Color for bearish SIF labels')
+sif_invalidated_color = input.color(color.gray, 'Invalidated', group='🎨 SIF Labelling (Type, Size & Color)', inline='sif2', tooltip='Color for invalidated SIF labels')
+show_sif_labels = input.bool(true, 'Enable Labels on SIF Candles', group='🎨 SIF Labelling (Type, Size & Color)', inline='sif3', tooltip='Show SIF arrow/text labels on candles\n\nNote: Arrow direction also points toward the source gap that created the SIF')
+
+// === ✨ SIF EXTENSION ===
+extended_box_bullish_color = input.color(color.new(color.green, 85), 'SIF+', group='✨ SIF Extension', inline='ext_colors', tooltip='Extension colors and enable/disable highlights and extensions\nSIF+: bullish zone color\nSIF-: bearish zone color\nEnable Extension: show highlights and extensions for valid SIFs')
+extended_box_bearish_color = input.color(color.new(color.red, 85), 'SIF-', group='✨ SIF Extension', inline='ext_colors')
+show_extended_boxes = input.bool(true, 'Enable Extension', group='✨ SIF Extension', inline='ext_colors')
+extended_box_text_size = input.string('Tiny', 'Label', options=['Tiny', 'Small', 'Normal', 'Large'], group='✨ SIF Extension', inline='ext_props', tooltip='Text size and color for extension box labels')
+extended_box_text_color = input.color(color.black, 'Label', group='✨ SIF Extension', inline='ext_props')
+extended_box_length = input.int(10, 'No. of Bars', minval=1, maxval=50, group='✨ SIF Extension', inline='ext_props', tooltip='Number of bars to extend SIF boxes')
+
+// === 🎯 GAP SOURCES ===
+enable_fair_value_gaps = input.bool(true, 'Fair Value Gaps', group='🎯 Gap Sources', inline='sources1')
+enable_implied = input.bool(true, 'Implied FVGs', group='🎯 Gap Sources', inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of SIF detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
+enable_volume_imbalance = input.bool(true, 'Volume Imbalances', group='🎯 Gap Sources', inline='sources2')
+enable_true_gaps = input.bool(true, 'True Gaps', group='🎯 Gap Sources', inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
+
+// === 🎭 SIF BEHAVIORS ===
+enable_inclusion = input.bool(true, 'Inclusion', group='🎭 SIF Behaviors', inline='behaviors')
+enable_reflection = input.bool(true, 'Reflection', group='🎭 SIF Behaviors', inline='behaviors', tooltip='SIF BEHAVIORS:\n• Inclusion: Wick toward body direction (bullish=lower wick, bearish=upper wick)\n• Reflection: Wick away from body direction (bullish=upper wick, bearish=lower wick)')
+
+// === 🔍 SIF ANALYSIS ===
+enable_nested_sifs = input.bool(true, 'Nested SIFs', group='🔍 SIF Analysis', inline='analysis', tooltip='Mark SIFs overlapping with same-direction SIFs using ✔️ checkmark')
+show_label_details = input.bool(true, 'Show Label Details', group='🔍 SIF Analysis', inline='analysis', tooltip='Display source types and behaviors in SIF labels\n\nOFF: Clean labels (SIF+, SIF-)\nON: Detailed labels (SIF+ (imp) ↓inc)')
+
+// === ⚙️ SOURCE SETTINGS ===
+displacement_multiplier = input.float(1.5, "Implied: Displacement", minval=1.0, maxval=5.0, step=0.1, group='⚙️ Source Settings', inline='implied', tooltip='C2 body size multiplier vs recent average for Implied FVG validation')
+lookback_candles = input.int(4, "Lookback", minval=3, maxval=5, group='⚙️ Source Settings', inline='implied', tooltip='Bars to average for displacement comparison')
+
+// === ⭐ WICK-TO-BODY RATIO ANALYSIS ===
+standard_star_color = input.color(color.blue, 'Standard', group='⭐ Wick-to-Body Ratio Analysis', inline='star1', tooltip='Standard ≥100% | Relaxed ≥85% | Risky ≥80%')
+relaxed_star_color = input.color(color.black, 'Relaxed', group='⭐ Wick-to-Body Ratio Analysis', inline='star1')
+risky_star_color = input.color(color.orange, 'Risky', group='⭐ Wick-to-Body Ratio Analysis', inline='star1')
+wick_star_size = input.string('Tiny', 'Star Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='⭐ Wick-to-Body Ratio Analysis', inline='star2', tooltip='Size of wick dominance stars')
+enable_wick_dominance_markers = input.bool(true, 'Enable Wick Dominance Markers', group='⭐ Wick-to-Body Ratio Analysis', inline='star2', tooltip='Show stars for SIFs with significant wick dominance')
+
+// === 📦 SOURCE GAP ===
+gap_color = input.color(color.new(color.blue, 85), 'Box', group='📦 Source Gap', inline='gap1', tooltip='Source gap settings\nBox: color for gap boxes\nMax Boxes: maximum boxes to keep visible\nEnable Gaps: show boxes for gaps (FVG/Implied/VI) that created each SIF')
+max_source_gap_boxes = input.int(10, 'Max Boxes', minval=1, maxval=50, group='📦 Source Gap', inline='gap1')
+show_source_gap = input.bool(false, 'Enable Gaps', group='📦 Source Gap', inline='gap1', tooltip='Show boxes for the gaps (FVG/Implied/VI) that created each SIF')
+label_size = input.string('Tiny', 'Label', options=['Tiny', 'Small', 'Normal', 'Large'], group='📦 Source Gap', inline='gap2', tooltip='Gap label text size and label text color')
+source_gap_text_color = input.color(color.black, 'Label', group='📦 Source Gap', inline='gap2')
+
+// === 📈 PROJECTIONS ===
+project_last_n_sifs = input.int(3, 'Project Last N', minval=1, maxval=20, group='📈 Projections', inline='proj1', tooltip='Projection settings\nProject Last N: number of recent valid SIFs to project\nEnable Projections: show projection lines from valid SIFs\nNo. of Bars: bars to extend projections')
+show_sif_projections = input.bool(false, 'Enable Projections', group='📈 Projections', inline='proj1')
+projection_extend_bars = input.int(DEFAULT_PROJECTION_BARS, 'No. of Bars', minval=MIN_PROJECTION_BARS, maxval=MAX_PROJECTION_BARS, group='📈 Projections', inline='proj1')
+projection_line_width = input.int(DEFAULT_LINE_WIDTH, 'Line Width', minval=1, maxval=3, group='📈 Projections', inline='proj2', tooltip='Projection line settings\nLine Width: thickness of projection lines\nLine Style: visual style of lines\nLabel Side: where to place level labels')
+projection_line_style = input.string('Dotted', 'Line Style', options=['Solid', 'Dashed', 'Dotted'], group='📈 Projections', inline='proj2')
+projection_label_side = input.string('Right', 'Label Side', options=['Left', 'Right'], group='📈 Projections', inline='proj2')
+projection_label_gap = input.int(1, 'Label Gap (bars)', minval=0, maxval=5, group='📈 Projections', inline='proj3', tooltip='Gap from projection line to label in bars')
+
+// Level Controls
+show_boundaries = input.bool(true, 'Boundaries (0, 1)', group='📈 Projections', inline='levels1', tooltip='Show zone boundaries\nBoundaries: levels 0 (close) and 1 (open)\nLabel: color and text size for boundary labels')
+boundary_color = input.color(color.black, 'Label', group='📈 Projections', inline='levels1')
+boundary_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels1')
+
+show_ce = input.bool(false, 'CE (0.5)', group='📈 Projections', inline='levels1_5', tooltip='Show 50% center level\nCE: equilibrium level at 50%\nLabel: color and text size for center level')
+ce_color = input.color(color.gray, 'Label', group='📈 Projections', inline='levels1_5')
+ce_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels1_5')
+
+show_quadrants = input.bool(false, 'Quadrants (0.25, 0.75)', group='📈 Projections', inline='levels2', tooltip='Show quarter levels between boundaries\nQuadrants: 25% and 75% levels\nLabel: color and text size for quadrant levels')
+quadrant_color = input.color(color.yellow, 'Label', group='📈 Projections', inline='levels2')
+quadrant_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels2')
+
+show_stops = input.bool(true, 'Stops (1.25, 1.5, 2.0)', group='📈 Projections', inline='levels3', tooltip='Show stop levels beyond open\nStops: potential stop loss levels\nLabel: color and text size for stop levels')
+stop_color = input.color(color.red, 'Label', group='📈 Projections', inline='levels3')
+stop_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels3')
+
+show_targets = input.bool(true, 'Targets (-2.33, -2.5, -4, -4.5)', group='📈 Projections', inline='levels4', tooltip='Show target levels beyond close\nTargets: potential profit target levels\nLabel: color and text size for target levels')
+target_color = input.color(color.green, 'Label', group='📈 Projections', inline='levels4')
+target_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels4')
+
+show_custom = input.bool(false, 'Custom Levels', group='📈 Projections', inline='levels5', tooltip='Use custom level list\nCustom Levels: enable custom projection levels\nCustom List: comma-separated values (e.g., 0, 1, 1.5, -2.33, -4)\nSize: text size for custom level labels')
+custom_levels_input = input.string('0, 1, 1.5, -2.33, -4', 'Custom List', group='📈 Projections', inline='levels5')
+custom_text_size = input.string('Tiny', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='📈 Projections', inline='levels5')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATA STRUCTURES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type SIFCandidate
+    int bar_index
+    float body_top
+    float body_bottom
+    bool is_bullish
+
+type GapData
+    int bar_index
+    float top
+    float bottom
+    bool is_bullish
+    bool is_inverted
+    int creation_bar
+    SIFCandidate first_tapper
+    int gap_id
+    string gap_type
+
+// Simplified SIFRecord with SUPER SIF detection
+type SIFRecord
+    int bar_index
+    float sif_open
+    float sif_close
+    float sif_high
+    float sif_low
+    bool is_bullish
+    bool is_invalidated
+    float max_fill_percentage
+    bool has_dominant_wick
+    string sif_subtype
+    string cached_label_text
+    string cached_tooltip
+    float cached_zone_top
+    float cached_zone_bottom
+    bool cached_data_valid
+    label sif_label
+    int source_gap_id
+    // Just SUPER or NORMAL
+    bool is_super_sif              // true if overlapping with any same-direction SIF
+    float overlap_percentage       // 0.0 to 100.0
+    int overlapping_sif_bar_index  // Which SIF we overlapped with
+    // BREACH CONFIRMATION SYSTEM
+    bool is_confirmed              // Whether zone is confirmed for breach detection
+    int confirmation_bar           // Bar where confirmation occurred (na if not confirmed)
+    bool distance_confirmed        // Whether distance confirmation was achieved
+    bool time_confirmed            // Whether time confirmation was achieved
+
+// Consolidated SIF group type
+type ConsolidatedSIF
+    array<SIFRecord> sif_group
+    int bar_index
+    bool is_bullish
+    float consolidated_zone_top
+    float consolidated_zone_bottom
+    bool is_consolidated_breached
+    bool is_consolidated_invalidated
+    string consolidated_candle_label
+    string consolidated_extension_label
+
+// Global State
+var array<GapData> active_gaps = array.new<GapData>()
+var array<SIFRecord> all_sif_records = array.new<SIFRecord>()
+var int next_gap_id = 1
+
+// Visual Elements
+var array<box> source_gap_boxes = array.new_box()
+var array<label> sif_labels = array.new<label>()
+var array<label> star_labels = array.new<label>()
+var array<box> sif_body_highlights = array.new_box()
+var array<box> sif_wick_highlights = array.new_box()
+var array<box> sif_extended_boxes = array.new_box()
+var array<line> sif_projection_lines = array.new_line()
+var array<label> sif_projection_labels = array.new<label>()
+var array<int> displayed_sif_indices = array.new<int>()
+
+var bool needs_visual_update = true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS - DEFINED EARLY FOR DEPENDENCIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Gap Detection Functions with Coordinate Validation
+// CRITICAL: These functions detect gaps but coordinates must be assigned carefully in gap creation
+
+// @function is_bullish_fvg
+// @description Detects bullish Fair Value Gap pattern (3-candle upward gap)
+// @returns bool True if C0.low > C2.high (upward gap exists)
+// COORDINATE WARNING: When creating GapData, ensure TOP > BOTTOM (gap_top=C0.low, gap_bottom=C2.high)
+is_bullish_fvg() => low > high[2]
+
+// @function is_bearish_fvg  
+// @description Detects bearish Fair Value Gap pattern (3-candle downward gap)
+// @returns bool True if C0.high < C2.low (downward gap exists)
+// COORDINATE WARNING: When creating GapData, ensure TOP > BOTTOM (gap_top=C2.low, gap_bottom=C0.high)
+is_bearish_fvg() => high < low[2]
+
+// Volume Imbalance Detection (2-candle body gap with wick connection)
+is_bullish_vi() =>
+    bodies_separated = math.min(open, close) > math.max(open[1], close[1])
+    wicks_still_connect = low <= high[1]  // Current low reaches previous high
+    bodies_separated and wicks_still_connect
+
+is_bearish_vi() =>
+    bodies_separated = math.max(open, close) < math.min(open[1], close[1])
+    wicks_still_connect = high >= low[1]  // Current high reaches previous low
+    bodies_separated and wicks_still_connect
+
+// True Gap Detection (2-candle structure) with Coordinate Validation
+// @function is_bullish_true_gap
+// @description Detects bullish True Gap (2-candle upward price gap)
+// @returns bool True if C1.high < C0.low (classic upward gap)
+// COORDINATE WARNING: gap_top=C0.low, gap_bottom=C1.high (ensure TOP > BOTTOM)
+is_bullish_true_gap() => high[1] < low
+
+// @function is_bearish_true_gap
+// @description Detects bearish True Gap (2-candle downward price gap)  
+// @returns bool True if C1.low > C0.high (classic downward gap)
+// COORDINATE WARNING: gap_top=C1.low, gap_bottom=C0.high (ensure TOP > BOTTOM)
+is_bearish_true_gap() => low[1] > high
+
+// True Gap coordinates
+get_true_gap_coordinates(is_bullish_gap) =>
+    if is_bullish_gap
+        // Bullish gap: between previous high and current low
+        [low, high[1]]
+    else
+        // Bearish gap: between previous low and current high
+        [low[1], high]
+
+// Gap priority hierarchy (lower number = higher priority) - MUST BE DEFINED FIRST
+get_gap_priority(gap_type) =>
+    switch gap_type
+        GAP_TYPE_FVG => 1        // Highest priority
+        GAP_TYPE_IMPLIED => 2
+        GAP_TYPE_TRUE => 3
+        GAP_TYPE_VOLUME => 4     // Lowest priority
+        => 5
+
+// @function is_gap_overlapping
+// @description Determines if a new gap should be suppressed by existing gaps using MBZ-style hierarchy enforcement (FVG > Implied > True > VI). Replaces dangerous 80% overlap threshold with targeted institutional priority system.
+// @param new_top Upper boundary of new gap
+// @param new_bottom Lower boundary of new gap
+// @param new_is_bullish Direction of new gap (true = bullish, false = bearish)
+// @param new_gap_type Gap classification (GAP_TYPE_FVG, GAP_TYPE_IMPLIED, GAP_TYPE_TRUE, GAP_TYPE_VOLUME)
+// @param existing_gaps Array of existing GapData objects to check against
+// @returns bool True if new gap should be suppressed, false if should be added
+is_gap_overlapping(new_top, new_bottom, new_is_bullish, new_gap_type, existing_gaps) =>
+    if array.size(existing_gaps) == 0
+        false
+    else
+        should_suppress = false
+
+        for i = 0 to array.size(existing_gaps) - 1
+            existing_gap = array.get(existing_gaps, i)
+
+            // MBZ-style targeted suppression - only same direction gaps with hierarchy enforcement
+            if existing_gap.is_bullish == new_is_bullish and not existing_gap.is_inverted
+                // Spatial overlap check: new_bottom < existing_top AND new_top >= existing_bottom
+                if new_bottom < existing_gap.top and new_top >= existing_gap.bottom
+                    // Apply hierarchy rules instead of percentage thresholds
+                    can_suppress = false
+
+                    if new_gap_type == GAP_TYPE_VOLUME  // VI can be suppressed by FVG, Implied, True
+                        can_suppress := (existing_gap.gap_type == GAP_TYPE_FVG or existing_gap.gap_type == GAP_TYPE_IMPLIED or existing_gap.gap_type == GAP_TYPE_TRUE)
+                    else if new_gap_type == GAP_TYPE_TRUE  // True Gap can be suppressed by FVG, Implied
+                        can_suppress := (existing_gap.gap_type == GAP_TYPE_FVG or existing_gap.gap_type == GAP_TYPE_IMPLIED)
+                    // FVG and Implied are never suppressed (institutional priority)
+
+                    if can_suppress
+                        should_suppress := true
+                        break
+
+        should_suppress
+
+// Body helpers
+bodyTop(o, c) => math.max(o, c)
+bodyBot(o, c) => math.min(o, c)
+
+// Text size conversion
+get_text_size(size_string) =>
+    switch size_string
+        'Tiny' => size.tiny
+        'Small' => size.small
+        'Normal' => size.normal
+        'Large' => size.large
+        => size.small
+
+// Size helpers
+get_sif_label_size() => get_text_size(sif_label_size)
+get_invalidated_sif_size() => get_text_size(sif_invalidated_size)
+get_label_size() => get_text_size(label_size)
+get_extended_box_text_size() => get_text_size(extended_box_text_size)
+get_wick_star_size() => get_text_size(wick_star_size)
+
+// Get invalidation threshold percentage
+get_sif_invalidation_threshold() =>
+    switch sif_invalidation_mode
+        INVALIDATION_STRICT => 55.0
+        INVALIDATION_LENIENT => 85.0
+        INVALIDATION_CUSTOM => custom_threshold_percent
+        => 55.0
+
+
+// Zone calculation based on subtype - MOVED UP for nested SIF detection
+get_subtype_zone(sif_record) =>
+    sif_subtype_contains_inclusion = str.contains(sif_record.sif_subtype, "inclusion")
+    sif_subtype_contains_reflection = str.contains(sif_record.sif_subtype, "reflection")
+
+    if sif_subtype_contains_inclusion
+        if sif_record.is_bullish
+            [sif_record.sif_close, sif_record.sif_low]
+        else
+            [sif_record.sif_high, sif_record.sif_close]
+    else if sif_subtype_contains_reflection
+        if sif_record.is_bullish
+            wick_range = math.abs(sif_record.sif_high - sif_record.sif_open)
+            [sif_record.sif_close, sif_record.sif_close - wick_range]
+        else
+            wick_range = math.abs(sif_record.sif_low - sif_record.sif_open)
+            [sif_record.sif_close + wick_range, sif_record.sif_close]
+    else
+        body_top = math.max(sif_record.sif_open, sif_record.sif_close)
+        body_bottom = math.min(sif_record.sif_open, sif_record.sif_close)
+        [body_top, body_bottom]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BREACH CONFIRMATION SYSTEM FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Check if SIF meets confirmation criteria and update confirmation status
+check_sif_confirmation(sif_record) =>
+    // Skip if already confirmed or confirmation is disabled
+    if sif_record.is_confirmed or not enable_breach_confirmation
+        sif_record
+    else
+        // Time confirmation check
+        time_confirmed = (bar_index - sif_record.bar_index) >= confirmation_time_bars
+
+        // Distance confirmation check
+        distance_confirmed = sif_record.distance_confirmed  // Preserve existing value
+        if not distance_confirmed
+            [zone_top, zone_bottom] = get_subtype_zone(sif_record)
+            zone_height = zone_top - zone_bottom
+            distance_threshold = zone_height * (confirmation_distance_percent / 100.0)
+
+            if sif_record.is_bullish
+                // For bullish SIF: check if price went below zone bottom
+                if low <= (zone_bottom - distance_threshold)
+                    distance_confirmed := true
+            else
+                // For bearish SIF: check if price went above zone top
+                if high >= (zone_top + distance_threshold)
+                    distance_confirmed := true
+
+        // Update confirmation status based on mode
+        is_now_confirmed = false
+        confirmation_bar_value = sif_record.confirmation_bar
+
+        switch confirmation_mode
+            CONFIRMATION_DISTANCE_ONLY =>
+                is_now_confirmed := distance_confirmed
+            CONFIRMATION_TIME_ONLY =>
+                is_now_confirmed := time_confirmed
+            CONFIRMATION_HYBRID_OR =>
+                is_now_confirmed := distance_confirmed or time_confirmed
+            CONFIRMATION_HYBRID_AND =>
+                is_now_confirmed := distance_confirmed and time_confirmed
+
+        // Set confirmation bar if newly confirmed
+        if is_now_confirmed and not sif_record.is_confirmed
+            confirmation_bar_value := bar_index
+
+        // Return updated record with new confirmation status
+        updated_record = SIFRecord.new(sif_record.bar_index, sif_record.sif_open, sif_record.sif_close, sif_record.sif_high, sif_record.sif_low, sif_record.is_bullish, sif_record.is_invalidated, sif_record.max_fill_percentage, sif_record.has_dominant_wick, sif_record.sif_subtype, sif_record.cached_label_text, sif_record.cached_tooltip, sif_record.cached_zone_top, sif_record.cached_zone_bottom, sif_record.cached_data_valid, sif_record.sif_label, sif_record.source_gap_id, sif_record.is_super_sif, sif_record.overlap_percentage, sif_record.overlapping_sif_bar_index, is_now_confirmed, confirmation_bar_value, distance_confirmed, time_confirmed)
+        updated_record
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIMPLIFIED SUPER SIF DETECTION SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Detect if new SIF overlaps with any existing same-direction SIF
+detect_sif_strength(new_sif_record) =>
+    if not enable_nested_sifs or array.size(all_sif_records) == 0
+        [false, 0.0, int(na)]
+    else
+        is_super = false
+        stored_percentage = 0.0
+        overlapped_bar = int(na)
+
+        // OPTIMIZED: Limit scanning to recent records only (massive performance gain)
+        if array.size(all_sif_records) > 0
+            scan_limit = math.min(50, array.size(all_sif_records))
+            start_index = math.max(0, array.size(all_sif_records) - scan_limit)
+
+            for record_index = start_index to array.size(all_sif_records) - 1
+                existing_sif = array.get(all_sif_records, record_index)
+                if not existing_sif.is_invalidated and
+                   existing_sif.bar_index < new_sif_record.bar_index and
+                   existing_sif.is_bullish == new_sif_record.is_bullish  // SAME DIRECTION ONLY
+
+                    // Quick range check before expensive zone calculation
+                    if new_sif_record.sif_low < existing_sif.sif_high and
+                       new_sif_record.sif_high > existing_sif.sif_low
+
+                        // Use SAME zone logic as breach detection
+                        [zone_top, zone_bottom] = get_subtype_zone(existing_sif)
+
+                        // Check for actual overlap with zone
+                        if new_sif_record.sif_low < zone_top and new_sif_record.sif_high > zone_bottom
+                            // Calculate exact overlap percentage
+                            overlap_top = math.min(new_sif_record.sif_high, zone_top)
+                            overlap_bottom = math.max(new_sif_record.sif_low, zone_bottom)
+                            overlap_range = overlap_top - overlap_bottom
+                            new_sif_range = new_sif_record.sif_high - new_sif_record.sif_low
+
+                            if new_sif_range > 0
+                                overlap_pct = (overlap_range / new_sif_range) * 100
+
+                                // Store the data - ANY overlap makes it SUPER
+                                stored_percentage := overlap_pct
+                                overlapped_bar := existing_sif.bar_index
+                                is_super := true
+                                break  // Take first overlap found
+
+        [is_super, stored_percentage, overlapped_bar]
+
+// Volume Imbalance gap coordinates for 2-candle structure
+get_vi_coordinates(is_bullish_gap) =>
+    if is_bullish_gap
+        // Bullish VI: gap between C1 body top and C2 body bottom
+        gap_bottom = math.max(open[1], close[1])  // C1 body top
+        gap_top = math.min(open, close)           // C2 body bottom
+        [gap_top, gap_bottom]
+    else
+        // Bearish VI: gap between C1 body bottom and C2 body top
+        gap_top = math.min(open[1], close[1])     // C1 body bottom
+        gap_bottom = math.max(open, close)        // C2 body top
+        [gap_top, gap_bottom]
+
+// FIXED: Volume Imbalance Edge Case - Change > to >= for boundary overlap
+is_vi_suppressed_by_gaps(vi_top, vi_bottom, is_vi_bullish) =>
+    if array.size(active_gaps) == 0
+        false
+    else
+        has_overlap = false
+        for i = 0 to array.size(active_gaps) - 1
+            gap = array.get(active_gaps, i)
+
+            // Check for both regular FVGs AND implied FVGs (not volume) - institutional gap hierarchy
+            if (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED) and gap.is_bullish == is_vi_bullish and not gap.is_inverted
+                // FIXED: Use >= for edge case where VI exactly touches gap boundary
+                if vi_bottom < gap.top and vi_top >= gap.bottom
+                    has_overlap := true
+                    break  // Found overlap, VI will be suppressed
+        has_overlap
+
+// Check if True Gap overlaps with existing VI gaps (prevent double detection)
+is_true_gap_suppressed_by_vi_gaps(tg_top, tg_bottom, is_tg_bullish) =>
+    if array.size(active_gaps) == 0
+        false
+    else
+        has_overlap = false
+        for i = 0 to array.size(active_gaps) - 1
+            gap = array.get(active_gaps, i)
+
+            // Check for VI gaps with same direction (prevent double detection)
+            if gap.gap_type == GAP_TYPE_VOLUME and gap.is_bullish == is_tg_bullish
+                if tg_bottom >= gap.bottom and tg_top <= gap.top
+                    has_overlap := true
+                    break  // Found overlap, True Gap will be suppressed
+        has_overlap
+
+// Displacement validation
+is_displacement_candle() =>
+    c2_body_size = math.abs(close[1] - open[1])
+    total_body_size = 0.0
+    for i = 2 to (1 + lookback_candles)
+        total_body_size += math.abs(close[i] - open[i])
+    average_body_size = total_body_size / lookback_candles
+
+    if average_body_size > 0
+        c2_body_size >= (displacement_multiplier * average_body_size)
+    else
+        false
+
+// Implied FVG Detection
+detect_implied_fvg() =>
+    has_bull_fvg = is_bullish_fvg()
+    has_bear_fvg = is_bearish_fvg()
+
+    if not is_displacement_candle()
+        [false, float(na), float(na), bool(na)]
+    else
+        result_found = false
+        result_bottom = float(na)
+        result_top = float(na)
+        result_bullish = bool(na)
+
+        // Bullish IFVG Detection
+        if not has_bull_fvg and not result_found
+            c1_top = bodyTop(open[2], close[2])
+            c3_bot = bodyBot(open, close)
+            bull_wicks_present = (high[2] > c1_top) and (c3_bot > low)
+
+            if bull_wicks_present
+                overlap_lo = math.max(c1_top, low)
+                overlap_hi = math.min(high[2], c3_bot)
+                has_bull_overlap = overlap_hi > overlap_lo
+
+                if has_bull_overlap and c1_top < c3_bot
+                    result_found := true
+                    result_bottom := c1_top
+                    result_top := c3_bot
+                    result_bullish := true
+
+        // Bearish IFVG Detection
+        if not has_bear_fvg and not result_found
+            c1_bot = bodyBot(open[2], close[2])
+            c3_top = bodyTop(open, close)
+            bear_wicks_present = (c1_bot > low[2]) and (high > c3_top)
+
+            if bear_wicks_present
+                overlap_lo = math.max(low[2], c3_top)
+                overlap_hi = math.min(c1_bot, high)
+                has_bear_overlap = overlap_hi > overlap_lo
+
+                if has_bear_overlap and c3_top < c1_bot
+                    result_found := true
+                    result_bottom := c3_top
+                    result_top := c1_bot
+                    result_bullish := false
+
+        [result_found, result_bottom, result_top, result_bullish]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GAP SOURCE AND SUBTYPE DISPLAY MAPPING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Get display name for gap source (lowercase for labels)
+get_gap_source_display(gap_type) =>
+    switch gap_type
+        GAP_TYPE_FVG => ""         // Blank for standard FVG
+        GAP_TYPE_IMPLIED => "imp"
+        GAP_TYPE_VOLUME => "vol"
+        GAP_TYPE_TRUE => "gap"
+        => ""
+
+// Get display name for subtype with arrows (lowercase for labels)
+get_subtype_display(sif_subtype, is_bullish) =>
+    if str.contains(sif_subtype, SUBTYPE_INCLUSION)
+        if is_bullish
+            "↓inc"  // Bullish inclusion = lower wick dominant (toward body)
+        else
+            "↑inc"  // Bearish inclusion = upper wick dominant (toward body)
+    else if str.contains(sif_subtype, SUBTYPE_REFLECTION)
+        if is_bullish
+            "↑ref"  // Bullish reflection = upper wick dominant (away from body)
+        else
+            "↓ref"  // Bearish reflection = lower wick dominant (away from body)
+    else
+        ""  // No suffix for standard
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADVANCED SIF ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Wick dominance classification - determines SIF quality based on wick-to-body ratios
+classify_wick_dominance(body_size, upper_wick, lower_wick) =>
+    if body_size <= 0
+        [WICK_TIER_NONE, false]
+    else
+        upper_ratio = upper_wick / body_size
+        lower_ratio = lower_wick / body_size
+        max_ratio = math.max(upper_ratio, lower_ratio)
+
+        if max_ratio >= 1.0
+            [WICK_TIER_STANDARD, true]
+        else if max_ratio >= 0.85
+            [WICK_TIER_RELAXED, true]
+        else if max_ratio >= 0.80
+            [WICK_TIER_RISKY, true]
+        else
+            [WICK_TIER_NONE, false]
+
+// ENHANCED: Advanced SIF subtype detection with Volume Imbalance support
+detect_sif_subtype(sif_open, sif_close, sif_high, sif_low, source_gap_type) =>
+    body_top = math.max(sif_open, sif_close)
+    body_bottom = math.min(sif_open, sif_close)
+    body_size = body_top - body_bottom
+    upper_wick = sif_high - body_top
+    lower_wick = body_bottom - sif_low
+    is_candle_bullish = sif_close > sif_open
+
+    // Determine base classification from source type
+    base_classification = SUBTYPE_STANDARD
+    if source_gap_type == GAP_TYPE_IMPLIED and enable_implied
+        base_classification := SUBTYPE_IMPLIED
+    else if source_gap_type == GAP_TYPE_VOLUME and enable_volume_imbalance
+        base_classification := SUBTYPE_VOLUME
+    else if source_gap_type == GAP_TYPE_TRUE and enable_true_gaps
+        base_classification := SUBTYPE_TRUE
+
+    // Check wick dominance
+    [wick_tier, has_dominant] = classify_wick_dominance(body_size, upper_wick, lower_wick)
+
+    if not has_dominant
+        [base_classification, false]
+    else
+        upper_is_dominant = upper_wick > lower_wick
+
+        // Handle ties
+        both_wicks_significant = (upper_wick / body_size >= 0.80) and (lower_wick / body_size >= 0.80)
+        is_tie = false
+
+        if both_wicks_significant and upper_wick > 0 and lower_wick > 0
+            larger_wick = math.max(upper_wick, lower_wick)
+            smaller_wick = math.min(upper_wick, lower_wick)
+            ratio = smaller_wick / larger_wick
+            is_tie := ratio >= 0.8
+
+        if is_tie
+            [base_classification, false]
+        else
+            // Determine wick pattern
+            wick_pattern = ""
+            pattern_enabled = false
+
+            if is_candle_bullish
+                if upper_is_dominant and enable_reflection
+                    wick_pattern := SUBTYPE_REFLECTION
+                    pattern_enabled := true
+                else if not upper_is_dominant and enable_inclusion
+                    wick_pattern := SUBTYPE_INCLUSION
+                    pattern_enabled := true
+            else
+                if upper_is_dominant and enable_inclusion
+                    wick_pattern := SUBTYPE_INCLUSION
+                    pattern_enabled := true
+                else if not upper_is_dominant and enable_reflection
+                    wick_pattern := SUBTYPE_REFLECTION
+                    pattern_enabled := true
+
+            // Combine base classification with wick pattern
+            if pattern_enabled
+                final_subtype = ""
+                if base_classification == SUBTYPE_IMPLIED
+                    final_subtype := SUBTYPE_IMPLIED + "_" + wick_pattern
+                else if base_classification == SUBTYPE_VOLUME
+                    final_subtype := SUBTYPE_VOLUME + "_" + wick_pattern
+                else if base_classification == SUBTYPE_TRUE
+                    final_subtype := SUBTYPE_TRUE + "_" + wick_pattern
+                else
+                    final_subtype := wick_pattern
+                [final_subtype, true]
+            else
+                [base_classification, false]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ZONE CALCULATION FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Calculate zone penetration percentage using extreme prices (low/high)
+calculate_zone_penetration_from_extreme(test_price, zone_top, zone_bottom, is_bullish_zone) =>
+    zone_range = zone_top - zone_bottom
+    if zone_range <= 0
+        0.0
+    else
+        if is_bullish_zone
+            // Bullish SIF: penetration comes from above downward → use low
+            if test_price >= zone_top
+                0.0  // No penetration
+            else if test_price <= zone_bottom
+                100.0  // Full penetration
+            else
+                penetration_distance = zone_top - test_price
+                (penetration_distance / zone_range) * 100.0
+        else
+            // Bearish SIF: penetration comes from below upward → use high
+            if test_price <= zone_bottom
+                0.0  // No penetration
+            else if test_price >= zone_top
+                100.0  // Full penetration
+            else
+                penetration_distance = test_price - zone_bottom
+                (penetration_distance / zone_range) * 100.0
+
+// Calculate zone penetration percentage using close price (for invalidation)
+calculate_zone_penetration_from_close(close_price, zone_top, zone_bottom, is_bullish_zone) =>
+    zone_range = zone_top - zone_bottom
+    if zone_range <= 0
+        0.0
+    else
+        if is_bullish_zone
+            // Bullish zone: penetration is from top downward
+            if close_price >= zone_top
+                0.0  // No penetration
+            else if close_price <= zone_bottom
+                100.0  // Full penetration
+            else
+                penetration_distance = zone_top - close_price
+                (penetration_distance / zone_range) * 100.0
+        else
+            // Bearish zone: penetration is from bottom upward
+            if close_price <= zone_bottom
+                0.0  // No penetration
+            else if close_price >= zone_top
+                100.0  // Full penetration
+            else
+                penetration_distance = close_price - zone_bottom
+                (penetration_distance / zone_range) * 100.0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSOLIDATION SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Group SIFs by candle (bar_index) - FIXED: Proper variable scoping
+group_sifs_by_candle(sif_records) =>
+    grouped_sifs = array.new<ConsolidatedSIF>()
+
+    if array.size(sif_records) == 0
+        grouped_sifs
+    else
+        // Create map-like structure using arrays
+        processed_candles = array.new<int>()
+
+        for i = 0 to array.size(sif_records) - 1
+            sif_record = array.get(sif_records, i)
+            current_bar = sif_record.bar_index
+
+            // Check if we already processed this candle
+            if not array.includes(processed_candles, current_bar)
+                // Collect all SIFs for this candle
+                candle_sifs = array.new<SIFRecord>()
+
+                for j = 0 to array.size(sif_records) - 1
+                    other_sif = array.get(sif_records, j)
+                    if other_sif.bar_index == current_bar
+                        array.push(candle_sifs, other_sif)
+
+                // Create consolidated SIF if we have any records
+                if array.size(candle_sifs) > 0
+                    first_sif = array.get(candle_sifs, 0)
+                    consolidated = ConsolidatedSIF.new(
+                         candle_sifs,
+                         current_bar,
+                         first_sif.is_bullish,  // All SIFs on same candle have same direction
+                         0.0,  // Will be calculated
+                         0.0,  // Will be calculated
+                         false,  // Will be calculated
+                         false,  // Will be calculated
+                         "",   // Will be built
+                         ""    // Will be built
+                     )
+                    array.push(grouped_sifs, consolidated)
+                    array.push(processed_candles, current_bar)
+
+        grouped_sifs
+
+// Calculate consolidated zone boundaries (outermost limits) - FIXED: Proper variable scoping
+calculate_consolidated_zone_boundaries(sif_group) =>
+    if array.size(sif_group) == 0
+        [float(na), float(na)]
+    else
+        zone_top = -999999.0
+        zone_bottom = 999999.0
+
+        for i = 0 to array.size(sif_group) - 1
+            sif_record = array.get(sif_group, i)
+            [individual_top, individual_bottom] = get_subtype_zone(sif_record)
+
+            if individual_top > zone_top
+                zone_top := individual_top
+            if individual_bottom < zone_bottom
+                zone_bottom := individual_bottom
+
+        [zone_top, zone_bottom]
+
+// Determine consolidated status for group
+determine_consolidated_status(consolidated_sif) =>
+    invalidation_threshold = get_sif_invalidation_threshold()
+    is_breached = false
+    is_invalidated = false
+
+    // First check if any SIF in group is already invalidated
+    for i = 0 to array.size(consolidated_sif.sif_group) - 1
+        sif = array.get(consolidated_sif.sif_group, i)
+        if sif.is_invalidated
+            is_invalidated := true
+            break
+
+    // Only check for breach if NOT already invalidated
+    if not is_invalidated
+        // Check breach (real-time, using extremes) - exclude formation candle
+        if not barstate.isconfirmed and bar_index != consolidated_sif.bar_index
+            // Check if any SIF in group is confirmed (for consolidated breach)
+            group_confirmed = not enable_breach_confirmation  // Auto-confirm if system disabled
+            if enable_breach_confirmation
+                for sif_check_index = 0 to array.size(consolidated_sif.sif_group) - 1
+                    sif_check = array.get(consolidated_sif.sif_group, sif_check_index)
+                    if sif_check.is_confirmed
+                        group_confirmed := true
+                        break
+
+            if group_confirmed  // Only check breach if group is confirmed
+                test_price = consolidated_sif.is_bullish ? low : high
+                penetration = calculate_zone_penetration_from_extreme(
+                     test_price,
+                     consolidated_sif.consolidated_zone_top,
+                     consolidated_sif.consolidated_zone_bottom,
+                     consolidated_sif.is_bullish
+                 )
+                is_breached := penetration >= invalidation_threshold
+
+        // Check invalidation (confirmed close)
+        if barstate.isconfirmed
+            penetration = calculate_zone_penetration_from_close(
+                 close,
+                 consolidated_sif.consolidated_zone_top,
+                 consolidated_sif.consolidated_zone_bottom,
+                 consolidated_sif.is_bullish
+             )
+            is_invalidated := penetration >= invalidation_threshold
+
+    [is_breached, is_invalidated]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSOLIDATED LABEL BUILDING SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Count source types for consolidated display
+// Count source types for consolidated display - ONLY ENABLED SOURCES
+count_source_types(sif_group) =>
+    fvg_count = 0
+    imp_count = 0
+    vol_count = 0
+    true_count = 0
+
+    for i = 0 to array.size(sif_group) - 1
+        sif_record = array.get(sif_group, i)
+
+        // Only count if source is enabled
+        if str.contains(sif_record.sif_subtype, SUBTYPE_IMPLIED) and enable_implied
+            imp_count += 1
+        else if str.contains(sif_record.sif_subtype, SUBTYPE_VOLUME) and enable_volume_imbalance
+            vol_count += 1
+        else if str.contains(sif_record.sif_subtype, SUBTYPE_TRUE) and enable_true_gaps
+            true_count += 1
+        else if (sif_record.sif_subtype == SUBTYPE_STANDARD or str.contains(sif_record.sif_subtype, SUBTYPE_INCLUSION) or str.contains(sif_record.sif_subtype, SUBTYPE_REFLECTION)) and enable_fair_value_gaps
+            fvg_count += 1
+
+    [fvg_count, imp_count, vol_count, true_count]
+
+// Check if any SIF in group is SUPER
+has_super_sifs(sif_group) =>
+    has_super = false
+
+    for i = 0 to array.size(sif_group) - 1
+        sif_record = array.get(sif_group, i)
+        if sif_record.is_super_sif
+            has_super := true
+            break
+
+    has_super
+
+// Build source breakdown with extension logic
+build_source_breakdown_extension(sif_group) =>
+    [fvg_count, imp_count, vol_count, true_count] = count_source_types(sif_group)
+    sif_count = array.size(sif_group)
+
+    // Count how many different types we have
+    types_present = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0) + (true_count > 0 ? 1 : 0)
+
+    if types_present == 1
+        // All same type: just show "fvg×2", "vol×3", etc. (no redundant total count)
+        if fvg_count > 0
+            if fvg_count == 1
+                "fvg"
+            else
+                "fvg×" + str.tostring(fvg_count)
+        else if imp_count > 0
+            if imp_count == 1
+                "imp"
+            else
+                "imp×" + str.tostring(imp_count)
+        else if vol_count > 0
+            if vol_count == 1
+                "vol"
+            else
+                "vol×" + str.tostring(vol_count)
+        else if true_count > 0
+            if true_count == 1
+                "gap"
+            else
+                "gap×" + str.tostring(true_count)
+        else
+            ""
+    else
+        // Multiple types: show total count and breakdown, drop ×1 for cleaner display
+        parts = array.new<string>()
+
+        if fvg_count > 0
+            if fvg_count == 1
+                array.push(parts, "fvg")  // Drop ×1
+            else
+                array.push(parts, "fvg×" + str.tostring(fvg_count))
+
+        if imp_count > 0
+            if imp_count == 1
+                array.push(parts, "imp")  // Drop ×1
+            else
+                array.push(parts, "imp×" + str.tostring(imp_count))
+
+        if vol_count > 0
+            if vol_count == 1
+                array.push(parts, "vol")  // Drop ×1
+            else
+                array.push(parts, "vol×" + str.tostring(vol_count))
+
+        if true_count > 0
+            if true_count == 1
+                array.push(parts, "gap")  // Drop ×1
+            else
+                array.push(parts, "gap×" + str.tostring(true_count))
+
+        // Join with commas
+        breakdown = ""
+        for i = 0 to array.size(parts) - 1
+            if i > 0
+                breakdown := breakdown + ", "
+            breakdown := breakdown + array.get(parts, i)
+
+        // Show total count for different types: "2: fvg, vol" or "5: fvg×3, vol, imp"
+        str.tostring(sif_count) + ": " + breakdown
+
+// Build source breakdown with counts - USED for candle label logic (Original)
+build_source_breakdown(sif_group) =>
+    [fvg_count, imp_count, vol_count, true_count] = count_source_types(sif_group)
+
+    parts = array.new<string>()
+
+    if fvg_count > 0
+        if fvg_count == 1
+            array.push(parts, "fvg")
+        else
+            array.push(parts, "fvg×" + str.tostring(fvg_count))
+
+    if imp_count > 0
+        if imp_count == 1
+            array.push(parts, "imp")
+        else
+            array.push(parts, "imp×" + str.tostring(imp_count))
+
+    if vol_count > 0
+        if vol_count == 1
+            array.push(parts, "vol")
+        else
+            array.push(parts, "vol×" + str.tostring(vol_count))
+
+    if true_count > 0
+        if true_count == 1
+            array.push(parts, "gap")
+        else
+            array.push(parts, "gap×" + str.tostring(true_count))
+
+    // Join with commas
+    result = ""
+    for i = 0 to array.size(parts) - 1
+        if i > 0
+            result := result + ", "
+        result := result + array.get(parts, i)
+
+    result
+
+// Get unified subtype for entire group - ONLY USED WHEN show_label_details = true
+get_unified_subtype(sif_group) =>
+    if array.size(sif_group) == 0
+        ["", false]
+    else
+        first_sif = array.get(sif_group, 0)
+        subtype_display = get_subtype_display(first_sif.sif_subtype, first_sif.is_bullish)
+
+        // Get wick tier for risk indicator
+        body_top = math.max(first_sif.sif_open, first_sif.sif_close)
+        body_bottom = math.min(first_sif.sif_open, first_sif.sif_close)
+        body_size = body_top - body_bottom
+        upper_wick = first_sif.sif_high - body_top
+        lower_wick = body_bottom - first_sif.sif_low
+        [wick_tier, has_wick_dominance] = classify_wick_dominance(body_size, upper_wick, lower_wick)
+
+        risky_prefix = wick_tier == WICK_TIER_RISKY ? "*" : ""
+        is_risky = risky_prefix != ""
+
+        final_subtype = ""
+        if subtype_display != ""
+            final_subtype := risky_prefix + subtype_display
+
+        [final_subtype, is_risky]
+
+// Create consolidated candle label with SIMPLIFIED SUPER SIF support
+create_consolidated_candle_label(consolidated_sif) =>
+    sif_count = array.size(consolidated_sif.sif_group)
+    direction = consolidated_sif.is_bullish ? "SIF+" : "SIF-"
+
+    // Check for SUPER SIFs in group
+    has_super = has_super_sifs(consolidated_sif.sif_group)
+
+    // FIXED: Handle Arrow Only Mode - return just arrows
+    if sif_symbol_type == DISPLAY_ARROW_ONLY
+        consolidated_sif.is_bullish ? "▲" : "▼"
+    else
+        // Build candle label parts
+        label_parts = array.new<string>()
+
+        // Add direction arrow for Arrow + Text mode
+        if sif_symbol_type == DISPLAY_ARROW_TEXT
+            arrow = consolidated_sif.is_bullish ? "▲" : "▼"
+            array.push(label_parts, arrow)
+
+        // Always use normal SIF text for candle labels (SUPER indicated in extension only)
+        sif_text = direction
+
+        array.push(label_parts, sif_text)
+
+        // Threshold-based candle labels (same as before)
+        if show_label_details
+            if sif_count >= 3
+                // 3+ SIFs: Just show count (3), (4), etc.
+                array.push(label_parts, "(" + str.tostring(sif_count) + ")")
+            else if sif_count == 2
+                // 2 SIFs: Check if same or different types
+                [fvg_count, imp_count, vol_count, true_count] = count_source_types(consolidated_sif.sif_group)
+                types_present = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0) + (true_count > 0 ? 1 : 0)
+
+                if types_present == 1
+                    // Same type: (fvg×2), (vol×2), (imp×2), (gap×2)
+                    if fvg_count == 2
+                        array.push(label_parts, "(fvg×2)")
+                    else if imp_count == 2
+                        array.push(label_parts, "(imp×2)")
+                    else if vol_count == 2
+                        array.push(label_parts, "(vol×2)")
+                    else if true_count == 2
+                        array.push(label_parts, "(gap×2)")
+                else
+                    // Different types: (fvg, vol), (fvg, imp), (vol, imp), (gap, fvg), etc.
+                    type_list = array.new<string>()
+                    if fvg_count > 0
+                        array.push(type_list, "fvg")
+                    if imp_count > 0
+                        array.push(type_list, "imp")
+                    if vol_count > 0
+                        array.push(type_list, "vol")
+                    if true_count > 0
+                        array.push(type_list, "gap")
+
+                    // Build type string based on array size
+                    type_string = ""
+                    if array.size(type_list) >= 2
+                        type_string := array.get(type_list, 0) + ", " + array.get(type_list, 1)
+                    else
+                        type_string := array.get(type_list, 0)
+                    array.push(label_parts, "(" + type_string + ")")
+            else
+                // Single SIF - only show gap source if NOT standard FVG
+                single_sif = array.get(consolidated_sif.sif_group, 0)
+
+                // Add gap source for single non-FVG SIFs (preserving FVG base behavior)
+                gap_source = ""
+                if str.contains(single_sif.sif_subtype, SUBTYPE_IMPLIED)
+                    gap_source := "imp"
+                else if str.contains(single_sif.sif_subtype, SUBTYPE_VOLUME)
+                    gap_source := "vol"
+                else if str.contains(single_sif.sif_subtype, SUBTYPE_TRUE)
+                    gap_source := "gap"
+                // FVG shows nothing (default/implied)
+
+                if gap_source != ""
+                    array.push(label_parts, "(" + gap_source + ")")
+
+                // Add subtype if not standard
+                subtype_display = get_subtype_display(single_sif.sif_subtype, single_sif.is_bullish)
+                if subtype_display != ""
+                    // Add risk indicator only for non-standard subtypes
+                    body_top = math.max(single_sif.sif_open, single_sif.sif_close)
+                    body_bottom = math.min(single_sif.sif_open, single_sif.sif_close)
+                    body_size = body_top - body_bottom
+                    upper_wick = single_sif.sif_high - body_top
+                    lower_wick = body_bottom - single_sif.sif_low
+                    [wick_tier, has_wick_dominance] = classify_wick_dominance(body_size, upper_wick, lower_wick)
+
+                    risky_prefix = wick_tier == WICK_TIER_RISKY ? "*" : ""
+                    array.push(label_parts, risky_prefix + subtype_display)
+
+            // Add unified subtype for multiple SIFs (all SIFs on same candle have same subtype)
+            if sif_count > 1
+                [unified_subtype, is_risky] = get_unified_subtype(consolidated_sif.sif_group)
+                if unified_subtype != ""
+                    array.push(label_parts, unified_subtype)
+
+        // Add status indicators (ALWAYS LAST)
+        if consolidated_sif.is_consolidated_breached
+            array.push(label_parts, "[BREACH]")
+        if consolidated_sif.is_consolidated_invalidated
+            array.push(label_parts, "[X]")
+
+        // FIXED: Bearish Order - reverse the parts for bearish SIFs (5-4-3-2-1)
+        if not consolidated_sif.is_bullish and array.size(label_parts) > 0
+            // Reverse the array for bearish stacking
+            reversed_parts = array.new<string>()
+            for i = array.size(label_parts) - 1 to 0 by 1
+                array.push(reversed_parts, array.get(label_parts, i))
+            label_parts := reversed_parts
+
+        // Join with newlines for vertical stacking
+        result = ""
+        for i = 0 to array.size(label_parts) - 1
+            if i > 0
+                result := result + "\n"
+            result := result + array.get(label_parts, i)
+
+        result
+
+// Create consolidated extension label with SIMPLIFIED SUPER SIF support
+create_consolidated_extension_label(consolidated_sif) =>
+    sif_count = array.size(consolidated_sif.sif_group)
+    direction = consolidated_sif.is_bullish ? "SIF+" : "SIF-"
+    extension_result = ""
+
+    // Check for SUPER SIFs in group
+    has_super = has_super_sifs(consolidated_sif.sif_group)
+
+    // Only show advanced info when show_label_details = true
+    if show_label_details
+        if sif_count == 1
+            // Single SIF - only show gap source if NOT standard FVG (fvg is implied)
+            single_sif = array.get(consolidated_sif.sif_group, 0)
+            gap_source = ""
+            if str.contains(single_sif.sif_subtype, SUBTYPE_IMPLIED)
+                gap_source := " imp"
+            else if str.contains(single_sif.sif_subtype, SUBTYPE_VOLUME)
+                gap_source := " vol"
+            // Standard FVG gets no gap source (implied)
+
+            // Get subtype
+            subtype_display = get_subtype_display(single_sif.sif_subtype, single_sif.is_bullish)
+
+            // Get risk indicator
+            body_top = math.max(single_sif.sif_open, single_sif.sif_close)
+            body_bottom = math.min(single_sif.sif_open, single_sif.sif_close)
+            body_size = body_top - body_bottom
+            upper_wick = single_sif.sif_high - body_top
+            lower_wick = body_bottom - single_sif.sif_low
+            [wick_tier, has_wick_dominance] = classify_wick_dominance(body_size, upper_wick, lower_wick)
+            risky_prefix = wick_tier == WICK_TIER_RISKY ? "*" : ""
+
+            // Apply checkmark for SUPER SIFs in extensions
+            sif_text = if single_sif.is_super_sif
+                "✔️ SIF" + (consolidated_sif.is_bullish ? "+" : "-")  // Checkmark for SUPER
+            else
+                direction  // Normal
+
+            // Build inline extension label (no newlines for subtype)
+            extension_result := sif_text + gap_source
+            if subtype_display != ""
+                extension_result := extension_result + " " + risky_prefix + subtype_display
+        else
+            // Multiple SIFs - use extension breakdown logic
+            source_breakdown = build_source_breakdown_extension(consolidated_sif.sif_group)
+
+            // Apply checkmark for SUPER SIFs in extensions
+            sif_text = if has_super
+                "✔️ SIF" + (consolidated_sif.is_bullish ? "+" : "-")  // Checkmark for SUPER
+            else
+                direction  // Normal
+
+            extension_result := sif_text + " (" + source_breakdown + ")"
+
+            // Add unified subtype inline (not on new line)
+            [unified_subtype, is_risky] = get_unified_subtype(consolidated_sif.sif_group)
+            if unified_subtype != ""
+                extension_result := extension_result + " " + unified_subtype
+    else
+        // When advanced labels are OFF, show clean SIF+/SIF- with checkmark for SUPER
+        extension_result := if has_super
+            "✔️ SIF" + (consolidated_sif.is_bullish ? "+" : "-")  // Checkmark for SUPER
+        else
+            direction  // Normal
+
+    // Add status indicators
+    if consolidated_sif.is_consolidated_breached
+        extension_result := extension_result + " [BREACH]"
+    if consolidated_sif.is_consolidated_invalidated
+        extension_result := extension_result + " [X]"
+
+    extension_result
+
+// Build consolidated tooltip with SIMPLIFIED SUPER SIF info
+build_consolidated_tooltip(consolidated_sif) =>
+    sif_count = array.size(consolidated_sif.sif_group)
+    direction = consolidated_sif.is_bullish ? "Bullish" : "Bearish"
+    base_text = direction + " SIF"
+
+    if sif_count > 1
+        // Show detailed breakdown using extension logic
+        source_breakdown = build_source_breakdown_extension(consolidated_sif.sif_group)
+        base_text := base_text + " (" + source_breakdown + ")"
+    else if sif_count == 1
+        // Show source type for single non-FVG SIFs (preserving FVG base behavior)
+        single_sif = array.get(consolidated_sif.sif_group, 0)
+        if str.contains(single_sif.sif_subtype, SUBTYPE_IMPLIED)
+            base_text := base_text + " (imp)"
+        else if str.contains(single_sif.sif_subtype, SUBTYPE_VOLUME)
+            base_text := base_text + " (vol)"
+        else if str.contains(single_sif.sif_subtype, SUBTYPE_TRUE)
+            base_text := base_text + " (gap)"
+        // FVG shows nothing (default/implied)
+
+    // Add subtype words (inclusion/reflection) with dash
+    if sif_count > 0
+        first_sif = array.get(consolidated_sif.sif_group, 0)
+        if str.contains(first_sif.sif_subtype, SUBTYPE_INCLUSION)
+            base_text := base_text + " - inclusion"
+        else if str.contains(first_sif.sif_subtype, SUBTYPE_REFLECTION)
+            base_text := base_text + " - reflection"
+
+    // Add SUPER SIF information
+    has_super = has_super_sifs(consolidated_sif.sif_group)
+    strength_info = ""
+    if has_super
+        // Find the first SUPER SIF for details
+        for i = 0 to array.size(consolidated_sif.sif_group) - 1
+            sif_record = array.get(consolidated_sif.sif_group, i)
+            if sif_record.is_super_sif
+                bars_ago = bar_index - sif_record.overlapping_sif_bar_index
+                direction_text = sif_record.is_bullish ? "bullish" : "bearish"
+                strength_info := " [" + str.tostring(sif_record.overlap_percentage, "#.1") + "% overlap with " + direction_text + " SIF from " + str.tostring(bars_ago) + " bars ago]"
+                break
+
+    // Only show breach status if NOT invalidated (mutually exclusive)
+    status_text = ""
+    if consolidated_sif.is_consolidated_invalidated
+        status_text := status_text + " - INVALIDATED"
+    else if consolidated_sif.is_consolidated_breached
+        status_text := status_text + " - BREACHED (unconfirmed)"
+
+    base_text + strength_info + status_text
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROJECTION SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+get_projection_line_style() =>
+    switch projection_line_style
+        'Solid' => line.style_solid
+        'Dashed' => line.style_dashed
+        'Dotted' => line.style_dotted
+        => line.style_solid
+
+get_level_style(level) =>
+    if level == 0.0 or level == 1.0
+        [boundary_color, get_text_size(boundary_text_size)]
+    else if level == 0.5
+        [ce_color, get_text_size(ce_text_size)]
+    else if level > 0.0 and level < 1.0
+        [quadrant_color, get_text_size(quadrant_text_size)]
+    else if level > 1.0
+        [stop_color, get_text_size(stop_text_size)]
+    else if level < 0.0
+        [target_color, get_text_size(target_text_size)]
+    else
+        [color.gray, size.small]
+
+get_projection_levels() =>
+    levels = array.new<float>()
+
+    if show_boundaries
+        array.push(levels, 0.0)
+        array.push(levels, 1.0)
+
+    if show_ce
+        array.push(levels, 0.5)
+
+    if show_quadrants
+        array.push(levels, 0.25)
+        array.push(levels, 0.75)
+
+    if show_stops
+        array.push(levels, 1.25)
+        array.push(levels, 1.5)
+        array.push(levels, 2.0)
+
+    if show_targets
+        array.push(levels, -2.33)
+        array.push(levels, -2.5)
+        array.push(levels, -4.0)
+        array.push(levels, -4.5)
+
+    if show_custom
+        input_str = custom_levels_input
+        if str.length(input_str) > 0
+            split_values = str.split(input_str, ",")
+            for i = 0 to array.size(split_values) - 1
+                value_str = str.replace_all(array.get(split_values, i), " ", "")
+                if str.length(value_str) > 0
+                    parsed_value = str.tonumber(value_str)
+                    if not na(parsed_value)
+                        array.push(levels, parsed_value)
+
+    if array.size(levels) == 0
+        array.push(levels, 0.0)
+        array.push(levels, 1.0)
+
+    levels
+
+format_level_label(level) =>
+    base_str = str.tostring(level, '#.##')
+    str_len = str.length(base_str)
+    padding_needed = 5 - str_len
+    padded_str = base_str
+
+    if padding_needed > 0
+        for i = 1 to padding_needed
+            padded_str := padded_str + " "
+
+    padded_str
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPLAY LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+should_display_sif(sif_record) =>
+    if sif_record.is_invalidated and invalidated_sif_display == INVALIDATED_DISPLAY_OFF
+        false
+    else
+        // Check if source type is enabled
+        source_enabled = true
+        if str.contains(sif_record.sif_subtype, SUBTYPE_IMPLIED) and not enable_implied
+            source_enabled := false
+        else if str.contains(sif_record.sif_subtype, SUBTYPE_VOLUME) and not enable_volume_imbalance
+            source_enabled := false
+        else if str.contains(sif_record.sif_subtype, SUBTYPE_TRUE) and not enable_true_gaps
+            source_enabled := false
+        else if sif_record.sif_subtype == SUBTYPE_STANDARD and not enable_fair_value_gaps
+            source_enabled := false
+
+        source_enabled
+
+// Check if SIF should be displayed based on directional filter
+should_display_sif_direction(sif_record) =>
+    sif_record.is_bullish ? show_bullish_sifs : show_bearish_sifs
+
+should_display_consolidated_sif(consolidated_sif) =>
+    // Check if any SIF in the group should be displayed
+    should_display = false
+    for i = 0 to array.size(consolidated_sif.sif_group) - 1
+        sif_record = array.get(consolidated_sif.sif_group, i)
+        if should_display_sif(sif_record)
+            should_display := true
+            break
+    should_display
+
+should_highlight_sif(sif_record) =>
+    if sif_record.is_invalidated
+        invalidated_sif_display == INVALIDATED_DISPLAY_LABELS_ZONES
+    else
+        true
+
+should_highlight_consolidated_sif(consolidated_sif) =>
+    if consolidated_sif.is_consolidated_invalidated
+        invalidated_sif_display == INVALIDATED_DISPLAY_LABELS_ZONES
+    else
+        true
+
+should_project_sif(sif_record) =>
+    not sif_record.is_invalidated
+
+should_project_consolidated_sif(consolidated_sif) =>
+    not consolidated_sif.is_consolidated_invalidated
+
+get_sif_colors(sif_record) =>
+    highlight_color = sif_record.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
+    [highlight_color, highlight_color]
+
+get_consolidated_sif_colors(consolidated_sif) =>
+    highlight_color = consolidated_sif.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
+    [highlight_color, highlight_color]
+
+create_box(left_bar, top_price, bottom_price, box_color, label_text) =>
+    box.new(left=left_bar, top=top_price, right=left_bar + 3, bottom=bottom_price, bgcolor=box_color, border_color=box_color, border_style=line.style_solid, border_width=1, text=label_text, text_halign=text.align_center, text_valign=text.align_center, text_size=get_label_size(), text_color=source_gap_text_color)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN DETECTION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Only process gaps if at least one source is enabled
+if enable_fair_value_gaps or enable_implied or enable_volume_imbalance or enable_true_gaps
+
+    // Track new regular FVGs with correct anchoring (3-candle structure: anchor from C1)
+    if enable_fair_value_gaps and barstate.isconfirmed and is_bullish_fvg()
+        // COORDINATE VALIDATION: Bullish FVG - ensure TOP > BOTTOM
+        fvg_top = low        // C0.low (current candle low) 
+        fvg_bottom = high[2] // C2.high (2 bars ago high)
+        // CRITICAL: fvg_top (low) > fvg_bottom (high[2]) by FVG detection logic
+
+        // Check for overlapping gaps before creating
+        if not is_gap_overlapping(fvg_top, fvg_bottom, true, GAP_TYPE_FVG, active_gaps)
+            // GapData.new(anchor, TOP, BOTTOM, bullish, inverted, formation, candidate, id, type)
+            gap_data = GapData.new(bar_index - 2, fvg_top, fvg_bottom, true, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_FVG)
+            array.push(active_gaps, gap_data)
+            next_gap_id += 1
+
+if enable_fair_value_gaps and barstate.isconfirmed and is_bearish_fvg()
+    // COORDINATE VALIDATION: Bearish FVG - ensure TOP > BOTTOM  
+    // CRITICAL FIX: Corrected coordinate reversal bug (was causing missing bearish FVGs)
+    fvg_top = low[2]     // C2.low (2 bars ago low) - HIGHER value
+    fvg_bottom = high    // C0.high (current candle high) - LOWER value
+    // CRITICAL: fvg_top (low[2]) > fvg_bottom (high) by FVG detection logic
+
+    // Check for overlapping gaps before creating
+    if not is_gap_overlapping(fvg_top, fvg_bottom, false, GAP_TYPE_FVG, active_gaps)
+        // GapData.new(anchor, TOP, BOTTOM, bearish, inverted, formation, candidate, id, type)
+        gap_data = GapData.new(bar_index - 2, fvg_top, fvg_bottom, false, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_FVG)
+        array.push(active_gaps, gap_data)
+        next_gap_id += 1
+
+// Track new implied FVGs with correct anchoring (3-candle structure: anchor from C1)
+if enable_implied and barstate.isconfirmed
+    [is_valid_ifvg, ifvg_bottom, ifvg_top, is_ifvg_bullish] = detect_implied_fvg()
+    if is_valid_ifvg
+        // Check for overlapping gaps before creating
+        if not is_gap_overlapping(ifvg_top, ifvg_bottom, is_ifvg_bullish, GAP_TYPE_IMPLIED, active_gaps)
+            ifvg_data = GapData.new(bar_index - 2, ifvg_top, ifvg_bottom, is_ifvg_bullish, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_IMPLIED)
+            array.push(active_gaps, ifvg_data)
+            next_gap_id += 1
+
+// Track Volume Imbalances with correct anchoring (2-candle structure: anchor from C1)
+if enable_volume_imbalance and barstate.isconfirmed
+    // Check for bullish VI (2-candle body gap)
+    if is_bullish_vi()
+        [vi_top, vi_bottom] = get_vi_coordinates(true)
+
+        // Check for overlapping gaps before creating
+        if not is_gap_overlapping(vi_top, vi_bottom, true, GAP_TYPE_VOLUME, active_gaps)
+            vi_data = GapData.new(bar_index - 1, vi_top, vi_bottom, true, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_VOLUME)
+            array.push(active_gaps, vi_data)
+            next_gap_id += 1
+
+    // Check for bearish VI (2-candle body gap)
+    if is_bearish_vi()
+        [vi_top, vi_bottom] = get_vi_coordinates(false)
+
+        // Check for overlapping gaps before creating
+        if not is_gap_overlapping(vi_top, vi_bottom, false, GAP_TYPE_VOLUME, active_gaps)
+            vi_data = GapData.new(bar_index - 1, vi_top, vi_bottom, false, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_VOLUME)
+            array.push(active_gaps, vi_data)
+            next_gap_id += 1
+
+    // Track True Gaps with correct anchoring (2-candle structure: anchor from C1)
+    if enable_true_gaps and barstate.isconfirmed
+        // Check for bullish true gap
+        if is_bullish_true_gap()
+            [tg_top, tg_bottom] = get_true_gap_coordinates(true)
+
+            // Check for overlapping gaps before creating
+            if not is_gap_overlapping(tg_top, tg_bottom, true, GAP_TYPE_TRUE, active_gaps)
+                tg_data = GapData.new(bar_index - 1, tg_top, tg_bottom, true, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_TRUE)
+                array.push(active_gaps, tg_data)
+                next_gap_id += 1
+
+        // Check for bearish true gap
+        if is_bearish_true_gap()
+            [tg_top, tg_bottom] = get_true_gap_coordinates(false)
+
+            // Check for overlapping gaps before creating
+            if not is_gap_overlapping(tg_top, tg_bottom, false, GAP_TYPE_TRUE, active_gaps)
+                tg_data = GapData.new(bar_index - 1, tg_top, tg_bottom, false, false, bar_index, SIFCandidate.new(int(na), float(na), float(na), false), next_gap_id, GAP_TYPE_TRUE)
+                array.push(active_gaps, tg_data)
+                next_gap_id += 1
+
+// Memory management
+while array.size(active_gaps) > 100
+    array.shift(active_gaps)
+
+while array.size(all_sif_records) > 75
+    array.shift(all_sif_records)
+
+// Clean up visual elements
+while array.size(sif_body_highlights) > 100
+    box.delete(array.shift(sif_body_highlights))
+
+while array.size(sif_wick_highlights) > 100
+    box.delete(array.shift(sif_wick_highlights))
+
+while array.size(sif_extended_boxes) > 100
+    box.delete(array.shift(sif_extended_boxes))
+
+while array.size(sif_projection_lines) > 200
+    line.delete(array.shift(sif_projection_lines))
+
+while array.size(sif_projection_labels) > 200
+    label.delete(array.shift(sif_projection_labels))
+
+// OPTIMIZED v4.11: Skip processing when no records exist
+if array.size(all_sif_records) > 0
+    for i = array.size(all_sif_records) - 1 to 0
+        sif_record = array.get(all_sif_records, i)
+
+        if not sif_record.is_invalidated
+            // Update confirmation status first
+            updated_sif = check_sif_confirmation(sif_record)
+
+            // Check for invalidation (only on confirmed close)
+            if barstate.isconfirmed
+                [zone_top, zone_bottom] = get_subtype_zone(updated_sif)
+                current_penetration = calculate_zone_penetration_from_close(close, zone_top, zone_bottom, updated_sif.is_bullish)
+                invalidation_threshold = get_sif_invalidation_threshold()
+
+                if current_penetration >= invalidation_threshold
+                    updated_sif.is_invalidated := true
+                    needs_visual_update := true
+                else if current_penetration > updated_sif.max_fill_percentage
+                    updated_sif.max_fill_percentage := current_penetration
+
+            array.set(all_sif_records, i, updated_sif)
+
+// Gap processing and SIF detection with correct timing
+sif_bullish_formed = false
+sif_bearish_formed = false
+
+if array.size(active_gaps) > 0
+    for i = array.size(active_gaps) - 1 to 0
+        gap = array.get(active_gaps, i)
+        if not gap.is_inverted
+            current_body_top = math.max(open, close)
+            current_body_bottom = math.min(open, close)
+            is_current_bullish = close > open
+            is_current_bearish = close < open
+
+            current_body_enters_gap = false
+            is_opposite_color = false
+
+            // SIF LOGIC: Body must enter gap (not just wick tapping like MBZ)
+            if gap.is_bullish and is_current_bearish
+                body_enters_from_above = open > gap.top and close < gap.top
+                body_opens_inside = open <= gap.top and open >= gap.bottom
+                body_closes_through = open >= gap.bottom and close < gap.bottom
+                if body_enters_from_above or body_opens_inside or body_closes_through
+                    current_body_enters_gap := true
+                    is_opposite_color := true
+            else if not gap.is_bullish and is_current_bullish
+                body_enters_from_below = open < gap.bottom and close > gap.bottom
+                body_opens_inside = open >= gap.bottom and open <= gap.top
+                body_closes_through = open <= gap.top and close > gap.top
+                if body_enters_from_below or body_opens_inside or body_closes_through
+                    current_body_enters_gap := true
+                    is_opposite_color := true
+
+            // SIF timing validation with universal 1+ bar gap rule
+            if current_body_enters_gap and is_opposite_color and na(gap.first_tapper.bar_index)
+                // Universal timing rule: 1+ bar gap for ALL gap types
+                bars_since_gap_creation = bar_index - gap.creation_bar
+                if bars_since_gap_creation >= 1
+                    gap.first_tapper := SIFCandidate.new(bar_index, current_body_top, current_body_bottom, is_current_bullish)
+                    array.set(active_gaps, i, gap)
+
+            // SIF LOGIC: Check for gap inversion (SIF-specific)
+            gap_inverted = false
+            if gap.is_bullish
+                if close <= gap.bottom
+                    gap_inverted := true
+            else
+                if close >= gap.top
+                    gap_inverted := true
+
+            if gap_inverted and not na(gap.first_tapper.bar_index)
+                gap.is_inverted := true
+                array.set(active_gaps, i, gap)
+
+                sif_candidate = gap.first_tapper
+
+                if not na(sif_candidate.bar_index)
+                    bars_back = bar_index - sif_candidate.bar_index
+                    sif_open_price = open[bars_back]
+                    sif_close_price = close[bars_back]
+                    sif_high_price = high[bars_back]
+                    sif_low_price = low[bars_back]
+
+                    [sif_subtype, has_dom_wick] = detect_sif_subtype(sif_open_price, sif_close_price, sif_high_price, sif_low_price, gap.gap_type)
+
+                    // Create temporary SIF record for strength detection
+                    temp_sif_record = SIFRecord.new(
+                         sif_candidate.bar_index,
+                         sif_open_price,
+                         sif_close_price,
+                         sif_high_price,
+                         sif_low_price,
+                         sif_candidate.is_bullish,
+                         false,
+                         0.0,
+                         has_dom_wick,
+                         sif_subtype,
+                         "",
+                         "",
+                         0.0,
+                         0.0,
+                         false,
+                         label(na),
+                         gap.gap_id,
+                         false,           // Will be updated
+                         0.0,             // Will be updated
+                         int(na),         // Will be updated
+                         false,           // is_confirmed (temp record)
+                         int(na),         // confirmation_bar (temp record)
+                         false,           // distance_confirmed (temp record)
+                         false            // time_confirmed (temp record)
+                     )
+
+                    // Detect SUPER SIF strength
+                    [is_super, overlap_pct, overlapped_bar] = detect_sif_strength(temp_sif_record)
+
+                    sif_record = SIFRecord.new(
+                         sif_candidate.bar_index,
+                         sif_open_price,
+                         sif_close_price,
+                         sif_high_price,
+                         sif_low_price,
+                         sif_candidate.is_bullish,
+                         false,
+                         0.0,
+                         has_dom_wick,
+                         sif_subtype,
+                         "",
+                         "",
+                         0.0,
+                         0.0,
+                         false,
+                         label(na),
+                         gap.gap_id,
+                         is_super,        // SUPER SIF detection
+                         overlap_pct,     // overlap percentage
+                         overlapped_bar,  // overlapped bar index
+                         not enable_breach_confirmation,  // is_confirmed (auto-confirm if system disabled)
+                         enable_breach_confirmation ? int(na) : sif_candidate.bar_index, // confirmation_bar
+                         false,           // distance_confirmed (initially false)
+                         false            // time_confirmed (initially false)
+                     )
+
+                    array.push(all_sif_records, sif_record)
+                    needs_visual_update := true
+
+                    if sif_candidate.is_bullish
+                        sif_bullish_formed := true
+                    else
+                        sif_bearish_formed := true
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSOLIDATED VISUAL MANAGEMENT SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+manage_consolidated_sif_display() =>
+    // Clear all visual elements efficiently
+    for elem in sif_labels
+        label.delete(elem)
+    array.clear(sif_labels)
+
+    // Always clear source gap boxes for dynamic toggle behavior
+    for elem in source_gap_boxes
+        box.delete(elem)
+    array.clear(source_gap_boxes)
+
+    for elem in sif_body_highlights
+        box.delete(elem)
+    array.clear(sif_body_highlights)
+
+    for elem in sif_extended_boxes
+        box.delete(elem)
+    array.clear(sif_extended_boxes)
+
+    for elem in sif_projection_lines
+        line.delete(elem)
+    array.clear(sif_projection_lines)
+
+    for elem in sif_projection_labels
+        label.delete(elem)
+    array.clear(sif_projection_labels)
+
+    array.clear(displayed_sif_indices)
+
+    // Group SIFs by candle for consolidation
+    displayable_sifs = array.new<SIFRecord>()
+
+    // Add bounds checking to prevent array out of bounds error
+    total_sif_records = array.size(all_sif_records)
+    if total_sif_records > 0  // Only proceed if we have records
+        // SEPARATE LIMITS SYSTEM: Process valid and invalidated SIFs with independent counters
+        // This provides fine-grained control over chart display density while preserving breach information
+        valid_sif_count = 0           // Counter for valid (non-breached) SIFs
+        invalidated_sif_count = 0     // Counter for invalidated (breached) SIFs
+        
+        // Iterate through SIF records from most recent to oldest
+        for record_index = total_sif_records - 1 to 0
+            current_sif_record = array.get(all_sif_records, record_index)
+            
+            // Apply source type and directional filters first
+            if should_display_sif(current_sif_record) and should_display_sif_direction(current_sif_record)
+                
+                // VALID SIF PROCESSING: Add valid SIFs up to configured limit
+                if not current_sif_record.is_invalidated and valid_sif_count < max_valid_sifs
+                    array.push(displayable_sifs, current_sif_record)
+                    valid_sif_count += 1
+                
+                // INVALIDATED SIF PROCESSING: Add invalidated SIFs only when display is enabled and under limit
+                else if current_sif_record.is_invalidated and invalidated_sif_count < max_invalidated_sifs and invalidated_sif_display != INVALIDATED_DISPLAY_OFF
+                    array.push(displayable_sifs, current_sif_record)
+                    invalidated_sif_count += 1
+            
+            // PERFORMANCE OPTIMIZATION: Early termination when both limits reached
+            // Reduces unnecessary array iterations on charts with many SIFs
+            if valid_sif_count >= max_valid_sifs and (invalidated_sif_count >= max_invalidated_sifs or invalidated_sif_display == INVALIDATED_DISPLAY_OFF)
+                break
+
+    // Group displayable SIFs by candle (will return empty array if no displayable SIFs)
+    consolidated_sifs = group_sifs_by_candle(displayable_sifs)
+
+    // Only process if we have consolidated SIFs
+    if array.size(consolidated_sifs) > 0
+        // Process each consolidated group
+        gap_boxes_already_created = array.new<int>()
+
+        for consolidated_group_index = 0 to array.size(consolidated_sifs) - 1
+            current_consolidated_sif = array.get(consolidated_sifs, consolidated_group_index)
+
+            if not should_display_consolidated_sif(current_consolidated_sif)
+                continue
+
+            // Calculate consolidated zone boundaries
+            [consolidated_zone_top_boundary, consolidated_zone_bottom_boundary] = calculate_consolidated_zone_boundaries(current_consolidated_sif.sif_group)
+            current_consolidated_sif.consolidated_zone_top := consolidated_zone_top_boundary
+            current_consolidated_sif.consolidated_zone_bottom := consolidated_zone_bottom_boundary
+
+            // Determine consolidated status
+            [is_currently_breached, is_currently_invalidated] = determine_consolidated_status(current_consolidated_sif)
+            current_consolidated_sif.is_consolidated_breached := is_currently_breached
+            current_consolidated_sif.is_consolidated_invalidated := is_currently_invalidated
+
+            // Build labels
+            current_consolidated_sif.consolidated_candle_label := create_consolidated_candle_label(current_consolidated_sif)
+            current_consolidated_sif.consolidated_extension_label := create_consolidated_extension_label(current_consolidated_sif)
+
+            // Update the consolidated_sifs array
+            array.set(consolidated_sifs, consolidated_group_index, current_consolidated_sif)
+
+            // Create candle label with proper positioning
+            if show_sif_labels
+                consolidated_label_color = current_consolidated_sif.is_consolidated_invalidated ? sif_invalidated_color : (current_consolidated_sif.is_bullish ? sif_bullish_color : sif_bearish_color)
+                consolidated_label_size = current_consolidated_sif.is_consolidated_invalidated ? get_invalidated_sif_size() : get_sif_label_size()
+
+                // Smart label positioning for reflection SIFs to avoid extension box overlap
+                first_sif_in_group = array.get(current_consolidated_sif.sif_group, 0)
+
+                // Check if any SIF in group is reflection type with extensions enabled
+                has_reflection_sif = false
+                for sif_check_index = 0 to array.size(current_consolidated_sif.sif_group) - 1
+                    check_sif = array.get(current_consolidated_sif.sif_group, sif_check_index)
+                    if str.contains(check_sif.sif_subtype, SUBTYPE_REFLECTION)
+                        has_reflection_sif := true
+                        break
+
+                // Declare variables for positioning
+                candle_label_y_position = float(na)
+                candle_label_yloc = yloc.price
+
+                // Calculate proper positioning
+                if show_extended_boxes and has_reflection_sif
+                    // For reflection SIFs with extensions, use 0.3 spacing offset (was 0.5)
+                    zone_height = current_consolidated_sif.consolidated_zone_top - current_consolidated_sif.consolidated_zone_bottom
+                    spacing_offset = zone_height * 0.3  // CHANGED from 0.5 to 0.3
+
+                    if current_consolidated_sif.is_bullish
+                        // Bullish reflection: extension goes down, push label further down
+                        candle_label_y_position := current_consolidated_sif.consolidated_zone_bottom - spacing_offset
+                    else
+                        // Bearish reflection: extension goes up, push label further up
+                        candle_label_y_position := current_consolidated_sif.consolidated_zone_top + spacing_offset
+
+                    candle_label_yloc := yloc.price
+                else
+                    // Standard positioning using yloc.belowbar/abovebar
+                    candle_label_y_position := current_consolidated_sif.is_bullish ? first_sif_in_group.sif_low : first_sif_in_group.sif_high
+                    candle_label_yloc := current_consolidated_sif.is_bullish ? yloc.belowbar : yloc.abovebar
+
+                consolidated_tooltip_text = build_consolidated_tooltip(current_consolidated_sif)
+
+                new_consolidated_label = label.new(
+                     x=current_consolidated_sif.bar_index,
+                     y=candle_label_y_position,
+                     text=current_consolidated_sif.consolidated_candle_label,
+                     style=label.style_none,
+                     textcolor=consolidated_label_color,
+                     size=consolidated_label_size,
+                     yloc=candle_label_yloc,
+                     tooltip=consolidated_tooltip_text
+                 )
+
+                array.push(sif_labels, new_consolidated_label)
+
+            // Create consolidated extension box
+            should_highlight_consolidated_zone = show_extended_boxes and should_highlight_consolidated_sif(current_consolidated_sif)
+            if should_highlight_consolidated_zone
+                [consolidated_highlight_color, consolidated_extension_color] = get_consolidated_sif_colors(current_consolidated_sif)
+
+                // Highlight box (consolidated zone)
+                consolidated_highlight_box = box.new(
+                     left=current_consolidated_sif.bar_index,
+                     right=current_consolidated_sif.bar_index + 1,
+                     top=current_consolidated_sif.consolidated_zone_top,
+                     bottom=current_consolidated_sif.consolidated_zone_bottom,
+                     xloc=xloc.bar_index,
+                     bgcolor=consolidated_highlight_color,
+                     border_color=na
+                 )
+                array.push(sif_body_highlights, consolidated_highlight_box)
+
+                // Extension box with consolidated label
+                consolidated_extension_box = box.new(
+                     left=current_consolidated_sif.bar_index,
+                     right=current_consolidated_sif.bar_index + extended_box_length,
+                     top=current_consolidated_sif.consolidated_zone_top,
+                     bottom=current_consolidated_sif.consolidated_zone_bottom,
+                     xloc=xloc.bar_index,
+                     bgcolor=consolidated_extension_color,
+                     border_color=consolidated_extension_color,
+                     border_width=1,
+                     text=current_consolidated_sif.consolidated_extension_label,
+                     text_halign=text.align_right,
+                     text_valign=text.align_center,
+                     text_color=extended_box_text_color,
+                     text_size=get_extended_box_text_size()
+                 )
+                array.push(sif_extended_boxes, consolidated_extension_box)
+
+            // Source gap creation - Show ALL individual gaps, not just first one
+            if show_source_gap and array.size(source_gap_boxes) < max_source_gap_boxes
+                // Create gap box for EACH SIF in the group
+                for current_sif_index = 0 to array.size(current_consolidated_sif.sif_group) - 1
+                    current_sif_in_group = array.get(current_consolidated_sif.sif_group, current_sif_index)
+
+                    if not array.includes(gap_boxes_already_created, current_sif_in_group.source_gap_id)
+                        // Find the source gap by ID
+                        for active_gap_index = 0 to array.size(active_gaps) - 1
+                            source_gap_data = array.get(active_gaps, active_gap_index)
+                            if source_gap_data.gap_id == current_sif_in_group.source_gap_id
+                                individual_sif_label = current_sif_in_group.is_bullish ? "SIF+" : "SIF-"
+
+                                // Use "Vol Imb+" instead of "VI+" for gap labels
+                                source_gap_label_text = ""
+                                if source_gap_data.gap_type == GAP_TYPE_IMPLIED
+                                    source_gap_label_text := source_gap_data.is_bullish ? 'Imp FVG+ for ' + individual_sif_label : 'Imp FVG- for ' + individual_sif_label
+                                else if source_gap_data.gap_type == GAP_TYPE_VOLUME
+                                    source_gap_label_text := source_gap_data.is_bullish ? 'Vol Imb+ for ' + individual_sif_label : 'Vol Imb- for ' + individual_sif_label
+                                else if source_gap_data.gap_type == GAP_TYPE_TRUE
+                                    source_gap_label_text := source_gap_data.is_bullish ? 'True Gap+ for ' + individual_sif_label : 'True Gap- for ' + individual_sif_label
+                                else
+                                    source_gap_label_text := source_gap_data.is_bullish ? 'FVG+ for ' + individual_sif_label : 'FVG- for ' + individual_sif_label
+
+                                // Create and configure gap box
+                                individual_gap_box = create_box(source_gap_data.bar_index, source_gap_data.top, source_gap_data.bottom, gap_color, source_gap_label_text)
+                                box.set_right(individual_gap_box, current_sif_in_group.bar_index)
+                                array.push(source_gap_boxes, individual_gap_box)
+
+                                // Mark this gap ID as processed
+                                array.push(gap_boxes_already_created, current_sif_in_group.source_gap_id)
+                                break
+
+        // Projections using consolidated zones
+        if show_sif_projections and array.size(consolidated_sifs) > 0
+            projection_levels_list = get_projection_levels()
+            projected_sif_count = 0
+
+            for consolidated_sif_index = 0 to array.size(consolidated_sifs) - 1
+                if projected_sif_count >= project_last_n_sifs
+                    break
+
+                current_consolidated_sif = array.get(consolidated_sifs, consolidated_sif_index)
+
+                if not should_project_consolidated_sif(current_consolidated_sif)
+                    continue
+
+                // Use consolidated zone for projections
+                consolidated_zone_close_level = current_consolidated_sif.consolidated_zone_bottom
+                consolidated_zone_open_level = current_consolidated_sif.consolidated_zone_top
+
+                projection_start_bar = current_consolidated_sif.bar_index
+                projection_end_bar = current_consolidated_sif.bar_index + projection_extend_bars
+
+                for level_index = 0 to array.size(projection_levels_list) - 1
+                    current_level_value = array.get(projection_levels_list, level_index)
+                    projection_target_price = if current_level_value == 0.0
+                        consolidated_zone_close_level
+                    else if current_level_value == 1.0
+                        consolidated_zone_open_level
+                    else if current_level_value > 0.0 and current_level_value < 1.0
+                        consolidated_zone_close_level + ((consolidated_zone_open_level - consolidated_zone_close_level) * current_level_value)
+                    else if current_level_value > 1.0
+                        level_extension = current_level_value - 1.0
+                        consolidated_zone_open_level + ((consolidated_zone_open_level - consolidated_zone_close_level) * level_extension)
+                    else
+                        absolute_level_value = math.abs(current_level_value)
+                        consolidated_zone_close_level - ((consolidated_zone_open_level - consolidated_zone_close_level) * absolute_level_value)
+
+                    [level_text_color, level_text_size] = get_level_style(current_level_value)
+
+                    projection_line = line.new(x1=projection_start_bar, y1=projection_target_price, x2=projection_end_bar, y2=projection_target_price,
+                                  xloc=xloc.bar_index, color=level_text_color,
+                                  style=get_projection_line_style(), width=projection_line_width)
+                    array.push(sif_projection_lines, projection_line)
+
+                    level_label_text = format_level_label(current_level_value)
+                    label_x_position = projection_label_side == 'Left' ? (projection_start_bar - projection_label_gap) : (projection_end_bar + projection_label_gap)
+                    if label_x_position < 0
+                        label_x_position := 0
+                    projection_level_label = label.new(x=label_x_position, y=projection_target_price, text=level_label_text, style=label.style_none,
+                                         textcolor=level_text_color, size=level_text_size,
+                                         yloc=yloc.price,
+                                         textalign=projection_label_side == 'Left' ? text.align_right : text.align_left)
+                    array.push(sif_projection_labels, projection_level_label)
+                projected_sif_count += 1
+
+// OPTIMIZED: Smart visual update system - only when necessary
+visual_update_needed = needs_visual_update or
+                      (barstate.isconfirmed and array.size(all_sif_records) > 0) or
+                      barstate.islastconfirmedhistory
+
+if visual_update_needed
+    manage_consolidated_sif_display()
+    needs_visual_update := false
+
+// Wick dominance stars - Updated for consolidated display
+if enable_wick_dominance_markers
+    for existing_star_element in star_labels
+        label.delete(existing_star_element)
+    array.clear(star_labels)
+
+    // Process each consolidated SIF group only if we have records
+    total_sif_records_available = array.size(all_sif_records)
+    if total_sif_records_available > 0
+        displayable_sifs_for_stars = array.new<SIFRecord>()
+        // SEPARATE LIMITS SYSTEM: Process SIFs for wick dominance stars with same limit logic
+        // Ensures consistency between main SIF display and wick star overlay
+        valid_sifs_count = 0           // Counter for valid SIFs in star display
+        invalidated_sifs_count = 0     // Counter for invalidated SIFs in star display
+        
+        // Apply same filtering logic as main SIF display for consistency
+        for record_index = total_sif_records_available - 1 to 0
+            current_sif_record = array.get(all_sif_records, record_index)
+            
+            // Apply source type and directional filters
+            if should_display_sif(current_sif_record) and should_display_sif_direction(current_sif_record)
+                
+                // VALID SIF PROCESSING: Add valid SIFs for star display
+                if not current_sif_record.is_invalidated and valid_sifs_count < max_valid_sifs
+                    array.push(displayable_sifs_for_stars, current_sif_record)
+                    valid_sifs_count += 1
+                
+                // INVALIDATED SIF PROCESSING: Add invalidated SIFs for star display when enabled
+                else if current_sif_record.is_invalidated and invalidated_sifs_count < max_invalidated_sifs and invalidated_sif_display != INVALIDATED_DISPLAY_OFF
+                    array.push(displayable_sifs_for_stars, current_sif_record)
+                    invalidated_sifs_count += 1
+            
+            // PERFORMANCE OPTIMIZATION: Early termination when limits reached
+            if valid_sifs_count >= max_valid_sifs and (invalidated_sifs_count >= max_invalidated_sifs or invalidated_sif_display == INVALIDATED_DISPLAY_OFF)
+                break
+
+        // Only proceed if we have displayable SIFs
+        if array.size(displayable_sifs_for_stars) > 0
+            consolidated_sifs_for_stars = group_sifs_by_candle(displayable_sifs_for_stars)
+
+            for consolidated_index = 0 to array.size(consolidated_sifs_for_stars) - 1
+                current_consolidated_sif_for_star = array.get(consolidated_sifs_for_stars, consolidated_index)
+
+                // Check each SIF in the group for dominant wicks
+                for sif_in_group_index = 0 to array.size(current_consolidated_sif_for_star.sif_group) - 1
+                    individual_sif_for_star = array.get(current_consolidated_sif_for_star.sif_group, sif_in_group_index)
+
+                    sif_body_top_price = math.max(individual_sif_for_star.sif_open, individual_sif_for_star.sif_close)
+                    sif_body_bottom_price = math.min(individual_sif_for_star.sif_open, individual_sif_for_star.sif_close)
+                    sif_body_size_range = sif_body_top_price - sif_body_bottom_price
+                    sif_upper_wick_size = individual_sif_for_star.sif_high - sif_body_top_price
+                    sif_lower_wick_size = sif_body_bottom_price - individual_sif_for_star.sif_low
+
+                    [wick_dominance_tier, has_significant_wick_dominance] = classify_wick_dominance(sif_body_size_range, sif_upper_wick_size, sif_lower_wick_size)
+
+                    if has_significant_wick_dominance
+                        wick_tier_star_color = switch wick_dominance_tier
+                            WICK_TIER_STANDARD => standard_star_color
+                            WICK_TIER_RELAXED => relaxed_star_color
+                            WICK_TIER_RISKY => risky_star_color
+                            => standard_star_color
+
+                        wick_strength_description = switch wick_dominance_tier
+                            WICK_TIER_STANDARD => "Standard (≥100%)"
+                            WICK_TIER_RELAXED => "Relaxed (85-99%)"
+                            WICK_TIER_RISKY => "Risky (80-84%)"
+                            => "Standard"
+
+                        is_sif_candle_bullish = individual_sif_for_star.sif_close > individual_sif_for_star.sif_open
+                        star_y_position = is_sif_candle_bullish ? individual_sif_for_star.sif_low : individual_sif_for_star.sif_high
+                        star_y_location = is_sif_candle_bullish ? yloc.abovebar : yloc.belowbar
+
+                        star_label_size = current_consolidated_sif_for_star.is_consolidated_invalidated ? get_invalidated_sif_size() : get_wick_star_size()
+                        star_label_color = current_consolidated_sif_for_star.is_consolidated_invalidated ? sif_invalidated_color : wick_tier_star_color
+
+                        wick_dominance_star_label = label.new(
+                             x=individual_sif_for_star.bar_index,
+                             y=star_y_position,
+                             text="★",
+                             style=label.style_none,
+                             textcolor=star_label_color,
+                             size=star_label_size,
+                             yloc=star_y_location,
+                             tooltip="Dominant Wick SIF (" + wick_strength_description + ")"
+                         )
+
+                        array.push(star_labels, wick_dominance_star_label)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENHANCED ALERTS - INDIVIDUAL SIF DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(sif_bullish_formed, title='SIF+', message='Detected at {{interval}} | SIF+ at {{close}}')
+alertcondition(sif_bearish_formed, title='SIF-', message='Detected at {{interval}} | SIF- at {{close}}')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEVELOPMENT TREE TRACKING
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// v9.0-final (BASE - PRODUCTION READY)
+// └── v9.3-separate-limits-only (THIS) ── [SEPARATE LIMITS] Independent valid/invalidated SIF limits
+//
+// INTEGRATED FEATURES:
+// ✓ All v9.0 functionality (proven stable and fast performance)
+// ✓ Separate limits system (max_valid_sifs + max_invalidated_sifs) - NEW IN v9.3
+// ✓ Professional constants structure (consistent with MBZ codebase)
+// ✓ Comprehensive documentation system
+//
+// DEVELOPMENT STATUS: Performance-optimized v9.0 base with separate limits enhancement
+//
+// KEY v9.3 IMPROVEMENTS:
+// • Independent control over valid vs invalidated SIF display counts
+// • Professional constants structure matching MBZ standards
+// • Enhanced documentation and code organization
+// • Maintains v9.0 performance characteristics (no reflection zone complexity)
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// SIF Hunter° [Pro+] [v9.3-separate-limits-only] - DEVELOPMENT: v9.0 performance + separate limits system
