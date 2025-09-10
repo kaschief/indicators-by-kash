@@ -5,7 +5,7 @@ This document is the authoritative, up‑to‑date reference for the indicator�
 ## Overview
 - Name: Gap Visualizer [Pro+]
 - Purpose: Detect and render Source Gaps; validate and visualize Change in State of Delivery (CSD) with an Anchor Candle and optional anchor labels.
-- Script: indicators/07-ebw/code/development/hunter-pro-dev-v2.0.pine
+- Script: indicators/07-csd-pro/code/development/csd-pro-dev-v2.0.pine
 
 ## Terminology (canonical)
 - Source Gaps: the only accepted term for gaps used by this script. Types:
@@ -39,42 +39,49 @@ This document is the authoritative, up‑to‑date reference for the indicator�
 - Lookback origin check: a source gap validates only if its origin index is within the lookback window.
 - Toggle: `CSD: Require Source Gap In Lookback` (on by default)
   - On: an opposite‑direction source gap origin must exist within the window for CSD to be valid.
-  - Off: CSD can be valid without gaps; anchor gap label prints only if qualifying gap(s) exist.
+  - Off: CSD can be valid without gaps; Anchor Gap label is suppressed; Anchor ID still displays on valid CSDs.
 
 ## Labels and Rendering
 - Source Gap Rectangles
   - Color: `Source Gap Color`.
-  - Toggle: `Show Source Gaps` (hides/shows rectangles; detection always runs).
-  - Box labels: `Show Source Gap Labels`, text only (transparent background), format: `FVG+/Imp-/Vol+/Gap-`.
-  - When `Show Source Gaps` is OFF, rectangle labels are not rendered and existing ones are removed.
+  - Toggle: `Show Source Gaps (with Labels)` — labels are tied to boxes; detection always runs regardless of visibility.
+  - Label format: text only (transparent background), `FVG+/Imp-/Vol+/Gap-`.
+  - When `Show Source Gaps` is OFF, rectangles and their labels are not rendered; existing labels are removed.
 - Anchor Labels (drawn on valid CSD’s Anchor Candle)
-  - Anchor ID: text `Anchor`.
-    - Bullish CSD → below the candle; Bearish CSD → above the candle.
-  - Anchor Gap: list of signed source gap acronyms within lookback that match opposite direction.
-    - Bullish CSD → drawn closer above; Bearish CSD → closer below.
+  - Single combined label (two lines max) that follows the distal rule:
+    - Bullish (belowbar): first line = ▲ (near the candle), second line = summary (farther)
+    - Bearish (abovebar): first line = summary (nearer), second line = ▼ (farther)
+  - Tooltip: always shows full gap details (counts by type, total, and types list) even when summary is grouped.
+  - Size and color: `Label Size` and `Anchor Label Text Color` apply to the entire combined label.
+  - Positioning: Bullish CSD → below the candle; Bearish CSD → above the candle; Anchor ID closer; summary farther.
+  - Formatting (summary):
+    - Single type → `FVG x2` (omit `x1`)
+    - Two types, small total → `(Gap x Vol)`; include counts as `xN` only when >1 (e.g., `(FVG x2 x Vol)`)  
+- Many types or total count ≥ 3 → `(3)` (total only)
+  - Colors: text colors for Source Gap labels and Anchor labels are independently configurable; all label backgrounds are transparent.
   - Toggle: `Show Anchor Labels` (on/off).
 - CSD Candle Coloring
-  - Color: lime (bullish) / red (bearish) when valid.
-  - Toggle: `CSD: Color Candle` (on/off).
+  - Removed: candle colorization has been discarded to keep the UI minimal and focused on key visuals.
 - Info Table
   - Shows `LB: <lookback>`; 9 positions (Top/Middle/Bottom × Left/Center/Right); customizable text/bg color and size.
 
 ## Inputs (grouped)
+- Anchors (first)
+  - `Show`
+  - `Text Color`, `Size` (Tiny/Small/Normal/Large/Huge)
+  - `Max Labels`
+- CSD Validation
+  - `Require Gap` (bool)
+  - `Lookback (bars)`
 - Source Gaps
   - `FVG` (enable_fvg): on by default
   - `Implied FVG` (enable_implied_fvg): on by default
   - `Vol Imbalance` (enable_vol): on by default
   - `True Gap` (enable_true_gap): on by default
-  - `Source Gap Color`, `Max Source Gaps`, `Show Source Gaps`
-- Labels
-  - `Show Source Gap Labels`, `Show Anchor Labels`
-  - `Label Size` (Tiny/Small/Normal/Large/Huge)
-  - `Max Source Gap Labels`, `Max Anchor Labels`, `Labels Window (bars)`
-- CSD Validation
-  - `CSD: Gap Lookback` (bars)
-  - `CSD: Require Source Gap In Lookback` (bool)
-  - `CSD: Color Candle` (bool)
-- Info Table
+  - `Show`, `Color`, `Text Color`, `Size`, `Max Gaps`
+- Visibility
+  - `Label Window (bars)` — display-only window for both Anchor and Source labels
+- Info Table (kept at bottom)
   - `Show Lookback Info`, `Info Position`, `Info Text Color`, `Info BG Color`, `Info Text Size`
 
 ## Naming + Conventions
@@ -84,8 +91,8 @@ This document is the authoritative, up‑to‑date reference for the indicator�
 
 ## Performance + Limits
 - Indicator limits: `INDICATOR_MAX_BOXES = 500`, `INDICATOR_MAX_LABELS = 500`.
-- Label caps: max source gap labels and anchor labels are configurable; older labels are pruned FIFO.
-- Labels window: older labels outside `Labels Window (bars)` are removed for clarity.
+- Unified cap for source gaps: `Max Source Gaps & Labels` controls both box and label counts; older items pruned FIFO.
+- Labels window: labels outside `Label Visibility Window (bars)` are removed for clarity; detection/validation unaffected.
 
 ## Maintenance Checklist
 - When adding/changing inputs:
@@ -98,8 +105,8 @@ This document is the authoritative, up‑to‑date reference for the indicator�
 - Keep terminology consistent: "Source Gap", "Implied FVG", "Anchor".
 
 ## Quick Test Scenarios
-- Toggle `Show Source Gaps` OFF → rectangles and their labels disappear; CSD detection continues; anchor labels unaffected.
-- Toggle `CSD: Require Source Gap In Lookback` OFF → valid CSDs can occur without gaps; Anchor Gap label only appears if gaps exist.
+- Toggle `Show Source Gaps (with Labels)` OFF → rectangles and their labels disappear; CSD detection continues; anchor labels unaffected.
+- Toggle `CSD: Require Source Gap In Lookback` OFF → valid CSDs can occur without gaps; Anchor Gap label is suppressed; Anchor ID still appears on valid CSDs.
 - Verify Anchor ID and Anchor Gap labels appear with correct vertical placement and polarity.
 - Validate opposite‑direction requirement by constructing sequences where only the opposite gap exists in lookback.
 
