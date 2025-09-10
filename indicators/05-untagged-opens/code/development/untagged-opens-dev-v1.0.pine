@@ -1,0 +1,113 @@
+//@version=6
+
+indicator('Untagged Opens° [Pro+] [v1.0]', overlay=true, max_lines_count=100, max_labels_count=100)
+
+// === INPUTS ===
+lookback = input.int(100, 'Lookback Bars', minval=50, maxval=500)
+max_upside_levels = input.int(3, 'Max Upside Levels', minval=1, maxval=10)
+max_downside_levels = input.int(3, 'Max Downside Levels', minval=1, maxval=10)
+
+upside_color = input.color(color.red, 'Upside Color', inline='colors')
+downside_color = input.color(color.green, 'Downside Color', inline='colors')
+
+line_width = input.int(2, 'Line Width', minval=1, maxval=5)
+line_style = input.string('Solid', 'Line Style', options=['Solid', 'Dashed', 'Dotted'])
+
+// === UTILITY FUNCTION ===
+get_line_style() =>
+    switch line_style
+        'Solid' => line.style_solid
+        'Dashed' => line.style_dashed
+        'Dotted' => line.style_dotted
+        => line.style_solid
+
+// === DATA STORAGE ===
+var array<float> opens = array.new<float>()
+var array<int> bars = array.new<int>()
+var array<bool> is_bullish = array.new<bool>()
+var array<bool> is_tagged = array.new<bool>()
+
+// === RECORD NEW OPENS ===
+if barstate.isconfirmed
+    array.push(opens, open)
+    array.push(bars, bar_index)
+    array.push(is_bullish, close > open)
+    array.push(is_tagged, false)
+    
+    if array.size(opens) > lookback
+        array.shift(opens)
+        array.shift(bars)
+        array.shift(is_bullish)
+        array.shift(is_tagged)
+
+// === UPDATE TAGGING STATUS ===
+if array.size(opens) > 0
+    for i = 0 to array.size(opens) - 1
+        if not array.get(is_tagged, i)
+            open_price = array.get(opens, i)
+            bullish = array.get(is_bullish, i)
+            
+            // Tag bearish opens when price trades above them
+            if not bullish and high >= open_price
+                array.set(is_tagged, i, true)
+            // Tag bullish opens when price trades below them
+            if bullish and low <= open_price
+                array.set(is_tagged, i, true)
+
+// === FIND UNTAGGED OPENS ===
+if array.size(opens) > 0
+    upside_candidates = array.new<int>()
+    downside_candidates = array.new<int>()
+    current_price = close
+    
+    for i = 0 to array.size(opens) - 1
+        if not array.get(is_tagged, i)
+            open_price = array.get(opens, i)
+            bullish = array.get(is_bullish, i)
+            
+            // Upside targets: bearish opens above current price
+            if not bullish and open_price > current_price
+                array.push(upside_candidates, i)
+            // Downside targets: bullish opens below current price
+            if bullish and open_price < current_price
+                array.push(downside_candidates, i)
+    
+    // Sort upside by price (ascending - nearest first)
+    if array.size(upside_candidates) > 1
+        for i = 0 to array.size(upside_candidates) - 2
+            for j = i + 1 to array.size(upside_candidates) - 1
+                idx_i = array.get(upside_candidates, i)
+                idx_j = array.get(upside_candidates, j)
+                price_i = array.get(opens, idx_i)
+                price_j = array.get(opens, idx_j)
+                if price_j < price_i
+                    array.set(upside_candidates, i, idx_j)
+                    array.set(upside_candidates, j, idx_i)
+    
+    // Sort downside by price (descending - nearest first)
+    if array.size(downside_candidates) > 1
+        for i = 0 to array.size(downside_candidates) - 2
+            for j = i + 1 to array.size(downside_candidates) - 1
+                idx_i = array.get(downside_candidates, i)
+                idx_j = array.get(downside_candidates, j)
+                price_i = array.get(opens, idx_i)
+                price_j = array.get(opens, idx_j)
+                if price_j > price_i
+                    array.set(downside_candidates, i, idx_j)
+                    array.set(downside_candidates, j, idx_i)
+    
+    // Draw upside levels
+    upside_count = math.min(array.size(upside_candidates), max_upside_levels)
+    for i = 0 to upside_count - 1
+        idx = array.get(upside_candidates, i)
+        open_price = array.get(opens, idx)
+        open_bar = array.get(bars, idx)
+        line.new(open_bar, open_price, bar_index, open_price, color=upside_color, width=line_width, style=get_line_style())
+    
+    // Draw downside levels
+    downside_count = math.min(array.size(downside_candidates), max_downside_levels)
+    for i = 0 to downside_count - 1
+        idx = array.get(downside_candidates, i)
+        open_price = array.get(opens, idx)
+        open_bar = array.get(bars, idx)
+        line.new(open_bar, open_price, bar_index, open_price, color=downside_color, width=line_width, style=get_line_style())

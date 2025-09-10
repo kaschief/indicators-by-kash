@@ -1,0 +1,604 @@
+//@version=6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INDICATOR LIMITS
+// ═══════════════════════════════════════════════════════════════════════════════
+INDICATOR_MAX_BOXES = 500
+INDICATOR_MAX_LABELS = 500
+
+indicator('Gap Visualizer [Pro+]', overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Source gap label abbreviations (used in data and labels)
+SOURCE_GAP_LABEL_FVG = "FVG"
+SOURCE_GAP_LABEL_IMPLIED = "Imp"
+SOURCE_GAP_LABEL_VOL = "Vol"
+SOURCE_GAP_LABEL_GAP = "Gap"
+// Anchor label text
+ANCHOR_TEXT = "Anchor"
+
+// Default values
+DEFAULT_MAX_BOXES = 20
+DEFAULT_DISPLACEMENT_MULTIPLIER = 2.5
+DEFAULT_LOOKBACK_CANDLES = 4
+// CSD defaults
+CSD_LOOKBACK_DEFAULT = 4
+
+// UI numeric limits
+MAX_GAPS_MIN = 1
+MAX_GAPS_MAX = 100
+DISP_MIN = 1.0
+DISP_MAX = 5.0
+DISP_STEP = 0.1
+LOOKBACK_MIN = 3
+LOOKBACK_MAX = 5
+// CSD lookback bounds
+CSD_LOOKBACK_MIN = 1
+CSD_LOOKBACK_MAX = 20
+
+// Rendering constants
+GAP_COLOR_ALPHA = 85
+LABEL_BG_ALPHA = 20
+BOX_EXTEND_LOOKAHEAD = 10
+
+// Formation offsets: last candle index relative to anchor
+THREE_BAR_FORMATION_OFFSET = 2
+TWO_BAR_FORMATION_OFFSET = 1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Define menu groups (used by inputs below)
+GROUP_SOURCE = "Source Gaps"
+GROUP_LABELS = "Labels"
+GROUP_INFO = "Info Table"
+GROUP_CSD = "CSD Validation"
+
+// Gap type toggles (enable multiple types concurrently)
+INPUT_TOGGLE_FVG_LABEL = "Enable Source FVG"
+INPUT_TOGGLE_IMPLIED_FVG_LABEL = "Enable Source Implied FVG"
+INPUT_TOGGLE_VI_LABEL = "Enable Source Volume Imbalance"
+INPUT_TOGGLE_TG_LABEL = "Enable Source True Gap"
+INPUT_TOGGLE_FVG_TIP = "Detect Source Fair Value Gaps"
+INPUT_TOGGLE_IMPLIED_FVG_TIP = "Detect Source Implied FVGs"
+INPUT_TOGGLE_VI_TIP = "Detect Source Volume Imbalances"
+INPUT_TOGGLE_TG_TIP = "Detect Source True Gaps"
+
+enable_fvg = input.bool(true,  "FVG", inline="src_types", tooltip=INPUT_TOGGLE_FVG_TIP, group=GROUP_SOURCE)
+enable_implied_fvg = input.bool(true, "Implied FVG", inline="src_types", tooltip=INPUT_TOGGLE_IMPLIED_FVG_TIP, group=GROUP_SOURCE)
+enable_vol = input.bool(true,   "Vol Imbalance", inline="src_types", tooltip=INPUT_TOGGLE_VI_TIP, group=GROUP_SOURCE)
+enable_true_gap = input.bool(true,   "True Gap", inline="src_types", tooltip=INPUT_TOGGLE_TG_TIP, group=GROUP_SOURCE)
+
+// Visual settings
+gap_color = input.color(color.new(color.blue, GAP_COLOR_ALPHA), "Source Gap Color", tooltip="Color for source gap rectangles", group=GROUP_SOURCE)
+max_gaps = input.int(DEFAULT_MAX_BOXES, "Max Source Gaps", minval=MAX_GAPS_MIN, maxval=MAX_GAPS_MAX, tooltip="Maximum number of source gap rectangles to display", group=GROUP_SOURCE)
+show_source_gaps = input.bool(true, "Show Source Gaps", tooltip="Render source gap rectangles (detection still runs when off)", group=GROUP_SOURCE)
+show_gap_labels = input.bool(true, "Show Source Gap Labels", tooltip="Display labels on source gap rectangles", group=GROUP_LABELS)
+show_anchor_labels = input.bool(true, "Show Anchor Labels", tooltip="Display gap rationale labels on the Anchor Candle", group=GROUP_LABELS)
+// Label management (to avoid hitting max labels)
+max_gap_labels = input.int(150, "Max Source Gap Labels", minval=0, maxval=INDICATOR_MAX_LABELS, tooltip="Maximum number of active source gap labels to keep; older ones are removed", group=GROUP_LABELS)
+labels_window_bars = input.int(300, "Labels Window (bars)", minval=0, maxval=5000, tooltip="Only show labels for items within the last N bars; 0 = unlimited", group=GROUP_LABELS)
+max_anchor_labels = input.int(200, "Max Anchor Labels", minval=0, maxval=INDICATOR_MAX_LABELS, tooltip="Maximum number of anchor-candle labels to keep; older ones are removed", group=GROUP_LABELS)
+
+// Label size (user configurable for all labels)
+SIZE_TINY = "Tiny"
+SIZE_SMALL = "Small"
+SIZE_NORMAL = "Normal"
+SIZE_LARGE = "Large"
+SIZE_HUGE = "Huge"
+label_size_choice = input.string(SIZE_TINY, "Label Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE, SIZE_HUGE], tooltip="Size for source and anchor labels", group=GROUP_LABELS)
+
+// Compact info table (shows current CSD lookback)
+SHOW_INFO_DEFAULT = true
+POS_TL = "Top Left"
+POS_TC = "Top Center"
+POS_TR = "Top Right"
+POS_ML = "Middle Left"
+POS_MC = "Middle Center"
+POS_MR = "Middle Right"
+POS_BL = "Bottom Left"
+POS_BC = "Bottom Center"
+POS_BR = "Bottom Right"
+info_show_table = input.bool(SHOW_INFO_DEFAULT, "Show Lookback Info", tooltip="Show ultra-compact table with current CSD lookback", group=GROUP_INFO)
+info_table_pos = input.string(POS_TR, "Info Position", options=[POS_TL, POS_TC, POS_TR, POS_ML, POS_MC, POS_MR, POS_BL, POS_BC, POS_BR], tooltip="Location of the lookback info table", group=GROUP_INFO)
+info_text_color = input.color(color.white, "Info Text Color", group=GROUP_INFO)
+info_bg_color = input.color(color.new(color.black, 0), "Info BG Color", group=GROUP_INFO)
+INFO_SIZE_TINY = "Tiny"
+INFO_SIZE_SMALL = "Small"
+INFO_SIZE_NORMAL = "Normal"
+info_text_size_choice = input.string(INFO_SIZE_TINY, "Info Text Size", options=[INFO_SIZE_TINY, INFO_SIZE_SMALL, INFO_SIZE_NORMAL], tooltip="Font size for lookback info table", group=GROUP_INFO)
+
+// Implied FVG settings (only used when Implied FVG is selected)
+// Implied FVG parameters (fixed; no inputs in menu)
+displacement_multiplier = DEFAULT_DISPLACEMENT_MULTIPLIER
+lookback_candles = DEFAULT_LOOKBACK_CANDLES
+// CSD settings
+csd_gap_lookback = input.int(CSD_LOOKBACK_DEFAULT, "CSD: Gap Lookback", minval=CSD_LOOKBACK_MIN, maxval=CSD_LOOKBACK_MAX, tooltip="Number of candles to scan (including Anchor Candle) for any gap that validates the CSD", group=GROUP_CSD)
+csd_color_enabled = input.bool(true, "CSD: Color Candle", tooltip="Color the CSD candle lime/red when valid", group=GROUP_CSD)
+csd_require_gap = input.bool(true, "CSD: Require Source Gap In Lookback", tooltip="When on, a valid opposite-direction source gap must exist within lookback; when off, CSD validation ignores the lookback requirement", group=GROUP_CSD)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type GapData
+    int bar_index
+    float top
+    float bottom
+    bool is_bullish
+    string gap_type
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GLOBAL VARIABLES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<GapData> active_gaps = array.new<GapData>()
+var array<box> gap_boxes = array.new_box()
+// Tracks whether each gap has been mitigated; aligned by index with `gap_boxes`
+var array<bool> mitigation_status = array.new_bool()
+// Aligned labels for each gap box (na when labels are disabled)
+var array<label> gap_labels = array.new_label()
+// Anchor-candle labels (with gap rationale acronyms)
+var array<label> anchor_labels = array.new_label()
+// Ultra-compact info table
+var table info_tbl = na
+var string info_tbl_pos_cache = ""
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Body helper functions
+bodyTop(o, c) => math.max(o, c)
+bodyBot(o, c) => math.min(o, c)
+
+// Text size conversion
+get_text_size() =>
+    label_size_choice == SIZE_TINY ? size.tiny :
+     label_size_choice == SIZE_SMALL ? size.small :
+     label_size_choice == SIZE_NORMAL ? size.normal :
+     label_size_choice == SIZE_LARGE ? size.large : size.huge
+
+// Info table helpers
+get_info_size() => info_text_size_choice == INFO_SIZE_TINY ? size.tiny : info_text_size_choice == INFO_SIZE_SMALL ? size.small : size.normal
+pos_from_str(p) =>
+    p == POS_TL ? position.top_left :
+     p == POS_TC ? position.top_center :
+     p == POS_TR ? position.top_right :
+     p == POS_ML ? position.middle_left :
+     p == POS_MC ? position.middle_center :
+     p == POS_MR ? position.middle_right :
+     p == POS_BL ? position.bottom_left :
+     p == POS_BC ? position.bottom_center : position.bottom_right
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCE GAP DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Fair Value Gap Detection
+is_bullish_fvg() => low > high[2]
+is_bearish_fvg() => high < low[2]
+
+// Volume Imbalance Detection
+is_bullish_vi() =>
+    bodies_separated = math.min(open, close) > math.max(open[1], close[1])
+    wicks_still_connect = low <= high[1]
+    bodies_separated and wicks_still_connect
+
+is_bearish_vi() =>
+    bodies_separated = math.max(open, close) < math.min(open[1], close[1])
+    wicks_still_connect = high >= low[1]
+    bodies_separated and wicks_still_connect
+
+get_vi_coordinates(is_bullish_gap) =>
+    if is_bullish_gap
+        gap_bottom = math.max(open[1], close[1])
+        gap_top = math.min(open, close)
+        [gap_top, gap_bottom]
+    else
+        gap_top = math.min(open[1], close[1])
+        gap_bottom = math.max(open, close)
+        [gap_top, gap_bottom]
+
+// True Gap Detection
+is_bullish_true_gap() => high[1] < low
+is_bearish_true_gap() => low[1] > high
+
+get_true_gap_coordinates(is_bullish_gap) =>
+    if is_bullish_gap
+        [low, high[1]]
+    else
+        [low[1], high]
+
+// Implied FVG Detection with Displacement Validation
+is_displacement_candle() =>
+    c2_body_size = math.abs(close[1] - open[1])
+    total_body_size = 0.0
+    for i = 2 to (1 + lookback_candles)
+        total_body_size += math.abs(close[i] - open[i])
+    average_body_size = total_body_size / lookback_candles
+
+    if average_body_size > 0
+        c2_body_size >= (displacement_multiplier * average_body_size)
+    else
+        false
+
+detect_implied_fvg() =>
+    has_bull_fvg = is_bullish_fvg()
+    has_bear_fvg = is_bearish_fvg()
+
+    if not is_displacement_candle()
+        [false, float(na), float(na), bool(na)]
+    else
+        result_found = false
+        result_bottom = float(na)
+        result_top = float(na)
+        result_bullish = bool(na)
+
+// Bullish Implied FVG Detection
+        if not has_bull_fvg and not result_found
+            c1_top = bodyTop(open[2], close[2])
+            c3_bot = bodyBot(open, close)
+            bull_wicks_present = (high[2] > c1_top) and (c3_bot > low)
+
+            if bull_wicks_present
+                overlap_lo = math.max(c1_top, low)
+                overlap_hi = math.min(high[2], c3_bot)
+                has_bull_overlap = overlap_hi > overlap_lo
+
+                if has_bull_overlap and c1_top < c3_bot
+                    result_found := true
+                    result_bottom := overlap_lo
+                    result_top := overlap_hi
+                    result_bullish := true
+
+// Bearish Implied FVG Detection
+        if not has_bear_fvg and not result_found
+            c1_bot = bodyBot(open[2], close[2])
+            c3_top = bodyTop(open, close)
+            bear_wicks_present = (low[2] < c1_bot) and (c3_top < high)
+
+            if bear_wicks_present
+                overlap_lo = math.max(low[2], c3_top)
+                overlap_hi = math.min(c1_bot, high)
+                has_bear_overlap = overlap_hi > overlap_lo
+
+                if has_bear_overlap and c1_bot > c3_top
+                    result_found := true
+                    result_bottom := overlap_lo
+                    result_top := overlap_hi
+                    result_bullish := false
+
+        [result_found, result_bottom, result_top, result_bullish]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCE GAP QUERY HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Returns true if any recorded gap's formation window overlaps [win_start, win_end]
+// Filtered by desired gap polarity: set `want_bullish` to true to only count bullish gaps,
+// or false to only count bearish gaps (used for CSD opposite-direction validation).
+has_gap_in_window(win_start, win_end, want_bullish) =>
+    found = false
+    if array.size(active_gaps) > 0
+        for gi = 0 to array.size(active_gaps) - 1
+            gd = array.get(active_gaps, gi)
+            is_three_bar_gap = (gd.gap_type == SOURCE_GAP_LABEL_FVG) or (gd.gap_type == SOURCE_GAP_LABEL_IMPLIED)
+            // Origin candle is the last formation candle: C3 for 3-bar, C2 for 2-bar
+            origin_idx = gd.bar_index + (is_three_bar_gap ? THREE_BAR_FORMATION_OFFSET : TWO_BAR_FORMATION_OFFSET)
+            within = (origin_idx >= win_start) and (origin_idx <= win_end)
+            if within and (gd.is_bullish == want_bullish)
+                found := true
+    found
+
+// Returns a comma-separated string of unique gap type acronyms within [win_start, win_end]
+// Returns comma-separated acronyms with sign (e.g., "FVG-", "VI+") within [win_start, win_end]
+// filtered by desired polarity. `want_bullish=true` collects only bullish gaps ("+")
+// and `want_bullish=false` collects only bearish gaps ("-"). Dedupe by type+sign.
+get_gap_acronyms_in_window(win_start, win_end, want_bullish) =>
+    fvg_pos = false
+    fvg_neg = false
+    implied_pos = false
+    implied_neg = false
+    vi_pos = false
+    vi_neg = false
+    tg_pos = false
+    tg_neg = false
+    if array.size(active_gaps) > 0
+        for gi = 0 to array.size(active_gaps) - 1
+            gd = array.get(active_gaps, gi)
+            is_three_bar_gap = (gd.gap_type == SOURCE_GAP_LABEL_FVG) or (gd.gap_type == SOURCE_GAP_LABEL_IMPLIED)
+            origin_idx = gd.bar_index + (is_three_bar_gap ? THREE_BAR_FORMATION_OFFSET : TWO_BAR_FORMATION_OFFSET)
+            within = (origin_idx >= win_start) and (origin_idx <= win_end)
+            if within and (gd.is_bullish == want_bullish)
+                is_bull = gd.is_bullish
+                if gd.gap_type == SOURCE_GAP_LABEL_FVG
+                    fvg_pos := fvg_pos or is_bull
+                    fvg_neg := fvg_neg or not is_bull
+                if gd.gap_type == SOURCE_GAP_LABEL_IMPLIED
+                    implied_pos := implied_pos or is_bull
+                    implied_neg := implied_neg or not is_bull
+                if gd.gap_type == SOURCE_GAP_LABEL_VOL
+                    vi_pos := vi_pos or is_bull
+                    vi_neg := vi_neg or not is_bull
+                if gd.gap_type == SOURCE_GAP_LABEL_GAP
+                    tg_pos := tg_pos or is_bull
+                    tg_neg := tg_neg or not is_bull
+    txt = ""
+    // Order: FVG, Implied FVG, Vol, Gap; include sign
+    if fvg_pos
+        txt := txt == "" ? SOURCE_GAP_LABEL_FVG + "+" : txt + ", " + SOURCE_GAP_LABEL_FVG + "+"
+    if fvg_neg
+        txt := txt == "" ? SOURCE_GAP_LABEL_FVG + "-" : txt + ", " + SOURCE_GAP_LABEL_FVG + "-"
+    if implied_pos
+        txt := txt == "" ? SOURCE_GAP_LABEL_IMPLIED + "+" : txt + ", " + SOURCE_GAP_LABEL_IMPLIED + "+"
+    if implied_neg
+        txt := txt == "" ? SOURCE_GAP_LABEL_IMPLIED + "-" : txt + ", " + SOURCE_GAP_LABEL_IMPLIED + "-"
+    if vi_pos
+        txt := txt == "" ? SOURCE_GAP_LABEL_VOL + "+" : txt + ", " + SOURCE_GAP_LABEL_VOL + "+"
+    if vi_neg
+        txt := txt == "" ? SOURCE_GAP_LABEL_VOL + "-" : txt + ", " + SOURCE_GAP_LABEL_VOL + "-"
+    if tg_pos
+        txt := txt == "" ? SOURCE_GAP_LABEL_GAP + "+" : txt + ", " + SOURCE_GAP_LABEL_GAP + "+"
+    if tg_neg
+        txt := txt == "" ? SOURCE_GAP_LABEL_GAP + "-" : txt + ", " + SOURCE_GAP_LABEL_GAP + "-"
+    txt
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCE GAP CREATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+create_gap(gap_top, gap_bottom, is_bullish_gap, gap_type_str, anchor_bar) =>
+    if array.size(active_gaps) >= max_gaps
+        // Remove oldest gap
+        if array.size(active_gaps) > 0
+            array.shift(active_gaps)
+        if array.size(gap_boxes) > 0
+            box.delete(array.shift(gap_boxes))
+        if array.size(mitigation_status) > 0
+            array.shift(mitigation_status)
+        if array.size(gap_labels) > 0
+            old_lbl = array.shift(gap_labels)
+            if not na(old_lbl)
+                label.delete(old_lbl)
+
+    // Create gap data
+    gap_data = GapData.new(anchor_bar, gap_top, gap_bottom, is_bullish_gap, gap_type_str)
+    array.push(active_gaps, gap_data)
+
+    // Create visual box
+    // Respect 'show_source_gaps' by hiding box fill when off
+    gap_bg = show_source_gaps ? gap_color : na
+    gap_box = box.new(left=anchor_bar, top=gap_top, right=bar_index + BOX_EXTEND_LOOKAHEAD, bottom=gap_bottom, border_color=na, bgcolor=gap_bg)
+    array.push(gap_boxes, gap_box)
+    // New gaps are unmitigated by default
+    array.push(mitigation_status, false)
+
+    // Add label if enabled (respect window + cap; keep array aligned even if we skip)
+    if show_source_gaps and show_gap_labels and (max_gap_labels != 0) and (labels_window_bars == 0 or (bar_index - anchor_bar) <= labels_window_bars)
+        label_text = gap_type_str + (is_bullish_gap ? "+" : "-")
+        label_y = (gap_top + gap_bottom) / 2
+        // Center X between box left and right
+        center_x = int(math.round((anchor_bar + (bar_index + BOX_EXTEND_LOOKAHEAD)) / 2))
+        // No background for source gap labels (transparent)
+        lbl = label.new(center_x, label_y, label_text, style=label.style_label_center, color=na, textcolor=color.black, size=get_text_size())
+        array.push(gap_labels, lbl)
+    else
+        array.push(gap_labels, na)
+
+    // Prune gap labels: enforce window and max count without breaking alignment
+    // First, remove labels outside window
+    if labels_window_bars > 0
+        for gi = 0 to array.size(gap_labels) - 1
+            lbl_i = array.get(gap_labels, gi)
+            if not na(lbl_i)
+                gd_i = array.get(active_gaps, gi)
+                if (bar_index - gd_i.bar_index) > labels_window_bars
+                    label.delete(lbl_i)
+                    array.set(gap_labels, gi, na)
+    // If source gaps are hidden, delete any existing source gap labels
+    if not show_source_gaps
+        for gi = 0 to array.size(gap_labels) - 1
+            lbl_i = array.get(gap_labels, gi)
+            if not na(lbl_i)
+                label.delete(lbl_i)
+                array.set(gap_labels, gi, na)
+    // Then, enforce cap by deleting oldest existing labels
+    if max_gap_labels >= 0
+        // Count current labels
+        current_labels = 0
+        for gi = 0 to array.size(gap_labels) - 1
+            if not na(array.get(gap_labels, gi))
+                current_labels += 1
+        // Delete from oldest until within cap
+        if max_gap_labels < current_labels
+            for gi = 0 to array.size(gap_labels) - 1
+                if not na(array.get(gap_labels, gi))
+                    label.delete(array.get(gap_labels, gi))
+                    array.set(gap_labels, gi, na)
+                    current_labels -= 1
+                if current_labels <= max_gap_labels
+                    break
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN DETECTION AND VISUALIZATION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Default CSD color for this bar
+color csd_col = na
+
+if barstate.isconfirmed
+    // Reset CSD color each bar before validation to avoid stale coloring when inputs change
+    csd_col := na
+    // Fair Value Gap Detection
+    if enable_fvg
+        if is_bullish_fvg()
+            gap_top = low
+            gap_bottom = high[2]
+            create_gap(gap_top, gap_bottom, true, SOURCE_GAP_LABEL_FVG, bar_index - THREE_BAR_FORMATION_OFFSET)
+
+        if is_bearish_fvg()
+            gap_top = low[2]
+            gap_bottom = high
+            create_gap(gap_top, gap_bottom, false, SOURCE_GAP_LABEL_FVG, bar_index - THREE_BAR_FORMATION_OFFSET)
+
+    // Implied Fair Value Gap Detection
+    if enable_implied_fvg
+        [is_valid_implied, implied_bottom, implied_top, is_implied_bullish] = detect_implied_fvg()
+        if is_valid_implied
+            create_gap(implied_top, implied_bottom, is_implied_bullish, SOURCE_GAP_LABEL_IMPLIED, bar_index - THREE_BAR_FORMATION_OFFSET)
+
+    // Volume Imbalance Detection
+    if enable_vol
+        if is_bullish_vi()
+            [vi_top, vi_bottom] = get_vi_coordinates(true)
+            create_gap(vi_top, vi_bottom, true, SOURCE_GAP_LABEL_VOL, bar_index - TWO_BAR_FORMATION_OFFSET)
+
+        if is_bearish_vi()
+            [vi_top, vi_bottom] = get_vi_coordinates(false)
+            create_gap(vi_top, vi_bottom, false, SOURCE_GAP_LABEL_VOL, bar_index - TWO_BAR_FORMATION_OFFSET)
+
+    // True Gap Detection
+    if enable_true_gap
+        if is_bullish_true_gap()
+            [tg_top, tg_bottom] = get_true_gap_coordinates(true)
+            create_gap(tg_top, tg_bottom, true, SOURCE_GAP_LABEL_GAP, bar_index - TWO_BAR_FORMATION_OFFSET)
+
+        if is_bearish_true_gap()
+            [tg_top, tg_bottom] = get_true_gap_coordinates(false)
+            create_gap(tg_top, tg_bottom, false, SOURCE_GAP_LABEL_GAP, bar_index - TWO_BAR_FORMATION_OFFSET)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CSD DETECTION AND VALIDATION
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Identify CSD + Anchor Candle (previous candle)
+    prev_bear = close[1] < open[1]
+    prev_bull = close[1] > open[1]
+    curr_bull = close > open
+    curr_bear = close < open
+
+    // Bullish CSD: bullish candle closes above prior bearish open; Anchor is prior bearish
+    is_bull_csd = curr_bull and prev_bear and (close > open[1])
+    // Bearish CSD: bearish candle closes below prior bullish open; Anchor is prior bullish
+    is_bear_csd = curr_bear and prev_bull and (close < open[1])
+
+    if is_bull_csd or is_bear_csd
+        anchor_index = bar_index - 1
+        win_end = anchor_index
+        win_start = anchor_index - csd_gap_lookback + 1
+        // Opposite-direction validation: bullish CSD looks for bearish gaps, and vice versa
+        want_bullish_gap = is_bear_csd
+        gap_ok = has_gap_in_window(win_start, win_end, want_bullish_gap)
+        valid_csd = csd_require_gap ? gap_ok : true
+        if valid_csd
+            csd_col := is_bull_csd ? color.new(color.lime, 0) : color.new(color.red, 0)
+            // Place Anchor ID and Anchor Gap labels on the Anchor Candle
+            acronyms = get_gap_acronyms_in_window(win_start, win_end, want_bullish_gap)
+            if show_anchor_labels and max_anchor_labels != 0 and (labels_window_bars == 0 or (bar_index - anchor_index) <= labels_window_bars)
+                anchor_yloc = is_bull_csd ? yloc.belowbar : yloc.abovebar
+                // Anchor ID label
+                anchor_id_style = is_bull_csd ? label.style_label_down : label.style_label_up
+                id_lbl = label.new(anchor_index, na, ANCHOR_TEXT, xloc=xloc.bar_index, yloc=anchor_yloc, style=anchor_id_style, color=color.new(color.white, LABEL_BG_ALPHA), textcolor=color.black, size=get_text_size())
+                array.push(anchor_labels, id_lbl)
+                // Anchor Gap label (only when acronyms exist); draw nearer to candle using opposite style
+                if acronyms != ""
+                    anchor_gap_style = is_bull_csd ? label.style_label_up : label.style_label_down
+                    a_lbl = label.new(anchor_index, na, acronyms, xloc=xloc.bar_index, yloc=anchor_yloc, style=anchor_gap_style, color=color.new(color.white, LABEL_BG_ALPHA), textcolor=color.black, size=get_text_size())
+                    array.push(anchor_labels, a_lbl)
+                // Prune by cap (FIFO)
+                while max_anchor_labels > 0 and array.size(anchor_labels) > max_anchor_labels
+                    to_del = array.shift(anchor_labels)
+                    if not na(to_del)
+                        label.delete(to_del)
+            // Prune anchor labels by window
+            if labels_window_bars > 0 and array.size(anchor_labels) > 0
+                for ai = 0 to array.size(anchor_labels) - 1
+                    lbl = array.get(anchor_labels, ai)
+                    if not na(lbl)
+                        ax = int(label.get_x(lbl))
+                        if (bar_index - ax) > labels_window_bars
+                            label.delete(lbl)
+                            array.set(anchor_labels, ai, na)
+
+// Apply CSD coloring (toggleable)
+barcolor(csd_color_enabled ? csd_col : na)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ULTRA-COMPACT LOOKBACK INFO TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Create/move table when needed and update content every bar
+if info_show_table
+    // Recreate if position changed
+    if not na(info_tbl) and info_tbl_pos_cache != info_table_pos
+        table.delete(info_tbl)
+        info_tbl := na
+    if na(info_tbl)
+        info_tbl := table.new(pos_from_str(info_table_pos), 1, 1, frame_color=na, border_width=0)
+        info_tbl_pos_cache := info_table_pos
+    // Update cell with current lookback
+    table.cell(info_tbl, 0, 0, "LB: " + str.tostring(csd_gap_lookback), text_color=info_text_color, bgcolor=info_bg_color, text_size=get_info_size())
+else
+    if not na(info_tbl)
+        table.delete(info_tbl)
+        info_tbl := na
+        info_tbl_pos_cache := ""
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCE GAP MITIGATION LOGIC (mark when current candle enters the gap)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// A gap is mitigated the first time the candle (wick or body) enters it
+if array.size(gap_boxes) > 0 and array.size(mitigation_status) > 0 and array.size(active_gaps) > 0
+    for i = 0 to array.size(gap_boxes) - 1
+        if i < array.size(gap_boxes) and i < array.size(mitigation_status) and i < array.size(active_gaps)
+            already_mitigated = array.get(mitigation_status, i)
+            if not already_mitigated
+                gd = array.get(active_gaps, i)
+                gap_top_i = gd.top
+                gap_bottom_i = gd.bottom
+                gap_type_i = gd.gap_type
+                // Do not allow mitigation on candles that form the gap
+                is_three_bar_gap = (gap_type_i == SOURCE_GAP_LABEL_FVG) or (gap_type_i == SOURCE_GAP_LABEL_IMPLIED)
+                formation_end = gd.bar_index + (is_three_bar_gap ? THREE_BAR_FORMATION_OFFSET : TWO_BAR_FORMATION_OFFSET)
+                if bar_index > formation_end
+                    // Price enters the gap if the current bar's high/low overlaps the gap range
+                    price_enters = (low <= gap_top_i) and (high >= gap_bottom_i)
+                    if price_enters
+                        // Mark mitigated and freeze the rectangle to this bar
+                        array.set(mitigation_status, i, true)
+                        gb = array.get(gap_boxes, i)
+                        box.set_right(gb, bar_index)
+                        // Re-center label on frozen box
+                        if array.size(gap_labels) > i
+                            lbl_i = array.get(gap_labels, i)
+                            if not na(lbl_i)
+                                cx = int(math.round((box.get_left(gb) + box.get_right(gb)) / 2))
+                                cy = (box.get_top(gb) + box.get_bottom(gb)) / 2
+                                label.set_x(lbl_i, cx)
+                                label.set_y(lbl_i, cy)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BOX EXTENSION LOGIC (extend only unmitigated rectangles to current bar)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if barstate.isrealtime and array.size(gap_boxes) > 0 and array.size(mitigation_status) > 0
+    for i = 0 to array.size(gap_boxes) - 1
+        if i < array.size(gap_boxes) and i < array.size(mitigation_status)
+            is_mitigated = array.get(mitigation_status, i)
+            // Only extend box if gap is not mitigated
+            if not is_mitigated
+                gap_box = array.get(gap_boxes, i)
+                box.set_right(gap_box, bar_index + BOX_EXTEND_LOOKAHEAD)
+                // Keep label centered as box extends
+                if i < array.size(gap_labels)
+                    lbl_i = array.get(gap_labels, i)
+                    if not na(lbl_i)
+                        cx = int(math.round((box.get_left(gap_box) + box.get_right(gap_box)) / 2))
+                        cy = (box.get_top(gap_box) + box.get_bottom(gap_box)) / 2
+                        label.set_x(lbl_i, cx)
+                        label.set_y(lbl_i, cy)
