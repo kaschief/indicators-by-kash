@@ -24,6 +24,9 @@ var array<string> sif_alert_parts = array.new<string>()
 nested_sif_bullish_formed = false
 nested_sif_bearish_formed = false
 
+// Cache of consolidated groups from last visual render (for stars reuse)
+// Moved declaration below type ConsolidatedSIF to satisfy Pine type ordering
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENUMS & CONSTANTS - CLEAN STRUCTURE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -289,6 +292,9 @@ GAP_LABEL_VOLUME_BULLISH = "Vol Imb⁺ for "
 GAP_LABEL_VOLUME_BEARISH = "Vol Imb⁻ for "
 GAP_LABEL_TRUE_BULLISH = "True Gap⁺ for "
 GAP_LABEL_TRUE_BEARISH = "True Gap⁻ for "
+// RDRB gap label text constants (parity with other sources)
+GAP_LABEL_RDRB_BULLISH = "RDRB⁺ for "
+GAP_LABEL_RDRB_BEARISH = "RDRB⁻ for "
 
 MULTIPLIER_SYMBOL = "×"
 COUNT_SEPARATOR = ": "
@@ -505,7 +511,7 @@ sif_breached_line_width = input.int(LINE_WIDTH_THIN, '', minval=1, maxval=5, gro
 sif_breached_line_transparency = input.int(TRANSPARENCY_LIGHT, '', minval=0, maxval=90, group=GROUP_BREACH_DETECTION, inline='breach')
 
 // Invalidation Lines
-enable_sif_invalidation_lines = input.bool(true, INPUT_LABEL_INVALIDATION_LINES, group=GROUP_BREACH_DETECTION, inline='invalidation')
+enable_sif_invalidation_lines = input.bool(false, INPUT_LABEL_INVALIDATION_LINES, group=GROUP_BREACH_DETECTION, inline='invalidation')
 sif_invalidation_line_color = input.color(color.new(color.gray, TRANSPARENCY_MEDIUM), '', group=GROUP_BREACH_DETECTION, inline='invalidation')
 sif_invalidation_line_style = input.string(LINE_STYLE_SOLID, '', options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_BREACH_DETECTION, inline='invalidation')
 sif_invalidation_line_width = input.int(LINE_WIDTH_MEDIUM, '', minval=1, maxval=5, group=GROUP_BREACH_DETECTION, inline='invalidation')
@@ -645,6 +651,11 @@ type SIFRecord
     bool cached_data_valid
     label sif_label
     int source_gap_id
+    // Cached source gap geometry to decouple from active_gaps retention
+    int source_gap_bar_index
+    float source_gap_top
+    float source_gap_bottom
+    string source_gap_type
     // Just SUPER or NORMAL
     bool is_super_sif              // true if overlapping with any same-direction SIF
     float overlap_percentage       // 0.0 to 100.0
@@ -662,6 +673,9 @@ type ConsolidatedSIF
     bool is_consolidated_invalidated
     string consolidated_candle_label
     string consolidated_extension_label
+
+// Cache of consolidated groups from last visual render (for stars reuse)
+var array<ConsolidatedSIF> last_consolidated_sifs = array.new<ConsolidatedSIF>()
 
 // Global State
 var array<GapData> active_gaps = array.new<GapData>()
@@ -684,6 +698,8 @@ var array<line> sif_breached_lines = array.new_line()
 var array<line> sif_invalidation_lines = array.new_line()
 
 var bool needs_visual_update = true
+var int last_update_bar = na
+var bool needs_full_update = true
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS - DEFINED EARLY FOR DEPENDENCIES
@@ -1575,7 +1591,7 @@ determine_consolidated_status(consolidated_sif) =>
                 if bars_since_formation > 1  // Only check history for old SIFs
                     historical_breach_found = false
                     // Look back through bars since formation (but not beyond formation)
-                    max_lookback = math.min(bars_since_formation - 1, 500)  // Limit to bars since formation or 500, whichever is smaller
+                    max_lookback = math.min(bars_since_formation - 1, HISTORICAL_LOOKBACK_LIMIT)  // Limit to bars since formation or configured lookback
                     for i = 1 to max_lookback
                         historical_penetration = sif_breach_method == BREACH_METHOD_BODY_BREACH ? calculate_sif_zone_penetration_from_body(open[i], close[i], consolidated_sif.consolidated_zone_top, consolidated_sif.consolidated_zone_bottom, consolidated_sif.is_bullish) : calculate_zone_penetration_from_extreme(consolidated_sif.is_bullish ? low[i] : high[i], consolidated_sif.consolidated_zone_top, consolidated_sif.consolidated_zone_bottom, consolidated_sif.is_bullish)
                         if historical_penetration >= validated_breach_threshold
@@ -2556,7 +2572,7 @@ if array.size(active_gaps) > 0
                     [sif_subtype, has_dom_wick] = detect_sif_subtype(sif_open_price, sif_close_price, sif_high_price, sif_low_price, gap.gap_type)
 
                     // Create temporary SIF record for strength detection
-                    temp_sif_record = SIFRecord.new(
+                    temporary_sif_record = SIFRecord.new(
                          sif_candidate.bar_index,
                          sif_open_price,
                          sif_close_price,
@@ -2574,6 +2590,10 @@ if array.size(active_gaps) > 0
                          false,
                          label(na),
                          gap.gap_id,
+                         gap.bar_index,
+                         gap.top,
+                         gap.bottom,
+                         gap.gap_type,
                          false,
                          0.0,
                          int(na),
@@ -2581,7 +2601,7 @@ if array.size(active_gaps) > 0
                      )
 
                     // Detect SUPER SIF strength
-                    [is_super, overlap_pct, overlapped_bar] = detect_sif_strength(temp_sif_record)
+                    [is_super, overlap_pct, overlapped_bar] = detect_sif_strength(temporary_sif_record)
                     if is_super
                         if sif_candidate.is_bullish
                             nested_sif_bullish_formed := true
@@ -2606,6 +2626,10 @@ if array.size(active_gaps) > 0
                          false,
                          label(na),
                          gap.gap_id,
+                         gap.bar_index,
+                         gap.top,
+                         gap.bottom,
+                         gap.gap_type,
                          is_super,
                          overlap_pct,
                          overlapped_bar,
@@ -2861,40 +2885,41 @@ manage_consolidated_sif_display() =>
                         invalidation_line = line.new(x1=current_consolidated_sif.bar_index, y1=invalidation_level, x2=extension_right, y2=invalidation_level, xloc=xloc.bar_index, color=get_sif_invalidation_line_color(), style=get_sif_invalidation_line_style(), width=sif_invalidation_line_width)
                         array.push(sif_invalidation_lines, invalidation_line)
 
-            // Source gap creation - Show ALL individual gaps, not just first one
+            // Source gap creation - use cached geometry (independent of active_gaps retention)
             if show_source_gap and array.size(source_gap_boxes) < max_source_gap_boxes_effective
                 // Create gap box for EACH SIF in the group
                 for current_sif_index = 0 to array.size(current_consolidated_sif.sif_group) - 1
                     current_sif_in_group = array.get(current_consolidated_sif.sif_group, current_sif_index)
 
                     if not array.includes(gap_boxes_already_created, current_sif_in_group.source_gap_id)
-                        // Find the source gap by ID
-                        for active_gap_index = 0 to array.size(active_gaps) - 1
-                            source_gap_data = array.get(active_gaps, active_gap_index)
-                            if source_gap_data.gap_id == current_sif_in_group.source_gap_id
-                                individual_sif_label = current_sif_in_group.is_bullish ? SIF_PLUS : SIF_MINUS
+                        individual_sif_label = current_sif_in_group.is_bullish ? SIF_PLUS : SIF_MINUS
 
-                                // Use "Vol Imb+" instead of "VI+" for gap labels
-                                source_gap_label_text = ""
-                                if source_gap_data.gap_type == GAP_TYPE_IMPLIED
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'Imp FVG+ for ' + individual_sif_label : 'Imp FVG- for ' + individual_sif_label
-                                else if source_gap_data.gap_type == GAP_TYPE_VOLUME
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'Vol Imb+ for ' + individual_sif_label : 'Vol Imb- for ' + individual_sif_label
-                                else if source_gap_data.gap_type == GAP_TYPE_TRUE
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'True Gap+ for ' + individual_sif_label : 'True Gap- for ' + individual_sif_label
-                                else if source_gap_data.gap_type == GAP_TYPE_RDRB
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'RDRB+ for ' + individual_sif_label : 'RDRB- for ' + individual_sif_label
-                                else
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'FVG+ for ' + individual_sif_label : 'FVG- for ' + individual_sif_label
+                        // Build label text from cached type and direction
+                        source_gap_label_text = ""
+                        if current_sif_in_group.source_gap_type == GAP_TYPE_IMPLIED
+                            source_gap_label_text := current_sif_in_group.is_bullish ? GAP_LABEL_IMPLIED_BULLISH + individual_sif_label : GAP_LABEL_IMPLIED_BEARISH + individual_sif_label
+                        else if current_sif_in_group.source_gap_type == GAP_TYPE_VOLUME
+                            source_gap_label_text := current_sif_in_group.is_bullish ? GAP_LABEL_VOLUME_BULLISH + individual_sif_label : GAP_LABEL_VOLUME_BEARISH + individual_sif_label
+                        else if current_sif_in_group.source_gap_type == GAP_TYPE_TRUE
+                            source_gap_label_text := current_sif_in_group.is_bullish ? GAP_LABEL_TRUE_BULLISH + individual_sif_label : GAP_LABEL_TRUE_BEARISH + individual_sif_label
+                        else if current_sif_in_group.source_gap_type == GAP_TYPE_RDRB
+                            source_gap_label_text := current_sif_in_group.is_bullish ? GAP_LABEL_RDRB_BULLISH + individual_sif_label : GAP_LABEL_RDRB_BEARISH + individual_sif_label
+                        else
+                            source_gap_label_text := current_sif_in_group.is_bullish ? GAP_LABEL_FVG_BULLISH + individual_sif_label : GAP_LABEL_FVG_BEARISH + individual_sif_label
 
-                                // Create and configure gap box
-                                individual_gap_box = create_box(source_gap_data.bar_index, source_gap_data.top, source_gap_data.bottom, gap_color, source_gap_label_text)
-                                box.set_right(individual_gap_box, current_sif_in_group.bar_index)
-                                array.push(source_gap_boxes, individual_gap_box)
+                        // Create and configure gap box from cached geometry
+                        individual_gap_box = create_box(
+                             current_sif_in_group.source_gap_bar_index,
+                             current_sif_in_group.source_gap_top,
+                             current_sif_in_group.source_gap_bottom,
+                             gap_color,
+                             source_gap_label_text
+                         )
+                        box.set_right(individual_gap_box, current_sif_in_group.bar_index)
+                        array.push(source_gap_boxes, individual_gap_box)
 
-                                // Mark this gap ID as processed
-                                array.push(gap_boxes_already_created, current_sif_in_group.source_gap_id)
-                                break
+                        // Mark this gap ID as processed
+                        array.push(gap_boxes_already_created, current_sif_in_group.source_gap_id)
 
         // Projections using consolidated zones
         if show_sif_projections and array.size(consolidated_sifs) > 0
@@ -2950,17 +2975,23 @@ manage_consolidated_sif_display() =>
                     array.push(sif_projection_labels, projection_level_label)
                 projected_sif_count += 1
 
-// OPTIMIZED: Smart visual update system - only when necessary (v9.13: historical backfill toggle added)
-visual_update_needed = needs_visual_update or
-                      (barstate.isconfirmed and array.size(all_sif_records) > 0) or
-                      (ENABLE_HISTORICAL_BACKFILL and barstate.islastconfirmedhistory)
+    // Cache consolidated groups for reuse in stars block (avoid re-grouping)
+    array.clear(last_consolidated_sifs)
+    if array.size(consolidated_sifs) > 0
+        for cache_i = 0 to array.size(consolidated_sifs) - 1
+            array.push(last_consolidated_sifs, array.get(consolidated_sifs, cache_i))
 
-if visual_update_needed
+// OPTIMIZED: Smart visual update system - only when necessary (match MBZ gating)
+should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
+
+if should_update_visuals
     manage_consolidated_sif_display()
+    last_update_bar := bar_index
+    needs_full_update := false
     needs_visual_update := false
 
-// Wick dominance stars - Updated for consolidated display
-if enable_wick_dominance_markers
+// Wick dominance stars - Reuse consolidated groups; update only on visual updates
+if enable_wick_dominance_markers and should_update_visuals
     for existing_star_element in star_labels
         label.delete(existing_star_element)
     array.clear(star_labels)
@@ -2995,12 +3026,10 @@ if enable_wick_dominance_markers
             if valid_sifs_count >= max_valid_sifs_effective and (invalidated_sifs_count >= max_invalidated_sifs_effective or invalidated_sif_display == INVALIDATED_DISPLAY_OFF)
                 break
 
-        // Only proceed if we have displayable SIFs
-        if array.size(displayable_sifs_for_stars) > 0
-            consolidated_sifs_for_stars = group_sifs_by_candle(displayable_sifs_for_stars)
-
-            for consolidated_index = 0 to array.size(consolidated_sifs_for_stars) - 1
-                current_consolidated_sif_for_star = array.get(consolidated_sifs_for_stars, consolidated_index)
+        // Use last_consolidated_sifs built during visual render to avoid re-grouping
+        if array.size(last_consolidated_sifs) > 0
+            for consolidated_index = 0 to array.size(last_consolidated_sifs) - 1
+                current_consolidated_sif_for_star = array.get(last_consolidated_sifs, consolidated_index)
 
                 // Check each SIF in the group for dominant wicks
                 for sif_in_group_index = 0 to array.size(current_consolidated_sif_for_star.sif_group) - 1

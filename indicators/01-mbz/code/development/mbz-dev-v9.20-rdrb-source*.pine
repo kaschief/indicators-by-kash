@@ -25,6 +25,10 @@ var bool mbz_grouped_alert_active = false
 var string mbz_alert_message = ""
 var array<string> mbz_alert_parts = array.new<string>()
 
+// Baseline MBZ formation flags (set per-bar in main detection)
+mbz_bullish_formed = false
+mbz_bearish_formed = false
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENUMS & CONSTANTS - CLEAN STRUCTURE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -245,6 +249,9 @@ GAP_LABEL_VOLUME_BULLISH = "Vol Imb⁺ for "
 GAP_LABEL_VOLUME_BEARISH = "Vol Imb⁻ for "
 GAP_LABEL_TRUE_BULLISH = "True Gap⁺ for "
 GAP_LABEL_TRUE_BEARISH = "True Gap⁻ for "
+// RDRB gap label text constants for parity
+GAP_LABEL_RDRB_BULLISH = "RDRB⁺ for "
+GAP_LABEL_RDRB_BEARISH = "RDRB⁻ for "
 MULTIPLIER_SYMBOL = "×"
 COUNT_SEPARATOR = ": "
 BREAKDOWN_SEPARATOR = ", "
@@ -551,6 +558,11 @@ type MBZRecord
     bool cached_data_valid
     label mbz_label
     int source_gap_id
+    // Cached source gap geometry to decouple from active_gaps retention
+    int source_gap_bar_index
+    float source_gap_top
+    float source_gap_bottom
+    string source_gap_type
     bool wicked_into_source_gap    // Track if wick penetrated deeper into source gap
     bool reflection_pattern_deeper // Track if reflection pattern wick was deeper
     // SUPER MBZ detection
@@ -584,6 +596,9 @@ var array<line> mbz_projection_lines = array.new_line()       // Projection line
 var array<label> mbz_projection_labels = array.new<label>()   // Projection labels
 var array<line> mbz_lines = array.new_line()                 // Breach level lines
 var array<int> displayed_mbz_indices = array.new<int>()       // Display tracking
+// Cache of consolidated groups from last visual render (for stars reuse)
+var array<ConsolidatedMBZ> last_consolidated_mbzs = array.new<ConsolidatedMBZ>()
+
 
 // Performance optimization flags
 var bool needs_visual_update = true
@@ -1761,7 +1776,35 @@ cache_mbz_data(mbz_record) =>
     cached_tooltip = build_mbz_tooltip(mbz_record, wick_tier)
 
     // Return new record with all cached data
-    MBZRecord.new(mbz_record.bar_index, mbz_record.high_price, mbz_record.low_price, mbz_record.mbz_open, mbz_record.mbz_close, mbz_record.is_bullish, mbz_record.is_invalidated, mbz_record.max_fill_percentage, mbz_record.has_dominant_wick, mbz_record.is_exactly_50_percent, mbz_record.mbz_subtype, cached_label_text, cached_tooltip, cached_zone_top, cached_zone_bottom, true, mbz_record.mbz_label, mbz_record.source_gap_id, mbz_record.wicked_into_source_gap, mbz_record.reflection_pattern_deeper, mbz_record.is_super_mbz, mbz_record.overlap_percentage, mbz_record.overlapping_mbz_bar_index)
+    MBZRecord.new(
+         mbz_record.bar_index,
+         mbz_record.high_price,
+         mbz_record.low_price,
+         mbz_record.mbz_open,
+         mbz_record.mbz_close,
+         mbz_record.is_bullish,
+         mbz_record.is_invalidated,
+         mbz_record.max_fill_percentage,
+         mbz_record.has_dominant_wick,
+         mbz_record.is_exactly_50_percent,
+         mbz_record.mbz_subtype,
+         cached_label_text,
+         cached_tooltip,
+         cached_zone_top,
+         cached_zone_bottom,
+         true,
+         mbz_record.mbz_label,
+         mbz_record.source_gap_id,
+         mbz_record.source_gap_bar_index,
+         mbz_record.source_gap_top,
+         mbz_record.source_gap_bottom,
+         mbz_record.source_gap_type,
+         mbz_record.wicked_into_source_gap,
+         mbz_record.reflection_pattern_deeper,
+         mbz_record.is_super_mbz,
+         mbz_record.overlap_percentage,
+         mbz_record.overlapping_mbz_bar_index
+     )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
     if not mbz_record.cached_data_valid
@@ -2766,6 +2809,8 @@ manage_consolidated_mbz_display() =>
     if array.size(consolidated_mbzs) > 0
         // Process each consolidated group
         gap_boxes_already_created = array.new<int>()
+        // NEW: Deduplicate gap boxes across all groups to minimize visuals and speed up rendering
+        created_gap_ids_overall = array.new_int()
 
         for consolidated_group_index = 0 to array.size(consolidated_mbzs) - 1
             current_consolidated_mbz = array.get(consolidated_mbzs, consolidated_group_index)
@@ -2933,40 +2978,43 @@ manage_consolidated_mbz_display() =>
                          )
                         array.push(mbz_lines, invalidation_line)
 
-            // Source gap creation - Show ALL individual gaps, not just first one
+            // Source gap creation - use cached geometry (independent of active_gaps retention)
             if show_source_gap and array.size(source_gap_boxes) < max_source_gap_boxes
                 // Create gap box for EACH MBZ in the group
                 for current_mbz_index = 0 to array.size(current_consolidated_mbz.mbz_group) - 1
                     current_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, current_mbz_index)
 
-                    if not array.includes(gap_boxes_already_created, current_mbz_in_group.source_gap_id)
-                        // Find the source gap by ID
-                        for active_gap_index = 0 to array.size(active_gaps) - 1
-                            source_gap_data = array.get(active_gaps, active_gap_index)
-                            if source_gap_data.gap_id == current_mbz_in_group.source_gap_id
-                                individual_mbz_label = MBZ_BASE_TEXT + (current_mbz_in_group.is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX)
+                    // Skip if we've already created this gap box anywhere in this pass
+                    if not array.includes(gap_boxes_already_created, current_mbz_in_group.source_gap_id) and not array.includes(created_gap_ids_overall, current_mbz_in_group.source_gap_id)
+                        individual_mbz_label = MBZ_BASE_TEXT + (current_mbz_in_group.is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX)
 
-                                // Use GAP_LABEL_VOL_IMB instead of "VI" for gap labels
-                                source_gap_label_text = ""
-                                if source_gap_data.gap_type == GAP_TYPE_IMPLIED
-                                    source_gap_label_text := source_gap_data.is_bullish ? GAP_LABEL_IMPLIED_BULLISH + individual_mbz_label : GAP_LABEL_IMPLIED_BEARISH + individual_mbz_label
-                                else if source_gap_data.gap_type == GAP_TYPE_VOLUME
-                                    source_gap_label_text := source_gap_data.is_bullish ? GAP_LABEL_VOLUME_BULLISH + individual_mbz_label : GAP_LABEL_VOLUME_BEARISH + individual_mbz_label
-                                else if source_gap_data.gap_type == GAP_TYPE_TRUE
-                                    source_gap_label_text := source_gap_data.is_bullish ? GAP_LABEL_TRUE_BULLISH + individual_mbz_label : GAP_LABEL_TRUE_BEARISH + individual_mbz_label
-                                else if source_gap_data.gap_type == GAP_TYPE_RDRB
-                                    source_gap_label_text := source_gap_data.is_bullish ? 'RDRB+ for ' + individual_mbz_label : 'RDRB- for ' + individual_mbz_label
-                                else
-                                    source_gap_label_text := source_gap_data.is_bullish ? GAP_LABEL_FVG_BULLISH + individual_mbz_label : GAP_LABEL_FVG_BEARISH + individual_mbz_label
+                        // Build label text from cached type and direction
+                        source_gap_label_text = ""
+                        if current_mbz_in_group.source_gap_type == GAP_TYPE_IMPLIED
+                            source_gap_label_text := current_mbz_in_group.is_bullish ? GAP_LABEL_IMPLIED_BULLISH + individual_mbz_label : GAP_LABEL_IMPLIED_BEARISH + individual_mbz_label
+                        else if current_mbz_in_group.source_gap_type == GAP_TYPE_VOLUME
+                            source_gap_label_text := current_mbz_in_group.is_bullish ? GAP_LABEL_VOLUME_BULLISH + individual_mbz_label : GAP_LABEL_VOLUME_BEARISH + individual_mbz_label
+                        else if current_mbz_in_group.source_gap_type == GAP_TYPE_TRUE
+                            source_gap_label_text := current_mbz_in_group.is_bullish ? GAP_LABEL_TRUE_BULLISH + individual_mbz_label : GAP_LABEL_TRUE_BEARISH + individual_mbz_label
+                        else if current_mbz_in_group.source_gap_type == GAP_TYPE_RDRB
+                            source_gap_label_text := current_mbz_in_group.is_bullish ? GAP_LABEL_RDRB_BULLISH + individual_mbz_label : GAP_LABEL_RDRB_BEARISH + individual_mbz_label
+                        else
+                            source_gap_label_text := current_mbz_in_group.is_bullish ? GAP_LABEL_FVG_BULLISH + individual_mbz_label : GAP_LABEL_FVG_BEARISH + individual_mbz_label
 
-                                // Create and configure gap box
-                                individual_gap_box = create_box(source_gap_data.bar_index, source_gap_data.top, source_gap_data.bottom, gap_color, source_gap_label_text)
-                                box.set_right(individual_gap_box, current_mbz_in_group.bar_index - 1)  // Extend to mitigation candle (correct for MBZ)
-                                array.push(source_gap_boxes, individual_gap_box)
+                        // Create and configure gap box from cached geometry
+                        individual_gap_box = create_box(
+                             current_mbz_in_group.source_gap_bar_index,
+                             current_mbz_in_group.source_gap_top,
+                             current_mbz_in_group.source_gap_bottom,
+                             gap_color,
+                             source_gap_label_text
+                         )
+                        box.set_right(individual_gap_box, current_mbz_in_group.bar_index - 1)  // Extend to mitigation candle
+                        array.push(source_gap_boxes, individual_gap_box)
 
-                                // Mark this gap ID as processed
-                                array.push(gap_boxes_already_created, current_mbz_in_group.source_gap_id)
-                                break
+                        // Mark this gap ID as processed
+                        array.push(gap_boxes_already_created, current_mbz_in_group.source_gap_id)
+                        array.push(created_gap_ids_overall, current_mbz_in_group.source_gap_id)
 
         // Projections using consolidated zones
         if show_mbz_projections and array.size(consolidated_mbzs) > 0
@@ -3022,6 +3070,12 @@ manage_consolidated_mbz_display() =>
                     array.push(mbz_projection_labels, projection_level_label)
                 projected_mbz_count += 1
 
+    // Cache consolidated groups for reuse in stars block (avoid re-grouping)
+    array.clear(last_consolidated_mbzs)
+    if array.size(consolidated_mbzs) > 0
+        for cache_i = 0 to array.size(consolidated_mbzs) - 1
+            array.push(last_consolidated_mbzs, array.get(consolidated_mbzs, cache_i))
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN DETECTION LOGIC - ENHANCED WITH VOLUME IMBALANCE SUPPORT // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -3034,6 +3088,9 @@ nested_mbz_bullish_formed := false
 nested_mbz_bearish_formed := false
 deeper_wick_mbz_bullish_formed := false
 deeper_wick_mbz_bearish_formed := false
+// Reset baseline MBZ formation flags each bar (used by alertcondition/grouped alerts)
+mbz_bullish_formed := false
+mbz_bearish_formed := false
 
 // PERFORMANCE OPTIMIZATION: Skip historical processing for instant loading
 if ENABLE_HISTORICAL_BACKFILL and not initialized and barstate.islastconfirmedhistory
@@ -3139,7 +3196,6 @@ if array.size(all_mbz_records) > 0
                 updated_mbz.is_invalidated := true
                 updated_mbz.cached_data_valid := false  // Invalidate cache
                 needs_visual_update := true
-                // Debug log - shows gap vs close invalidation
                 // if barstate.islast
                 //     [zone_top, zone_bottom] = get_mbz_subtype_zone(updated_mbz)
                 //     gap_invalidation = updated_mbz.is_bullish ? (open < zone_bottom) : (open > zone_top)
@@ -3223,7 +3279,7 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                         [gap_deeper, pattern_deeper] = check_deeper_wick_penetration(high, low, open, close, gap.is_bullish, mbz_subtype, high[1], low[1], gap.gap_id)
 
                         // Create temporary MBZ record for SUPER detection
-                        temp_mbz_record = MBZRecord.new(
+                        temporary_mbz_record = MBZRecord.new(
                              bar_index,         // MBZ formation bar
                              high,             // MBZ candle high
                              low,              // MBZ candle low
@@ -3242,6 +3298,10 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              false, // cached_data_valid
                              label(na),        // Label will be created by manage_mbz_display()
                              gap.gap_id,       // Reference to source gap
+                             gap.bar_index,    // Cached source gap bar index
+                             gap.top,          // Cached source gap top
+                             gap.bottom,       // Cached source gap bottom
+                             gap.gap_type,     // Cached source gap type
                              gap_deeper,  // Standard deeper wick detection
                              pattern_deeper, // Optional reflection pattern deeper
                              false,            // Will be updated
@@ -3250,7 +3310,7 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                          )
 
                         // Detect SUPER MBZ strength
-                        [is_super, overlap_pct, overlapped_bar] = detect_mbz_strength(temp_mbz_record)
+                        [is_super, overlap_pct, overlapped_bar] = detect_mbz_strength(temporary_mbz_record)
 
                         // Store complete MBZ record with SUPER data
                         mbz_record = MBZRecord.new(
@@ -3272,6 +3332,10 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              false, // cached_data_valid
                              label(na),        // Label will be created by manage_mbz_display()
                              gap.gap_id,       // Reference to source gap
+                             gap.bar_index,    // Cached source gap bar index
+                             gap.top,          // Cached source gap top
+                             gap.bottom,       // Cached source gap bottom
+                             gap.gap_type,     // Cached source gap type
                              gap_deeper,  // Standard deeper wick detection
                              pattern_deeper, // Optional reflection pattern deeper
                              is_super,         // SUPER MBZ detection
@@ -3283,6 +3347,12 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                         mbz_record := cache_mbz_data(mbz_record)
                         array.push(all_mbz_records, mbz_record)
                         needs_visual_update := true
+
+                        // Baseline MBZ formation flags for alerts (merged from duplicate scan)
+                        if gap.is_bullish
+                            mbz_bullish_formed := true
+                        else
+                            mbz_bearish_formed := true
 
                         // Multi-source MBZ alert detection: set flags when >=2 MBZs form on same bar and direction
                         same_bar_same_direction_count = 0
@@ -3325,10 +3395,8 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
 // VISUAL MANAGEMENT - CONSOLIDATED SYSTEM // ═══════════════════════════════════════════════════════════════════════════════
 
 // PERFORMANCE OPTIMIZED: Smart visual update system - only when truly necessary
-should_update_visuals = needs_full_update or
-                       barstate.isconfirmed or
-                       (barstate.islast and bar_index != last_update_bar) or
-                       barstate.islastconfirmedhistory
+// Only update on explicit need, last/last-confirmed bars (avoid per-bar historical rebuilds)
+should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
     manage_consolidated_mbz_display()
@@ -3336,141 +3404,65 @@ if should_update_visuals
     needs_full_update := false
     needs_visual_update := false
 
-// Wick dominance stars - Updated for consolidated display
-if enable_wick_dominance_markers
+
+// Wick dominance stars - Reuse consolidated groups; update only on visual updates
+if enable_wick_dominance_markers and should_update_visuals
     for existing_star_element in star_labels
         label.delete(existing_star_element)
     array.clear(star_labels)
 
-    // Process each consolidated MBZ group only if we have records
-    total_mbz_records_available = array.size(all_mbz_records)
-    if total_mbz_records_available > 0
-        displayable_mbzs_for_stars = array.new<MBZRecord>()
-        // SEPARATE LIMITS SYSTEM: Apply same limits for wick dominance stars
-        valid_mbz_star_count = 0
-        invalidated_mbz_star_count = 0
+    // Use last_consolidated_mbzs built during visual render to avoid re-grouping
+    if array.size(last_consolidated_mbzs) > 0
+        for consolidated_index = 0 to array.size(last_consolidated_mbzs) - 1
+            current_consolidated_mbz_for_star = array.get(last_consolidated_mbzs, consolidated_index)
 
-        for record_index = total_mbz_records_available - 1 to 0
-            current_mbz_record = array.get(all_mbz_records, record_index)
+            // Check each MBZ in the group for dominant wicks
+            for mbz_in_group_index = 0 to array.size(current_consolidated_mbz_for_star.mbz_group) - 1
+                individual_mbz_for_star = array.get(current_consolidated_mbz_for_star.mbz_group, mbz_in_group_index)
 
-            if should_display_mbz_direction(current_mbz_record)
-                // SEPARATE LIMITS SYSTEM: Apply same logic for star display
-                if not current_mbz_record.is_invalidated and valid_mbz_star_count < max_valid_mbzs_effective
-                    if should_display_mbz(current_mbz_record)
-                        array.push(displayable_mbzs_for_stars, current_mbz_record)
-                        valid_mbz_star_count += 1
-                else if current_mbz_record.is_invalidated and invalidated_mbz_star_count < max_invalidated_mbzs and invalidated_mbz_display != INVALIDATED_DISPLAY_OFF
-                    if should_display_mbz(current_mbz_record)
-                        array.push(displayable_mbzs_for_stars, current_mbz_record)
-                        invalidated_mbz_star_count += 1
+                mbz_body_top_price = math.max(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
+                mbz_body_bottom_price = math.min(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
+                mbz_body_size_range = mbz_body_top_price - mbz_body_bottom_price
+                mbz_upper_wick_size = individual_mbz_for_star.high_price - mbz_body_top_price
+                mbz_lower_wick_size = mbz_body_bottom_price - individual_mbz_for_star.low_price
 
-        // Only proceed if we have displayable MBZs
-        if array.size(displayable_mbzs_for_stars) > 0
-            consolidated_mbzs_for_stars = group_mbzs_by_candle(displayable_mbzs_for_stars)
+                [wick_dominance_tier, has_significant_wick_dominance] = classify_wick_dominance(mbz_body_size_range, mbz_upper_wick_size, mbz_lower_wick_size)
 
-            for consolidated_index = 0 to array.size(consolidated_mbzs_for_stars) - 1
-                current_consolidated_mbz_for_star = array.get(consolidated_mbzs_for_stars, consolidated_index)
+                if has_significant_wick_dominance
+                    wick_tier_star_color = switch wick_dominance_tier
+                        WICK_TIER_STANDARD => standard_star_color
+                        WICK_TIER_RELAXED => relaxed_star_color
+                        WICK_TIER_RISKY => risky_star_color
+                        => standard_star_color
 
-                // Calculate consolidated status for star display
-                [consolidated_zone_top, consolidated_zone_bottom] = calculate_consolidated_zone_boundaries(current_consolidated_mbz_for_star.mbz_group)
-                current_consolidated_mbz_for_star.consolidated_zone_top := consolidated_zone_top
-                current_consolidated_mbz_for_star.consolidated_zone_bottom := consolidated_zone_bottom
-                [is_breached, is_invalidated] = determine_consolidated_status(current_consolidated_mbz_for_star)
-                current_consolidated_mbz_for_star.is_consolidated_breached := is_breached
-                current_consolidated_mbz_for_star.is_consolidated_invalidated := is_invalidated
+                    wick_strength_description = switch wick_dominance_tier
+                        WICK_TIER_STANDARD => "Standard (≥100%)"
+                        WICK_TIER_RELAXED => "Relaxed (85-99%)"
+                        WICK_TIER_RISKY => "Risky (80-84%)"
+                        => WICK_TIER_STANDARD_DISPLAY
 
-                // Check each MBZ in the group for dominant wicks
-                for mbz_in_group_index = 0 to array.size(current_consolidated_mbz_for_star.mbz_group) - 1
-                    individual_mbz_for_star = array.get(current_consolidated_mbz_for_star.mbz_group, mbz_in_group_index)
+                    is_mbz_candle_bullish = individual_mbz_for_star.mbz_close > individual_mbz_for_star.mbz_open
+                    star_y_position = is_mbz_candle_bullish ? individual_mbz_for_star.low_price : individual_mbz_for_star.high_price
+                    star_y_location = is_mbz_candle_bullish ? yloc.abovebar : yloc.belowbar
 
-                    mbz_body_top_price = math.max(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
-                    mbz_body_bottom_price = math.min(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
-                    mbz_body_size_range = mbz_body_top_price - mbz_body_bottom_price
-                    mbz_upper_wick_size = individual_mbz_for_star.high_price - mbz_body_top_price
-                    mbz_lower_wick_size = mbz_body_bottom_price - individual_mbz_for_star.low_price
+                    star_label_size = current_consolidated_mbz_for_star.is_consolidated_invalidated ? get_invalidated_mbz_size() : get_wick_star_size()
+                    star_label_color = current_consolidated_mbz_for_star.is_consolidated_invalidated ? mbz_invalidated_color : wick_tier_star_color
 
-                    [wick_dominance_tier, has_significant_wick_dominance] = classify_wick_dominance(mbz_body_size_range, mbz_upper_wick_size, mbz_lower_wick_size)
+                    wick_dominance_star_label = label.new(
+                         x=individual_mbz_for_star.bar_index,
+                         y=star_y_position,
+                         text="★",
+                         style=label.style_none,
+                         textcolor=star_label_color,
+                         size=star_label_size,
+                         yloc=star_y_location,
+                         tooltip="Dominant Wick MBZ (" + wick_strength_description + ")"
+                     )
 
-                    if has_significant_wick_dominance
-                        wick_tier_star_color = switch wick_dominance_tier
-                            WICK_TIER_STANDARD => standard_star_color
-                            WICK_TIER_RELAXED => relaxed_star_color
-                            WICK_TIER_RISKY => risky_star_color
-                            => standard_star_color
-
-                        wick_strength_description = switch wick_dominance_tier
-                            WICK_TIER_STANDARD => "Standard (≥100%)"
-                            WICK_TIER_RELAXED => "Relaxed (85-99%)"
-                            WICK_TIER_RISKY => "Risky (80-84%)"
-                            => WICK_TIER_STANDARD_DISPLAY
-
-                        is_mbz_candle_bullish = individual_mbz_for_star.mbz_close > individual_mbz_for_star.mbz_open
-                        star_y_position = is_mbz_candle_bullish ? individual_mbz_for_star.low_price : individual_mbz_for_star.high_price
-                        star_y_location = is_mbz_candle_bullish ? yloc.abovebar : yloc.belowbar
-
-                        star_label_size = current_consolidated_mbz_for_star.is_consolidated_invalidated ? get_invalidated_mbz_size() : get_wick_star_size()
-                        star_label_color = current_consolidated_mbz_for_star.is_consolidated_invalidated ? mbz_invalidated_color : wick_tier_star_color
-
-                        wick_dominance_star_label = label.new(
-                             x=individual_mbz_for_star.bar_index,
-                             y=star_y_position,
-                             text="★",
-                             style=label.style_none,
-                             textcolor=star_label_color,
-                             size=star_label_size,
-                             yloc=star_y_location,
-                             tooltip="Dominant Wick MBZ (" + wick_strength_description + ")"
-                         )
-
-                        array.push(star_labels, wick_dominance_star_label)
+                    array.push(star_labels, wick_dominance_star_label)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENHANCED ALERTS - FULLY FUNCTIONAL FOR ALL GAP TYPES // ═══════════════════════════════════════════════════════════════════════════════
-
-mbz_bullish_formed = false
-mbz_bearish_formed = false
-
-if array.size(active_gaps) > 0 and barstate.isconfirmed
-    for i = array.size(active_gaps) - 1 to 0 by 1
-        gap = array.get(active_gaps, i)
-
-        if not gap.is_closed_through
-            // Timing validation - consistent 1+ bar gap required for ALL gap types (matches main detection logic)
-            bars_since_gap_creation = bar_index - gap.creation_bar
-            if bars_since_gap_creation < 1
-                continue
-
-            prev_index = bar_index - 1
-            if prev_index <= gap.creation_bar
-                continue
-
-            current_body_top = math.max(open, close)
-            current_body_bottom = math.min(open, close)
-            is_current_bullish = close > open
-            is_current_bearish = close < open
-
-            prev_body_top = math.max(open[1], close[1])
-            prev_body_bottom = math.min(open[1], close[1])
-            is_prev_bullish = close[1] > open[1]
-            is_prev_bearish = close[1] < open[1]
-
-            prev_tapped_gap = false
-            if gap.is_bullish and is_prev_bearish
-                if low[1] <= gap.top and high[1] >= gap.bottom
-                    prev_tapped_gap := true
-            else if not gap.is_bullish and is_prev_bullish
-                if high[1] >= gap.bottom and low[1] <= gap.top
-                    prev_tapped_gap := true
-
-            if prev_tapped_gap
-                prev_50_percent = (prev_body_top + prev_body_bottom) / 2
-
-                if gap.is_bullish and is_prev_bearish and is_current_bullish
-                    if close >= prev_50_percent  // Detect at 50% and above
-                        mbz_bullish_formed := true
-                else if not gap.is_bullish and is_prev_bullish and is_current_bearish
-                    if close <= prev_50_percent  // Detect at 50% and above
-                        mbz_bearish_formed := true
+// ENHANCED ALERTS - flags set in main detection (duplicate scan removed)
 
 // Individual alertconditions
 // - Always available by Pine design; attach alerts per condition if desired.
