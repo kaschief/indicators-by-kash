@@ -74,6 +74,13 @@ ENABLE_SMART_VISUAL_UPDATES = true      // Enable optimized rendering
 - **Smart Array Pruning**: Automatic removal of oldest entries when limits exceeded
 - **Conditional Processing**: Skip expensive calculations when features disabled
 
+### Capacity Modes (v9.23 update)
+- **Optimized**: Respects user-configured display limits and baseline array caps for balanced performance.
+- **Boost**: Applies the `BOOST_MULTIPLIER` constant (2× base) for a clean doubling of valid-count and retention ceilings without overwhelming the chart.
+- **Ultra Boost**: Uses `ULTRA_BOOST_MULTIPLIER` (4× base) to unlock deeper history while staying within comfortable visual limits.
+- **Ultra Pro Boost**: Leverages `ULTRA_PRO_BOOST_MULTIPLIER` (6× base) with automatic clamping against `INDICATOR_MAX_*` so the script never exceeds platform object caps.
+- **Future Scaling**: Because the multipliers are centralized constants, expanding or tuning these modes now only requires editing the shared multiplier values rather than every downstream calculation.
+
 ---
 
 ## 🆕 Immediate SIF Inversion System (v9.15)
@@ -89,8 +96,8 @@ The immediate SIF inversion system detects rare instances where the formation ca
 ```
 
 ### Visual Marking
-- **Symbol**: ☆ (star suffix) added to candle labels
-- **Example**: "SIF+ (fvg) ↓inc ☆" indicates immediate inversion
+- **Symbol Options**: Configurable ☆ star or `[IMM]` tag applied to candle labels and tooltips
+- **Example**: "SIF+ (fvg) ↓inc ☆" (star) or "SIF+ (fvg) ↓inc [IMM]" (text) indicates immediate inversion
 - **Border Priority**: 3px borders take precedence over multi-source borders
 - **Specialized Alerts**: Dedicated alert conditions available
 
@@ -103,13 +110,14 @@ The immediate SIF inversion system detects rare instances where the formation ca
 
 ## 🆕 Multi-Source Highlighting System (v9.14)
 
-Enhanced detection and visualization of SIFs created from multiple gap sources, indicating higher probability confluence zones.
+Enhanced detection and visualization of SIFs created from multiple gap sources, indicating higher probability confluence zones. v9.23 adds configurable "STRONG" tagging for the highest-confidence multi-source clusters.
 
 ### Detection Criteria
 ```pinescript
 // Multi-source SIF requires:
-// 2 or more different gap types contributing to single SIF formation
-// Examples: FVG + Volume Imbalance, Implied + True Gap + FVG
+// 2 or more gap contributions on the same candle (distinct or same type)
+// Default: 2 sources minimum, distinct types enabled, identical types optional
+// Examples: FVG + Volume Imbalance, Implied + True Gap + FVG, Vol×3 (if enabled)
 ```
 
 ### Visual Enhancement
@@ -127,6 +135,18 @@ Enhanced detection and visualization of SIFs created from multiple gap sources, 
 3. Default (1px) - Standard Priority
 ```
 
+### STRONG Multi-Source Tag (v9.23)
+- **Purpose**: Highlight confluence zones that exceed the configurable multi-source strength threshold.
+- **Controls**:
+  - `Label Tag` / `Extension Tag`: independent toggles for candle and extension displays.
+  - `Min Sources`: minimum combined sources (default 2; supports up to 10).
+  - `Distinct Types` / `Same Type`: decide whether mixed-only, repeated-only, or both qualify.
+  - `Extension Placement`: choose whether `[STRONG]` renders above or below the extension label (candle labels always place `[STRONG]` after ☆ and before status markers).
+- **Order of Appearance**:
+  - Candle labels: `… ☆ → [STRONG] → [BREACHED] → [X]`.
+  - Extensions: `[STRONG]` line placement depends on the Extension Placement setting.
+- **Alerts**: Dedicated Strong SIF⁺ / SIF⁻ grouped alerts supersede traditional multi-source alerts when fired, with individual alertcondition support.
+
 ---
 
 ## 🆕 Special Properties Menu (v9.16)
@@ -134,7 +154,7 @@ Enhanced detection and visualization of SIFs created from multiple gap sources, 
 Consolidated menu section for advanced SIF designations and special detection features.
 
 ### Included Features
-- **Immediate SIF Inversion Controls**: Off/Star/Border/Star+Border
+- **Immediate SIF Inversion Controls**: Off/Star/Border/Star+Border with symbol selector (☆ or `[IMM]`)
 - **Multi-Source Highlighting**: Enhanced borders for confluence zones
 - **Nested SIF Markers**: ✔️ checkmarks for overlapping same-direction SIFs
 - **Wick Dominance Markers**: Color-coded stars for significant wick-to-body ratios
@@ -577,7 +597,7 @@ Color-coded stars mark SIFs with significant wick dominance:
 - **Project Last N**: Number of recent SIFs to project (1-20)
 - **Enable Projections**: Master control for projection system
 - **Projection Bars**: Bars to extend projections (5-100)
-- **Line Settings**: Width, style, label positioning
+- **Line Settings**: Width, style, label side (fixed 1-bar label offset; color/size inputs use blank titles for compact UI)
 - **Level Controls**: 
   - Boundaries (0, 1)
   - Center (0.5) 
@@ -592,24 +612,67 @@ Color-coded stars mark SIFs with significant wick dominance:
 
 ### Data Structures
 ```pine
-// Core SIF record
-type SifData
+// Gap metadata cached during detection
+type GapData
     int bar_index
-    string gap_type  
-    string sif_subtype
-    float zone_top
-    float zone_bottom
+    float top
+    float bottom
     bool is_bullish
-    string strength
+    bool is_inverted
+    int creation_bar
+    SIFCandidate first_tapper
+    int gap_id
+    string gap_type
+
+// Core SIF record with cached visuals
+type SIFRecord
+    int bar_index
+    float sif_open
+    float sif_close
+    float sif_high
+    float sif_low
+    bool is_bullish
     bool is_invalidated
-    
-// Consolidated SIF group
-type ConsolidatedSIF  
-    array<SifData> sif_group
-    int formation_bar
+    float max_fill_percentage
+    bool has_dominant_wick
+    string sif_subtype
+    string cached_label_text
+    string cached_tooltip
+    float cached_zone_top
+    float cached_zone_bottom
+    bool cached_data_valid
+    label sif_label
+    int source_gap_id
+    int source_gap_bar_index
+    float source_gap_top
+    float source_gap_bottom
+    string source_gap_type
+    bool is_super_sif
+    float overlap_percentage
+    int overlapping_sif_bar_index
+    bool is_immediate_sif_inversion
+
+// Consolidated grouping for per-candle rendering
+type ConsolidatedSIF
+    array<SIFRecord> sif_group
+    int bar_index
     bool is_bullish
-    string strength
-    string unified_subtype
+    float consolidated_zone_top
+    float consolidated_zone_bottom
+    bool is_consolidated_breached
+    bool is_consolidated_invalidated
+    string consolidated_candle_label
+    string consolidated_extension_label
+
+// Multi-source aggregation cache powering STRONG logic
+type SourceTypeStats
+    int group_size
+    int distinct_types
+    int fvg_count
+    int imp_count
+    int vol_count
+    int true_count
+    int rdrb_count
 ```
 
 ### Memory Management
@@ -733,6 +796,20 @@ Invalidation: Lenient (85%)
 
 ## Version History & Changelog
 
+### 🆕 v9.23-multi-source-strength
+**Major Changes:**
+- STRONG multi-source tagging for candle labels and extension boxes
+- Configurable strength threshold (min sources + distinct/same-type toggles)
+- Dedicated Strong SIF alerts with grouped-alert priority
+- Special Properties menu reorganization for STRONG controls
+- Ultra Pro Boost capacity mode with constantized multipliers for future scaling
+
+**User Experience Improvements:**
+- Candle labels automatically insert `[STRONG]` after ☆ and before status markers
+- Extension placement control keeps `[STRONG]` readable in tight layouts
+- Tooltips clarify when STRONG applies and how filters interact with gap enables
+- Capacity mode tooltips now document Optimized → Ultra Pro tiers and reference shared multiplier constants
+
 ### 🆕 v9.17-enhanced-controls-tooltips
 **Major Changes:**
 - Enhanced border controls with individual width specifications
@@ -794,4 +871,4 @@ Invalidation: Lenient (85%)
 
 ---
 
-This comprehensive documentation serves as the definitive reference for the SIF Hunter° [Pro+] indicator as implemented in v9.17-enhanced-controls-tooltips. It covers every aspect of the system architecture, from basic gap detection to advanced user experience enhancements, ensuring that both developers and traders can fully understand and utilize all features effectively.
+This comprehensive documentation serves as the definitive reference for the SIF Hunter° [Pro+] indicator as implemented in v9.23-multi-source-strength. It covers every aspect of the system architecture, from basic gap detection to advanced user experience enhancements, ensuring that both developers and traders can fully understand and utilize all features effectively.

@@ -108,7 +108,7 @@ The indicator uses a comprehensive constants system (40+ constants) to eliminate
 ```pinescript
 // Gap types
 GAP_TYPE_FVG = "fvg"
-GAP_TYPE_IMPLIED = "implied" 
+GAP_TYPE_IMPLIED = "implied"
 GAP_TYPE_VOLUME = "volume"
 GAP_TYPE_TRUE = "true"
 
@@ -225,7 +225,7 @@ Star + Border: Both visual enhancements combined
 ### Border Priority System
 ```
 1. Deeper Wick Borders (3px) - Highest priority
-2. Multi-Source Borders (2px) - Medium priority  
+2. Multi-Source Borders (2px) - Medium priority
 3. Default Borders (1px) - Standard priority
 ```
 
@@ -240,8 +240,8 @@ type MBZRecord
 ### Core Detection Function
 ```pinescript
 // Main detection function
-check_deeper_wick_penetration(mbz_high, mbz_low, mbz_open, mbz_close, 
-                              is_bullish, subtype, mitigating_high, 
+check_deeper_wick_penetration(mbz_high, mbz_low, mbz_open, mbz_close,
+                              is_bullish, subtype, mitigating_high,
                               mitigating_low, source_gap_id)
     // Returns [standard_deeper, reflection_pattern_deeper]
 ```
@@ -275,7 +275,7 @@ The indicator uses a sophisticated two-constant FVG display system for clean vis
 2 Volume:       "MBZ+ (vol×2)"      // Multiplier used
 ```
 
-#### Mixed Type Labels  
+#### Mixed Type Labels
 ```
 1 FVG + 1 Vol:         "MBZ+ (fvg, vol)"        // FVG now visible
 1 FVG + 1 Imp:         "MBZ+ (fvg, imp)"        // FVG now visible
@@ -304,9 +304,9 @@ Extension boxes follow different logic - they show gap breakdowns or remain empt
 ```pinescript
 // Simplified logic for candle labels
 get_candle_label_text(fvg_count, imp_count, vol_count, true_count) =>
-    total_types = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + 
+    total_types = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) +
                   (vol_count > 0 ? 1 : 0) + (true_count > 0 ? 1 : 0)
-    
+
     if total_types == 1
         // Single type - FVG shows nothing, others show type
         if fvg_count > 0
@@ -331,7 +331,7 @@ The indicator detects four types of gaps that can create MBZs:
 // Bullish FVG: C0.low > C2.high
 is_bullish_fvg() => low > high[2]
 
-// Bearish FVG: C0.high < C2.low  
+// Bearish FVG: C0.high < C2.low
 is_bearish_fvg() => high < low[2]
 ```
 
@@ -356,7 +356,7 @@ is_displacement_valid = c2_body_size >= displacement_threshold
 - Default displacement multiplier: 1.5x
 - Lookback period: configurable
 
-### 3. Volume Imbalances  
+### 3. Volume Imbalances
 **Definition**: 2-candle body gaps between retail candles
 ```pinescript
 // Bullish: C0.body_bottom > C1.body_top
@@ -401,11 +401,11 @@ MBZs are classified based on wick behavior relative to body direction:
 // Bullish inclusion detection
 is_bullish_inclusion = (close > open) and (low < math.min(open, close))
 
-// Bearish inclusion detection  
+// Bearish inclusion detection
 is_bearish_inclusion = (close < open) and (high > math.max(open, close))
 ```
 
-**Visual Markers**: 
+**Visual Markers**:
 - Arrow: "↓inc" (bullish), "↑inc" (bearish)
 - Label detail: "MBZ+ (vol) ↓inc"
 
@@ -423,7 +423,7 @@ is_bearish_reflection = (close < open) and (low < math.min(open, close))
 ```
 
 **Visual Markers**:
-- Arrow: "↑ref" (bullish), "↓ref" (bearish)  
+- Arrow: "↑ref" (bullish), "↓ref" (bearish)
 - Label detail: "MBZ+ (vol) ↑ref"
 
 ### Nested Classifications
@@ -455,12 +455,12 @@ Advanced breach detection with configurable methods and thresholds:
 breach_detected = bullish_mbz ? (low <= zone_threshold) : (high >= zone_threshold)
 ```
 
-**Use Case**: 
+**Use Case**:
 - More sensitive detection
 - Catches institutional wick tests
 - Earlier breach alerts
 
-#### 2. Body Breach Method  
+#### 2. Body Breach Method
 **Definition**: Only candle body (open/close) enters zone
 ```pinescript
 // Only counts when body breaches
@@ -470,7 +470,7 @@ breach_detected = bullish_mbz ? (body_low <= zone_threshold) : (body_high >= zon
 ```
 
 **Use Case**:
-- Less sensitive detection  
+- Less sensitive detection
 - Filters out wick tests
 - Confirms commitment to direction
 
@@ -480,7 +480,7 @@ Configurable percentage of zone that must be filled:
 #### Invalidation Modes
 ```pinescript
 INVALIDATION_STRICT = "Strict (55%)"      // 55% fill required
-INVALIDATION_LENIENT = "Lenient (85%)"    // 85% fill required  
+INVALIDATION_LENIENT = "Lenient (85%)"    // 85% fill required
 INVALIDATION_CUSTOM = "Custom"            // User-defined (1-99%)
 ```
 
@@ -519,13 +519,13 @@ EXTENSION_BEYOND_CURRENT = "Beyond Current Price" // Extend N bars beyond curren
 ```
 
 #### Mode Behaviors
-1. **Fixed Length**: 
+1. **Fixed Length**:
    - Extends exactly N bars from MBZ formation
    - Static length, doesn't change with time
    - Good for historical analysis
 
 2. **To Current Price**:
-   - Always extends to current bar minimum  
+   - Always extends to current bar minimum
    - Prevents boxes from shrinking as time progresses
    - Real-time relevance maintained
 
@@ -619,12 +619,12 @@ MAX_INVALIDATED_SIFS_LIMIT = 50      // UI maximum for invalidated
 
 #### 🎯 DETECTION
 - **Max Valid MBZs**: 0-100 (default: 20)
-- **Max Invalidated MBZs**: 0-50 (default: 5)  
+- **Max Invalidated MBZs**: 0-50 (default: 5)
 - **Show Invalidated MBZs**: Off/Labels Only/Labels + Zones
 - **Invalidation Threshold**: Strict/Lenient/Custom
 - **Custom %**: 1-99% (when Custom selected)
 
-#### 🎯 DIRECTIONAL FILTER  
+#### 🎯 DIRECTIONAL FILTER
 - **Show MBZ+**: Enable/disable bullish MBZs
 - **Show MBZ-**: Enable/disable bearish MBZs
 
@@ -642,7 +642,7 @@ MAX_INVALIDATED_SIFS_LIMIT = 50      // UI maximum for invalidated
 #### 🏷️ MBZ LABELLING
 - **Label Style**: Arrow Only/Text Only/Arrow + Text
 - **Valid MBZ Size**: Tiny/Small/Normal/Large
-- **Invalidated MBZ Size**: Tiny/Small/Normal/Large  
+- **Invalidated MBZ Size**: Tiny/Small/Normal/Large
 - **MBZ+ Color**: Bullish label color
 - **MBZ- Color**: Bearish label color
 - **Invalidated Color**: Color for invalidated labels
@@ -680,7 +680,7 @@ MAX_INVALIDATED_SIFS_LIMIT = 50      // UI maximum for invalidated
 - **Deeper Wick Border Width**: 1-5px (default: 3px)
 - **Deeper Wick Symbol Style**: Circle (◉) or Text ([deeper])
 - **Enhanced Reflection Detection**: Enable geometric projection detection
-- **Multi-Source Border Color**: Color for multi-source borders (default: orange) 
+- **Multi-Source Border Color**: Color for multi-source borders (default: orange)
 - **Multi-Source Border Width**: 1-5px (default: 2px)
 - **Nested MBZs**: Mark overlapping same-direction MBZs
 - **Show Label Details**: Display source types and behaviors
@@ -701,7 +701,7 @@ MAX_INVALIDATED_SIFS_LIMIT = 50      // UI maximum for invalidated
 
 **Level Controls**:
 - **Boundaries (0, 1)**: Zone boundary levels
-- **CE (0.5)**: Equilibrium center level  
+- **CE (0.5)**: Equilibrium center level
 - **Quadrants (0.25, 0.75)**: Quarter levels
 - **Stops (1.25, 1.5, 2.0)**: Stop loss levels
 - **Targets (-2.33, -2.5, -4, -4.5)**: Profit target levels
@@ -719,7 +719,7 @@ MAX_INVALIDATED_SIFS_LIMIT = 50      // UI maximum for invalidated
 type GapData
     string gap_type        // "fvg", "implied", "volume", "true"
     float gap_top          // Upper boundary of gap
-    float gap_bottom       // Lower boundary of gap  
+    float gap_bottom       // Lower boundary of gap
     int gap_bar_index      // Bar index where gap formed
     bool is_bullish        // Gap direction
 ```
@@ -744,7 +744,7 @@ type ConsolidatedSIF
 3. **Create GapData**: Store gap information
 4. **Queue for Processing**: Add to active gaps array
 
-#### MBZ Formation Flow  
+#### MBZ Formation Flow
 1. **Analyze Wick Patterns**: Determine inclusion/reflection
 2. **Create MBZData**: Generate individual MBZ record
 3. **Consolidation Check**: Group with overlapping same-direction MBZs
@@ -764,6 +764,13 @@ type ConsolidatedSIF
 - **Efficient Indexing**: Bar-based indexing for fast lookups
 - **Consolidated Processing**: Reduces individual MBZ tracking
 
+### Capacity Modes (v9.23 update)
+- **Optimized**: Uses trader-defined max MBZ counts alongside baseline array limits for balanced performance.
+- **Boost**: Applies `BOOST_MULTIPLIER` (2× base) for a clean double of zone retention without flooding visuals.
+- **Ultra Boost**: Uses `ULTRA_BOOST_MULTIPLIER` (4× base) to surface deeper structural history for intensive analysis sessions.
+- **Ultra Pro Boost**: Applies `ULTRA_PRO_BOOST_MULTIPLIER` (12× base) while clamping against `INDICATOR_MAX_*` safeguards so charts remain responsive.
+- **Future Scaling**: Centralized multiplier constants make it trivial to add new tiers or adjust capacity without auditing dozens of downstream calculations.
+
 ---
 
 ## Usage Guidelines
@@ -777,7 +784,7 @@ type ConsolidatedSIF
 - **Lower Breach Threshold**: 25-35% for early entries
 - **Show More Valid MBZs**: 15-25 for opportunity scanning
 
-#### For Swing Trading  
+#### For Swing Trading
 - **Use Body Breach Method**: Filters noise, confirms commitment
 - **Use Fixed Extensions**: Historical analysis preferred
 - **Include All Gap Sources**: Broader opportunity set
@@ -797,7 +804,7 @@ type ConsolidatedSIF
 ```
 Max Valid MBZs: 25
 Invalidation: Strict (55%)
-Method: Trade Through  
+Method: Trade Through
 Threshold: 25%
 Extension Mode: Beyond Current
 Gap Sources: FVG + Implied only
@@ -808,7 +815,7 @@ Gap Sources: FVG + Implied only
 Max Valid MBZs: 10
 Invalidation: Lenient (85%)
 Method: Body Breach
-Threshold: 65%  
+Threshold: 65%
 Extension Mode: Fixed Length
 Gap Sources: All enabled
 ```
@@ -817,11 +824,11 @@ Gap Sources: All enabled
 
 #### Strong MBZ Signals
 - **Multiple Gap Sources**: "MBZ+ (fvg×2, vol)"
-- **Super MBZ Marking**: "✔️ MBZ+"  
+- **Super MBZ Marking**: "✔️ MBZ+"
 - **High Wick Dominance**: ⭐ markers present
 - **Clear Behavior**: Obvious inclusion/reflection
 
-#### Weak MBZ Signals  
+#### Weak MBZ Signals
 - **Single Volume Gap**: "MBZ+ (vol)" only
 - **Small Wick Ratio**: No star markers
 - **Mixed Behavior**: Unclear inclusion/reflection
@@ -874,7 +881,7 @@ Gap Sources: All enabled
 - **Check Directional Filter**: MBZ+/MBZ- both enabled
 - **Threshold Too Strict**: Breach detection may be too aggressive
 
-#### False MBZs  
+#### False MBZs
 - **Increase Displacement Multiplier**: Reduce Implied FVG sensitivity
 - **Enable Body Breach Only**: Filter wick-based false signals
 - **Increase Breach Threshold**: Require more confirmation
@@ -912,17 +919,19 @@ Gap Sources: All enabled
 ## Appendix
 
 ### Version History
+- **v9.23**: Multi-source strength enhancements, Ultra Pro Boost capacity mode, multiplier constants centralized for scalability
 - **v9.17**: 🆕 Deeper wick detection system, enhanced border controls, menu reorganization
 - **v9.16**: Enhanced visual controls and special properties consolidation
-- **v9.15**: Performance improvements and architectural refinements  
+- **v9.15**: Performance improvements and architectural refinements
 - **v9.14**: Multi-source detection and filtering capabilities
 - **v9.13**: Performance optimized, reduced historical lookback
-- **v9.12**: Constants architecture implementation  
+- **v9.12**: Constants architecture implementation
 - **v9.11**: Extension box fading system
 - **v9.10**: Body breach method addition
 - **v9.3**: Separate limits system introduction
 
 ### Changelog Summary
+- **🆕 v9.23**: Added Ultra Pro Boost capacity mode, documented `BOOST_MULTIPLIER` / `ULTRA_BOOST_MULTIPLIER` / `ULTRA_PRO_BOOST_MULTIPLIER`, and refreshed multi-source strength workflows (now 4×/8×/12× ladder)
 - **🆕 v9.17**: Deeper wick detection system with visual marking options
 - **🆕 v9.17**: Enhanced border controls with priority system (1-5px)
 - **🆕 v9.17**: Special properties menu consolidation
@@ -934,7 +943,7 @@ Gap Sources: All enabled
 - Extension system with real-time modes
 - Comprehensive projection level system
 
-### Future Enhancements  
+### Future Enhancements
 - Multi-timeframe MBZ detection
 - Volume-weighted gap scoring
 - Machine learning breach probability
@@ -944,4 +953,4 @@ Gap Sources: All enabled
 
 ---
 
-*This documentation covers the complete MBZ Hunter° [Pro+] system as implemented in v9.17-deeper-wick-special-properties. For the most current version and updates, refer to the indicator source code and release notes.*
+*This documentation covers the complete MBZ Hunter° [Pro+] system as implemented in v9.23-multi-source-strength. For the most current version and updates, refer to the indicator source code and release notes.*
