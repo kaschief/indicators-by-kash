@@ -492,15 +492,17 @@ liquidity_detection_enabled = show_liquidity_mbzs and (enable_liquidity_immediat
 show_source_origins = input.bool(false, 'Show Source Origins', group=GROUP_SOURCE_ORIGINS, inline='src1', tooltip='Display visual markers at origin points where MBZs were created. Imbalance sources show as boxes, liquidity sources show as lines. Only displays origins for currently visible MBZs (excludes invalidated when Show Invalidated is off). Auto-deduplicates: one visual per unique source even if multiple MBZs share it')
 max_source_displays = input.int(DEFAULT_IMBALANCE_SOURCE_BOXES, 'Max Origins', minval=MIN_IMBALANCE_SOURCE_BOXES, maxval=MAX_IMBALANCE_SOURCE_BOXES, group=GROUP_SOURCE_ORIGINS, inline='src1', tooltip='Maximum combined source origins to display on chart (includes both imbalance boxes and liquidity lines). Automatically scales with Capacity Mode: Base=10, Boost=40, Ultra=80, Ultra Pro=120. Higher values recommended with extended liquidity scan depth.')
 source_label_size = input.string(TEXT_SIZE_TINY, 'Label Size', options=[TEXT_SIZE_TINY, TEXT_SIZE_SMALL, TEXT_SIZE_NORMAL, TEXT_SIZE_LARGE], group=GROUP_SOURCE_ORIGINS, inline='src2', tooltip='Text size for labels on both imbalance boxes and liquidity lines')
-imbalance_source_text_color = input.color(color.black, 'Box Label Color', group=GROUP_SOURCE_ORIGINS, inline='src2', tooltip='Text color for labels on imbalance source boxes (FVG, Implied, Volume, Gap, RDRB)')
-imbalance_source_box_color = input.color(color.new(color.blue, 85), 'Box Color', group=GROUP_SOURCE_ORIGINS, inline='src3', tooltip='Background color for imbalance source boxes')
-daily_liquidity_color = input.color(color.new(color.purple, 0), 'Daily Color', group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Line color for daily liquidity pool levels (daily highs/lows that spawned MBZs)')
-daily_liquidity_line_width = input.int(2, 'Daily Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Line thickness for daily liquidity pool level lines')
-show_daily_liquidity_labels = input.bool(true, 'Daily Labels', group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Show date labels on daily liquidity pool lines (e.g., "Daily Mon 9/22")')
-weekly_liquidity_color = input.color(color.new(#ec407a, 0), 'Weekly Color', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line color for weekly liquidity pool levels (weekly highs/lows that spawned MBZs)')
-weekly_liquidity_line_width = input.int(3, 'Weekly Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line thickness for weekly liquidity pool level lines')
-show_weekly_liquidity_labels = input.bool(true, 'Weekly Labels', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Show date labels on weekly liquidity pool lines (e.g., "Weekly 8/19-8/25")')
-// Imbalance box labels are always shown (part of box identity)
+imbalance_source_box_color = input.color(color.new(color.blue, 85), 'Box Color', group=GROUP_SOURCE_ORIGINS, inline='src3', tooltip='Background color for imbalance source boxes (always shown when Source Origins enabled)')
+imbalance_source_text_color = input.color(color.black, 'Box Label Color', group=GROUP_SOURCE_ORIGINS, inline='src3', tooltip='Text color for labels on imbalance source boxes (FVG, Implied, Volume, Gap, RDRB)')
+show_daily_liquidity_lines = input.bool(true, 'Daily Lines', group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Show daily liquidity pool level lines (horizontal lines at daily highs/lows that spawned MBZs)')
+daily_liquidity_color = input.color(color.new(color.purple, 0), 'Color', group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Line color for daily liquidity pool levels')
+daily_liquidity_line_width = input.int(2, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Line thickness for daily liquidity pool level lines')
+show_daily_liquidity_labels = input.bool(true, 'Labels', group=GROUP_SOURCE_ORIGINS, inline='src4', tooltip='Show date labels on daily liquidity pool lines (e.g., "Daily Mon 9/22")')
+show_weekly_liquidity_lines = input.bool(true, 'Weekly Lines', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Show weekly liquidity pool level lines (horizontal lines at weekly highs/lows that spawned MBZs)')
+weekly_liquidity_color = input.color(color.new(#ec407a, 0), 'Color', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line color for weekly liquidity pool levels')
+weekly_liquidity_line_width = input.int(3, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line thickness for weekly liquidity pool level lines')
+show_weekly_liquidity_labels = input.bool(true, 'Labels', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Show date labels on weekly liquidity pool lines (e.g., "Weekly 8/19-8/25")')
+// Note: Imbalance boxes always shown when Source Origins enabled (core source visualization)
 
 // === 🎨 MBZ LABELLING (TYPE, SIZE & COLOR)===
 mbz_symbol_type = input.string(DISPLAY_MODE_ARROW_TEXT, INPUT_LABEL_LABEL_STYLE, options=[DISPLAY_MODE_ARROW_ONLY, DISPLAY_MODE_TEXT_ONLY, DISPLAY_MODE_ARROW_TEXT], group=GROUP_MBZ_LABELLING, inline='mbz2', tooltip='What to display on MBZ candles')
@@ -761,6 +763,7 @@ type ConsolidatedMBZ
     string consolidated_extension_label
 
 var array<MBZRecord> all_mbz_records = array.new<MBZRecord>()  // Large pool for history
+var array<MBZRecord> active_mbz_records = array.new<MBZRecord>()  // PERFORMANCE: Only non-invalidated MBZs (for fast invalidation checks)
 var int next_source_id = 1  // Unique ID counter for imbalance source tracking
 var array<int> liquidity_source_id_counter = array.new_int(1, 1)  // Mutable counter for liquidity boundaries
 
@@ -789,18 +792,25 @@ var array<label> weekly_liquidity_labels = array.new<label>()
 var bool needs_visual_update = true
 
 // PROFILING: Per-bar operation counters
-var int profile_liquidity_pool_iterations = 0
 var int profile_imbalance_detections = 0
-var int profile_records_filtered = 0
 var int profile_records_consolidated = 0
-var int profile_display_operations = 0
 var int profile_total_records_examined = 0
 var int profile_imbalance_records_added = 0
 var int profile_liquidity_records_added = 0
-var int profile_records_skipped_no_family = 0
-var int profile_groups_before_filter = 0
-var int profile_groups_after_filter = 0
 var int profile_rejected_by_should_display = 0
+var int profile_daily_liq_added = 0
+var int profile_weekly_liq_added = 0
+var int profile_daily_liq_total = 0
+var int profile_weekly_liq_total = 0
+var int profile_imbalance_total = 0
+var int profile_imbalance_visible = 0
+var int profile_daily_sessions = 0
+var int profile_weekly_sessions = 0
+var int profile_daily_liq_invalidated = 0
+var int profile_weekly_liq_invalidated = 0
+var int profile_weekly_rejected_variant = 0
+var int profile_weekly_rejected_direction = 0
+var int profile_weekly_rejected_display = 0
 var table profiling_table = na
 
 // Effective capacity settings (Boost mode temporarily raises limits)
@@ -1545,7 +1555,7 @@ process_liquidity_pool(
             pool_low_ready = liquidity_level_is_ready(pool_low_value, pool_low_time)
 
             if not pool_high_ready and not pool_low_ready
-                break
+                continue
 
             [
                  updated_high_first_breach,
@@ -3105,6 +3115,7 @@ register_new_mbz_record(mbz_record) =>
     cached_mbz = cache_mbz_data(mbz_record)
 
     array.push(all_mbz_records, cached_mbz)
+    array.push(active_mbz_records, cached_mbz)  // PERFORMANCE: Also add to active array for fast invalidation checks
 
     // Collect per-registration alert flags for caller (keep functions free of global mutation)
     formed_bull = cached_mbz.is_bullish
@@ -4114,14 +4125,14 @@ manage_consolidated_mbz_display() =>
     debug_total_examined = 0
     debug_imbalance_added = 0
     debug_liquidity_added = 0
-    debug_skipped_no_family = 0
-    debug_groups_before_filter = 0
-    debug_groups_after_filter = 0
+    debug_daily_liq_added = 0
+    debug_weekly_liq_added = 0
     debug_rejected_by_should_display = 0
 
     // Early filtering counters (like v9.23)
     imbalance_record_count = 0
     liquidity_record_count = 0
+    invalidated_record_count = 0
 
     // Add bounds checking to prevent array out of bounds error
     total_mbz_records = array.size(all_mbz_records)
@@ -4140,10 +4151,6 @@ manage_consolidated_mbz_display() =>
                     // Check source family
                     is_imbalance_source = current_mbz_record.source_family == SOURCE_FAMILY_IMBALANCE
                     is_liquidity_source = current_mbz_record.source_family == SOURCE_FAMILY_LIQUIDITY
-
-                    // PROFILING: Track records with no valid source family (only if profiling enabled)
-                    if show_profiling and not is_imbalance_source and not is_liquidity_source
-                        debug_skipped_no_family += 1
 
                     // Apply quota limits (like v9.23)
                     can_add = false
@@ -4171,6 +4178,10 @@ manage_consolidated_mbz_display() =>
                             liquidity_record_count += 1
                             if show_profiling
                                 debug_liquidity_added += 1
+                                if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_DAILY
+                                    debug_daily_liq_added += 1
+                                else if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
+                                    debug_weekly_liq_added += 1
                         else if show_profiling
                             debug_rejected_by_should_display += 1
 
@@ -4178,19 +4189,19 @@ manage_consolidated_mbz_display() =>
                         array.push(displayable_mbzs, current_mbz_record)
 
                     // Early exit when quotas full
-                    if imbalance_record_count >= max_imbalance_mbzs_effective and liquidity_record_count >= max_liquidity_mbzs_effective
+                    imbalance_quota_full = imbalance_record_count >= max_imbalance_mbzs_effective
+                    liquidity_quota_full = liquidity_record_count >= max_liquidity_mbzs_effective
+                    invalidated_quota_full = invalidated_record_count >= max_invalidated_mbzs_effective or not show_invalidated_mbzs
+                    if imbalance_quota_full and liquidity_quota_full and invalidated_quota_full
                         break
                 else if current_mbz_record.is_invalidated and show_invalidated_mbzs
-                    if should_display_mbz(current_mbz_record)
-                        array.push(displayable_mbzs, current_mbz_record)
+                    if invalidated_record_count < max_invalidated_mbzs_effective
+                        if should_display_mbz(current_mbz_record)
+                            array.push(displayable_mbzs, current_mbz_record)
+                            invalidated_record_count += 1
 
     // Group displayable MBZs by candle (will return empty array if no displayable MBZs)
     consolidated_mbzs = group_mbzs_by_candle(displayable_mbzs)
-
-    // PROFILING: Track groups created by consolidation (only if profiling enabled)
-    if show_profiling
-        debug_groups_before_filter := array.size(consolidated_mbzs)
-        debug_groups_after_filter := array.size(consolidated_mbzs)
 
     // Only process if we have consolidated MBZs
     if array.size(consolidated_mbzs) > 0
@@ -4376,6 +4387,22 @@ manage_consolidated_mbz_display() =>
                     if current_mbz_in_group.source_family != SOURCE_FAMILY_IMBALANCE
                         continue
 
+                    // Check if this imbalance source type is enabled
+                    source_type_enabled = true
+                    if current_mbz_in_group.source_type == IMBALANCE_SOURCE_TYPE_FVG
+                        source_type_enabled := enable_fair_value_gaps
+                    else if current_mbz_in_group.source_type == IMBALANCE_SOURCE_TYPE_IMPLIED
+                        source_type_enabled := enable_implied
+                    else if current_mbz_in_group.source_type == IMBALANCE_SOURCE_TYPE_VOLUME
+                        source_type_enabled := enable_volume_imbalance
+                    else if current_mbz_in_group.source_type == IMBALANCE_SOURCE_TYPE_TRUE_GAP
+                        source_type_enabled := enable_true_gaps
+                    else if current_mbz_in_group.source_type == IMBALANCE_SOURCE_TYPE_RDRB
+                        source_type_enabled := enable_rdrb
+
+                    if not source_type_enabled
+                        continue
+
                     // Skip if we've already created this source box anywhere in this pass
                     current_source_id = current_mbz_in_group.source_id
                     if na(current_source_id)
@@ -4413,7 +4440,7 @@ manage_consolidated_mbz_display() =>
                         array.push(created_source_ids, current_source_id)
 
             // Liquidity source line creation - only for visible MBZs
-            if show_source_origins and array.size(daily_liquidity_lines) < max_source_displays_effective
+            if show_source_origins and show_daily_liquidity_lines and array.size(daily_liquidity_lines) < max_source_displays_effective
                 // Create liquidity level line for EACH MBZ in the group
                 for current_mbz_index = 0 to array.size(current_consolidated_mbz.mbz_group) - 1
                     current_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, current_mbz_index)
@@ -4475,7 +4502,7 @@ manage_consolidated_mbz_display() =>
                                 break
 
             // Weekly liquidity source line creation
-            if show_source_origins and array.size(weekly_liquidity_lines) < max_source_displays_effective
+            if show_source_origins and show_weekly_liquidity_lines and array.size(weekly_liquidity_lines) < max_source_displays_effective
                 for current_mbz_index = 0 to array.size(current_consolidated_mbz.mbz_group) - 1
                     current_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, current_mbz_index)
 
@@ -4604,7 +4631,7 @@ manage_consolidated_mbz_display() =>
     // Liquidity source lines now rendered inline with MBZ display loop (above) for proper visibility filtering
 
     // Return profiling debug values
-    [debug_total_examined, debug_imbalance_added, debug_liquidity_added, debug_skipped_no_family, debug_groups_before_filter, debug_groups_after_filter, debug_rejected_by_should_display]
+    [debug_total_examined, debug_imbalance_added, debug_liquidity_added, debug_daily_liq_added, debug_weekly_liq_added, debug_rejected_by_should_display]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN DETECTION LOGIC // ═══════════════════════════════════════════════════════════════════════════════
@@ -4668,11 +4695,7 @@ else if barstate.isnew
 // PROFILING: Reset counters at bar start
 // ═══════════════════════════════════════════════════════════════════════════════
 if show_profiling
-    profile_liquidity_pool_iterations := 0
     profile_imbalance_detections := 0
-    profile_records_filtered := 0
-    profile_records_consolidated := 0
-    profile_display_operations := 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIQUIDITY MBZ DETECTION
@@ -4917,7 +4940,18 @@ while array.size(active_imbalance_sources) > max_active_imbalance_sources_effect
 
 // Clean up old records and visual elements
 while array.size(all_mbz_records) > max_mbz_records_effective
+    oldest_record = array.get(all_mbz_records, 0)  // Get before removing
     array.shift(all_mbz_records)
+
+    // PERFORMANCE: Also remove from active array if it's still there (not invalidated yet)
+    if not oldest_record.is_invalidated
+        for active_idx = 0 to array.size(active_mbz_records) - 1
+            active_rec = array.get(active_mbz_records, active_idx)
+            if active_rec.bar_index == oldest_record.bar_index and
+               active_rec.source_type == oldest_record.source_type and
+               active_rec.is_bullish == oldest_record.is_bullish
+                array.remove(active_mbz_records, active_idx)
+                break
 
 while array.size(mbz_body_highlights) > max_body_highlights_effective
     box.delete(array.shift(mbz_body_highlights))
@@ -4934,28 +4968,49 @@ while array.size(mbz_projection_lines) > MAX_PROJECTION_LINES
 while array.size(mbz_projection_labels) > MAX_PROJECTION_LABELS
     label.delete(array.shift(mbz_projection_labels))
 
-// OPTIMIZED v4.11: Skip processing when no records exist
-if array.size(all_mbz_records) > 0
-    for i = array.size(all_mbz_records) - 1 to 0
-        mbz_record = array.get(all_mbz_records, i)
+// PERFORMANCE OPTIMIZED: Only check active (non-invalidated) MBZs
+// This avoids wasting checks on already-invalidated records every bar
+if array.size(active_mbz_records) > 0
+    for i = array.size(active_mbz_records) - 1 to 0
+        mbz_record = array.get(active_mbz_records, i)
 
-        if not mbz_record.is_invalidated
-            // Update confirmation status first
-            updated_mbz = check_mbz_confirmation(mbz_record)
-            // Check for invalidation using enhanced source detection
-            should_invalidate = should_mbz_be_invalidated_enhanced(updated_mbz, open, close)
-            if should_invalidate
-                updated_mbz.is_invalidated := true
-                updated_mbz.cached_data_valid := false  // Invalidate cache
-                needs_visual_update := true
-                // if barstate.islast
-                //     [zone_top, zone_bottom] = get_mbz_subtype_zone(updated_mbz)
-                //     gap_invalidation = updated_mbz.is_bullish ? (open < zone_bottom) : (open > zone_top)
-                //     invalidation_type = gap_invalidation ? "GAP" : "CLOSE"
-                //     log.info("MBZ " + str.tostring(updated_mbz.bar_index) + " invalidated by " + invalidation_type +
-                //              " - Open:" + str.tostring(open) + " Close:" + str.tostring(close) +
-                //              " Zone:" + str.tostring(zone_top) + "-" + str.tostring(zone_bottom))
-            array.set(all_mbz_records, i, updated_mbz)
+        // Update confirmation status first
+        updated_mbz = check_mbz_confirmation(mbz_record)
+        // Check for invalidation using enhanced source detection
+        should_invalidate = should_mbz_be_invalidated_enhanced(updated_mbz, open, close)
+
+        if should_invalidate
+            updated_mbz.is_invalidated := true
+            updated_mbz.cached_data_valid := false  // Invalidate cache
+            needs_visual_update := true
+
+            // Update in both arrays and remove from active array
+            array.set(active_mbz_records, i, updated_mbz)
+
+            // Find and update in all_mbz_records (match by bar_index + source_type + is_bullish for uniqueness)
+            for all_idx = 0 to array.size(all_mbz_records) - 1
+                all_rec = array.get(all_mbz_records, all_idx)
+                if all_rec.bar_index == updated_mbz.bar_index and
+                   all_rec.source_type == updated_mbz.source_type and
+                   all_rec.is_bullish == updated_mbz.is_bullish and
+                   not all_rec.is_invalidated  // Only update if not already invalidated
+                    array.set(all_mbz_records, all_idx, updated_mbz)
+                    break
+
+            // Remove from active array (no longer needs invalidation checks)
+            array.remove(active_mbz_records, i)
+        else
+            // Still active, just update confirmation status
+            array.set(active_mbz_records, i, updated_mbz)
+
+            // Update in all_mbz_records as well
+            for all_idx = 0 to array.size(all_mbz_records) - 1
+                all_rec = array.get(all_mbz_records, all_idx)
+                if all_rec.bar_index == updated_mbz.bar_index and
+                   all_rec.source_type == updated_mbz.source_type and
+                   all_rec.is_bullish == updated_mbz.is_bullish
+                    array.set(all_mbz_records, all_idx, updated_mbz)
+                    break
 
         // Process sources for MBZ detection with unified imbalance origin support
 if array.size(active_imbalance_sources) > 0 and barstate.isconfirmed
@@ -5119,20 +5174,57 @@ if not na(liquidity_variant_placeholder_label)
 should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
-    [debug_examined, debug_imb_added, debug_liq_added, debug_skipped, debug_before_filter, debug_after_filter, debug_rejected] = manage_consolidated_mbz_display()
+    [debug_examined, debug_imb_added, debug_liq_added, debug_daily_added, debug_weekly_added, debug_rejected] = manage_consolidated_mbz_display()
 
     // PROFILING: Track display results after function completes
     if show_profiling
         profile_total_records_examined := debug_examined
         profile_imbalance_records_added := debug_imb_added
         profile_liquidity_records_added := debug_liq_added
-        profile_records_skipped_no_family := debug_skipped
-        profile_groups_before_filter := debug_before_filter
-        profile_groups_after_filter := debug_after_filter
+        profile_daily_liq_added := debug_daily_added
+        profile_weekly_liq_added := debug_weekly_added
         profile_rejected_by_should_display := debug_rejected
         profile_records_consolidated := array.size(last_consolidated_mbzs)
-        profile_records_filtered := array.size(last_consolidated_mbzs)  // Approximation
-        profile_display_operations := array.size(last_consolidated_mbzs)
+
+        // Count totals in all_mbz_records
+        profile_daily_liq_total := 0
+        profile_weekly_liq_total := 0
+        profile_imbalance_total := 0
+        profile_imbalance_visible := 0
+        profile_daily_liq_invalidated := 0
+        profile_weekly_liq_invalidated := 0
+        profile_weekly_rejected_variant := 0
+        profile_weekly_rejected_direction := 0
+        profile_weekly_rejected_display := 0
+        if array.size(all_mbz_records) > 0
+            for rec_idx = 0 to array.size(all_mbz_records) - 1
+                rec = array.get(all_mbz_records, rec_idx)
+                if rec.source_family == SOURCE_FAMILY_IMBALANCE
+                    profile_imbalance_total += 1
+                else if rec.source_family == SOURCE_FAMILY_LIQUIDITY
+                    if rec.source_origin_token == LIQUIDITY_SOURCE_TYPE_DAILY
+                        profile_daily_liq_total += 1
+                        if rec.is_invalidated
+                            profile_daily_liq_invalidated += 1
+                    else if rec.source_origin_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
+                        profile_weekly_liq_total += 1
+                        if rec.is_invalidated
+                            profile_weekly_liq_invalidated += 1
+                        // Check filters that would reject this weekly MBZ
+                        if not rec.is_invalidated
+                            if not should_display_variant(rec)
+                                profile_weekly_rejected_variant += 1
+                            else if not should_display_mbz_direction(rec)
+                                profile_weekly_rejected_direction += 1
+                            else if not should_display_mbz(rec)
+                                profile_weekly_rejected_display += 1
+
+        // Count visible imbalance (debug_imb_added already has visible count)
+        profile_imbalance_visible := debug_imb_added
+
+        // Pool sessions
+        profile_daily_sessions := liquidity_pool_session_count(daily_liquidity_pool)
+        profile_weekly_sessions := liquidity_pool_session_count(weekly_liquidity_pool)
 
     last_update_bar := bar_index
     needs_full_update := false
@@ -5304,65 +5396,83 @@ if alert_mode == ALERT_MODE_GROUPED or alert_mode == ALERT_MODE_BOTH
 // ═══════════════════════════════════════════════════════════════════════════════
 if show_profiling
     if na(profiling_table)
-        profiling_table := table.new(position.top_right, 2, 18, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.orange)
+        profiling_table := table.new(position.top_right, 2, 23, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.orange)
 
     // Header
     table.cell(profiling_table, 0, 0, "v10 Setting/Metric", text_color=color.white, bgcolor=color.new(color.orange, 30), text_size=size.small)
     table.cell(profiling_table, 1, 0, "Value", text_color=color.white, bgcolor=color.new(color.orange, 30), text_size=size.small)
 
-    // Input Settings
+    // Settings
     table.cell(profiling_table, 0, 1, "Capacity Mode", text_color=color.white, text_size=size.small)
     table.cell(profiling_table, 1, 1, capacity_mode, text_color=color.yellow, text_size=size.small)
 
-    table.cell(profiling_table, 0, 2, "Max Imbalance (input)", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 2, str.tostring(max_imbalance_mbzs), text_color=color.yellow, text_size=size.small)
+    table.cell(profiling_table, 0, 2, "Max Imb / Max Liq", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 2, str.tostring(max_imbalance_mbzs) + " / " + str.tostring(max_liquidity_mbzs), text_color=color.yellow, text_size=size.small)
 
-    table.cell(profiling_table, 0, 3, "Max Liquidity (input)", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 3, str.tostring(max_liquidity_mbzs), text_color=color.yellow, text_size=size.small)
+    // Pool Status
+    table.cell(profiling_table, 0, 3, "Daily / Weekly Sessions", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 3, str.tostring(profile_daily_sessions) + " / " + str.tostring(profile_weekly_sessions), text_color=color.aqua, text_size=size.small)
 
-    table.cell(profiling_table, 0, 4, "Max Imb (effective)", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 4, str.tostring(max_imbalance_mbzs_effective), text_color=color.orange, text_size=size.small)
+    // Total Records Created
+    table.cell(profiling_table, 0, 4, "Total MBZ Records", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 4, str.tostring(array.size(all_mbz_records)), text_color=color.aqua, text_size=size.small)
 
-    table.cell(profiling_table, 0, 5, "Max Liq (effective)", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 5, str.tostring(max_liquidity_mbzs_effective), text_color=color.orange, text_size=size.small)
+    table.cell(profiling_table, 0, 5, "  └─ Imbalance Total", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 5, str.tostring(profile_imbalance_total), text_color=color.aqua, text_size=size.small)
 
-    // Performance metrics
-    table.cell(profiling_table, 0, 6, "Liquidity Pool Iters", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 6, str.tostring(profile_liquidity_pool_iterations), text_color=color.aqua, text_size=size.small)
+    table.cell(profiling_table, 0, 6, "  └─ Daily Liq Total", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 6, str.tostring(profile_daily_liq_total), text_color=color.aqua, text_size=size.small)
 
-    table.cell(profiling_table, 0, 7, "Imbalance Detections", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 7, str.tostring(profile_imbalance_detections), text_color=color.aqua, text_size=size.small)
+    table.cell(profiling_table, 0, 7, "  └─ Weekly Liq Total", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 7, str.tostring(profile_weekly_liq_total), text_color=color.aqua, text_size=size.small)
 
-    table.cell(profiling_table, 0, 8, "Total Records", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 8, str.tostring(array.size(all_mbz_records)), text_color=color.aqua, text_size=size.small)
+    // Visible on Chart
+    table.cell(profiling_table, 0, 8, "VISIBLE ON CHART", text_color=color.white, bgcolor=color.new(color.green, 30), text_size=size.small)
+    table.cell(profiling_table, 1, 8, str.tostring(profile_records_consolidated), text_color=color.lime, bgcolor=color.new(color.green, 30), text_size=size.small, text_font_family=font.family_monospace)
 
-    table.cell(profiling_table, 0, 9, "Records Examined", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 9, str.tostring(profile_total_records_examined), text_color=color.aqua, text_size=size.small)
+    table.cell(profiling_table, 0, 9, "  └─ Imbalance Visible", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 9, str.tostring(profile_imbalance_visible), text_color=color.lime, text_size=size.small)
 
-    table.cell(profiling_table, 0, 10, "Imbalance Added", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 10, str.tostring(profile_imbalance_records_added), text_color=color.lime, text_size=size.small)
+    table.cell(profiling_table, 0, 10, "  └─ Daily Liq Visible", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 10, str.tostring(profile_daily_liq_added), text_color=color.lime, text_size=size.small)
 
-    table.cell(profiling_table, 0, 11, "Liquidity Added", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 11, str.tostring(profile_liquidity_records_added), text_color=color.lime, text_size=size.small)
+    table.cell(profiling_table, 0, 11, "  └─ Weekly Liq Visible", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 11, str.tostring(profile_weekly_liq_added), text_color=color.lime, text_size=size.small)
 
-    table.cell(profiling_table, 0, 12, "Skipped (no family)", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 12, str.tostring(profile_records_skipped_no_family), text_color=color.red, text_size=size.small)
+    // Weekly Filter Breakdown
+    table.cell(profiling_table, 0, 12, "Weekly Filter Breakdown", text_color=color.white, bgcolor=color.new(color.red, 70), text_size=size.small)
+    table.cell(profiling_table, 1, 12, "", text_color=color.white, bgcolor=color.new(color.red, 70), text_size=size.small)
 
-    table.cell(profiling_table, 0, 13, "Rejected by Display", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 13, str.tostring(profile_rejected_by_should_display), text_color=color.red, text_size=size.small)
+    table.cell(profiling_table, 0, 13, "  └─ Weekly Invalidated", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 13, str.tostring(profile_weekly_liq_invalidated), text_color=color.red, text_size=size.small)
 
-    table.cell(profiling_table, 0, 14, "Groups Before Filter", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 14, str.tostring(profile_groups_before_filter), text_color=color.yellow, text_size=size.small)
+    table.cell(profiling_table, 0, 14, "  └─ Rejected (Variant)", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 14, str.tostring(profile_weekly_rejected_variant), text_color=color.red, text_size=size.small)
 
-    table.cell(profiling_table, 0, 15, "Groups After Filter", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 15, str.tostring(profile_groups_after_filter), text_color=color.lime, text_size=size.small)
+    table.cell(profiling_table, 0, 15, "  └─ Rejected (Direction)", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 15, str.tostring(profile_weekly_rejected_direction), text_color=color.red, text_size=size.small)
 
-    table.cell(profiling_table, 0, 16, "Consolidated Groups", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 16, str.tostring(profile_records_consolidated), text_color=color.aqua, text_size=size.small)
+    table.cell(profiling_table, 0, 16, "  └─ Rejected (Display)", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 16, str.tostring(profile_weekly_rejected_display), text_color=color.red, text_size=size.small)
 
-    // Summary row
-    table.cell(profiling_table, 0, 17, "VISIBLE ON CHART", text_color=color.white, bgcolor=color.new(color.green, 30), text_size=size.small)
-    table.cell(profiling_table, 1, 17, str.tostring(profile_records_consolidated), text_color=color.lime, bgcolor=color.new(color.green, 30), text_size=size.small, text_font_family=font.family_monospace)
+    // Detection/Filter Metrics
+    table.cell(profiling_table, 0, 17, "Imbalance Detections", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 17, str.tostring(profile_imbalance_detections), text_color=color.aqua, text_size=size.small)
+
+    table.cell(profiling_table, 0, 18, "Records Examined", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 18, str.tostring(profile_total_records_examined), text_color=color.aqua, text_size=size.small)
+
+    table.cell(profiling_table, 0, 19, "Rejected by Display", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 19, str.tostring(profile_rejected_by_should_display), text_color=color.red, text_size=size.small)
+
+    table.cell(profiling_table, 0, 20, "Consolidated Groups", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 20, str.tostring(profile_records_consolidated), text_color=color.aqua, text_size=size.small)
+
+    table.cell(profiling_table, 0, 21, "Daily Liq Invalidated", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 21, str.tostring(profile_daily_liq_invalidated), text_color=color.orange, text_size=size.small)
+
+    table.cell(profiling_table, 0, 22, "Weekly Liq Invalidated", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 22, str.tostring(profile_weekly_liq_invalidated), text_color=color.orange, text_size=size.small)
 
 
 // MBZ Hunter° [Pro+] [mbz-ultimate]
