@@ -767,6 +767,10 @@ var array<MBZRecord> active_mbz_records = array.new<MBZRecord>()  // PERFORMANCE
 var int next_source_id = 1  // Unique ID counter for imbalance source tracking
 var array<int> liquidity_source_id_counter = array.new_int(1, 1)  // Mutable counter for liquidity boundaries
 
+// PERFORMANCE: Session memoization - track which liquidity sessions already yielded MBZs
+var array<int> processed_daily_session_ids = array.new_int()
+var array<int> processed_weekly_session_ids = array.new_int()
+
 // Visual elements
 var array<box> imbalance_source_boxes = array.new_box()
 var array<label> mbz_labels = array.new<label>()
@@ -1030,6 +1034,23 @@ build_liquidity_pool_label(pool_type, time_value) =>
         label_prefix
     else
         label_prefix + ' ' + format_liquidity_pool_time_label(pool_type, time_value)
+
+// PERFORMANCE: Generate unique session ID for memoization (tracking which sessions already processed)
+get_session_id(pool_type, session_time) =>
+    switch pool_type
+        LIQUIDITY_SOURCE_TYPE_DAILY =>
+            // Format: YYYYMMDD (year * 10000 + month * 100 + day)
+            // Example: 20240215 = Year 2024, Feb 15
+            year(session_time, NY_TIMEZONE) * 10000 + month(session_time, NY_TIMEZONE) * 100 + dayofmonth(session_time, NY_TIMEZONE)
+        LIQUIDITY_SOURCE_TYPE_WEEKLY =>
+            // Format: YYYYWW (year * 100 + week-of-year)
+            // Example: 202408 = Year 2024, Week 8
+            year(session_time, NY_TIMEZONE) * 100 + weekofyear(session_time, NY_TIMEZONE)
+        LIQUIDITY_SOURCE_TYPE_MONTHLY =>
+            // Format: YYYYMM (year * 100 + month)
+            // Example: 202403 = Year 2024, March
+            year(session_time, NY_TIMEZONE) * 100 + month(session_time, NY_TIMEZONE)
+        => 0  // Unknown type
 
 create_liquidity_pool() =>
     LiquidityPoolCollection.new(
@@ -1537,6 +1558,17 @@ process_liquidity_pool(
     // Process finalized sessions
     if total_sessions > 0
         for session_index = scan_start_index to total_sessions - 1
+            // PERFORMANCE: Session memoization - skip sessions already processed
+            session_time = array.get(pool.session_close_times, session_index)
+            session_id = get_session_id(pool_source_type, session_time)
+
+            // Check if this session was already fully processed
+            processed_array = pool_source_type == LIQUIDITY_SOURCE_TYPE_DAILY ?
+                              processed_daily_session_ids : processed_weekly_session_ids
+
+            if array.includes(processed_array, session_id)
+                continue  // Skip - already processed this session
+
             pool_high_value = array.get(pool.highs, session_index)
             pool_low_value = array.get(pool.lows, session_index)
             pool_high_breach_time = array.get(pool.high_breach_times, session_index)
@@ -1613,6 +1645,9 @@ process_liquidity_pool(
                     array.push(detected_events_is_exact, array.get(session_events_is_exact, event_index))
                     array.push(detected_events_source_price, array.get(session_events_source_price, event_index))
                     array.push(detected_events_source_bar_index, array.get(session_events_source_bar_index, event_index))
+
+                // PERFORMANCE: Mark this session as processed (don't scan again on future bars)
+                array.push(processed_array, session_id)
 
     // Process current (active) session
     current_high_value = pool.current_high
@@ -4664,9 +4699,12 @@ mbz_bearish_formed := false
 liquidity_pool_max_entries = max_liquidity_detection_scan_effective
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LIQUIDITY POOL TRACKING
+// LIQUIDITY POOL TRACKING (PERFORMANCE: Skip on <15m charts to prevent timeouts)
 // ═══════════════════════════════════════════════════════════════════════════════
-if show_source_origins or liquidity_detection_enabled
+current_tf_minutes_for_tracking = timeframe.in_seconds() / 60
+enable_liquidity_tracking = current_tf_minutes_for_tracking >= 15  // Skip ALL liquidity on <15m charts
+
+if enable_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
     skip_sunday_liquidity = is_sunday_liquidity_reopen(time)
     if not skip_sunday_liquidity
         if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_DAILY)
@@ -4680,7 +4718,7 @@ else if barstate.isnew
     liquidity_pool_clear_current(daily_liquidity_pool)
 
 // Weekly liquidity pool tracking
-if show_source_origins or liquidity_detection_enabled
+if enable_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
     if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_WEEKLY)
         liquidity_pool_finalize_session(weekly_liquidity_pool, nz(time[1], time), liquidity_pool_max_entries)
         liquidity_pool_reset_current(weekly_liquidity_pool, high, low, time, bar_index)
@@ -4714,12 +4752,15 @@ if liquidity_detection_enabled
         b_high = high
         b_low = low
 
-        // PERFORMANCE: Universal scan cap for fast loading (60 days = ~3 months)
-        timeframe_scan_cap = 60
+        // PERFORMANCE: Timeframe-aware gating (prevent timeouts on low TF charts)
+        current_tf_minutes = timeframe.in_seconds() / 60
+        enable_liquidity_on_this_tf = current_tf_minutes >= 15  // Disable ALL liquidity on <15m charts (too granular, causes timeouts)
+        daily_scan_cap = current_tf_minutes < 60 ? 30 : 60  // <1H charts: 30 sessions, others: 60
+        weekly_scan_cap = current_tf_minutes < 240 ? 20 : 60  // <4H charts: 20 sessions, others: 60
 
-        // Process DAILY liquidity pool (if enabled)
-        if enable_daily_liquidity
-            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, timeframe_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+        // Process DAILY liquidity pool (if enabled and chart TF allows)
+        if enable_daily_liquidity and enable_liquidity_on_this_tf
+            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from daily events
             daily_event_count = array.size(daily_events_is_high)
@@ -4785,9 +4826,9 @@ if liquidity_detection_enabled
 
                     needs_visual_update := true
 
-        // Process WEEKLY liquidity pool (if enabled)
-        if enable_weekly_liquidity
-            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, timeframe_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+        // Process WEEKLY liquidity pool (if enabled and chart TF allows)
+        if enable_weekly_liquidity and enable_liquidity_on_this_tf
+            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from weekly events
             weekly_event_count = array.size(weekly_events_is_high)
@@ -4937,6 +4978,13 @@ if enable_rdrb and barstate.isconfirmed
 // Clean up old sources
 while array.size(active_imbalance_sources) > max_active_imbalance_sources_effective
     array.shift(active_imbalance_sources)
+
+// PERFORMANCE: Clean up old processed session IDs (keep last 120 to cover scan caps)
+while array.size(processed_daily_session_ids) > 120
+    array.shift(processed_daily_session_ids)
+
+while array.size(processed_weekly_session_ids) > 120
+    array.shift(processed_weekly_session_ids)
 
 // Clean up old records and visual elements
 while array.size(all_mbz_records) > max_mbz_records_effective
@@ -5170,8 +5218,9 @@ if not na(liquidity_variant_placeholder_label)
 // VISUAL MANAGEMENT - CONSOLIDATED SYSTEM // ═══════════════════════════════════════════════════════════════════════════════
 
 // PERFORMANCE OPTIMIZED: Smart visual update system - only when truly necessary
-// Only update on explicit need, last/last-confirmed bars (avoid per-bar historical rebuilds)
-should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
+// Defer visual updates during historical load (fast initial render: 5-10x faster)
+// Update only at: end of history (islastconfirmedhistory), live bars, or full update requests
+should_update_visuals = needs_full_update or barstate.islastconfirmedhistory or (barstate.islast and (needs_visual_update or bar_index != last_update_bar))
 
 if should_update_visuals
     [debug_examined, debug_imb_added, debug_liq_added, debug_daily_added, debug_weekly_added, debug_rejected] = manage_consolidated_mbz_display()
