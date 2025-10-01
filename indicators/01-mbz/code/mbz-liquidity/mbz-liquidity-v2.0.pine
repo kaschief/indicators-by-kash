@@ -204,6 +204,7 @@ MAX_PROJECTION_BARS = 100
 PROJECTION_LABEL_OFFSET_BARS = 1
 REFLECTION_LABEL_SPACING_MULTIPLIER = 0.8  // Tested value - prevents label collision with reflection extension boxes
 WEEKLY_LABEL_OFFSET_MULTIPLIER = 0.3  // Offset for weekly labels to avoid collision with daily labels
+MONTHLY_LABEL_OFFSET_MULTIPLIER = 0.6  // Offset for monthly labels to avoid collision with daily and weekly labels
 
 // Text size constants
 TEXT_SIZE_TINY = 'Tiny'
@@ -391,7 +392,7 @@ show_bearish_mbzs = input.bool(true, INPUT_LABEL_SHOW_MBZ_MINUS, group=GROUP_VIS
 enable_daily_liquidity = input.bool(true, 'Daily Highs/Lows', group=GROUP_LIQUIDITY_SOURCE_TYPES, inline='liq_types1', tooltip='Detect MBZs from daily session high/low breaches')
 include_daily_liquidity_sunday = input.bool(true, 'Include Sunday Evening (18:00-00:00)', group=GROUP_LIQUIDITY_SOURCE_TYPES, tooltip='Include Sunday 18:00-00:00 NY time as part of daily liquidity sessions')
 enable_weekly_liquidity = input.bool(true, 'Weekly Highs/Lows', group=GROUP_LIQUIDITY_SOURCE_TYPES, inline='liq_types2', tooltip='Detect MBZs from weekly session high/low breaches')
-// Future: Monthly, Session types will be added here
+enable_monthly_liquidity = input.bool(true, 'Monthly Highs/Lows', group=GROUP_LIQUIDITY_SOURCE_TYPES, inline='liq_types3', tooltip='Detect MBZs from monthly session high/low breaches')
 // Historical scan depth automatically scales with Capacity Mode (no manual input needed)
 
 // === 💧 LIQUIDITY FORMATION VARIANTS ===
@@ -413,6 +414,10 @@ show_weekly_liquidity_lines = input.bool(true, 'Weekly Lines', group=GROUP_SOURC
 weekly_liquidity_color = input.color(color.new(#ec407a, 0), 'Color', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line color for weekly liquidity pool levels')
 weekly_liquidity_line_width = input.int(3, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Line thickness for weekly liquidity pool level lines')
 show_weekly_liquidity_labels = input.bool(true, 'Labels', group=GROUP_SOURCE_ORIGINS, inline='src5', tooltip='Show date labels on weekly liquidity pool lines (e.g., "Weekly 8/19-8/25")')
+show_monthly_liquidity_lines = input.bool(true, 'Monthly Lines', group=GROUP_SOURCE_ORIGINS, inline='src6', tooltip='Show monthly liquidity pool level lines (horizontal lines at monthly highs/lows that spawned MBZs)')
+monthly_liquidity_color = input.color(color.new(#ff9800, 0), 'Color', group=GROUP_SOURCE_ORIGINS, inline='src6', tooltip='Line color for monthly liquidity pool levels')
+monthly_liquidity_line_width = input.int(4, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src6', tooltip='Line thickness for monthly liquidity pool level lines')
+show_monthly_liquidity_labels = input.bool(true, 'Labels', group=GROUP_SOURCE_ORIGINS, inline='src6', tooltip='Show date labels on monthly liquidity pool lines (e.g., "Monthly Sep 2024")')
 // Note: Imbalance boxes always shown when Source Origins enabled (core source visualization)
 
 // === 🎨 MBZ LABELLING (TYPE, SIZE & COLOR)===
@@ -667,6 +672,9 @@ var array<label> daily_liquidity_labels = array.new<label>()
 // Weekly liquidity tracking
 var array<line> weekly_liquidity_lines = array.new<line>()
 var array<label> weekly_liquidity_labels = array.new<label>()
+// Monthly liquidity tracking
+var array<line> monthly_liquidity_lines = array.new<line>()
+var array<label> monthly_liquidity_labels = array.new<label>()
 // Performance optimization flags
 var bool needs_visual_update = true
 
@@ -677,12 +685,16 @@ var int profile_liquidity_records_added = 0
 var int profile_rejected_by_should_display = 0
 var int profile_daily_liq_added = 0
 var int profile_weekly_liq_added = 0
+var int profile_monthly_liq_added = 0
 var int profile_daily_liq_total = 0
 var int profile_weekly_liq_total = 0
+var int profile_monthly_liq_total = 0
 var int profile_daily_sessions = 0
 var int profile_weekly_sessions = 0
+var int profile_monthly_sessions = 0
 var int profile_daily_liq_invalidated = 0
 var int profile_weekly_liq_invalidated = 0
+var int profile_monthly_liq_invalidated = 0
 var int profile_weekly_rejected_direction = 0
 var int profile_weekly_rejected_display = 0
 var table profiling_table = na
@@ -1084,6 +1096,8 @@ liquidity_pool_clear(pool) =>
 var LiquidityPoolCollection daily_liquidity_pool = create_liquidity_pool()
 // Initialize weekly liquidity pool instance
 var LiquidityPoolCollection weekly_liquidity_pool = create_liquidity_pool()
+// Initialize monthly liquidity pool instance
+var LiquidityPoolCollection monthly_liquidity_pool = create_liquidity_pool()
 
 liquidity_level_is_ready(level_value, level_time) =>
     not na(level_value) and not na(level_time) and level_time < time
@@ -3226,6 +3240,14 @@ manage_consolidated_mbz_display() =>
         label.delete(liq_label)
     array.clear(weekly_liquidity_labels)
 
+    for liq_line in monthly_liquidity_lines
+        line.delete(liq_line)
+    array.clear(monthly_liquidity_lines)
+
+    for liq_label in monthly_liquidity_labels
+        label.delete(liq_label)
+    array.clear(monthly_liquidity_labels)
+
     // Group MBZs by candle for consolidation
     displayable_mbzs = array.new<MBZRecord>()
 
@@ -3234,6 +3256,7 @@ manage_consolidated_mbz_display() =>
     debug_liquidity_added = 0
     debug_daily_liq_added = 0
     debug_weekly_liq_added = 0
+    debug_monthly_liq_added = 0
     debug_rejected_by_should_display = 0
 
     // Early filtering counters (liquidity-only mode)
@@ -3265,7 +3288,8 @@ manage_consolidated_mbz_display() =>
                             liquidity_source_enabled := enable_daily_liquidity
                         else if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
                             liquidity_source_enabled := enable_weekly_liquidity
-                        // Future: Add monthly check here
+                        else if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_MONTHLY
+                            liquidity_source_enabled := enable_monthly_liquidity
 
                         if passes_display_check and liquidity_source_enabled
                             can_add := true
@@ -3276,6 +3300,8 @@ manage_consolidated_mbz_display() =>
                                     debug_daily_liq_added += 1
                                 else if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
                                     debug_weekly_liq_added += 1
+                                else if current_mbz_record.source_origin_token == LIQUIDITY_SOURCE_TYPE_MONTHLY
+                                    debug_monthly_liq_added += 1
                         else if show_profiling
                             debug_rejected_by_should_display += 1
 
@@ -3302,6 +3328,7 @@ manage_consolidated_mbz_display() =>
         // Deduplicate liquidity level lines (by price AND source type) to prevent duplicate lines
         displayed_daily_levels = array.new_float()
         displayed_weekly_levels = array.new_float()
+        displayed_monthly_levels = array.new_float()
 
         for consolidated_group_index = 0 to array.size(consolidated_mbzs) - 1
             current_consolidated_mbz = array.get(consolidated_mbzs, consolidated_group_index)
@@ -3607,6 +3634,70 @@ manage_consolidated_mbz_display() =>
                                 array.push(displayed_weekly_levels, source_price_key)
                                 break
 
+            // Monthly liquidity source line creation
+            if show_source_origins and show_monthly_liquidity_lines
+                for current_mbz_index = 0 to array.size(current_consolidated_mbz.mbz_group) - 1
+                    // Check capacity before processing each MBZ
+                    if array.size(monthly_liquidity_lines) >= max_source_displays_effective
+                        break
+
+                    current_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, current_mbz_index)
+
+                    if current_mbz_in_group.source_family != SOURCE_FAMILY_LIQUIDITY
+                        continue
+
+                    if current_mbz_in_group.source_origin_token != LIQUIDITY_SOURCE_TYPE_MONTHLY
+                        continue
+
+                    source_price_key = current_mbz_in_group.source_high
+                    if na(source_price_key)
+                        continue
+                    if not array.includes(displayed_monthly_levels, source_price_key)
+                        session_count = liquidity_pool_session_count(monthly_liquidity_pool)
+                        for session_idx = 0 to session_count - 1
+                            session_high = array.get(monthly_liquidity_pool.highs, session_idx)
+                            session_low = array.get(monthly_liquidity_pool.lows, session_idx)
+
+                            level_matched = false
+                            level_price = 0.0
+                            level_time = 0
+                            level_end_time = 0
+                            level_label_time = 0
+                            is_high_level = false
+
+                            if session_high == source_price_key
+                                level_matched := true
+                                level_price := session_high
+                                level_time := array.get(monthly_liquidity_pool.high_times, session_idx)
+                                level_end_time := liquidity_pool_get_high_line_end_time(monthly_liquidity_pool, session_idx, time)
+                                level_label_time := array.get(monthly_liquidity_pool.session_close_times, session_idx)
+                                is_high_level := true
+                            else if session_low == source_price_key
+                                level_matched := true
+                                level_price := session_low
+                                level_time := array.get(monthly_liquidity_pool.low_times, session_idx)
+                                level_end_time := liquidity_pool_get_low_line_end_time(monthly_liquidity_pool, session_idx, time)
+                                level_label_time := array.get(monthly_liquidity_pool.session_close_times, session_idx)
+                                is_high_level := false
+
+                            if level_matched
+                                liquidity_line = line.new(level_time, level_price, level_end_time, level_price, xloc=xloc.bar_time, color=monthly_liquidity_color, width=monthly_liquidity_line_width, style=line.style_solid)
+                                array.push(monthly_liquidity_lines, liquidity_line)
+
+                                if show_monthly_liquidity_labels
+                                    label_text = build_liquidity_pool_label(LIQUIDITY_SOURCE_TYPE_MONTHLY, level_label_time)
+                                    final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
+                                    label_style = is_high_level ? label.style_label_down : label.style_label_up
+                                    // Offset monthly label vertically to avoid collision with daily and weekly labels
+                                    bar_range = high - low
+                                    spacing_offset = bar_range * MONTHLY_LABEL_OFFSET_MULTIPLIER
+                                    label_price_with_offset = level_price + (is_high_level ? -spacing_offset : spacing_offset)
+                                    liquidity_label = label.new(final_label_time, label_price_with_offset, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=monthly_liquidity_color, size=get_source_label_size(), color=color.new(color.white, 100))
+                                    array.push(monthly_liquidity_labels, liquidity_label)
+
+                                array.push(displayed_monthly_levels, source_price_key)
+                                break
+
         // Projections using consolidated zones
         if show_mbz_projections and array.size(consolidated_mbzs) > 0
             projection_levels_list = get_projection_levels()
@@ -3681,7 +3772,7 @@ manage_consolidated_mbz_display() =>
     // Liquidity source lines now rendered inline with MBZ display loop (above) for proper visibility filtering
 
     // Return profiling debug values (liquidity-only mode)
-    [debug_total_examined, debug_liquidity_added, debug_daily_liq_added, debug_weekly_liq_added, debug_rejected_by_should_display]
+    [debug_total_examined, debug_liquidity_added, debug_daily_liq_added, debug_weekly_liq_added, debug_monthly_liq_added, debug_rejected_by_should_display]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN DETECTION LOGIC // ═══════════════════════════════════════════════════════════════════════════════
@@ -3731,6 +3822,18 @@ if enable_liquidity_tracking and (show_source_origins or liquidity_detection_ena
 else if barstate.isnew
     liquidity_pool_clear_current(weekly_liquidity_pool)
 
+// Monthly liquidity pool tracking
+if enable_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
+    if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_MONTHLY)
+        liquidity_pool_finalize_session(monthly_liquidity_pool, nz(time[1], time), liquidity_pool_max_entries)
+        liquidity_pool_reset_current(monthly_liquidity_pool, high, low, time, bar_index)
+    else
+        liquidity_pool_update_current_extremes(monthly_liquidity_pool, high, low, time, bar_index)
+
+    liquidity_pool_mark_breaches(monthly_liquidity_pool, high, low, time)
+else if barstate.isnew
+    liquidity_pool_clear_current(monthly_liquidity_pool)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIQUIDITY MBZ DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3756,6 +3859,7 @@ if liquidity_detection_enabled
         // Apply timeframe reduction as PERCENTAGE of user's chosen capacity mode
         daily_scan_cap = current_tf_minutes < 60 ? int(max_liquidity_detection_scan_effective * 0.5) : max_liquidity_detection_scan_effective  // <1H: 50% of user setting
         weekly_scan_cap = current_tf_minutes < 240 ? int(max_liquidity_detection_scan_effective * 0.33) : max_liquidity_detection_scan_effective  // <4H: 33% of user setting
+        monthly_scan_cap = current_tf_minutes < 1440 ? int(max_liquidity_detection_scan_effective * 0.25) : max_liquidity_detection_scan_effective  // <1D: 25% of user setting
 
         // Process DAILY liquidity pool (if enabled and chart TF allows)
         if enable_daily_liquidity and enable_liquidity_on_this_tf
@@ -3858,6 +3962,67 @@ if liquidity_detection_enabled
                          LIQUIDITY_SOURCE_TYPE_WEEKLY,
                          event_is_exact,
                          weekly_liquidity_pool,
+                         event_is_high
+                     )
+
+                    if formed_bull_flag
+                        mbz_bullish_formed := true
+                    if formed_bear_flag
+                        mbz_bearish_formed := true
+                    if multi_plus_flag
+                        multi_source_mbz_bullish_formed := true
+                    if multi_minus_flag
+                        multi_source_mbz_bearish_formed := true
+                    if strong_plus_flag
+                        strong_mbz_bullish_formed := true
+                    if strong_minus_flag
+                        strong_mbz_bearish_formed := true
+                    if nested_plus_flag
+                        nested_mbz_bullish_formed := true
+                    if nested_minus_flag
+                        nested_mbz_bearish_formed := true
+                    needs_visual_update := true
+
+        // Process MONTHLY liquidity pool (if enabled and chart TF allows)
+        if enable_monthly_liquidity and enable_liquidity_on_this_tf
+            [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+
+            // Create MBZ records from monthly events
+            monthly_event_count = array.size(monthly_events_is_high)
+            if monthly_event_count > 0
+                for event_index = 0 to monthly_event_count - 1
+                    event_is_high = array.get(monthly_events_is_high, event_index)
+                    event_rule = array.get(monthly_events_rules, event_index)
+                    event_is_exact = array.get(monthly_events_is_exact, event_index)
+                    event_source_price = array.get(monthly_events_source_price, event_index)
+                    event_source_bar_index = array.get(monthly_events_source_bar_index, event_index)
+
+                    pool_boundary = event_is_high ? POOL_BOUNDARY_HIGH : POOL_BOUNDARY_LOW
+                    is_bullish_event = not event_is_high
+
+                    [_,
+                     formed_bull_flag,
+                     formed_bear_flag,
+                     strong_plus_flag,
+                     strong_minus_flag,
+                     multi_plus_flag,
+                     multi_minus_flag,
+                     nested_plus_flag,
+                     nested_minus_flag] = create_liquidity_mbz_record(
+                         bar_index,
+                         b_open,
+                         b_high,
+                         b_low,
+                         b_close,
+                         LIQUIDITY_SOURCE_TYPE_MONTHLY,
+                         pool_boundary,
+                         event_rule,
+                         event_source_price,
+                         event_source_bar_index,
+                         is_bullish_event,
+                         LIQUIDITY_SOURCE_TYPE_MONTHLY,
+                         event_is_exact,
+                         monthly_liquidity_pool,
                          event_is_high
                      )
 
@@ -4020,7 +4185,7 @@ if not na(liquidity_variant_placeholder_label)
 should_update_visuals = needs_full_update or barstate.islastconfirmedhistory or (barstate.islast and (needs_visual_update or bar_index != last_update_bar))
 
 if should_update_visuals
-    [debug_examined, debug_liq_added, debug_daily_added, debug_weekly_added, debug_rejected] = manage_consolidated_mbz_display()
+    [debug_examined, debug_liq_added, debug_daily_added, debug_weekly_added, debug_monthly_added, debug_rejected] = manage_consolidated_mbz_display()
 
     // PROFILING: Track display results after function completes
     if show_profiling
@@ -4028,14 +4193,17 @@ if should_update_visuals
         profile_liquidity_records_added := debug_liq_added
         profile_daily_liq_added := debug_daily_added
         profile_weekly_liq_added := debug_weekly_added
+        profile_monthly_liq_added := debug_monthly_added
         profile_rejected_by_should_display := debug_rejected
         profile_records_consolidated := array.size(last_consolidated_mbzs)
 
         // Count totals in all_mbz_records
         profile_daily_liq_total := 0
         profile_weekly_liq_total := 0
+        profile_monthly_liq_total := 0
         profile_daily_liq_invalidated := 0
         profile_weekly_liq_invalidated := 0
+        profile_monthly_liq_invalidated := 0
         profile_weekly_rejected_direction := 0
         profile_weekly_rejected_display := 0
         if array.size(all_mbz_records) > 0
@@ -4056,10 +4224,15 @@ if should_update_visuals
                                 profile_weekly_rejected_direction += 1
                             else if not should_display_mbz(rec)
                                 profile_weekly_rejected_display += 1
+                    else if rec.source_origin_token == LIQUIDITY_SOURCE_TYPE_MONTHLY
+                        profile_monthly_liq_total += 1
+                        if rec.is_invalidated
+                            profile_monthly_liq_invalidated += 1
 
         // Pool sessions
         profile_daily_sessions := liquidity_pool_session_count(daily_liquidity_pool)
         profile_weekly_sessions := liquidity_pool_session_count(weekly_liquidity_pool)
+        profile_monthly_sessions := liquidity_pool_session_count(monthly_liquidity_pool)
 
     last_update_bar := bar_index
     needs_full_update := false
@@ -4225,7 +4398,7 @@ if alert_mode == ALERT_MODE_GROUPED or alert_mode == ALERT_MODE_BOTH
 // ═══════════════════════════════════════════════════════════════════════════════
 if show_profiling
     if na(profiling_table)
-        profiling_table := table.new(position.top_right, 2, 23, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.orange)
+        profiling_table := table.new(position.top_right, 2, 26, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.orange)
 
     // Header
     table.cell(profiling_table, 0, 0, "v10 Setting/Metric", text_color=color.white, bgcolor=color.new(color.orange, 30), text_size=size.small)
@@ -4239,8 +4412,8 @@ if show_profiling
     table.cell(profiling_table, 1, 2, str.tostring(max_liquidity_mbzs), text_color=color.yellow, text_size=size.small)
 
     // Pool Status
-    table.cell(profiling_table, 0, 3, "Daily / Weekly Sessions", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 3, str.tostring(profile_daily_sessions) + " / " + str.tostring(profile_weekly_sessions), text_color=color.aqua, text_size=size.small)
+    table.cell(profiling_table, 0, 3, "D / W / M Sessions", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 3, str.tostring(profile_daily_sessions) + " / " + str.tostring(profile_weekly_sessions) + " / " + str.tostring(profile_monthly_sessions), text_color=color.aqua, text_size=size.small)
 
     // Total Records Created (Liquidity Only)
     table.cell(profiling_table, 0, 4, "Total MBZ Records", text_color=color.white, text_size=size.small)
@@ -4252,6 +4425,9 @@ if show_profiling
     table.cell(profiling_table, 0, 7, "  └─ Weekly Liq Total", text_color=color.gray, text_size=size.small)
     table.cell(profiling_table, 1, 7, str.tostring(profile_weekly_liq_total), text_color=color.aqua, text_size=size.small)
 
+    table.cell(profiling_table, 0, 6, "  └─ Monthly Liq Total", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 6, str.tostring(profile_monthly_liq_total), text_color=color.aqua, text_size=size.small)
+
     // Visible on Chart
     table.cell(profiling_table, 0, 8, "VISIBLE ON CHART", text_color=color.white, bgcolor=color.new(color.green, 30), text_size=size.small)
     table.cell(profiling_table, 1, 8, str.tostring(profile_records_consolidated), text_color=color.lime, bgcolor=color.new(color.green, 30), text_size=size.small, text_font_family=font.family_monospace)
@@ -4261,6 +4437,9 @@ if show_profiling
 
     table.cell(profiling_table, 0, 10, "  └─ Weekly Liq Visible", text_color=color.gray, text_size=size.small)
     table.cell(profiling_table, 1, 10, str.tostring(profile_weekly_liq_added), text_color=color.lime, text_size=size.small)
+
+    table.cell(profiling_table, 0, 11, "  └─ Monthly Liq Visible", text_color=color.gray, text_size=size.small)
+    table.cell(profiling_table, 1, 11, str.tostring(profile_monthly_liq_added), text_color=color.lime, text_size=size.small)
 
     // Weekly Filter Breakdown
     table.cell(profiling_table, 0, 12, "Weekly Filter Breakdown", text_color=color.white, bgcolor=color.new(color.red, 70), text_size=size.small)
@@ -4290,6 +4469,9 @@ if show_profiling
 
     table.cell(profiling_table, 0, 20, "Weekly Liq Invalidated", text_color=color.white, text_size=size.small)
     table.cell(profiling_table, 1, 20, str.tostring(profile_weekly_liq_invalidated), text_color=color.orange, text_size=size.small)
+
+    table.cell(profiling_table, 0, 21, "Monthly Liq Invalidated", text_color=color.white, text_size=size.small)
+    table.cell(profiling_table, 1, 21, str.tostring(profile_monthly_liq_invalidated), text_color=color.orange, text_size=size.small)
 
 
 // MBZ Hunter° [Pro+] [mbz-ultimate]
