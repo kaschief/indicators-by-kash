@@ -32,7 +32,7 @@ This document centralizes the explanatory comments previously embedded in the sc
 
 Candle labels (behavior-first):
 - Format: [SUPER] + BEHAVIOR + MBZ⁺/⁻ + [½] + (source) + [subtype]
-- Examples: "Inclusion MBZ⁺ (imp) ↓inc", "✔ Reflection MBZ⁻[½] (vol) ↑ref"
+- Examples: "Inclusion MBZ⁺ (imp) ↓inc", "✔ Reflection MBZ⁻[½] (vol) ↑ref" (the word Inclusion or Reflection appears in hover tooltips only)
 - Reversal rule: For MBZ⁻, multi-part labels reverse their order.
 
 Tooltips (comprehensive):

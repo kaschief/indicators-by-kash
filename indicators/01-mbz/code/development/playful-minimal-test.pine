@@ -1,0 +1,511 @@
+//@version=6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INDICATOR SETUP (Daily parity baseline)
+// ═══════════════════════════════════════════════════════════════════════════════
+INDICATOR_MAX_LINES = 300
+INDICATOR_MAX_LABELS = 300
+INDICATOR_TITLE = 'Playful Daily Baseline'
+
+indicator(INDICATOR_TITLE, shorttitle='playful-daily', overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS (mirrored from Playful)
+// ═══════════════════════════════════════════════════════════════════════════════
+DEFAULT_SHOW_LAST = 5
+DEFAULT_LINE_WIDTH = 1
+DEFAULT_LABEL_SIZE = 'Tiny'
+
+MIN_SHOW_LAST = 1
+MAX_SHOW_LAST = 50
+MIN_LINE_WIDTH = 1
+MAX_LINE_WIDTH = 5
+
+DEFAULT_DAILY_HIGH_COLOR = #9c27b0
+DEFAULT_DAILY_LOW_COLOR = #9c27b0
+DEFAULT_LABEL_COLOR = #000000
+DEFAULT_IMMEDIATE_HIGHLIGHT_COLOR = #ffeb3b
+DEFAULT_STANDARD_HIGHLIGHT_COLOR = #ab47bc
+DEFAULT_DELAYED_HIGHLIGHT_COLOR = #39ff14
+DEFAULT_IMMEDIATE_LABEL_TEXT_COLOR = color.black
+DEFAULT_STANDARD_LABEL_TEXT_COLOR = color.white
+DEFAULT_DELAYED_LABEL_TEXT_COLOR = color.white
+
+NY_TIMEZONE = "America/New_York"
+SUNDAY_REOPEN_START_HOUR = 18
+
+SOURCE_FAMILY_IMBALANCE = "imbalance"
+SOURCE_FAMILY_LIQUIDITY = "liquidity"
+
+IMBALANCE_SOURCE_TYPE_FVG = "fvg"
+IMBALANCE_SOURCE_TYPE_IMPLIED = "implied"
+IMBALANCE_SOURCE_TYPE_VOLUME = "volume"
+IMBALANCE_SOURCE_TYPE_GAP = "gap"
+IMBALANCE_SOURCE_TYPE_RDRB = "rdrb"
+
+LIQUIDITY_SOURCE_TYPE_DAILY = "daily"
+
+FORMATION_RULE_GAP_STANDARD = "gap_standard"
+FORMATION_RULE_LIQUIDITY_IMMEDIATE = "liquidity_immediate"
+FORMATION_RULE_LIQUIDITY_STANDARD = "liquidity_standard"
+FORMATION_RULE_LIQUIDITY_DELAYED = "liquidity_delayed"
+
+POOL_BOUNDARY_NONE = ""
+POOL_BOUNDARY_HIGH = "high"
+POOL_BOUNDARY_LOW = "low"
+
+DAILY_TIMEFRAME_LABEL = "1D"
+WEEKDAY_LABEL_MON = "Mon"
+WEEKDAY_LABEL_TUE = "Tue"
+WEEKDAY_LABEL_WED = "Wed"
+WEEKDAY_LABEL_THU = "Thu"
+WEEKDAY_LABEL_FRI = "Fri"
+WEEKDAY_LABEL_SAT = "Sat"
+WEEKDAY_LABEL_SUN = "Sun"
+
+MAX_SESSION_LEVELS = 50
+MAX_BREACH_SCAN_BARS = 50
+MAX_PATTERN_LABELS = 250
+
+IMMEDIATE_LABEL_TEXT = 'IMM'
+STANDARD_LABEL_TEXT = 'STD'
+DELAYED_LABEL_TEXT = 'DEY'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS (daily levels + pattern highlights)
+// ═══════════════════════════════════════════════════════════════════════════════
+showDaily = input.bool(true, 'Enable Daily Levels', group='📅 Daily')
+showDailyLast = input.int(DEFAULT_SHOW_LAST, 'Show Last', minval=MIN_SHOW_LAST, maxval=MAX_SHOW_LAST, group='📅 Daily')
+showDailyHighs = input.bool(true, 'Show Highs', inline='daily_lines', group='📅 Daily')
+dailyHighColor = input.color(DEFAULT_DAILY_HIGH_COLOR, '', inline='daily_lines', group='📅 Daily')
+showDailyLows = input.bool(true, 'Show Lows', inline='daily_lines', group='📅 Daily')
+dailyLowColor = input.color(DEFAULT_DAILY_LOW_COLOR, '', inline='daily_lines', group='📅 Daily')
+dailyLineWidth = input.int(DEFAULT_LINE_WIDTH, 'Line Width', minval=MIN_LINE_WIDTH, maxval=MAX_LINE_WIDTH, group='📅 Daily')
+includeSundayReopen = input.bool(true, 'Include Sunday Evening (18:00-00:00)', group='📅 Daily')
+
+highlightImmediateType = input.bool(true, 'Highlight Immediate-Type Candle', inline='pattern_highlight_immediate', group='🎯 Patterns')
+immediateHighlightColor = input.color(DEFAULT_IMMEDIATE_HIGHLIGHT_COLOR, 'Immediate Color', inline='pattern_highlight_immediate', group='🎯 Patterns')
+immediateLabelTextColor = input.color(DEFAULT_IMMEDIATE_LABEL_TEXT_COLOR, 'Immediate Label Text', inline='pattern_label_immediate', group='🎯 Patterns')
+highlightStandardType = input.bool(true, 'Highlight Standard-Type Candle', inline='pattern_highlight_standard', group='🎯 Patterns')
+standardHighlightColor = input.color(DEFAULT_STANDARD_HIGHLIGHT_COLOR, 'Standard Color', inline='pattern_highlight_standard', group='🎯 Patterns')
+standardLabelTextColor = input.color(DEFAULT_STANDARD_LABEL_TEXT_COLOR, 'Standard Label Text', inline='pattern_label_standard', group='🎯 Patterns')
+highlightDelayedType = input.bool(true, 'Highlight Delayed-Type Candle', inline='pattern_highlight_delayed', group='🎯 Patterns')
+delayedHighlightColor = input.color(DEFAULT_DELAYED_HIGHLIGHT_COLOR, 'Delayed Color', inline='pattern_highlight_delayed', group='🎯 Patterns')
+delayedLabelTextColor = input.color(DEFAULT_DELAYED_LABEL_TEXT_COLOR, 'Delayed Label Text', inline='pattern_label_delayed', group='🎯 Patterns')
+patternLabelSizeSetting = input.string('Small', 'Pattern Label Size', options=['Tiny', 'Small', 'Normal', 'Large', 'Huge'], group='🎯 Patterns')
+verifyLevels = input.bool(false, 'Verify Levels', inline='pattern_verify', group='🎯 Patterns', tooltip='Only display levels that produced an IMM/STD/DEY pattern')
+
+showLabels = input.bool(true, 'Show Labels', group='🏷️ Labels')
+labelSize = input.string(DEFAULT_LABEL_SIZE, 'Label Size', options=['Tiny', 'Small', 'Normal'], group='🏷️ Labels')
+labelColor = input.color(DEFAULT_LABEL_COLOR, 'Label Color', group='🏷️ Labels')
+appendTimeframeDateLabels = input.bool(false, 'Append Day/Date To Labels', group='🏷️ Labels')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STORAGE ARRAYS (daily only)
+// ═══════════════════════════════════════════════════════════════════════════════
+var array<float> daily_highs = array.new<float>()
+var array<float> daily_lows = array.new<float>()
+var array<int> daily_times = array.new<int>()
+var array<int> daily_high_times = array.new<int>()
+var array<int> daily_low_times = array.new<int>()
+var array<bool> daily_high_breached = array.new<bool>()
+var array<bool> daily_low_breached = array.new<bool>()
+var array<int> daily_high_breach_times = array.new<int>()
+var array<int> daily_low_breach_times = array.new<int>()
+var array<bool> daily_high_used_by_pattern = array.new<bool>()
+var array<bool> daily_low_used_by_pattern = array.new<bool>()
+
+// Active session tracking
+var float daily_session_high = na
+var float daily_session_low = na
+var int daily_session_high_time = na
+var int daily_session_low_time = na
+
+// Visual caches
+var array<line> all_lines = array.new<line>()
+var array<label> all_labels = array.new<label>()
+var array<label> pattern_labels = array.new<label>()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITY HELPERS (copied from Playful)
+// ═══════════════════════════════════════════════════════════════════════════════
+get_label_size() =>
+    switch labelSize
+        'Tiny' => size.tiny
+        'Small' => size.small
+        'Normal' => size.normal
+        => size.small
+
+pad_two_digits(value) => value < 10 ? '0' + str.tostring(value) : str.tostring(value)
+
+get_day_name(time_value) =>
+    day = dayofweek(time_value, NY_TIMEZONE)
+    switch day
+        dayofweek.monday => WEEKDAY_LABEL_MON
+        dayofweek.tuesday => WEEKDAY_LABEL_TUE
+        dayofweek.wednesday => WEEKDAY_LABEL_WED
+        dayofweek.thursday => WEEKDAY_LABEL_THU
+        dayofweek.friday => WEEKDAY_LABEL_FRI
+        dayofweek.saturday => WEEKDAY_LABEL_SAT
+        dayofweek.sunday => WEEKDAY_LABEL_SUN
+        => ''
+
+format_day_date(time_value) =>
+    day_name = get_day_name(time_value)
+    month_str = pad_two_digits(month(time_value, NY_TIMEZONE))
+    day_str = pad_two_digits(dayofmonth(time_value, NY_TIMEZONE))
+    day_name + ' ' + month_str + '/' + day_str
+
+build_daily_label(time_value) =>
+    if not appendTimeframeDateLabels or na(time_value)
+        DAILY_TIMEFRAME_LABEL
+    else
+        DAILY_TIMEFRAME_LABEL + ' ' + format_day_date(time_value)
+
+get_pattern_label_size() =>
+    switch patternLabelSizeSetting
+        'Tiny' => size.tiny
+        'Small' => size.small
+        'Normal' => size.normal
+        'Large' => size.large
+        'Huge' => size.huge
+        => size.small
+
+is_sunday_evening_reopen(time_value) =>
+    not includeSundayReopen and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+
+is_new_day() =>
+    prev_time = time[1]
+    not na(prev_time) and dayofmonth(prev_time, NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
+
+// Pattern detection copied verbatim from Playful
+detect_pool_patterns(show_pool, array<float> levels_high, array<float> levels_low, array<int> high_breach_times, array<int> low_breach_times, array<bool> high_used_flags, array<bool> low_used_flags) =>
+    immediate_found = false
+    standard_found = false
+    delayed_found = false
+    immediate_high_count = 0
+    immediate_low_count = 0
+    standard_high_count = 0
+    standard_low_count = 0
+    delayed_high_count = 0
+    delayed_low_count = 0
+    if show_pool and array.size(levels_high) > 0 and array.size(levels_low) > 0 and array.size(high_breach_times) > 0 and array.size(low_breach_times) > 0
+        has_previous_bar = not na(time[1]) and not na(open[1]) and not na(close[1]) and not na(high[1]) and not na(low[1])
+        if has_previous_bar
+            a_mid = (open[1] + close[1]) / 2.0
+
+            if highlightImmediateType
+                for i = 0 to array.size(levels_high) - 1
+                    if array.get(high_breach_times, i) == time
+                        level = array.get(levels_high, i)
+                        if not na(level) and high[1] < level and close[1] < level and open < level and high > level and close < a_mid and close < open
+                            immediate_found := true
+                            if array.size(high_used_flags) > i
+                                array.set(high_used_flags, i, true)
+                            immediate_high_count += 1
+
+                for i = 0 to array.size(levels_low) - 1
+                    if array.get(low_breach_times, i) == time
+                        level = array.get(levels_low, i)
+                        if not na(level) and low[1] > level and close[1] > level and open > level and low < level and close > a_mid and close > open
+                            immediate_found := true
+                            if array.size(low_used_flags) > i
+                                array.set(low_used_flags, i, true)
+                            immediate_low_count += 1
+
+            if highlightStandardType
+                for i = 0 to array.size(levels_high) - 1
+                    if array.get(high_breach_times, i) == time[1]
+                        level = array.get(levels_high, i)
+                        if not na(level) and close < open
+                            is_wick_only_first_breach = open[1] < level and high[1] > level and close[1] < level
+                            b_open_inside = open < level
+                            b_close_beyond_mid = close < a_mid
+                            b_no_new_high = high < high[1]
+                            if is_wick_only_first_breach and b_open_inside and b_close_beyond_mid and b_no_new_high
+                                standard_found := true
+                                if array.size(high_used_flags) > i
+                                    array.set(high_used_flags, i, true)
+                                standard_high_count += 1
+
+                for i = 0 to array.size(levels_low) - 1
+                    if array.get(low_breach_times, i) == time[1]
+                        level = array.get(levels_low, i)
+                        if not na(level) and close > open
+                            is_wick_only_first_breach = open[1] > level and low[1] < level and close[1] > level
+                            b_open_inside = open > level
+                            b_close_beyond_mid = close > a_mid
+                            b_no_new_low = low > low[1]
+                            if is_wick_only_first_breach and b_open_inside and b_close_beyond_mid and b_no_new_low
+                                standard_found := true
+                                if array.size(low_used_flags) > i
+                                    array.set(low_used_flags, i, true)
+                                standard_low_count += 1
+
+            if highlightDelayedType
+                for i = 0 to array.size(levels_high) - 1
+                    if array.get(high_breach_times, i) == time[1]
+                        level = array.get(levels_high, i)
+                        if not na(level) and close < open
+                            is_body_close_breach = close[1] > level
+                            b_open_outside = open > level
+                            b_close_beyond_mid = close < a_mid
+                            if is_body_close_breach and b_open_outside and b_close_beyond_mid
+                                delayed_found := true
+                                if array.size(high_used_flags) > i
+                                    array.set(high_used_flags, i, true)
+                                delayed_high_count += 1
+
+                for i = 0 to array.size(levels_low) - 1
+                    if array.get(low_breach_times, i) == time[1]
+                        level = array.get(levels_low, i)
+                        if not na(level) and close > open
+                            is_body_close_breach = close[1] < level
+                            b_open_outside = open < level
+                            b_close_beyond_mid = close > a_mid
+                            if is_body_close_breach and b_open_outside and b_close_beyond_mid
+                                delayed_found := true
+                                if array.size(low_used_flags) > i
+                                    array.set(low_used_flags, i, true)
+                                delayed_low_count += 1
+
+    [immediate_found, standard_found, delayed_found, immediate_high_count, immediate_low_count, standard_high_count, standard_low_count, delayed_high_count, delayed_low_count]
+
+create_pattern_label(label_text, text_color, levels_used) =>
+    if not na(low)
+        price_range = high - low
+        offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+        label_price = low - offset
+        full_text = label_text
+        if levels_used > 1
+            full_text += '\n(' + str.tostring(levels_used) + ')'
+        pattern_label = label.new(
+             x=bar_index,
+             y=label_price,
+             text=full_text,
+             style=label.style_label_up,
+             textcolor=text_color,
+             size=get_pattern_label_size(),
+             color=color.new(color.white, 100),
+             xloc=xloc.bar_index,
+             yloc=yloc.price
+         )
+        array.push(pattern_labels, pattern_label)
+        while array.size(pattern_labels) > MAX_PATTERN_LABELS
+            old_pattern_label = array.shift(pattern_labels)
+            if not na(old_pattern_label)
+                label.delete(old_pattern_label)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DAILY SESSION TRACKING
+// ═══════════════════════════════════════════════════════════════════════════════
+new_day = is_new_day()
+new_bar = barstate.isnew
+
+if showDaily
+    skip_sunday_reopen = is_sunday_evening_reopen(time)
+    if not skip_sunday_reopen
+        if new_bar and new_day
+            if not na(daily_session_high) and not na(daily_session_low)
+                session_close_time = nz(time[1], time)
+                array.push(daily_highs, daily_session_high)
+                array.push(daily_lows, daily_session_low)
+                array.push(daily_times, session_close_time)
+                array.push(daily_high_times, daily_session_high_time)
+                array.push(daily_low_times, daily_session_low_time)
+                array.push(daily_high_breached, false)
+                array.push(daily_low_breached, false)
+                array.push(daily_high_breach_times, na)
+                array.push(daily_low_breach_times, na)
+                array.push(daily_high_used_by_pattern, false)
+                array.push(daily_low_used_by_pattern, false)
+
+                max_daily_entries = math.min(showDailyLast, MAX_SESSION_LEVELS)
+                while array.size(daily_highs) > max_daily_entries
+                    array.shift(daily_highs)
+                    array.shift(daily_lows)
+                    array.shift(daily_times)
+                    array.shift(daily_high_times)
+                    array.shift(daily_low_times)
+                    array.shift(daily_high_breached)
+                    array.shift(daily_low_breached)
+                    array.shift(daily_high_breach_times)
+                    array.shift(daily_low_breach_times)
+                    array.shift(daily_high_used_by_pattern)
+                    array.shift(daily_low_used_by_pattern)
+
+            daily_session_high := high
+            daily_session_low := low
+            daily_session_high_time := time
+            daily_session_low_time := time
+
+        if na(daily_session_high) or na(daily_session_low)
+            daily_session_high := high
+            daily_session_low := low
+            daily_session_high_time := time
+            daily_session_low_time := time
+
+        if high > daily_session_high
+            daily_session_high := high
+            daily_session_high_time := time
+        if low < daily_session_low
+            daily_session_low := low
+            daily_session_low_time := time
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BREACH DETECTION (daily only)
+// ═══════════════════════════════════════════════════════════════════════════════
+if showDaily and array.size(daily_highs) > 0
+    scan_size = math.min(array.size(daily_highs), MAX_BREACH_SCAN_BARS)
+    start_index = math.max(0, array.size(daily_highs) - scan_size)
+
+    for i = start_index to array.size(daily_highs) - 1
+        if not array.get(daily_high_breached, i)
+            tracked_high = array.get(daily_highs, i)
+            if high >= tracked_high
+                array.set(daily_high_breached, i, true)
+                array.set(daily_high_breach_times, i, time)
+
+        if not array.get(daily_low_breached, i)
+            tracked_low = array.get(daily_lows, i)
+            if low <= tracked_low
+                array.set(daily_low_breached, i, true)
+                array.set(daily_low_breach_times, i, time)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTION + BAR COLORING
+// ═══════════════════════════════════════════════════════════════════════════════
+bool immediate_detected = false
+bool standard_detected = false
+bool delayed_detected = false
+int immediate_levels_used = 0
+int standard_levels_used = 0
+int delayed_levels_used = 0
+int immediate_high_levels_used = 0
+int immediate_low_levels_used = 0
+int standard_high_levels_used = 0
+int standard_low_levels_used = 0
+int delayed_high_levels_used = 0
+int delayed_low_levels_used = 0
+string immediate_label_with_sign = IMMEDIATE_LABEL_TEXT
+string standard_label_with_sign = STANDARD_LABEL_TEXT
+string delayed_label_with_sign = DELAYED_LABEL_TEXT
+
+if showDaily
+    [daily_immediate, daily_standard, daily_delayed, daily_immediate_high_count, daily_immediate_low_count, daily_standard_high_count, daily_standard_low_count, daily_delayed_high_count, daily_delayed_low_count] = detect_pool_patterns(showDaily, daily_highs, daily_lows, daily_high_breach_times, daily_low_breach_times, daily_high_used_by_pattern, daily_low_used_by_pattern)
+    immediate_detected := daily_immediate
+    standard_detected := daily_standard
+    delayed_detected := daily_delayed
+    immediate_levels_used := daily_immediate_high_count + daily_immediate_low_count
+    standard_levels_used := daily_standard_high_count + daily_standard_low_count
+    delayed_levels_used := daily_delayed_high_count + daily_delayed_low_count
+    immediate_high_levels_used := daily_immediate_high_count
+    immediate_low_levels_used := daily_immediate_low_count
+    standard_high_levels_used := daily_standard_high_count
+    standard_low_levels_used := daily_standard_low_count
+    delayed_high_levels_used := daily_delayed_high_count
+    delayed_low_levels_used := daily_delayed_low_count
+
+    if immediate_levels_used > 0
+        immediate_label_with_sign := IMMEDIATE_LABEL_TEXT + (close < open ? '⁻' : close > open ? '⁺' : '')
+    if standard_levels_used > 0
+        standard_label_with_sign := STANDARD_LABEL_TEXT + (close < open ? '⁻' : close > open ? '⁺' : '')
+    if delayed_levels_used > 0
+        delayed_label_with_sign := DELAYED_LABEL_TEXT + (close < open ? '⁻' : close > open ? '⁺' : '')
+
+color final_bar_color = na
+if highlightDelayedType and delayed_detected
+    final_bar_color := delayedHighlightColor
+else if highlightStandardType and standard_detected
+    final_bar_color := standardHighlightColor
+else if highlightImmediateType and immediate_detected
+    final_bar_color := immediateHighlightColor
+
+barcolor(final_bar_color)
+
+if barstate.isconfirmed
+    if highlightDelayedType and delayed_detected
+        create_pattern_label(delayed_label_with_sign, delayedLabelTextColor, delayed_levels_used)
+    else if highlightStandardType and standard_detected
+        create_pattern_label(standard_label_with_sign, standardLabelTextColor, standard_levels_used)
+    else if highlightImmediateType and immediate_detected
+        create_pattern_label(immediate_label_with_sign, immediateLabelTextColor, immediate_levels_used)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUAL OUTPUT (daily lines + labels)
+// ═══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    while array.size(all_lines) > 0
+        old_line = array.shift(all_lines)
+        if not na(old_line)
+            line.delete(old_line)
+
+    while array.size(all_labels) > 0
+        old_label = array.shift(all_labels)
+        if not na(old_label)
+            label.delete(old_label)
+
+if barstate.islast and showDaily
+    if array.size(daily_highs) > 0
+        for i = 0 to array.size(daily_highs) - 1
+            tracked_high = array.get(daily_highs, i)
+            tracked_low = array.get(daily_lows, i)
+            high_time = array.get(daily_high_times, i)
+            low_time = array.get(daily_low_times, i)
+            high_breached = array.get(daily_high_breached, i)
+            low_breached = array.get(daily_low_breached, i)
+            high_breach_time = array.get(daily_high_breach_times, i)
+            low_breach_time = array.get(daily_low_breach_times, i)
+            high_used = array.size(daily_high_used_by_pattern) > i ? array.get(daily_high_used_by_pattern, i) : false
+            low_used = array.size(daily_low_used_by_pattern) > i ? array.get(daily_low_used_by_pattern, i) : false
+
+            if showDailyHighs and (not verifyLevels or high_used)
+                high_end_time = high_breached ? high_breach_time : time
+                high_line = line.new(high_time, tracked_high, high_end_time, tracked_high, xloc=xloc.bar_time)
+                line.set_color(high_line, dailyHighColor)
+                line.set_width(high_line, dailyLineWidth)
+                line.set_style(high_line, line.style_solid)
+                array.push(all_lines, high_line)
+
+                if showLabels
+                    high_label_time = high_breached ? int((high_time + high_end_time) / 2) : high_end_time
+                    high_label = label.new(high_label_time, tracked_high, build_daily_label(high_time), style=label.style_label_down, textcolor=labelColor, size=get_label_size(), color=color.new(color.white, 100), xloc=xloc.bar_time)
+                    array.push(all_labels, high_label)
+
+            if showDailyLows and (not verifyLevels or low_used)
+                low_end_time = low_breached ? low_breach_time : time
+                low_line = line.new(low_time, tracked_low, low_end_time, tracked_low, xloc=xloc.bar_time)
+                line.set_color(low_line, dailyLowColor)
+                line.set_width(low_line, dailyLineWidth)
+                line.set_style(low_line, line.style_solid)
+                array.push(all_lines, low_line)
+
+                if showLabels
+                    low_label_time = low_breached ? int((low_time + low_end_time) / 2) : low_end_time
+                    low_label = label.new(low_label_time, tracked_low, build_daily_label(low_time), style=label.style_label_up, textcolor=labelColor, size=get_label_size(), color=color.new(color.white, 100), xloc=xloc.bar_time)
+                    array.push(all_labels, low_label)
+
+    if not verifyLevels and showDailyHighs and not na(daily_session_high) and not na(daily_session_high_time)
+        active_high_line = line.new(daily_session_high_time, daily_session_high, time, daily_session_high, xloc=xloc.bar_time)
+        line.set_color(active_high_line, dailyHighColor)
+        line.set_width(active_high_line, dailyLineWidth)
+        line.set_style(active_high_line, line.style_solid)
+        array.push(all_lines, active_high_line)
+
+        if showLabels
+            active_high_label_time = int((daily_session_high_time + time) / 2)
+            active_high_label = label.new(active_high_label_time, daily_session_high, build_daily_label(daily_session_high_time), style=label.style_label_down, textcolor=labelColor, size=get_label_size(), color=color.new(color.white, 100), xloc=xloc.bar_time)
+            array.push(all_labels, active_high_label)
+
+    if not verifyLevels and showDailyLows and not na(daily_session_low) and not na(daily_session_low_time)
+        active_low_line = line.new(daily_session_low_time, daily_session_low, time, daily_session_low, xloc=xloc.bar_time)
+        line.set_color(active_low_line, dailyLowColor)
+        line.set_width(active_low_line, dailyLineWidth)
+        line.set_style(active_low_line, line.style_solid)
+        array.push(all_lines, active_low_line)
+
+        if showLabels
+            active_low_label_time = int((daily_session_low_time + time) / 2)
+            active_low_label = label.new(active_low_label_time, daily_session_low, build_daily_label(daily_session_low_time), style=label.style_label_up, textcolor=labelColor, size=get_label_size(), color=color.new(color.white, 100), xloc=xloc.bar_time)
+            array.push(all_labels, active_low_label)
