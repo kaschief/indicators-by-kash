@@ -136,7 +136,7 @@ BREACH_METHOD_BODY_BREACH = "Body Breach"
 
 // Array Size Limits (Optimized through performance testing)
 MAX_ACTIVE_SOURCE_REGIONS = 100
-MAX_MBZ_RECORDS = 90  // Increased from 60 to accommodate both imbalance + liquidity families
+MAX_MBZ_RECORDS = 60  // v9.23 proven capacity - imbalance + liquidity share this pool
 MAX_BODY_HIGHLIGHTS = 75
 MAX_WICK_HIGHLIGHTS = 75
 MAX_EXTENDED_BOXES = 75
@@ -153,9 +153,9 @@ MAX_THRESHOLD_PERCENT = 99.0
 DEFAULT_STEP_SIZE = 0.1
 
 // Separate Limits System Defaults - Independent quotas for each MBZ source family
-DEFAULT_MAX_IMBALANCE_MBZS = 21  // Default imbalance quota (70% of old unified 30)
+DEFAULT_MAX_IMBALANCE_MBZS = 60  // Default imbalance quota (v9.23 parity - 60 × 12x = 720 in Ultra Pro)
 DEFAULT_MAX_LIQUIDITY_MBZS = 9   // Default liquidity quota (30% of old unified 30)
-MAX_IMBALANCE_MBZS_LIMIT = 55    // Max limit for imbalance MBZs
+MAX_IMBALANCE_MBZS_LIMIT = 80    // Max limit for imbalance MBZs (headroom for power users)
 MAX_LIQUIDITY_MBZS_LIMIT = 30    // Max limit for liquidity MBZs
 DEFAULT_MAX_INVALIDATED_MBZS = 5
 MAX_INVALIDATED_MBZS_LIMIT = 15
@@ -445,7 +445,7 @@ EMPTY_DISPLAY = ""
 // === 🎯 DETECTION ===
 show_imbalance_mbzs = input.bool(true, 'Imbalance MBZs', group=GROUP_DETECTION, inline='variant1', tooltip='Detect MBZs from imbalance sources (FVG/Implied/Volume/Gap/RDRB)')
 show_liquidity_mbzs = input.bool(true, 'Liquidity MBZs', group=GROUP_DETECTION, inline='variant1', tooltip='Detect MBZs from liquidity sources (Daily highs/lows swept)')
-max_imbalance_mbzs = input.int(DEFAULT_MAX_IMBALANCE_MBZS, INPUT_LABEL_MAX_IMBALANCE_MBZS, minval=0, maxval=MAX_IMBALANCE_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum imbalance MBZs (from FVG/Implied/Volume/Gap/RDRB sources, 0-55 limit)')
+max_imbalance_mbzs = input.int(DEFAULT_MAX_IMBALANCE_MBZS, INPUT_LABEL_MAX_IMBALANCE_MBZS, minval=0, maxval=MAX_IMBALANCE_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum imbalance MBZs (from FVG/Implied/Volume/Gap/RDRB sources, 0-80 limit)')
 max_liquidity_mbzs = input.int(DEFAULT_MAX_LIQUIDITY_MBZS, INPUT_LABEL_MAX_LIQUIDITY_MBZS, minval=0, maxval=MAX_LIQUIDITY_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum liquidity MBZs (from daily high/low sweeps, 0-30 limit)')
 capacity_mode = input.string(CAPACITY_MODE_OPTIMIZED, "Capacity Mode", options=[CAPACITY_MODE_OPTIMIZED, CAPACITY_MODE_BOOST, CAPACITY_MODE_ULTRA_BOOST, CAPACITY_MODE_ULTRA_PRO_BOOST], group=GROUP_DETECTION, inline='capacity', tooltip='Scales MBZ records, boxes, and historical scan depth:\n• Optimized: base limits (Liq: 60 days)\n• Boost: 4× base (Liq: 240 days / 1 year)\n• Ultra Boost: 8× base (Liq: 480 days / 2 years)\n• Ultra Pro Boost: 12× base (Liq: 720 days / 3 years)')
 
@@ -767,10 +767,6 @@ var array<MBZRecord> active_mbz_records = array.new<MBZRecord>()  // PERFORMANCE
 var int next_source_id = 1  // Unique ID counter for imbalance source tracking
 var array<int> liquidity_source_id_counter = array.new_int(1, 1)  // Mutable counter for liquidity boundaries
 
-// PERFORMANCE: Session memoization - track which liquidity sessions already yielded MBZs
-var array<int> processed_daily_session_ids = array.new_int()
-var array<int> processed_weekly_session_ids = array.new_int()
-
 // Visual elements
 var array<box> imbalance_source_boxes = array.new_box()
 var array<label> mbz_labels = array.new<label>()
@@ -822,11 +818,18 @@ is_capacity_boost = capacity_mode == CAPACITY_MODE_BOOST
 is_capacity_ultra_boost = capacity_mode == CAPACITY_MODE_ULTRA_BOOST
 is_capacity_ultra_pro_boost = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST
 
-// Base (Optimized) - Separate quotas for imbalance vs liquidity
-base_imbalance_mbzs = max_imbalance_mbzs
-base_liquidity_mbzs = max_liquidity_mbzs
-base_invalidated_mbzs = max_invalidated_mbzs
-base_records = MAX_MBZ_RECORDS                // 90 (increased to support both imbalance + liquidity)
+// Base (Optimized) - Granular capacity per source type
+base_imbalance_mbzs = max_imbalance_mbzs  // 60 (FVG + Implied + Volume + True Gap + RDRB share this)
+base_invalidated_mbzs = max_invalidated_mbzs  // 5
+
+// GRANULAR LIQUIDITY CAPACITY: Separate limits for each timeframe (daily/weekly don't need years of history)
+base_daily_liquidity_mbzs = 10   // Daily highs/lows (60-90 days typical)
+base_weekly_liquidity_mbzs = 8   // Weekly highs/lows (30-60 weeks typical)
+base_monthly_liquidity_mbzs = 5  // Monthly highs/lows (future feature, 12-24 months typical)
+base_session_liquidity_mbzs = 7  // Session highs/lows (future feature, London/NY/Asia)
+base_liquidity_mbzs = base_daily_liquidity_mbzs + base_weekly_liquidity_mbzs + base_monthly_liquidity_mbzs + base_session_liquidity_mbzs  // Total: 30
+
+base_records = base_imbalance_mbzs + base_liquidity_mbzs + base_invalidated_mbzs  // 60 + 30 + 5 = 95
 base_active_imbalance_sources = MAX_ACTIVE_SOURCE_REGIONS            // 100
 base_extended_boxes = MAX_EXTENDED_BOXES      // 75
 base_body_highlights = MAX_BODY_HIGHLIGHTS    // 75
@@ -834,10 +837,18 @@ base_wick_highlights = MAX_WICK_HIGHLIGHTS    // 75
 base_source_displays = max_source_displays  // input-bound (unified: boxes + lines)
 base_liquidity_detection_scan = BASE_LIQUIDITY_SCAN_DEPTH  // 60 days (~3 months)
 
-// Boost, Ultra & Ultra Pro multipliers applied to base limits (clamped to platform caps where needed)
-boost_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * BOOST_MULTIPLIER)))
-boost_liquidity_mbzs = int(math.max(base_liquidity_mbzs, math.round(base_liquidity_mbzs * BOOST_MULTIPLIER)))
-boost_records = int(math.max(base_records, math.round(base_records * BOOST_MULTIPLIER)))
+// SEPARATE CAPACITY STRATEGY: Imbalance benefits from deep history, Liquidity doesn't need years of data
+// Imbalance: Full boost multipliers (4x, 8x, 12x like v9.23)
+// Liquidity: Fixed modest limits (don't scale aggressively - daily/weekly from 10 years ago is useless)
+
+// Boost Mode (4x multiplier for imbalance, FIXED modest increases for liquidity)
+boost_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * BOOST_MULTIPLIER)))  // 60 → 240
+boost_daily_liquidity_mbzs = 12   // +2 from base (modest increase, not 4x)
+boost_weekly_liquidity_mbzs = 10  // +2 from base
+boost_monthly_liquidity_mbzs = 6  // +1 from base (future)
+boost_session_liquidity_mbzs = 8  // +1 from base (future)
+boost_liquidity_mbzs = boost_daily_liquidity_mbzs + boost_weekly_liquidity_mbzs + boost_monthly_liquidity_mbzs + boost_session_liquidity_mbzs  // Total: 36
+boost_records = boost_imbalance_mbzs + boost_liquidity_mbzs + base_invalidated_mbzs  // 240 + 36 + 5 = 281
 boost_active_imbalance_sources = int(math.max(base_active_imbalance_sources, math.round(base_active_imbalance_sources * BOOST_MULTIPLIER)))
 boost_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * BOOST_MULTIPLIER))))
 boost_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * BOOST_MULTIPLIER))))
@@ -845,9 +856,14 @@ boost_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick_hig
 boost_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * BOOST_MULTIPLIER))))
 boost_liquidity_detection_scan = BOOST_LIQUIDITY_SCAN_DEPTH  // 240 days (~1 year)
 
-ultra_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * ULTRA_BOOST_MULTIPLIER)))
-ultra_liquidity_mbzs = int(math.max(base_liquidity_mbzs, math.round(base_liquidity_mbzs * ULTRA_BOOST_MULTIPLIER)))
-ultra_records = int(math.max(base_records, math.round(base_records * ULTRA_BOOST_MULTIPLIER)))
+// Ultra Boost Mode (8x multiplier for imbalance, FIXED moderate increases for liquidity)
+ultra_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * ULTRA_BOOST_MULTIPLIER)))  // 60 → 480
+ultra_daily_liquidity_mbzs = 15   // +5 from base (reasonable cap)
+ultra_weekly_liquidity_mbzs = 12  // +4 from base
+ultra_monthly_liquidity_mbzs = 8  // +3 from base (future)
+ultra_session_liquidity_mbzs = 10 // +3 from base (future)
+ultra_liquidity_mbzs = ultra_daily_liquidity_mbzs + ultra_weekly_liquidity_mbzs + ultra_monthly_liquidity_mbzs + ultra_session_liquidity_mbzs  // Total: 45
+ultra_records = ultra_imbalance_mbzs + ultra_liquidity_mbzs + base_invalidated_mbzs  // 480 + 45 + 5 = 530
 ultra_active_imbalance_sources = int(math.max(base_active_imbalance_sources, math.round(base_active_imbalance_sources * ULTRA_BOOST_MULTIPLIER)))
 ultra_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * ULTRA_BOOST_MULTIPLIER))))
 ultra_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * ULTRA_BOOST_MULTIPLIER))))
@@ -855,9 +871,14 @@ ultra_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick_hig
 ultra_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * ULTRA_BOOST_MULTIPLIER))))
 ultra_liquidity_detection_scan = ULTRA_LIQUIDITY_SCAN_DEPTH  // 480 days (~2 years)
 
-ultra_pro_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * ULTRA_PRO_BOOST_MULTIPLIER)))
-ultra_pro_liquidity_mbzs = int(math.max(base_liquidity_mbzs, math.round(base_liquidity_mbzs * ULTRA_PRO_BOOST_MULTIPLIER)))
-ultra_pro_records = int(math.max(base_records, math.round(base_records * ULTRA_PRO_BOOST_MULTIPLIER)))
+// Ultra Pro Boost Mode (12x multiplier for imbalance, FIXED maximum caps for liquidity)
+ultra_pro_imbalance_mbzs = int(math.max(base_imbalance_mbzs, math.round(base_imbalance_mbzs * ULTRA_PRO_BOOST_MULTIPLIER)))  // 60 → 720 (v9.23 parity!)
+ultra_pro_daily_liquidity_mbzs = 18   // +8 from base (maximum reasonable)
+ultra_pro_weekly_liquidity_mbzs = 15  // +7 from base (maximum reasonable)
+ultra_pro_monthly_liquidity_mbzs = 10 // +5 from base (future)
+ultra_pro_session_liquidity_mbzs = 12 // +5 from base (future)
+ultra_pro_liquidity_mbzs = ultra_pro_daily_liquidity_mbzs + ultra_pro_weekly_liquidity_mbzs + ultra_pro_monthly_liquidity_mbzs + ultra_pro_session_liquidity_mbzs  // Total: 55
+ultra_pro_records = ultra_pro_imbalance_mbzs + ultra_pro_liquidity_mbzs + base_invalidated_mbzs  // 720 + 55 + 5 = 780
 ultra_pro_active_imbalance_sources = int(math.max(base_active_imbalance_sources, math.round(base_active_imbalance_sources * ULTRA_PRO_BOOST_MULTIPLIER)))
 ultra_pro_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * ULTRA_PRO_BOOST_MULTIPLIER))))
 ultra_pro_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * ULTRA_PRO_BOOST_MULTIPLIER))))
@@ -865,10 +886,10 @@ ultra_pro_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick
 ultra_pro_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * ULTRA_PRO_BOOST_MULTIPLIER))))
 ultra_pro_liquidity_detection_scan = ULTRA_PRO_LIQUIDITY_SCAN_DEPTH  // 720 days (~3 years)
 
-// Effective selections - Separate quotas
+// Effective capacity (v9.23 style - no timeframe scaling, full boost capacity on all timeframes)
 max_imbalance_mbzs_effective = is_capacity_ultra_pro_boost ? ultra_pro_imbalance_mbzs : is_capacity_ultra_boost ? ultra_imbalance_mbzs : is_capacity_boost ? boost_imbalance_mbzs : base_imbalance_mbzs
 max_liquidity_mbzs_effective = is_capacity_ultra_pro_boost ? ultra_pro_liquidity_mbzs : is_capacity_ultra_boost ? ultra_liquidity_mbzs : is_capacity_boost ? boost_liquidity_mbzs : base_liquidity_mbzs
-max_invalidated_mbzs_effective = base_invalidated_mbzs
+max_invalidated_mbzs_effective = base_invalidated_mbzs  // Always use base
 max_mbz_records_effective = is_capacity_ultra_pro_boost ? ultra_pro_records : is_capacity_ultra_boost ? ultra_records : is_capacity_boost ? boost_records : base_records
 max_active_imbalance_sources_effective = is_capacity_ultra_pro_boost ? ultra_pro_active_imbalance_sources : is_capacity_ultra_boost ? ultra_active_imbalance_sources : is_capacity_boost ? boost_active_imbalance_sources : base_active_imbalance_sources
 max_extended_boxes_effective = is_capacity_ultra_pro_boost ? ultra_pro_extended_boxes : is_capacity_ultra_boost ? ultra_extended_boxes : is_capacity_boost ? boost_extended_boxes : base_extended_boxes
@@ -1034,23 +1055,6 @@ build_liquidity_pool_label(pool_type, time_value) =>
         label_prefix
     else
         label_prefix + ' ' + format_liquidity_pool_time_label(pool_type, time_value)
-
-// PERFORMANCE: Generate unique session ID for memoization (tracking which sessions already processed)
-get_session_id(pool_type, session_time) =>
-    switch pool_type
-        LIQUIDITY_SOURCE_TYPE_DAILY =>
-            // Format: YYYYMMDD (year * 10000 + month * 100 + day)
-            // Example: 20240215 = Year 2024, Feb 15
-            year(session_time, NY_TIMEZONE) * 10000 + month(session_time, NY_TIMEZONE) * 100 + dayofmonth(session_time, NY_TIMEZONE)
-        LIQUIDITY_SOURCE_TYPE_WEEKLY =>
-            // Format: YYYYWW (year * 100 + week-of-year)
-            // Example: 202408 = Year 2024, Week 8
-            year(session_time, NY_TIMEZONE) * 100 + weekofyear(session_time, NY_TIMEZONE)
-        LIQUIDITY_SOURCE_TYPE_MONTHLY =>
-            // Format: YYYYMM (year * 100 + month)
-            // Example: 202403 = Year 2024, March
-            year(session_time, NY_TIMEZONE) * 100 + month(session_time, NY_TIMEZONE)
-        => 0  // Unknown type
 
 create_liquidity_pool() =>
     LiquidityPoolCollection.new(
@@ -1558,17 +1562,6 @@ process_liquidity_pool(
     // Process finalized sessions
     if total_sessions > 0
         for session_index = scan_start_index to total_sessions - 1
-            // PERFORMANCE: Session memoization - skip sessions already processed
-            session_time = array.get(pool.session_close_times, session_index)
-            session_id = get_session_id(pool_source_type, session_time)
-
-            // Check if this session was already fully processed
-            processed_array = pool_source_type == LIQUIDITY_SOURCE_TYPE_DAILY ?
-                              processed_daily_session_ids : processed_weekly_session_ids
-
-            if array.includes(processed_array, session_id)
-                continue  // Skip - already processed this session
-
             pool_high_value = array.get(pool.highs, session_index)
             pool_low_value = array.get(pool.lows, session_index)
             pool_high_breach_time = array.get(pool.high_breach_times, session_index)
@@ -1645,9 +1638,6 @@ process_liquidity_pool(
                     array.push(detected_events_is_exact, array.get(session_events_is_exact, event_index))
                     array.push(detected_events_source_price, array.get(session_events_source_price, event_index))
                     array.push(detected_events_source_bar_index, array.get(session_events_source_bar_index, event_index))
-
-                // PERFORMANCE: Mark this session as processed (don't scan again on future bars)
-                array.push(processed_array, session_id)
 
     // Process current (active) session
     current_high_value = pool.current_high
@@ -4253,6 +4243,14 @@ manage_consolidated_mbz_display() =>
             if not should_display_consolidated_mbz(current_consolidated_mbz)
                 continue
 
+            // PERFORMANCE: Check historical distance for buffer safety
+            // Pine's historical buffer limit varies (can be as low as 300-500 bars depending on data)
+            bars_ago = bar_index - current_consolidated_mbz.bar_index
+
+            // Skip MBZs too far back (beyond safe visual creation range)
+            if bars_ago >= 250  // Conservative limit to prevent buffer errors across all timeframes
+                continue
+
             // Calculate consolidated zone boundaries
             [consolidated_zone_top_boundary, consolidated_zone_bottom_boundary] = calculate_consolidated_zone_boundaries(current_consolidated_mbz.mbz_group)
             current_consolidated_mbz.consolidated_zone_top := consolidated_zone_top_boundary
@@ -4753,10 +4751,13 @@ if liquidity_detection_enabled
         b_low = low
 
         // PERFORMANCE: Timeframe-aware gating (prevent timeouts on low TF charts)
+        // Reduces scan depth based on timeframe while respecting user's capacity mode boost
         current_tf_minutes = timeframe.in_seconds() / 60
         enable_liquidity_on_this_tf = current_tf_minutes >= 15  // Disable ALL liquidity on <15m charts (too granular, causes timeouts)
-        daily_scan_cap = current_tf_minutes < 60 ? 30 : 60  // <1H charts: 30 sessions, others: 60
-        weekly_scan_cap = current_tf_minutes < 240 ? 20 : 60  // <4H charts: 20 sessions, others: 60
+
+        // Apply timeframe reduction as PERCENTAGE of user's chosen capacity mode
+        daily_scan_cap = current_tf_minutes < 60 ? int(max_liquidity_detection_scan_effective * 0.5) : max_liquidity_detection_scan_effective  // <1H: 50% of user setting
+        weekly_scan_cap = current_tf_minutes < 240 ? int(max_liquidity_detection_scan_effective * 0.33) : max_liquidity_detection_scan_effective  // <4H: 33% of user setting
 
         // Process DAILY liquidity pool (if enabled and chart TF allows)
         if enable_daily_liquidity and enable_liquidity_on_this_tf
@@ -4979,12 +4980,45 @@ if enable_rdrb and barstate.isconfirmed
 while array.size(active_imbalance_sources) > max_active_imbalance_sources_effective
     array.shift(active_imbalance_sources)
 
-// PERFORMANCE: Clean up old processed session IDs (keep last 120 to cover scan caps)
-while array.size(processed_daily_session_ids) > 120
-    array.shift(processed_daily_session_ids)
+// PERFORMANCE: Aggressive garbage collection of invalidated MBZs
+// Philosophy: Invalidated MBZs are for display/analysis only (use replay mode for deep inspection)
+// Keep ONLY what user wants to display, delete everything else immediately (free capacity for active MBZs)
+// OPTIMIZATION: Only run on live bars or end of history (skip during historical load for speed)
+should_run_garbage_collection = barstate.islastconfirmedhistory or barstate.islast
+if should_run_garbage_collection and array.size(all_mbz_records) > 0
+    invalidated_count = 0
+    invalidated_indices = array.new_int()
 
-while array.size(processed_weekly_session_ids) > 120
-    array.shift(processed_weekly_session_ids)
+    // Count invalidated MBZs and track their indices (oldest first)
+    for i = 0 to array.size(all_mbz_records) - 1
+        if array.get(all_mbz_records, i).is_invalidated
+            invalidated_count += 1
+            array.push(invalidated_indices, i)
+
+    // Determine how many invalidated to keep
+    // If "Show Invalidated" is OFF: keep 0 (delete all)
+    // If "Show Invalidated" is ON: keep max_invalidated_mbzs (user's display quota)
+    keep_invalidated = show_invalidated_mbzs ? max_invalidated_mbzs_effective : 0
+    excess_invalidated = invalidated_count - keep_invalidated
+
+    if excess_invalidated > 0
+        // AGGRESSIVE: Delete ALL excess invalidated MBZs (free capacity immediately)
+        removed = 0
+        for idx = 0 to array.size(invalidated_indices) - 1
+            if removed >= excess_invalidated
+                break
+
+            invalidated_idx = array.get(invalidated_indices, idx)
+            adjusted_idx = invalidated_idx - removed  // Adjust for previous removals
+            array.remove(all_mbz_records, adjusted_idx)
+
+            // Also remove from active array if somehow still there
+            if adjusted_idx < array.size(active_mbz_records)
+                mbz_in_active = array.get(active_mbz_records, adjusted_idx)
+                if mbz_in_active.is_invalidated
+                    array.remove(active_mbz_records, adjusted_idx)
+
+            removed += 1
 
 // Clean up old records and visual elements
 while array.size(all_mbz_records) > max_mbz_records_effective
@@ -5018,6 +5052,8 @@ while array.size(mbz_projection_labels) > MAX_PROJECTION_LABELS
 
 // PERFORMANCE OPTIMIZED: Only check active (non-invalidated) MBZs
 // This avoids wasting checks on already-invalidated records every bar
+// CRITICAL OPTIMIZATION: Always sync invalidations (required for display), but skip confirmation status syncs during history
+should_sync_confirmation_status = barstate.islastconfirmedhistory or barstate.islast
 if array.size(active_mbz_records) > 0
     for i = array.size(active_mbz_records) - 1 to 0
         mbz_record = array.get(active_mbz_records, i)
@@ -5032,33 +5068,37 @@ if array.size(active_mbz_records) > 0
             updated_mbz.cached_data_valid := false  // Invalidate cache
             needs_visual_update := true
 
-            // Update in both arrays and remove from active array
+            // Update in active array
             array.set(active_mbz_records, i, updated_mbz)
 
-            // Find and update in all_mbz_records (match by bar_index + source_type + is_bullish for uniqueness)
+            // ALWAYS sync invalidations to all_mbz_records (required for correct display)
+            // Find and update in all_mbz_records
             for all_idx = 0 to array.size(all_mbz_records) - 1
                 all_rec = array.get(all_mbz_records, all_idx)
                 if all_rec.bar_index == updated_mbz.bar_index and
                    all_rec.source_type == updated_mbz.source_type and
                    all_rec.is_bullish == updated_mbz.is_bullish and
-                   not all_rec.is_invalidated  // Only update if not already invalidated
+                   not all_rec.is_invalidated
                     array.set(all_mbz_records, all_idx, updated_mbz)
                     break
 
             // Remove from active array (no longer needs invalidation checks)
             array.remove(active_mbz_records, i)
         else
-            // Still active, just update confirmation status
+            // Still active, just update confirmation status in active array
             array.set(active_mbz_records, i, updated_mbz)
 
-            // Update in all_mbz_records as well
-            for all_idx = 0 to array.size(all_mbz_records) - 1
-                all_rec = array.get(all_mbz_records, all_idx)
-                if all_rec.bar_index == updated_mbz.bar_index and
-                   all_rec.source_type == updated_mbz.source_type and
-                   all_rec.is_bullish == updated_mbz.is_bullish
-                    array.set(all_mbz_records, all_idx, updated_mbz)
-                    break
+            // PERFORMANCE: Only sync confirmation status during display (not every bar during history)
+            // This saves millions of comparisons without affecting display accuracy
+            if should_sync_confirmation_status
+                // Update in all_mbz_records as well
+                for all_idx = 0 to array.size(all_mbz_records) - 1
+                    all_rec = array.get(all_mbz_records, all_idx)
+                    if all_rec.bar_index == updated_mbz.bar_index and
+                       all_rec.source_type == updated_mbz.source_type and
+                       all_rec.is_bullish == updated_mbz.is_bullish
+                        array.set(all_mbz_records, all_idx, updated_mbz)
+                        break
 
         // Process sources for MBZ detection with unified imbalance origin support
 if array.size(active_imbalance_sources) > 0 and barstate.isconfirmed
@@ -5294,6 +5334,11 @@ if enable_wick_dominance_markers and should_update_visuals
             // Check each MBZ in the group for dominant wicks
             for mbz_in_group_index = 0 to array.size(current_consolidated_mbz_for_star.mbz_group) - 1
                 individual_mbz_for_star = array.get(current_consolidated_mbz_for_star.mbz_group, mbz_in_group_index)
+
+                // PERFORMANCE: Skip star creation for MBZs beyond historical buffer limit
+                star_bars_ago = bar_index - individual_mbz_for_star.bar_index
+                if star_bars_ago >= 250  // Conservative limit matching consolidated visual safety
+                    continue
 
                 mbz_body_top_price = math.max(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
                 mbz_body_bottom_price = math.min(individual_mbz_for_star.mbz_open, individual_mbz_for_star.mbz_close)
