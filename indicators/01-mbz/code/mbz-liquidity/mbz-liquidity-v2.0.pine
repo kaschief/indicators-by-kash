@@ -55,11 +55,19 @@ LIQUIDITY_SOURCE_TYPE_DAILY = "daily"
 LIQUIDITY_SOURCE_TYPE_WEEKLY = "weekly"
 LIQUIDITY_SOURCE_TYPE_MONTHLY = "monthly"
 
-// Liquidity scan depth (auto-scales with capacity mode)
-BASE_LIQUIDITY_SCAN_DEPTH = 120       // Optimized: ~6 months (increased for liquidity-only)
-BOOST_LIQUIDITY_SCAN_DEPTH = 360      // Boost: ~18 months
-ULTRA_LIQUIDITY_SCAN_DEPTH = 600      // Ultra: ~30 months
-ULTRA_PRO_LIQUIDITY_SCAN_DEPTH = 900  // Ultra Pro: ~45 months
+// Liquidity pool limits (simple fixed values)
+LIQUIDITY_POOL_MAX_ENTRIES = 360      // Max sessions stored per pool (~18 months for daily)
+
+// Liquidity detection scan caps (simple fixed limits)
+DAILY_LIQUIDITY_SCAN_CAP = 100        // Scan last 100 daily sessions (~3-4 months)
+WEEKLY_LIQUIDITY_SCAN_CAP = 50        // Scan last 50 weekly sessions (~1 year)
+MONTHLY_LIQUIDITY_SCAN_CAP = 30       // Scan last 30 monthly sessions (~2.5 years)
+
+// Minimum timeframe requirements (in minutes) for liquidity pools
+MIN_TF_DAILY_LIQUIDITY = 60           // Daily liquidity requires 1H+ timeframe
+MIN_TF_WEEKLY_LIQUIDITY = 60          // Weekly liquidity requires 1H+ timeframe
+MIN_TF_MONTHLY_LIQUIDITY = 240        // Monthly liquidity requires 4H+ timeframe
+
 DEFAULT_DAILY_LIQUIDITY_LINE_WIDTH = 1
 NY_TIMEZONE = "America/New_York"
 SUNDAY_REOPEN_START_HOUR = 18
@@ -229,16 +237,6 @@ LABEL_VERTICAL_TOP = 'Top'
 LABEL_VERTICAL_CENTER = 'Center'
 LABEL_VERTICAL_BOTTOM = 'Bottom'
 
-// Capacity Mode Constants (Optimized vs Boost)
-CAPACITY_MODE_OPTIMIZED = "Optimized"
-CAPACITY_MODE_BOOST = "Boost"
-CAPACITY_MODE_ULTRA_BOOST = "Ultra Boost"
-CAPACITY_MODE_ULTRA_PRO_BOOST = "Ultra Pro Boost"
-
-BOOST_MULTIPLIER = 4.0
-ULTRA_BOOST_MULTIPLIER = 8.0
-ULTRA_PRO_BOOST_MULTIPLIER = 12.0
-
 // UI Group constants
 GROUP_DETECTION = '🎯 Detection'
 GROUP_INVALIDATION = '✋ Invalidation'
@@ -368,9 +366,7 @@ EMPTY_DISPLAY = ""
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // === 🎯 DETECTION ===
-show_liquidity_mbzs = input.bool(true, 'Liquidity MBZs', group=GROUP_DETECTION, inline='variant1', tooltip='Detect MBZs from liquidity sources (Daily highs/lows swept)')
-max_liquidity_mbzs = input.int(DEFAULT_MAX_LIQUIDITY_MBZS, INPUT_LABEL_MAX_LIQUIDITY_MBZS, minval=0, maxval=MAX_LIQUIDITY_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum liquidity MBZs (from daily high/low sweeps, 0-30 limit)')
-capacity_mode = input.string(CAPACITY_MODE_OPTIMIZED, "Capacity Mode", options=[CAPACITY_MODE_OPTIMIZED, CAPACITY_MODE_BOOST, CAPACITY_MODE_ULTRA_BOOST, CAPACITY_MODE_ULTRA_PRO_BOOST], group=GROUP_DETECTION, inline='capacity', tooltip='Scales MBZ records, boxes, and historical scan depth:\n• Optimized: base limits (Liq: 120 days / 6 months)\n• Boost: 3× base (Liq: 360 days / 18 months)\n• Ultra Boost: 5× base (Liq: 600 days / 30 months)\n• Ultra Pro Boost: 7.5× base (Liq: 900 days / 45 months)')
+max_liquidity_mbzs = input.int(DEFAULT_MAX_LIQUIDITY_MBZS, INPUT_LABEL_MAX_LIQUIDITY_MBZS, minval=0, maxval=MAX_LIQUIDITY_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum liquidity MBZs on chart (0-60)')
 
 // === ✋ INVALIDATION ===
 show_invalidated_mbzs = input.bool(false, 'Show Invalidated MBZs', group=GROUP_INVALIDATION, inline='inv1', tooltip='Show invalidated (breached) MBZs with labels and zones')
@@ -397,7 +393,7 @@ enable_liquidity_immediate = input.bool(true, 'Immediate', group=GROUP_LIQUIDITY
 enable_liquidity_standard = input.bool(true, 'Standard', group=GROUP_LIQUIDITY_RULES, inline='liq_rules')
 enable_liquidity_delayed = input.bool(true, 'Delayed', group=GROUP_LIQUIDITY_RULES, inline='liq_rules', tooltip='LIQUIDITY FORMATION VARIANTS:\n\n• Immediate: First touch of pool produces same-bar rejection (current bar sweep)\n• Standard: Previous bar swept pool, current bar respects original extreme (no new high/low)\n• Delayed: Sweep closes beyond pool, next bar re-enters (delayed confirmation)')
 
-liquidity_detection_enabled = show_liquidity_mbzs and (enable_liquidity_immediate or enable_liquidity_standard or enable_liquidity_delayed)
+liquidity_detection_enabled = enable_liquidity_immediate or enable_liquidity_standard or enable_liquidity_delayed
 
 // === 📦 SOURCE ORIGINS ===
 show_source_origins = input.bool(false, 'Show Source Origins', group=GROUP_SOURCE_ORIGINS, inline='src1', tooltip='Display visual markers at origin points where MBZs were created (liquidity sources show as lines). Only displays origins for currently visible MBZs (excludes invalidated when Show Invalidated is off). Auto-deduplicates: one visual per unique source even if multiple MBZs share it')
@@ -694,74 +690,14 @@ var int profile_weekly_rejected_direction = 0
 var int profile_weekly_rejected_display = 0
 var table profiling_table = na
 
-// Effective capacity settings (Boost mode temporarily raises limits)
-is_capacity_boost = capacity_mode == CAPACITY_MODE_BOOST
-is_capacity_ultra_boost = capacity_mode == CAPACITY_MODE_ULTRA_BOOST
-is_capacity_ultra_pro_boost = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST
-
-// Base (Optimized) - Liquidity-only capacity
-base_invalidated_mbzs = max_invalidated_mbzs  // 5
-
-// GRANULAR LIQUIDITY CAPACITY: Separate limits for each timeframe
-base_daily_liquidity_mbzs = 10   // Daily highs/lows (60-90 days typical)
-base_weekly_liquidity_mbzs = 8   // Weekly highs/lows (30-60 weeks typical)
-base_monthly_liquidity_mbzs = 5  // Monthly highs/lows (12-24 months typical)
-base_liquidity_mbzs = base_daily_liquidity_mbzs + base_weekly_liquidity_mbzs + base_monthly_liquidity_mbzs  // Total: 23
-
-base_records = base_liquidity_mbzs + base_invalidated_mbzs  // 23 + 5 = 28
-base_extended_boxes = MAX_EXTENDED_BOXES      // 75
-base_body_highlights = MAX_BODY_HIGHLIGHTS    // 75
-base_wick_highlights = MAX_WICK_HIGHLIGHTS    // 75
-base_source_displays = max_source_displays  // input-bound (liquidity lines)
-base_liquidity_detection_scan = BASE_LIQUIDITY_SCAN_DEPTH  // 120 days (~6 months)
-
-// Liquidity: Fixed modest limits (don't scale aggressively - daily/weekly from 10 years ago is useless)
-
-// Boost Mode (FIXED modest increases for liquidity)
-boost_daily_liquidity_mbzs = 12   // +2 from base (modest increase)
-boost_weekly_liquidity_mbzs = 10  // +2 from base
-boost_monthly_liquidity_mbzs = 6  // +1 from base
-boost_liquidity_mbzs = boost_daily_liquidity_mbzs + boost_weekly_liquidity_mbzs + boost_monthly_liquidity_mbzs  // Total: 28
-boost_records = boost_liquidity_mbzs + base_invalidated_mbzs  // 28 + 5 = 33
-boost_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * BOOST_MULTIPLIER))))
-boost_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * BOOST_MULTIPLIER))))
-boost_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick_highlights, math.round(base_wick_highlights * BOOST_MULTIPLIER))))
-boost_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * BOOST_MULTIPLIER))))
-boost_liquidity_detection_scan = BOOST_LIQUIDITY_SCAN_DEPTH  // 360 days (~18 months)
-
-// Ultra Boost Mode (FIXED moderate increases for liquidity)
-ultra_daily_liquidity_mbzs = 15   // +5 from base (reasonable cap)
-ultra_weekly_liquidity_mbzs = 12  // +4 from base
-ultra_monthly_liquidity_mbzs = 8  // +3 from base
-ultra_liquidity_mbzs = ultra_daily_liquidity_mbzs + ultra_weekly_liquidity_mbzs + ultra_monthly_liquidity_mbzs  // Total: 35
-ultra_records = ultra_liquidity_mbzs + base_invalidated_mbzs  // 35 + 5 = 40
-ultra_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * ULTRA_BOOST_MULTIPLIER))))
-ultra_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * ULTRA_BOOST_MULTIPLIER))))
-ultra_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick_highlights, math.round(base_wick_highlights * ULTRA_BOOST_MULTIPLIER))))
-ultra_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * ULTRA_BOOST_MULTIPLIER))))
-ultra_liquidity_detection_scan = ULTRA_LIQUIDITY_SCAN_DEPTH  // 600 days (~30 months)
-
-// Ultra Pro Boost Mode (FIXED maximum caps for liquidity)
-ultra_pro_daily_liquidity_mbzs = 18   // +8 from base (maximum reasonable)
-ultra_pro_weekly_liquidity_mbzs = 15  // +7 from base (maximum reasonable)
-ultra_pro_monthly_liquidity_mbzs = 10 // +5 from base
-ultra_pro_liquidity_mbzs = ultra_pro_daily_liquidity_mbzs + ultra_pro_weekly_liquidity_mbzs + ultra_pro_monthly_liquidity_mbzs  // Total: 43
-ultra_pro_records = ultra_pro_liquidity_mbzs + base_invalidated_mbzs  // 43 + 5 = 48
-ultra_pro_extended_boxes = int(math.min(INDICATOR_MAX_BOXES, math.max(base_extended_boxes, math.round(base_extended_boxes * ULTRA_PRO_BOOST_MULTIPLIER))))
-ultra_pro_body_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_body_highlights, math.round(base_body_highlights * ULTRA_PRO_BOOST_MULTIPLIER))))
-ultra_pro_wick_highlights = int(math.min(INDICATOR_MAX_BOXES, math.max(base_wick_highlights, math.round(base_wick_highlights * ULTRA_PRO_BOOST_MULTIPLIER))))
-ultra_pro_source_displays = int(math.min(INDICATOR_MAX_BOXES, math.max(base_source_displays, math.round(base_source_displays * ULTRA_PRO_BOOST_MULTIPLIER))))
-ultra_pro_liquidity_detection_scan = ULTRA_PRO_LIQUIDITY_SCAN_DEPTH  // 900 days (~45 months)
-
-// Effective capacity (liquidity-only)
-max_liquidity_mbzs_effective = is_capacity_ultra_pro_boost ? ultra_pro_liquidity_mbzs : is_capacity_ultra_boost ? ultra_liquidity_mbzs : is_capacity_boost ? boost_liquidity_mbzs : base_liquidity_mbzs
-max_invalidated_mbzs_effective = base_invalidated_mbzs  // Always use base
-max_mbz_records_effective = is_capacity_ultra_pro_boost ? ultra_pro_records : is_capacity_ultra_boost ? ultra_records : is_capacity_boost ? boost_records : base_records
-max_extended_boxes_effective = is_capacity_ultra_pro_boost ? ultra_pro_extended_boxes : is_capacity_ultra_boost ? ultra_extended_boxes : is_capacity_boost ? boost_extended_boxes : base_extended_boxes
-max_body_highlights_effective = is_capacity_ultra_pro_boost ? ultra_pro_body_highlights : is_capacity_ultra_boost ? ultra_body_highlights : is_capacity_boost ? boost_body_highlights : base_body_highlights
-max_wick_highlights_effective = is_capacity_ultra_pro_boost ? ultra_pro_wick_highlights : is_capacity_ultra_boost ? ultra_wick_highlights : is_capacity_boost ? boost_wick_highlights : base_wick_highlights
-max_source_displays_effective = is_capacity_ultra_pro_boost ? math.max(base_source_displays, ultra_pro_source_displays) : is_capacity_ultra_boost ? math.max(base_source_displays, ultra_source_displays) : is_capacity_boost ? math.max(base_source_displays, boost_source_displays) : base_source_displays
-max_liquidity_detection_scan_effective = is_capacity_ultra_pro_boost ? ultra_pro_liquidity_detection_scan : is_capacity_ultra_boost ? ultra_liquidity_detection_scan : is_capacity_boost ? boost_liquidity_detection_scan : base_liquidity_detection_scan
+// Simple fixed capacity values (using user inputs)
+max_liquidity_mbzs_effective = max_liquidity_mbzs
+max_invalidated_mbzs_effective = max_invalidated_mbzs
+max_mbz_records_effective = max_liquidity_mbzs + max_invalidated_mbzs
+max_extended_boxes_effective = MAX_EXTENDED_BOXES
+max_body_highlights_effective = MAX_BODY_HIGHLIGHTS
+max_wick_highlights_effective = MAX_WICK_HIGHLIGHTS
+max_source_displays_effective = max_source_displays
 var int last_update_bar = na
 var bool needs_full_update = true
 var bool initialized = false
@@ -3758,17 +3694,20 @@ strong_mbz_bearish_formed := false
 mbz_bullish_formed := false
 mbz_bearish_formed := false
 
-// TIME-BASED: Pool capacity = scan depth (no caps). Scales with capacity mode automatically.
-liquidity_pool_max_entries = max_liquidity_detection_scan_effective
+// Simple fixed pool capacity
+liquidity_pool_max_entries = LIQUIDITY_POOL_MAX_ENTRIES
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LIQUIDITY POOL TRACKING (PERFORMANCE: Skip on <15m charts to prevent timeouts)
+// LIQUIDITY POOL TRACKING
 // ═══════════════════════════════════════════════════════════════════════════════
 current_tf_minutes_for_tracking = timeframe.in_seconds() / 60
-enable_liquidity_tracking = current_tf_minutes_for_tracking >= 15  // Skip ALL liquidity on <15m charts
-enable_dwm_liquidity_tracking = current_tf_minutes_for_tracking >= 60  // Daily/Weekly/Monthly only on 1H+ charts
 
-if enable_dwm_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
+// Timeframe checks using constants
+enable_daily_liquidity_tracking = current_tf_minutes_for_tracking >= MIN_TF_DAILY_LIQUIDITY
+enable_weekly_liquidity_tracking = current_tf_minutes_for_tracking >= MIN_TF_WEEKLY_LIQUIDITY
+enable_monthly_liquidity_tracking = current_tf_minutes_for_tracking >= MIN_TF_MONTHLY_LIQUIDITY
+
+if enable_daily_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
     skip_sunday_liquidity = is_sunday_liquidity_reopen(time)
     if not skip_sunday_liquidity
         if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_DAILY)
@@ -3782,7 +3721,7 @@ else if barstate.isnew
     liquidity_pool_clear_current(daily_liquidity_pool)
 
 // Weekly liquidity pool tracking
-if enable_dwm_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
+if enable_weekly_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
     if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_WEEKLY)
         liquidity_pool_finalize_session(weekly_liquidity_pool, nz(time[1], time), liquidity_pool_max_entries)
         liquidity_pool_reset_current(weekly_liquidity_pool, high, low, time, bar_index)
@@ -3794,7 +3733,7 @@ else if barstate.isnew
     liquidity_pool_clear_current(weekly_liquidity_pool)
 
 // Monthly liquidity pool tracking
-if enable_dwm_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
+if enable_monthly_liquidity_tracking and (show_source_origins or liquidity_detection_enabled)
     if barstate.isnew and is_new_liquidity_session(LIQUIDITY_SOURCE_TYPE_MONTHLY)
         liquidity_pool_finalize_session(monthly_liquidity_pool, nz(time[1], time), liquidity_pool_max_entries)
         liquidity_pool_reset_current(monthly_liquidity_pool, high, low, time, bar_index)
@@ -3822,18 +3761,13 @@ if liquidity_detection_enabled
         b_high = high
         b_low = low
 
-        // PERFORMANCE: Timeframe-aware gating (prevent timeouts on low TF charts)
-        // Reduces scan depth based on timeframe while respecting user's capacity mode boost
-        current_tf_minutes = timeframe.in_seconds() / 60
-        enable_liquidity_on_this_tf = current_tf_minutes >= 15  // Disable ALL liquidity on <15m charts (too granular, causes timeouts)
+        // Simple fixed scan caps (liquidity pools are much smaller than imbalance scans)
+        daily_scan_cap = DAILY_LIQUIDITY_SCAN_CAP
+        weekly_scan_cap = WEEKLY_LIQUIDITY_SCAN_CAP
+        monthly_scan_cap = MONTHLY_LIQUIDITY_SCAN_CAP
 
-        // Apply timeframe reduction as PERCENTAGE of user's chosen capacity mode
-        daily_scan_cap = current_tf_minutes < 60 ? int(max_liquidity_detection_scan_effective * 0.5) : max_liquidity_detection_scan_effective  // <1H: 50% of user setting
-        weekly_scan_cap = current_tf_minutes < 240 ? int(max_liquidity_detection_scan_effective * 0.33) : max_liquidity_detection_scan_effective  // <4H: 33% of user setting
-        monthly_scan_cap = current_tf_minutes < 1440 ? int(max_liquidity_detection_scan_effective * 0.25) : max_liquidity_detection_scan_effective  // <1D: 25% of user setting
-
-        // Process DAILY liquidity pool (if enabled and chart TF allows)
-        if enable_daily_liquidity and enable_liquidity_on_this_tf
+        // Process DAILY liquidity pool (if enabled)
+        if enable_daily_liquidity
             [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from daily events
@@ -3893,8 +3827,8 @@ if liquidity_detection_enabled
                         nested_mbz_bearish_formed := true
                     needs_visual_update := true
 
-        // Process WEEKLY liquidity pool (if enabled and chart TF allows)
-        if enable_weekly_liquidity and enable_liquidity_on_this_tf
+        // Process WEEKLY liquidity pool (if enabled)
+        if enable_weekly_liquidity
             [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from weekly events
@@ -3954,8 +3888,8 @@ if liquidity_detection_enabled
                         nested_mbz_bearish_formed := true
                     needs_visual_update := true
 
-        // Process MONTHLY liquidity pool (if enabled and chart TF allows)
-        if enable_monthly_liquidity and enable_liquidity_on_this_tf
+        // Process MONTHLY liquidity pool (if enabled)
+        if enable_monthly_liquidity
             [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from monthly events
@@ -4376,9 +4310,6 @@ if show_profiling
     table.cell(profiling_table, 1, 0, "Value", text_color=color.white, bgcolor=color.new(color.orange, 30), text_size=size.small)
 
     // Settings
-    table.cell(profiling_table, 0, 1, "Capacity Mode", text_color=color.white, text_size=size.small)
-    table.cell(profiling_table, 1, 1, capacity_mode, text_color=color.yellow, text_size=size.small)
-
     table.cell(profiling_table, 0, 2, "Max Liquidity", text_color=color.white, text_size=size.small)
     table.cell(profiling_table, 1, 2, str.tostring(max_liquidity_mbzs), text_color=color.yellow, text_size=size.small)
 
