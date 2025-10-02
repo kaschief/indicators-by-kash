@@ -182,10 +182,12 @@ MULTI_SOURCE_STRONG_DISPLAY_BOTH = "Label + Extension"
 DEFAULT_MULTI_SOURCE_BORDER_WIDTH = 2
 MIN_MULTI_SOURCE_ALERT_COUNT = 2
 
-// Visual & Input Defaults (parity with SIF)
+// Visual & Input Defaults
 DEFAULT_EXTENSION_BARS = 10
 MAX_EXTENSION_BARS = 50
 MIN_EXTENSION_BARS = 1
+MAX_PADDING_HORIZONTAL = 10
+MAX_PADDING_VERTICAL = 5
 DEFAULT_SOURCE_GAP_BOXES = 10
 MIN_SOURCE_GAP_BOXES = 1
 MAX_SOURCE_GAP_BOXES = 50
@@ -196,7 +198,12 @@ DEFAULT_PROJECTION_BARS = 20
 MIN_PROJECTION_BARS = 5
 MAX_PROJECTION_BARS = 100
 PROJECTION_LABEL_OFFSET_BARS = 1
-REFLECTION_LABEL_SPACING_MULTIPLIER = 0.3
+DEFAULT_REFLECTION_LABEL_SPACING_MULTIPLIER = 0.3
+MIN_REFLECTION_LABEL_SPACING_MULTIPLIER = 0.0
+MAX_REFLECTION_LABEL_SPACING_MULTIPLIER = 2.0
+DEFAULT_GENERAL_LABEL_OFFSET_MULTIPLIER = 0.0
+MIN_GENERAL_LABEL_OFFSET_MULTIPLIER = 0.0
+MAX_GENERAL_LABEL_OFFSET_MULTIPLIER = 5.0
 DEFAULT_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 4
 MIN_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 3
 MAX_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 5
@@ -347,6 +354,8 @@ INPUT_LABEL_TARGETS = 'Targets'
 INPUT_LABEL_CUSTOM_LEVELS = 'Custom Levels'
 INPUT_LABEL_CUSTOM_LIST = 'Custom List'
 INPUT_LABEL_CE = 'CE'
+INPUT_LABEL_REFLECTION_LABEL_OFFSET = 'Reflection Label Offset'
+INPUT_LABEL_GENERAL_LABEL_OFFSET = 'General Label Offset'
 MBZ_BASE_TEXT = "MBZ"
 DIRECTION_BULLISH_DISPLAY = "Bullish"
 DIRECTION_BEARISH_DISPLAY = "Bearish"
@@ -429,6 +438,8 @@ mbz_bearish_color = input.color(color.red, INPUT_LABEL_MBZ_MINUS, group=GROUP_MB
 mbz_invalidated_color = input.color(color.gray, INPUT_LABEL_INVALIDATED, group=GROUP_MBZ_LABELLING, inline='mbz2', tooltip='Color for invalidated MBZ labels')
 show_mbz_labels = input.bool(true, INPUT_LABEL_ENABLE_LABELS, group=GROUP_MBZ_LABELLING, inline='mbz3', tooltip='Show MBZ arrow/text labels on candles\n\nNote: Arrow direction also points toward the source gap that created the MBZ')
 show_enhanced_label_details = input.bool(true, 'Show Enhanced Label Details', group=GROUP_MBZ_LABELLING, inline='mbz4', tooltip='Display detailed source types and behaviors in MBZ labels\n\nOFF: Clean labels (MBZ⁺, MBZ⁻)\nON: Enhanced labels (MBZ⁺ (imp) ↓inc)')
+reflection_label_offset_multiplier = input.float(DEFAULT_REFLECTION_LABEL_SPACING_MULTIPLIER, INPUT_LABEL_REFLECTION_LABEL_OFFSET, minval=MIN_REFLECTION_LABEL_SPACING_MULTIPLIER, maxval=MAX_REFLECTION_LABEL_SPACING_MULTIPLIER, step=0.1, group=GROUP_MBZ_LABELLING, inline='mbz5', tooltip='Offset multiplier for reflection MBZ labels to prevent collision with extension boxes (0.0-2.0)')
+general_label_offset_multiplier = input.float(DEFAULT_GENERAL_LABEL_OFFSET_MULTIPLIER, INPUT_LABEL_GENERAL_LABEL_OFFSET, minval=MIN_GENERAL_LABEL_OFFSET_MULTIPLIER, maxval=MAX_GENERAL_LABEL_OFFSET_MULTIPLIER, step=0.1, group=GROUP_MBZ_LABELLING, inline='mbz6', tooltip='Additional vertical offset multiplier for ALL labels based on zone height (0.0-5.0)\n\nUseful to separate labels for better visibility')
 
 // === ✨ MBZ EXTENSION ===
 extended_box_bullish_color = input.color(color.new(color.green, 85), INPUT_LABEL_MBZ_PLUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁺ highlights and extensions')
@@ -439,6 +450,8 @@ extended_box_text_size = input.string(TEXT_SIZE_TINY, INPUT_LABEL_LABEL, options
 extended_box_text_color = input.color(color.black, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext2', tooltip='Text color for extension boxes')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_RIGHT, 'Horizontal', options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Horizontal alignment for extension box text')
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Vertical alignment for extension box text')
+extension_label_horizontal_padding = input.int(1, 'Horizontal Padding', minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Number of spaces for left/right padding (0-10)')
+extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Number of newlines for top/bottom padding (0-5)')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_mode', tooltip='Number of bars for extension (1-50 limit, meaning changes based on Extension Mode selected)')
 
 
@@ -668,6 +681,15 @@ var array<ConsolidatedMBZ> last_consolidated_mbzs = array.new<ConsolidatedMBZ>()
 
 // Performance optimization flags
 var bool needs_visual_update = true
+
+// Pre-calculated padding strings (performance optimization)
+horizontal_padding_str = ""
+for i = 0 to extension_label_horizontal_padding - 1
+    horizontal_padding_str := horizontal_padding_str + " "
+
+vertical_padding_str = ""
+for i = 0 to extension_label_vertical_padding - 1
+    vertical_padding_str := vertical_padding_str + "\n"
 
 // Effective capacity settings (Boost mode temporarily raises limits)
 is_capacity_boost = capacity_mode == CAPACITY_MODE_BOOST
@@ -2479,6 +2501,19 @@ create_consolidated_extension_label(consolidated_mbz) =>
     if show_strong_extension
         extension_result := str.length(extension_result) == 0 ? MULTI_SOURCE_STRENGTH_LABEL : MULTI_SOURCE_STRENGTH_LABEL + "\n" + extension_result
 
+    // Add horizontal padding based on alignment setting
+    if extension_label_horizontal_alignment == LABEL_ALIGNMENT_LEFT and str.length(horizontal_padding_str) > 0
+        extension_result := horizontal_padding_str + extension_result
+    else if extension_label_horizontal_alignment == LABEL_ALIGNMENT_RIGHT and str.length(horizontal_padding_str) > 0
+        extension_result := extension_result + horizontal_padding_str
+
+    // Add vertical padding (newlines)
+    if str.length(vertical_padding_str) > 0
+        if extension_label_vertical_alignment == LABEL_VERTICAL_TOP
+            extension_result := extension_result + vertical_padding_str
+        else if extension_label_vertical_alignment == LABEL_VERTICAL_BOTTOM
+            extension_result := vertical_padding_str + extension_result
+
     extension_result
 
 // Build consolidated tooltip with SUPER MBZ info
@@ -2943,11 +2978,13 @@ manage_consolidated_mbz_display() =>
                 candle_label_y_position = float(na)
                 candle_label_yloc = yloc.price
 
+                // Calculate zone height for offset calculations
+                zone_height = current_consolidated_mbz.consolidated_zone_top - current_consolidated_mbz.consolidated_zone_bottom
+
                 // Calculate proper positioning
                 if show_extended_boxes and has_reflection_mbz
-                    // For reflection MBZs with extensions, use 0.3 spacing offset (was 0.5)
-                    zone_height = current_consolidated_mbz.consolidated_zone_top - current_consolidated_mbz.consolidated_zone_bottom
-                    spacing_offset = zone_height * REFLECTION_LABEL_SPACING_MULTIPLIER  // CHANGED from 0.5 to 0.3
+                    // For reflection MBZs with extensions, use reflection spacing multiplier
+                    spacing_offset = zone_height * reflection_label_offset_multiplier
 
                     if current_consolidated_mbz.is_bullish
                         // Bullish reflection: extension goes down, push label further down
@@ -2961,6 +2998,18 @@ manage_consolidated_mbz_display() =>
                     // Standard positioning using yloc.belowbar/abovebar
                     candle_label_y_position := current_consolidated_mbz.is_bullish ? first_mbz_in_group.low_price : first_mbz_in_group.high_price
                     candle_label_yloc := current_consolidated_mbz.is_bullish ? yloc.belowbar : yloc.abovebar
+
+                // Apply general vertical offset (applies to all labels)
+                if general_label_offset_multiplier > 0
+                    general_offset = zone_height * general_label_offset_multiplier
+                    if current_consolidated_mbz.is_bullish
+                        // Bullish: push label further down
+                        candle_label_y_position := candle_label_y_position - general_offset
+                    else
+                        // Bearish: push label further up
+                        candle_label_y_position := candle_label_y_position + general_offset
+                    // When using general offset, always use yloc.price for precise positioning
+                    candle_label_yloc := yloc.price
 
                 consolidated_tooltip_text = build_consolidated_tooltip(current_consolidated_mbz)
 

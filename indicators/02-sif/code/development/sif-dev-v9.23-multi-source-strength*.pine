@@ -140,15 +140,22 @@ DEFAULT_LINE_WIDTH = 1
 MIN_PROJECTION_BARS = 5
 MAX_PROJECTION_BARS = 100
 
-// Visual Constants (Consistency with MBZ structure)
+// Visual Constants
 DEFAULT_EXTENSION_BARS = 10
 MAX_EXTENSION_BARS = 50
+MAX_PADDING_HORIZONTAL = 10
+MAX_PADDING_VERTICAL = 5
 DEFAULT_SOURCE_GAP_BOXES = 10
 MAX_SOURCE_GAP_BOXES = 50
 DEFAULT_PROJECT_LAST_N = 3
 MAX_PROJECT_LAST_N = 20
 PROJECTION_LABEL_OFFSET_BARS = 1
-REFLECTION_LABEL_SPACING_MULTIPLIER = 0.8  // Tested value - prevents label collision with reflection extension boxes
+DEFAULT_REFLECTION_LABEL_SPACING_MULTIPLIER = 0.8
+MIN_REFLECTION_LABEL_SPACING_MULTIPLIER = 0.0
+MAX_REFLECTION_LABEL_SPACING_MULTIPLIER = 2.0
+DEFAULT_GENERAL_LABEL_OFFSET_MULTIPLIER = 0.0
+MIN_GENERAL_LABEL_OFFSET_MULTIPLIER = 0.0
+MAX_GENERAL_LABEL_OFFSET_MULTIPLIER = 5.0
 DEFAULT_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 4
 MIN_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 3
 MAX_IMPLIED_DISPLACEMENT_LOOKBACK_CANDLES = 5
@@ -432,6 +439,8 @@ INPUT_LABEL_RISKY = 'Risky'
 INPUT_LABEL_LABEL = 'Label'
 INPUT_LABEL_SIZE = 'Size'
 INPUT_LABEL_CE = 'CE'
+INPUT_LABEL_REFLECTION_LABEL_OFFSET = 'Reflection Label Offset'
+INPUT_LABEL_GENERAL_LABEL_OFFSET = 'General Label Offset'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUT SETTINGS - OPTIMIZED LAYOUT
@@ -465,6 +474,8 @@ sif_bearish_color = input.color(color.red, INPUT_LABEL_SIF_MINUS, group=GROUP_SI
 sif_invalidated_color = input.color(color.gray, INPUT_LABEL_INVALIDATED, group=GROUP_SIF_LABELLING, inline='sif2', tooltip='Color for invalidated SIF labels')
 show_sif_labels = input.bool(true, INPUT_LABEL_ENABLE_LABELS, group=GROUP_SIF_LABELLING, inline='sif3', tooltip='Show SIF arrow/text labels on candles\n\nNote: Arrow direction also points toward the source gap that created the SIF')
 show_label_details = input.bool(true, 'Show Enhanced Label Details', group=GROUP_SIF_LABELLING, inline='sif4', tooltip='Display source types and behaviors in SIF labels\n\nOFF: Clean labels (SIF⁺, SIF⁻)\nON: Detailed labels (SIF⁺ (imp) ↓inc)')
+reflection_label_offset_multiplier = input.float(DEFAULT_REFLECTION_LABEL_SPACING_MULTIPLIER, INPUT_LABEL_REFLECTION_LABEL_OFFSET, minval=MIN_REFLECTION_LABEL_SPACING_MULTIPLIER, maxval=MAX_REFLECTION_LABEL_SPACING_MULTIPLIER, step=0.1, group=GROUP_SIF_LABELLING, inline='sif5', tooltip='Offset multiplier for reflection SIF labels to prevent collision with extension boxes (0.0-2.0)')
+general_label_offset_multiplier = input.float(DEFAULT_GENERAL_LABEL_OFFSET_MULTIPLIER, INPUT_LABEL_GENERAL_LABEL_OFFSET, minval=MIN_GENERAL_LABEL_OFFSET_MULTIPLIER, maxval=MAX_GENERAL_LABEL_OFFSET_MULTIPLIER, step=0.1, group=GROUP_SIF_LABELLING, inline='sif6', tooltip='Additional vertical offset multiplier for ALL labels based on zone height (0.0-5.0)\n\nUseful to separate labels for better visibility')
 
 // === ✨ SIF EXTENSION ===
 extended_box_bullish_color = input.color(color.new(color.green, 85), 'SIF⁺', group=GROUP_SIF_EXTENSION, inline='ext_colors', tooltip='Extension colors and enable/disable highlights and extensions\nSIF⁺: zone color\nSIF⁻: zone color\nEnable Extension: show highlights and extensions for valid SIFs')
@@ -475,6 +486,8 @@ extended_box_text_size = input.string(TEXT_SIZE_TINY, INPUT_LABEL_LABEL, options
 extended_box_text_color = input.color(color.black, INPUT_LABEL_LABEL, group=GROUP_SIF_EXTENSION, inline='ext_props')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_CENTER, 'Horizontal', options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_SIF_EXTENSION, inline='ext_align', tooltip='Horizontal alignment for extension box text')
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_SIF_EXTENSION, inline='ext_align', tooltip='Vertical alignment for extension box text')
+extension_label_horizontal_padding = input.int(1, 'Horizontal Padding', minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of spaces for left/right padding (0-10)')
+extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of newlines for top/bottom padding (0-5)')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_EXTENSION_BARS, minval=1, maxval=MAX_EXTENSION_BARS, group=GROUP_SIF_EXTENSION, inline='ext_mode', tooltip='Number of bars for extension (meaning changes based on Extension Mode selected). Max: 50')
 
 // === 🎯 GAP SOURCES ===
@@ -747,6 +760,15 @@ var array<line> sif_invalidation_lines = array.new_line()
 var bool needs_visual_update = true
 var int last_update_bar = na
 var bool needs_full_update = true
+
+// Pre-calculated padding strings (performance optimization)
+horizontal_padding_str = ""
+for i = 0 to extension_label_horizontal_padding - 1
+    horizontal_padding_str := horizontal_padding_str + " "
+
+vertical_padding_str = ""
+for i = 0 to extension_label_vertical_padding - 1
+    vertical_padding_str := vertical_padding_str + "\n"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS - DEFINED EARLY FOR DEPENDENCIES
@@ -2153,6 +2175,19 @@ create_consolidated_extension_label(consolidated_sif) =>
     if show_strong_extension
         extension_result := str.length(extension_result) == 0 ? MULTI_SOURCE_STRENGTH_LABEL : MULTI_SOURCE_STRENGTH_LABEL + "\n" + extension_result
 
+    // Add horizontal padding based on alignment setting
+    if extension_label_horizontal_alignment == LABEL_ALIGNMENT_LEFT and str.length(horizontal_padding_str) > 0
+        extension_result := horizontal_padding_str + extension_result
+    else if extension_label_horizontal_alignment == LABEL_ALIGNMENT_RIGHT and str.length(horizontal_padding_str) > 0
+        extension_result := extension_result + horizontal_padding_str
+
+    // Add vertical padding (newlines)
+    if str.length(vertical_padding_str) > 0
+        if extension_label_vertical_alignment == LABEL_VERTICAL_TOP
+            extension_result := extension_result + vertical_padding_str
+        else if extension_label_vertical_alignment == LABEL_VERTICAL_BOTTOM
+            extension_result := vertical_padding_str + extension_result
+
     extension_result
 
 // Build consolidated tooltip with SIMPLIFIED SUPER SIF info
@@ -2430,7 +2465,7 @@ get_consolidated_sif_extension_text_color(consolidated_sif, default_text_color) 
         default_text_color
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SIF EXTENSION BOX FADING SYSTEM — parity with MBZ v8.9 (concise overview)
+// SIF EXTENSION BOX FADING SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 // === VISUAL COLOR/FADING FUNCTIONS (6 functions) ===
 // Get SIF zone color (normal or breached)
@@ -2911,11 +2946,13 @@ manage_consolidated_sif_display() =>
                 candle_label_y_position = float(na)
                 candle_label_yloc = yloc.price
 
+                // Calculate zone height for offset calculations
+                zone_height = current_consolidated_sif.consolidated_zone_top - current_consolidated_sif.consolidated_zone_bottom
+
                 // Calculate proper positioning
                 if show_extended_boxes and has_reflection_sif
-                    // For reflection SIFs with extensions, use 0.8 spacing multiplier (tested - prevents collision)
-                    zone_height = current_consolidated_sif.consolidated_zone_top - current_consolidated_sif.consolidated_zone_bottom
-                    spacing_offset = zone_height * REFLECTION_LABEL_SPACING_MULTIPLIER
+                    // For reflection SIFs with extensions, use reflection spacing multiplier
+                    spacing_offset = zone_height * reflection_label_offset_multiplier
 
                     if current_consolidated_sif.is_bullish
                         // Bullish reflection: extension goes down, push label further down
@@ -2929,6 +2966,18 @@ manage_consolidated_sif_display() =>
                     // Standard positioning using yloc.belowbar/abovebar
                     candle_label_y_position := current_consolidated_sif.is_bullish ? first_sif_in_group.sif_low : first_sif_in_group.sif_high
                     candle_label_yloc := current_consolidated_sif.is_bullish ? yloc.belowbar : yloc.abovebar
+
+                // Apply general vertical offset (applies to all labels)
+                if general_label_offset_multiplier > 0
+                    general_offset = zone_height * general_label_offset_multiplier
+                    if current_consolidated_sif.is_bullish
+                        // Bullish: push label further down
+                        candle_label_y_position := candle_label_y_position - general_offset
+                    else
+                        // Bearish: push label further up
+                        candle_label_y_position := candle_label_y_position + general_offset
+                    // When using general offset, always use yloc.price for precise positioning
+                    candle_label_yloc := yloc.price
 
                 consolidated_tooltip_text = build_consolidated_tooltip(current_consolidated_sif)
 
