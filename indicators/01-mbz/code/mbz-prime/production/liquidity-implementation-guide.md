@@ -337,7 +337,12 @@ if stats.liquidity_london_count > 0
     array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_LONDON, stats.liquidity_london_count))
 ```
 **After**: Monthly count check
-**⚠️ Critical**: Missing this causes "array index out of bounds" errors!
+
+**⚠️ CRITICAL BUG**: Missing this causes multi-source labels to display incorrectly!
+- **Example Bug**: Lunch + Daily MBZ shows "2:Daily" instead of "Lunch + Daily"
+- **Root Cause**: Function only checks first 5 sources (D/W/M/A/L), missing intraday sessions
+- **Impact**: All multi-source combinations with NY AM, Lunch, or NY PM will be misidentified
+- **Fix Required**: MUST add ALL session types to BOTH `build_source_breakdown()` AND `build_source_breakdown_extension_from_stats()` functions
 
 ---
 
@@ -684,6 +689,21 @@ Use this checklist when implementing a new session:
 ---
 
 ## Version History
+
+### v1.4 - NY PM Session & Multi-Source Label Bug Fix
+- **Date**: 2025-10-02
+- **Session Added**: NY PM (1:30pm-4pm NY)
+- **Bug Fixed**: Multi-source labels showing incorrect breakdown
+  - **Issue**: Lunch + Daily MBZ displayed as "2:Daily" instead of "Lunch + Daily"
+  - **Root Cause**: `build_source_breakdown()` and `build_source_breakdown_extension_from_stats()` functions missing NY AM, Lunch, NY PM
+  - **Impact**: All multi-source combinations with intraday sessions were misidentified
+  - **Fix**: Added all 3 intraday sessions (NY AM, Lunch, NY PM) to both breakdown functions (lines 2858-2863, 2883-2888)
+- **Changes**:
+  - Complete NY PM implementation (1:30pm-4pm) following all 11 steps
+  - **Color**: Cyan `#00bcd4` (matching all intraday)
+  - **Timeframe**: ≤45m only
+  - All 5 Playful sessions now implemented (Asia, London, NY AM, Lunch, NY PM)
+- **Files Modified**: `mbz-prime.pine`, `liquidity-implementation-guide.md`
 
 ### v1.3.1 - Profiling Counter Bug Fix
 - **Date**: 2025-10-02
