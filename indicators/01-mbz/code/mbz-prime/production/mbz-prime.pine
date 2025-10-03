@@ -181,6 +181,10 @@ INVALIDATION_STANDARD = "Standard (100%)"
 INVALIDATION_STRICT = "Strict (85%)"
 INVALIDATION_CUSTOM = "Custom"
 
+// Invalidation Boundary Constants
+INVALIDATION_BOUNDARY_BODY = "Body Zone"
+INVALIDATION_BOUNDARY_EXTREMES = "Candle Extremes"
+
 // Extension Mode Constants
 EXTENSION_FIXED = "Fixed Length"
 EXTENSION_TO_CURRENT = "To Current Price"
@@ -382,6 +386,7 @@ INPUT_LABEL_LABEL = 'Label'
 INPUT_LABEL_MAX_LIQUIDITY_MBZS = 'Max Liquidity'
 INPUT_LABEL_MAX_INVALIDATED_MBZS = 'Max Invalidated MBZs'
 INPUT_LABEL_INVALIDATION_THRESHOLD = 'Invalidation Threshold'
+INPUT_LABEL_INVALIDATION_BOUNDARY = 'Invalidation Boundary'
 INPUT_LABEL_CUSTOM_PERCENT = 'Custom %'
 INPUT_LABEL_SHOW_MBZ_PLUS = 'Show MBZ⁺'
 INPUT_LABEL_SHOW_MBZ_MINUS = 'Show MBZ⁻'
@@ -514,6 +519,7 @@ show_invalidated_mbzs = input.bool(false, 'Show Invalidated MBZs', group=GROUP_I
 max_invalidated_mbzs = input.int(DEFAULT_MAX_INVALIDATED_MBZS, 'Max', minval=0, maxval=MAX_INVALIDATED_MBZS_LIMIT, group=GROUP_INVALIDATION, inline='inv1', tooltip='Maximum number of invalidated MBZs to show (0-15 limit)')
 mbz_invalidation_mode = input.string(INVALIDATION_STANDARD, 'Threshold', options=[INVALIDATION_STANDARD, INVALIDATION_STRICT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv2', tooltip='Zone fill threshold for invalidation (requires candle close)\n• Standard: 100% fill\n• Strict: 85% fill\n• Custom: set your own percentage')
 custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, 'Custom %', minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=DEFAULT_STEP_SIZE, group=GROUP_INVALIDATION, inline='inv2', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
+invalidation_boundary = input.string(INVALIDATION_BOUNDARY_EXTREMES, INPUT_LABEL_INVALIDATION_BOUNDARY, options=[INVALIDATION_BOUNDARY_BODY, INVALIDATION_BOUNDARY_EXTREMES], group=GROUP_INVALIDATION, inline='inv3', tooltip='Invalidation boundary:\n• Body Zone: Uses MBZ zone (body) boundaries\n• Candle Extremes: Uses candle high/low (default, more forgiving)\n\nNote: Only applies to Standard MBZs. Inclusion and Reflection always use their zone boundaries.')
 
 // Set variant mode (liquidity only)
 mbz_variant_mode = VARIANT_LIQUIDITY
@@ -1828,20 +1834,6 @@ get_invalidation_line_style() =>
         LINE_STYLE_DOTTED => line.style_dotted
         => line.style_solid
 
-// Calculate invalidation level price for display
-get_invalidation_level_price(zone_top, zone_bottom, is_bullish_mbz) =>
-    if not enable_invalidation_lines
-        na
-    else
-        invalidation_threshold = get_mbz_invalidation_threshold()
-        zone_height = zone_top - zone_bottom
-        invalidation_distance = zone_height * (invalidation_threshold / 100.0)
-
-        if is_bullish_mbz
-            zone_top - invalidation_distance  // Inside zone from top
-        else
-            zone_bottom + invalidation_distance  // Inside zone from bottom
-
 // Get invalidation line color
 get_invalidation_line_color() =>
     // Apply user-defined transparency to invalidation line color
@@ -2001,7 +1993,6 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_type) =>
 // MBZ ZONE CALCULATION - FIXED REFLECTION BUG
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Calculate zone boundaries for MBZ subtypes with corrected reflection logic
 get_mbz_subtype_zone(mbz_record) =>
     if str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
         if mbz_record.is_bullish
@@ -2024,6 +2015,30 @@ get_mbz_subtype_zone(mbz_record) =>
         body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
         body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
         [body_top, body_bottom]
+
+get_mbz_invalidation_boundaries(mbz_record) =>
+    is_inclusion = str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
+    is_reflection = str.contains(mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
+    is_standard = not is_inclusion and not is_reflection
+
+    if is_standard and invalidation_boundary == INVALIDATION_BOUNDARY_EXTREMES
+        [mbz_record.high_price, mbz_record.low_price]
+    else
+        get_mbz_subtype_zone(mbz_record)
+
+get_invalidation_level_price(mbz_record) =>
+    if not enable_invalidation_lines
+        na
+    else
+        invalidation_threshold = get_mbz_invalidation_threshold()
+        [boundary_top, boundary_bottom] = get_mbz_invalidation_boundaries(mbz_record)
+        boundary_height = boundary_top - boundary_bottom
+        invalidation_distance = boundary_height * (invalidation_threshold / 100.0)
+
+        if mbz_record.is_bullish
+            boundary_top - invalidation_distance
+        else
+            boundary_bottom + invalidation_distance
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SUPER MBZ DETECTION SYSTEM - REFLECTION ZONE OVERLAP FIXED
@@ -2238,25 +2253,25 @@ is_mbz_currently_breached(mbz_record) =>
 should_mbz_be_invalidated_enhanced(mbz_record, current_open, current_close) =>
     invalidation_threshold = get_mbz_invalidation_threshold()
 
-    // Get the SAME zone that visuals use (corrected zones)
-    [zone_top, zone_bottom] = get_mbz_subtype_zone(mbz_record)
+    // Get invalidation boundaries based on user setting (candle extremes or zone)
+    [boundary_top, boundary_bottom] = get_mbz_invalidation_boundaries(mbz_record)
 
     // CRITICAL: Check for OPENING GAPS first (immediate invalidation)
     if mbz_record.is_bullish
-        // Bullish MBZ: If candle opens BELOW zone bottom = instant invalidation
-        if current_open < zone_bottom
+        // Bullish MBZ: If candle opens BELOW boundary bottom = instant invalidation
+        if current_open < boundary_bottom
             true  // GAPPED BELOW - IMMEDIATE INVALIDATION
         else
             // No gap - check close penetration normally
-            penetration_percentage = calculate_mbz_zone_penetration_from_close(current_close, zone_top, zone_bottom, mbz_record.is_bullish)
+            penetration_percentage = calculate_mbz_zone_penetration_from_close(current_close, boundary_top, boundary_bottom, mbz_record.is_bullish)
             penetration_percentage >= invalidation_threshold
     else
-        // Bearish MBZ: If candle opens ABOVE zone top = instant invalidation
-        if current_open > zone_top
+        // Bearish MBZ: If candle opens ABOVE boundary top = instant invalidation
+        if current_open > boundary_top
             true  // GAPPED ABOVE - IMMEDIATE INVALIDATION
         else
             // No gap - check close penetration normally
-            penetration_percentage = calculate_mbz_zone_penetration_from_close(current_close, zone_top, zone_bottom, mbz_record.is_bullish)
+            penetration_percentage = calculate_mbz_zone_penetration_from_close(current_close, boundary_top, boundary_bottom, mbz_record.is_bullish)
             penetration_percentage >= invalidation_threshold
 
 // Legacy function for backward compatibility (now calls enhanced version)
@@ -3625,13 +3640,13 @@ manage_consolidated_mbz_display() =>
             mbz_age = bar_index - current_consolidated_mbz.bar_index
             max_safe_lookback = 300
 
+            // Get first MBZ from group for invalidation boundary calculation and label positioning
+            first_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, 0)
+
             // Create candle label with proper positioning
             if show_mbz_labels and mbz_age <= max_safe_lookback
                 consolidated_label_color = current_consolidated_mbz.is_consolidated_invalidated ? mbz_invalidated_color : (current_consolidated_mbz.is_bullish ? mbz_bullish_color : mbz_bearish_color)
                 consolidated_label_size = current_consolidated_mbz.is_consolidated_invalidated ? get_invalidated_mbz_size() : get_mbz_label_size()
-
-                // Smart label positioning for reflection MBZs to avoid extension box overlap
-                first_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, 0)
 
                 // Check if any MBZ in group is reflection type with extensions enabled
                 has_reflection_mbz = false
@@ -3763,11 +3778,7 @@ manage_consolidated_mbz_display() =>
 
                 // Add invalidation level line within extension box
                 if enable_invalidation_lines
-                    invalidation_level_price = get_invalidation_level_price(
-                         current_consolidated_mbz.consolidated_zone_top,
-                         current_consolidated_mbz.consolidated_zone_bottom,
-                         current_consolidated_mbz.is_bullish
-                     )
+                    invalidation_level_price = get_invalidation_level_price(first_mbz_in_group)
                     if not na(invalidation_level_price)
                         invalidation_line_color_final = get_invalidation_line_color()
                         invalidation_line = line.new(
