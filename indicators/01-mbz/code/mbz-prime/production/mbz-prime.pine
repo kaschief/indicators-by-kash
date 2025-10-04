@@ -573,20 +573,33 @@ enable_nypm_liquidity = input.bool(true, UI_LABEL_NYPM_SESSION, group=GROUP_LIQU
 nypm_session_time = input.session(DEFAULT_NYPM_SESSION_TIME, '', group=GROUP_LIQUIDITY_INTRADAY, inline='liq_nypm', tooltip='NY PM session time range in NY timezone (default: 1330-1600 = 1:30pm-4pm)')
 enable_ons_liquidity = input.bool(false, UI_LABEL_ONS_SESSION, group=GROUP_LIQUIDITY_INTRADAY, inline='liq_ons', tooltip='Detect MBZs from ONS/Pre-Market high/low breaches (only on 45m or lower timeframes)')
 ons_session_time = input.session(DEFAULT_ONS_SESSION_TIME, '', group=GROUP_LIQUIDITY_INTRADAY, inline='liq_ons', tooltip='ONS session time range in NY timezone (default: 0500-0915 = 5am-9:15am)')
-enable_24_7_mode = input.bool(false, UI_LABEL_24_7_MODE, group=GROUP_LIQUIDITY_INTRADAY, inline='intraday_settings')
-enable_nine_times = input.bool(false, UI_LABEL_NINE_TIMES, group=GROUP_LIQUIDITY_INTRADAY, inline='intraday_settings', tooltip='NINE\'S TIMES:\n• Asia: 18:00-03:00\n• London: 03:00-09:30\n• NY AM: 09:30-12:00\n• NY PM: 12:00-18:00\n• Lunch: Disabled\n• ONS: Unaffected\n\n24/7 MODE:\n• Adds Saturday & Sunday to all intraday sessions')
+enable_nine_times = input.bool(false, UI_LABEL_NINE_TIMES, group=GROUP_LIQUIDITY_INTRADAY, inline='intraday_settings', tooltip='NINE\'S TIMES:\n• Asia: 18:00-03:00\n• London: 03:00-09:30\n• NY AM: 09:30-12:00\n• NY PM: 12:00-18:00\n• Lunch: Disabled\n• ONS: Unaffected')
 
-// Apply NINE's times + 24/7 mode overrides
-// Priority: NINE times (time slots) → user input → defaults
-// Then: 24/7 mode (day codes) → Mon-Fri
-day_codes = enable_24_7_mode ? DAY_CODE_ALL_DAYS : DAY_CODE_MON_SAT
+// Auto-detect 24/7 asset by scanning for weekend bars
+var bool is_247_asset = false
+if barstate.isfirst
+    is_247_asset := false
+    tf_minutes = timeframe.in_seconds() / 60
+    bars_in_7_days = math.ceil(10080 / tf_minutes)
+    scan_limit = math.min(bars_in_7_days, bar_index)
 
-actual_asia_session = enable_nine_times ? (NINE_ASIA_TIME + day_codes) : (enable_24_7_mode ? SESSION_24_7_ASIA : asia_session_time)
-actual_london_session = enable_nine_times ? (NINE_LONDON_TIME + day_codes) : (enable_24_7_mode ? SESSION_24_7_LONDON : london_session_time)
-actual_nyam_session = enable_nine_times ? (NINE_NYAM_TIME + day_codes) : (enable_24_7_mode ? SESSION_24_7_NYAM : nyam_session_time)
-actual_lunch_session = enable_nine_times ? (NINE_LUNCH_TIME + day_codes) : (enable_24_7_mode ? SESSION_24_7_LUNCH : lunch_session_time)
-actual_nypm_session = enable_nine_times ? (NINE_NYPM_TIME + day_codes) : (enable_24_7_mode ? SESSION_24_7_NYPM : nypm_session_time)
-actual_ons_session = enable_24_7_mode ? SESSION_24_7_ONS : ons_session_time
+    for i = 0 to scan_limit
+        if i % 10 == 0
+            check_day = dayofweek(time[i], NY_TIMEZONE)
+            if check_day == dayofweek.saturday or check_day == dayofweek.sunday
+                is_247_asset := true
+                break
+
+// Auto-apply 24/7 day codes if weekend bars detected
+day_codes = is_247_asset ? DAY_CODE_ALL_DAYS : DAY_CODE_MON_SAT
+
+// Apply day codes to all sessions (user custom times already have Mon-Sat, we just override if 24/7)
+actual_asia_session = enable_nine_times ? (NINE_ASIA_TIME + day_codes) : (is_247_asset ? ("2000-0000" + DAY_CODE_ALL_DAYS) : asia_session_time)
+actual_london_session = enable_nine_times ? (NINE_LONDON_TIME + day_codes) : (is_247_asset ? ("0200-0500" + DAY_CODE_ALL_DAYS) : london_session_time)
+actual_nyam_session = enable_nine_times ? (NINE_NYAM_TIME + day_codes) : (is_247_asset ? ("0930-1200" + DAY_CODE_ALL_DAYS) : nyam_session_time)
+actual_lunch_session = enable_nine_times ? (NINE_LUNCH_TIME + day_codes) : (is_247_asset ? ("1200-1330" + DAY_CODE_ALL_DAYS) : lunch_session_time)
+actual_nypm_session = enable_nine_times ? (NINE_NYPM_TIME + day_codes) : (is_247_asset ? ("1330-1600" + DAY_CODE_ALL_DAYS) : nypm_session_time)
+actual_ons_session = is_247_asset ? ("0500-0915" + DAY_CODE_ALL_DAYS) : ons_session_time
 
 // Auto-disable lunch when NINE's times enabled (NINE doesn't use lunch)
 actual_enable_lunch = enable_nine_times ? false : enable_lunch_liquidity
@@ -1789,7 +1802,7 @@ process_liquidity_pool(
     [detected_events_is_high, detected_events_rules, detected_events_is_exact, detected_events_source_price, detected_events_source_bar_index]
 
 is_sunday_liquidity_reopen(time_value) =>
-    not include_daily_liquidity_sunday and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+    not is_247_asset and not include_daily_liquidity_sunday and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
 
 is_new_liquidity_session(pool_type) =>
     prev_time = time[1]
