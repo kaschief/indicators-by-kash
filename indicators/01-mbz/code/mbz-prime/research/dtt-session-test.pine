@@ -1,0 +1,955 @@
+//@version=6
+indicator("DTT Session Test", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+const int SESSIONS_PER_CYCLE = 15
+const int MILLISECONDS_PER_DAY = 86400000
+const int LOOKBACK_BARS = 500
+const string TIMEZONE = "America/New_York"
+const string ARROW_UP = "▲"
+const string ARROW_DOWN = "▼"
+
+// Pattern Labels
+const string PATTERN_IMMEDIATE = "IMM"
+const string PATTERN_STANDARD = "STD"
+const string PATTERN_DELAYED = "DEL"
+
+// Session Names
+const string SESSION_DAMASU = "Damasu"
+const string SESSION_OSAKA = "Osaka"
+const string SESSION_KYOTO = "Kyoto"
+const string SESSION_NAGASAKI = "Nagasaki"
+const string SESSION_TURNCOAT = "Turncoat"
+const string SESSION_BISHOP = "Bishop"
+const string SESSION_KNIGHT = "Knight"
+const string SESSION_BIGBEN = "Big Ben"
+const string SESSION_NYOPEN = "NY Open"
+const string SESSION_JUDAS = "Judas"
+const string SESSION_MODEL11 = "Model 11"
+const string SESSION_MODEL110 = "Model 110"
+const string SESSION_LUNCH = "Lunch"
+const string SESSION_MODEL1001 = "Model 1001"
+const string SESSION_MODEL111 = "Model 111"
+
+// Session Times (HHMM format)
+const int TIME_DAMASU_START = 1800
+const int TIME_DAMASU_END = 1901
+const int TIME_OSAKA_START = 1901
+const int TIME_OSAKA_END = 2114
+const int TIME_KYOTO_START = 2114
+const int TIME_KYOTO_END = 2304
+const int TIME_NAGASAKI_START = 2304
+const int TIME_NAGASAKI_END = 300
+const int TIME_TURNCOAT_START = 300
+const int TIME_TURNCOAT_END = 344
+const int TIME_BISHOP_START = 344
+const int TIME_BISHOP_END = 520
+const int TIME_KNIGHT_START = 520
+const int TIME_KNIGHT_END = 639
+const int TIME_BIGBEN_START = 639
+const int TIME_BIGBEN_END = 930
+const int TIME_NYOPEN_START = 930
+const int TIME_NYOPEN_END = 955
+const int TIME_JUDAS_START = 955
+const int TIME_JUDAS_END = 1020
+const int TIME_MODEL11_START = 1020
+const int TIME_MODEL11_END = 1110
+const int TIME_MODEL110_START = 1110
+const int TIME_MODEL110_END = 1149
+const int TIME_LUNCH_START = 1149
+const int TIME_LUNCH_END = 1235
+const int TIME_MODEL1001_START = 1235
+const int TIME_MODEL1001_END = 1409
+const int TIME_MODEL111_START = 1409
+const int TIME_MODEL111_END = 1800
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Display Settings
+show_last_n_days = input.int(1, "Show Last N Days", minval=1, maxval=10, group="Display", tooltip="Number of 24-hour DTT cycles to display")
+show_debug = input.bool(false, "Show Debug Table", group="Display")
+session_label_size = input.string(size.small, "Session Label Size", options=[size.tiny, size.small, size.normal, size.large], group="Display")
+
+// Session Boundary Lines
+boundary_color = input.color(color.blue, "Color", group="Session Boundaries", inline="boundary")
+boundary_width = input.int(2, "Width", minval=1, maxval=5, group="Session Boundaries", inline="boundary")
+boundary_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Session Boundaries", inline="boundary")
+
+// Previous Session High & Low Lines
+pool_color = input.color(color.new(color.purple, 50), "Color", group="Previous Session High & Low", inline="pool")
+pool_width = input.int(1, "Width", minval=1, maxval=5, group="Previous Session High & Low", inline="pool")
+pool_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Session High & Low", inline="pool")
+
+// First Breach Arrows
+show_breach_arrows = input.bool(true, "Show Breach Arrows", group="First Breach Arrows")
+arrow_high_color = input.color(color.green, "High Breach Color", group="First Breach Arrows", inline="arrow1")
+arrow_low_color = input.color(color.red, "Low Breach Color", group="First Breach Arrows", inline="arrow1")
+arrow_size = input.string(size.small, "Size", options=[size.tiny, size.small, size.normal, size.large], group="First Breach Arrows", inline="arrow2")
+
+// Pattern Detection
+enable_pattern_detection = input.bool(true, "Enable Pattern Detection", group="Pattern Detection")
+
+// IMMEDIATE
+show_immediate = input.bool(true, "Show Immediate (IMM)", group="Pattern Detection", inline="imm")
+immediate_label_color = input.color(color.red, "Label Color", group="Pattern Detection", inline="imm")
+highlight_immediate = input.bool(true, "Highlight Candle", group="Pattern Detection", inline="imm_hl")
+immediate_highlight_color = input.color(color.new(color.red, 70), "Candle Color", group="Pattern Detection", inline="imm_hl")
+
+// STANDARD
+show_standard = input.bool(true, "Show Standard (STD)", group="Pattern Detection", inline="std")
+standard_label_color = input.color(color.red, "Label Color", group="Pattern Detection", inline="std")
+highlight_standard = input.bool(true, "Highlight Candle", group="Pattern Detection", inline="std_hl")
+standard_highlight_color = input.color(color.new(color.red, 70), "Candle Color", group="Pattern Detection", inline="std_hl")
+
+// DELAYED
+show_delayed = input.bool(true, "Show Delayed (DEL)", group="Pattern Detection", inline="del")
+delayed_label_color = input.color(color.red, "Label Color", group="Pattern Detection", inline="del")
+highlight_delayed = input.bool(true, "Highlight Candle", group="Pattern Detection", inline="del_hl")
+delayed_highlight_color = input.color(color.new(color.red, 70), "Candle Color", group="Pattern Detection", inline="del_hl")
+
+pattern_label_size = input.string(size.small, "Pattern Label Size", options=[size.tiny, size.small, size.normal, size.large], group="Pattern Detection")
+
+
+// Session definitions
+type DttSession
+    int start_time
+    int end_time
+    string name
+    string prev_session_name
+    int start_bar
+    int end_bar
+    int session_day
+    float session_high
+    float session_low
+    line pool_high_line
+    line pool_low_line
+    line start_boundary_line
+    line end_boundary_line
+    label session_label
+    bool high_breached
+    bool low_breached
+    int high_breach_bar
+    int low_breach_bar
+    label high_arrow
+    label low_arrow
+    bool high_pattern_checked
+    bool low_pattern_checked
+    // Pattern events - multiple patterns can form per session
+    array<bool> pattern_is_high          // true = high pattern, false = low pattern
+    array<string> pattern_formation_rule // PATTERN_IMMEDIATE, PATTERN_STANDARD, PATTERN_DELAYED
+    array<label> pattern_labels          // Label objects for each pattern
+    string high_fail_reason
+    string low_fail_reason
+
+// Session template
+type SessionTemplate
+    int start_time
+    int end_time
+    string name
+    string prev_session_name
+
+// Helper functions for pattern detection (match mbz-prime structure)
+dtt_immediate_condition(is_bearish_pattern, level_value, a_high, a_low, a_close, b_open, b_close, b_high, b_low) =>
+    if is_bearish_pattern
+        previous_inside = a_high < level_value and a_close < level_value
+        current_sweep = b_high > level_value and b_open < level_value
+        is_bearish_candle = b_close < b_open
+        previous_inside and current_sweep and is_bearish_candle
+    else
+        previous_inside = a_low > level_value and a_close > level_value
+        current_sweep = b_low < level_value and b_open > level_value
+        is_bullish_candle = b_close > b_open
+        previous_inside and current_sweep and is_bullish_candle
+
+dtt_standard_condition(is_bearish_pattern, level_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low) =>
+    if is_bearish_pattern
+        wick_only_first_breach = a_open < level_value and a_high > level_value and a_close < level_value
+        no_new_extreme = b_high < a_high
+        is_bearish_candle = b_close < b_open
+        wick_only_first_breach and b_open < level_value and no_new_extreme and is_bearish_candle
+    else
+        wick_only_first_breach = a_open > level_value and a_low < level_value and a_close > level_value
+        no_new_extreme = b_low > a_low
+        is_bullish_candle = b_close > b_open
+        wick_only_first_breach and b_open > level_value and no_new_extreme and is_bullish_candle
+
+dtt_delayed_condition(is_bearish_pattern, level_value, a_close, b_open, b_close) =>
+    if is_bearish_pattern
+        body_close_breach = a_close > level_value
+        is_bearish_candle = b_close < b_open
+        body_close_breach and b_open > level_value and is_bearish_candle
+    else
+        body_close_breach = a_close < level_value
+        is_bullish_candle = b_close > b_open
+        body_close_breach and b_open < level_value and is_bullish_candle
+
+dtt_check_midpoint(is_bearish_pattern, close_price, midpoint) =>
+    if is_bearish_pattern
+        close_price < midpoint
+    else
+        close_price > midpoint
+
+// Track all session instances across days
+var session_instances = array.new<DttSession>()
+
+// Define session templates (in cascade order - 15 DTT sessions)
+var session_templates = array.new<SessionTemplate>()
+if barstate.isfirst
+    array.push(session_templates, SessionTemplate.new(TIME_DAMASU_START, TIME_DAMASU_END, SESSION_DAMASU, SESSION_MODEL111))
+    array.push(session_templates, SessionTemplate.new(TIME_OSAKA_START, TIME_OSAKA_END, SESSION_OSAKA, SESSION_DAMASU))
+    array.push(session_templates, SessionTemplate.new(TIME_KYOTO_START, TIME_KYOTO_END, SESSION_KYOTO, SESSION_OSAKA))
+    array.push(session_templates, SessionTemplate.new(TIME_NAGASAKI_START, TIME_NAGASAKI_END, SESSION_NAGASAKI, SESSION_KYOTO))
+    array.push(session_templates, SessionTemplate.new(TIME_TURNCOAT_START, TIME_TURNCOAT_END, SESSION_TURNCOAT, SESSION_NAGASAKI))
+    array.push(session_templates, SessionTemplate.new(TIME_BISHOP_START, TIME_BISHOP_END, SESSION_BISHOP, SESSION_TURNCOAT))
+    array.push(session_templates, SessionTemplate.new(TIME_KNIGHT_START, TIME_KNIGHT_END, SESSION_KNIGHT, SESSION_BISHOP))
+    array.push(session_templates, SessionTemplate.new(TIME_BIGBEN_START, TIME_BIGBEN_END, SESSION_BIGBEN, SESSION_KNIGHT))
+    array.push(session_templates, SessionTemplate.new(TIME_NYOPEN_START, TIME_NYOPEN_END, SESSION_NYOPEN, SESSION_BIGBEN))
+    array.push(session_templates, SessionTemplate.new(TIME_JUDAS_START, TIME_JUDAS_END, SESSION_JUDAS, SESSION_NYOPEN))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL11_START, TIME_MODEL11_END, SESSION_MODEL11, SESSION_JUDAS))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL110_START, TIME_MODEL110_END, SESSION_MODEL110, SESSION_MODEL11))
+    array.push(session_templates, SessionTemplate.new(TIME_LUNCH_START, TIME_LUNCH_END, SESSION_LUNCH, SESSION_MODEL110))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL1001_START, TIME_MODEL1001_END, SESSION_MODEL1001, SESSION_LUNCH))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL111_START, TIME_MODEL111_END, SESSION_MODEL111, SESSION_MODEL1001))
+
+// Get current time in HHMM format (using TIMEZONE constant)
+// Use bar time, not real-world time
+current_hour = hour(time, TIMEZONE)
+current_minute = minute(time, TIMEZONE)
+current_time = current_hour * 100 + current_minute
+current_day = dayofweek(time, TIMEZONE)
+
+// Auto-detect if asset trades 24/7 by checking if there are weekend bars
+var bool is_247_asset = false
+if barstate.isfirst
+    is_247_asset := false
+    // Check last LOOKBACK_BARS for any weekend activity
+    for i = 0 to math.min(LOOKBACK_BARS, bar_index)
+        check_day = dayofweek(time[i], TIMEZONE)
+        if check_day == dayofweek.saturday or check_day == dayofweek.sunday
+            is_247_asset := true
+            break
+
+// Check if we should process sessions (always process if 24/7 asset detected, or on weekdays)
+process_sessions = is_247_asset or (current_day != dayofweek.saturday and current_day != dayofweek.sunday)
+
+// Helper function to get the last instance of a session type (completed or active)
+get_last_session_of_type(session_name) =>
+    result = DttSession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na)
+    if array.size(session_instances) > 0
+        for i = array.size(session_instances) - 1 to 0
+            sess = array.get(session_instances, i)
+            if sess.name == session_name and not na(sess.start_bar)
+                result := sess
+                break
+    result
+
+// Get the count of completed Model 111 sessions (marks complete "days")
+get_completed_model111_count() =>
+    count = 0
+    if array.size(session_instances) > 0
+        for i = 0 to array.size(session_instances) - 1
+            sess = array.get(session_instances, i)
+            if sess.name == SESSION_MODEL111 and not na(sess.end_bar)
+                count += 1
+    count
+
+// Mark sessions as ended and finalize them
+if array.size(session_instances) > 0
+    for j = array.size(session_instances) - 1 to 0
+        sess = array.get(session_instances, j)
+        if not na(sess.start_bar) and na(sess.end_bar)
+            // Check if current time is in the session or if we've passed it
+            in_session = false
+            if sess.end_time > sess.start_time
+                // Normal session (doesn't wrap midnight)
+                in_session := current_time >= sess.start_time and current_time < sess.end_time
+            else
+                // Wraps midnight (e.g., 23:04 to 03:00)
+                in_session := current_time >= sess.start_time or current_time < sess.end_time
+
+            // If NOT in session and session has started, it must have ended
+            if not in_session
+                sess.end_bar := bar_index
+                array.set(session_instances, j, sess)
+
+// Clean up old sessions BEFORE creating new ones: keep only the last N "cycles"
+if array.size(session_instances) > 0
+    sessions_to_keep = show_last_n_days * SESSIONS_PER_CYCLE
+    total_sessions = array.size(session_instances)
+
+    if total_sessions > sessions_to_keep
+        sessions_to_delete = total_sessions - sessions_to_keep
+
+        for i = 0 to sessions_to_delete - 1
+            sess = array.get(session_instances, i)
+            if not na(sess.start_boundary_line)
+                line.delete(sess.start_boundary_line)
+            if not na(sess.end_boundary_line)
+                line.delete(sess.end_boundary_line)
+            if not na(sess.pool_high_line)
+                line.delete(sess.pool_high_line)
+            if not na(sess.pool_low_line)
+                line.delete(sess.pool_low_line)
+            if not na(sess.session_label)
+                label.delete(sess.session_label)
+            if not na(sess.high_arrow)
+                label.delete(sess.high_arrow)
+            if not na(sess.low_arrow)
+                label.delete(sess.low_arrow)
+            // Delete all pattern labels
+            if array.size(sess.pattern_labels) > 0
+                for j = 0 to array.size(sess.pattern_labels) - 1
+                    lbl = array.get(sess.pattern_labels, j)
+                    if not na(lbl)
+                        label.delete(lbl)
+
+        for i = 0 to sessions_to_delete - 1
+            array.shift(session_instances)
+
+// Only CREATE new sessions if weekend is enabled OR it's a weekday
+if process_sessions
+    // Process all session templates
+    for i = 0 to array.size(session_templates) - 1
+        template = array.get(session_templates, i)
+
+        // Check if we're IN this session's time range
+        in_session_time = false
+        if template.end_time > template.start_time
+            in_session_time := current_time >= template.start_time and current_time < template.end_time
+        else
+            in_session_time := current_time >= template.start_time or current_time < template.end_time
+
+        // Check if this session type already has an active instance for current bar
+        session_exists = false
+        if array.size(session_instances) > 0
+            for j = array.size(session_instances) - 1 to 0
+                sess = array.get(session_instances, j)
+                if sess.name == template.name and not na(sess.start_bar) and na(sess.end_bar)
+                    session_exists := true
+                    break
+
+        // Create session if we're in the time range and it doesn't exist yet
+        if in_session_time and not session_exists
+            // Count completed "days" (Model 111 sessions mark end of day)
+            completed_days = get_completed_model111_count()
+
+            // Assign day number: incomplete sessions are in "current day" = completed_days
+            day_number = completed_days
+
+            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, day_number, high, low, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na)
+            array.push(session_instances, new_sess)
+
+            // Draw boundaries
+            idx = array.size(session_instances) - 1
+            curr_sess = array.get(session_instances, idx)
+
+            // Get previous session to delete its end boundary and replace with shared boundary
+            prev_session = get_last_session_of_type(template.prev_session_name)
+            if not na(prev_session.end_boundary_line)
+                // Delete the previous session's end boundary
+                line.delete(prev_session.end_boundary_line)
+                // Update the previous session in the array
+                if array.size(session_instances) > 1
+                    for j = array.size(session_instances) - 2 to 0
+                        check_sess = array.get(session_instances, j)
+                        if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
+                            check_sess.end_boundary_line := na
+                            array.set(session_instances, j, check_sess)
+                            break
+
+            // Draw start boundary at current bar
+            curr_sess.start_boundary_line := line.new(bar_index, 1e10, bar_index, -1e6, color=boundary_color, width=boundary_width, style=boundary_style)
+
+            // Calculate the timestamp for when this session ends
+            end_hour = math.floor(template.end_time / 100)
+            end_minute = template.end_time % 100
+
+            // Get current bar's date components
+            current_year = year(time, TIMEZONE)
+            current_month = month(time, TIMEZONE)
+            current_date = dayofmonth(time, TIMEZONE)
+
+            // Build end timestamp (might be next day if wraps midnight)
+            end_timestamp = timestamp(TIMEZONE, current_year, current_month, current_date, end_hour, end_minute)
+
+            // If end time is before start time, it wraps to next day
+            if template.end_time < template.start_time
+                end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
+
+            // If end_timestamp is before current time, add a day
+            if end_timestamp < time
+                end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
+
+            // Draw end boundary at the exact end time
+            curr_sess.end_boundary_line := line.new(end_timestamp, 1e10, end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+            // Draw high/low lines from previous session extending to end timestamp
+            if not na(prev_session.session_high) and not na(prev_session.session_low)
+                curr_sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+                curr_sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+
+            // Draw session name label at midpoint between start and end time
+            midpoint_timestamp = math.round((time + end_timestamp) / 2)
+            curr_sess.session_label := label.new(midpoint_timestamp, high, text=template.name, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
+
+            array.set(session_instances, idx, curr_sess)
+
+// Update high/low for all active sessions and detect first touch
+if array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+        if not na(sess.start_bar) and na(sess.end_bar)
+            // Session is active, update high/low
+            in_session = false
+            if sess.start_time > sess.end_time  // Wraps around midnight
+                in_session := (current_time >= sess.start_time or current_time < sess.end_time)
+            else
+                in_session := (current_time >= sess.start_time and current_time < sess.end_time)
+
+            if in_session
+                sess.session_high := math.max(sess.session_high, high)
+                sess.session_low := math.min(sess.session_low, low)
+
+                // Get previous session's high/low for comparison
+                prev_session = get_last_session_of_type(sess.prev_session_name)
+                prev_high = prev_session.session_high
+                prev_low = prev_session.session_low
+
+                // Check for FIRST breach of previous session's high
+                if not sess.high_breached and not na(prev_high)
+                    // STRICT BREACH: Must exceed level, not just touch (use > not >=)
+                    if high > prev_high
+                        sess.high_breached := true
+                        sess.high_breach_bar := bar_index  // SAVE BREACH BAR
+                        // Draw downward arrow ABOVE the candle pointing down at the high
+                        if show_breach_arrows
+                            sess.high_arrow := label.new(bar_index, high, text=ARROW_DOWN, style=label.style_none, color=color.new(color.white, 100), textcolor=arrow_high_color, size=arrow_size, yloc=yloc.abovebar)
+
+                // Check for FIRST breach of previous session's low
+                if not sess.low_breached and not na(prev_low)
+                    // STRICT BREACH: Must exceed level, not just touch (use < not <=)
+                    if low < prev_low
+                        sess.low_breached := true
+                        sess.low_breach_bar := bar_index  // SAVE BREACH BAR
+                        // Draw upward arrow BELOW the candle pointing up at the low
+                        if show_breach_arrows
+                            sess.low_arrow := label.new(bar_index, low, text=ARROW_UP, style=label.style_none, color=color.new(color.white, 100), textcolor=arrow_low_color, size=arrow_size, yloc=yloc.belowbar)
+
+                array.set(session_instances, i, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATTERN DETECTION (IMM/STD/DEL) - Matches mbz-prime structure
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Pattern detection for DTT sessions
+if enable_pattern_detection and array.size(session_instances) > 0
+
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+
+        // Check both active AND ended sessions (but only once per session)
+        if not na(sess.start_bar)
+            prev_session = get_last_session_of_type(sess.prev_session_name)
+            prev_high = prev_session.session_high
+            prev_low = prev_session.session_low
+
+            // ═══════════════════════════════════════════════════════════════
+            // HIGH PATTERN DETECTION (Bearish)
+            // ═══════════════════════════════════════════════════════════════
+
+            high_ready = sess.high_breached and not sess.high_pattern_checked and not na(prev_high) and not na(sess.high_breach_bar)
+
+            if high_ready
+                breach_bar = sess.high_breach_bar
+                bars_since_breach = bar_index - breach_bar
+
+                // Determine breach timing (current or previous bar)
+                breach_is_current_high = breach_bar == bar_index
+                breach_is_previous_high = breach_bar == bar_index - 1
+
+                breach_bar_offset = bar_index - breach_bar
+
+                pattern_found = false
+                imm_fail_reason = ""
+                std_fail_reason = ""
+                del_fail_reason = ""
+
+                // ─────────────────────────────────────────────────────────────
+                // IMMEDIATE: Check when breach happens (bars_since_breach >= 0)
+                // ─────────────────────────────────────────────────────────────
+                if show_immediate and breach_is_current_high
+                    // For IMM: A = bar before breach, B = breach bar
+                    if breach_bar_offset + 1 <= 500
+                        a_imm_open = open[breach_bar_offset + 1]
+                        a_imm_close = close[breach_bar_offset + 1]
+                        a_imm_high = high[breach_bar_offset + 1]
+                        a_imm_low = low[breach_bar_offset + 1]
+                        a_imm_mid = (a_imm_open + a_imm_close) / 2.0
+
+                        // B = current bar (breach bar)
+                        b_open = open
+                        b_close = close
+                        b_high = high
+                        b_low = low
+
+                        // Check all conditions with explicit failure reasons
+                        // A can touch the level with high but must not exceed it
+                        a_stayed_inside = a_imm_high <= prev_high
+                        b_swept = b_high > prev_high and b_open < prev_high
+                        b_is_bearish = b_close < b_open
+                        midpoint_passed = dtt_check_midpoint(true, b_close, a_imm_mid)
+
+                        if not a_stayed_inside
+                            imm_fail_reason := "IMM✗: A high exceeded the level"
+                        else if not b_swept
+                            imm_fail_reason := "IMM✗: B didn't sweep the high"
+                        else if not b_is_bearish
+                            imm_fail_reason := "IMM✗: B not bearish"
+                        else if not midpoint_passed
+                            imm_fail_reason := "IMM✗: B close above A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, true)
+                            array.push(sess.pattern_formation_rule, PATTERN_IMMEDIATE)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_IMMEDIATE + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_low - offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=immediate_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                // ─────────────────────────────────────────────────────────────
+                // STANDARD/DELAYED: Check one bar after breach (bars_since_breach >= 1)
+                // ─────────────────────────────────────────────────────────────
+                if bars_since_breach >= 1
+                    // A candle = breach bar
+                    a_open = open[breach_bar_offset]
+                    a_close = close[breach_bar_offset]
+                    a_high = high[breach_bar_offset]
+                    a_low = low[breach_bar_offset]
+                    a_mid = (a_open + a_close) / 2.0
+
+                    // B candle = current bar (bar after breach)
+                    b_open = open
+                    b_close = close
+                    b_high = high
+                    b_low = low
+
+                    // Check STANDARD (breach on previous bar = A candle)
+                    if show_standard and breach_is_previous_high
+                        // Check all conditions with explicit failure reasons
+                        wick_only = a_open < prev_high and a_high > prev_high and a_close < prev_high
+                        b_started_below = b_open < prev_high
+                        no_new_extreme = b_high < a_high
+                        b_is_bearish = b_close < b_open
+                        midpoint_passed = dtt_check_midpoint(true, b_close, a_mid)
+
+                        if not wick_only
+                            std_fail_reason := "STD✗: A body touched the high"
+                        else if not b_started_below
+                            std_fail_reason := "STD✗: B didn't start below the high"
+                        else if not no_new_extreme
+                            std_fail_reason := "STD✗: B made new extreme"
+                        else if not b_is_bearish
+                            std_fail_reason := "STD✗: B not bearish"
+                        else if not midpoint_passed
+                            std_fail_reason := "STD✗: B close above A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, true)
+                            array.push(sess.pattern_formation_rule, PATTERN_STANDARD)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_STANDARD + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_low - offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=standard_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                    // Check DELAYED (breach on previous bar = A candle)
+                    if show_delayed and breach_is_previous_high
+                        // Check all conditions with explicit failure reasons
+                        body_closed_beyond = a_close > prev_high
+                        b_started_above = b_open > prev_high
+                        b_is_bearish = b_close < b_open
+                        midpoint_passed = dtt_check_midpoint(true, b_close, a_mid)
+
+                        if not body_closed_beyond
+                            del_fail_reason := "DEL✗: A didn't close above the high"
+                        else if not b_started_above
+                            del_fail_reason := "DEL✗: B didn't start above the high"
+                        else if not b_is_bearish
+                            del_fail_reason := "DEL✗: B not bearish"
+                        else if not midpoint_passed
+                            del_fail_reason := "DEL✗: B close above A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, true)
+                            array.push(sess.pattern_formation_rule, PATTERN_DELAYED)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_DELAYED + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_low - offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=delayed_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                    // Mark as checked ONLY after checking all patterns (STD/DEL checked at bars_since_breach >= 1)
+                    sess.high_pattern_checked := true
+
+                    // If no pattern found, record PRIMARY failure reason
+                    if not pattern_found
+                        if imm_fail_reason != ""
+                            sess.high_fail_reason := imm_fail_reason
+                        else if std_fail_reason != ""
+                            sess.high_fail_reason := std_fail_reason
+                        else if del_fail_reason != ""
+                            sess.high_fail_reason := del_fail_reason
+
+            // ═══════════════════════════════════════════════════════════════
+            // LOW PATTERN DETECTION (Bullish)
+            // ═══════════════════════════════════════════════════════════════
+
+            low_ready = sess.low_breached and not sess.low_pattern_checked and not na(prev_low) and not na(sess.low_breach_bar)
+
+            if low_ready
+                breach_bar = sess.low_breach_bar
+                bars_since_breach = bar_index - breach_bar
+
+                // Determine breach timing (current or previous bar)
+                breach_is_current_low = breach_bar == bar_index
+                breach_is_previous_low = breach_bar == bar_index - 1
+
+                breach_bar_offset = bar_index - breach_bar
+
+                pattern_found = false
+                imm_fail_reason = ""
+                std_fail_reason = ""
+                del_fail_reason = ""
+
+                // ─────────────────────────────────────────────────────────────
+                // IMMEDIATE: Check when breach happens (bars_since_breach >= 0)
+                // ─────────────────────────────────────────────────────────────
+                if show_immediate and breach_is_current_low
+                    // For IMM: A = bar before breach, B = breach bar
+                    if breach_bar_offset + 1 <= 500
+                        a_imm_open = open[breach_bar_offset + 1]
+                        a_imm_close = close[breach_bar_offset + 1]
+                        a_imm_high = high[breach_bar_offset + 1]
+                        a_imm_low = low[breach_bar_offset + 1]
+                        a_imm_mid = (a_imm_open + a_imm_close) / 2.0
+
+                        // B = current bar (breach bar)
+                        b_open = open
+                        b_close = close
+                        b_high = high
+                        b_low = low
+
+                        // Check all conditions with explicit failure reasons
+                        // A can touch the level with low but must not exceed it
+                        a_stayed_inside = a_imm_low >= prev_low
+                        b_swept = b_low < prev_low and b_open > prev_low
+                        b_is_bullish = b_close > b_open
+                        midpoint_passed = dtt_check_midpoint(false, b_close, a_imm_mid)
+
+                        if not a_stayed_inside
+                            imm_fail_reason := "IMM✗: A low exceeded the level"
+                        else if not b_swept
+                            imm_fail_reason := "IMM✗: B didn't sweep the low"
+                        else if not b_is_bullish
+                            imm_fail_reason := "IMM✗: B not bullish"
+                        else if not midpoint_passed
+                            imm_fail_reason := "IMM✗: B close below A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, false)
+                            array.push(sess.pattern_formation_rule, PATTERN_IMMEDIATE)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_IMMEDIATE + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_high + offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=immediate_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                // ─────────────────────────────────────────────────────────────
+                // STANDARD/DELAYED: Check one bar after breach (bars_since_breach >= 1)
+                // ─────────────────────────────────────────────────────────────
+                if bars_since_breach >= 1
+                    // A candle = breach bar
+                    a_open = open[breach_bar_offset]
+                    a_close = close[breach_bar_offset]
+                    a_high = high[breach_bar_offset]
+                    a_low = low[breach_bar_offset]
+                    a_mid = (a_open + a_close) / 2.0
+
+                    // B candle = current bar (bar after breach)
+                    b_open = open
+                    b_close = close
+                    b_high = high
+                    b_low = low
+
+                    // Check STANDARD (breach on previous bar = A candle)
+                    if show_standard and breach_is_previous_low
+                        // Check all conditions with explicit failure reasons
+                        wick_only = a_open > prev_low and a_low < prev_low and a_close > prev_low
+                        b_started_above = b_open > prev_low
+                        no_new_extreme = b_low > a_low
+                        b_is_bullish = b_close > b_open
+                        midpoint_passed = dtt_check_midpoint(false, b_close, a_mid)
+
+                        if not wick_only
+                            std_fail_reason := "STD✗: A body touched the low"
+                        else if not b_started_above
+                            std_fail_reason := "STD✗: B didn't start above the low"
+                        else if not no_new_extreme
+                            std_fail_reason := "STD✗: B made new extreme"
+                        else if not b_is_bullish
+                            std_fail_reason := "STD✗: B not bullish"
+                        else if not midpoint_passed
+                            std_fail_reason := "STD✗: B close below A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, false)
+                            array.push(sess.pattern_formation_rule, PATTERN_STANDARD)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_STANDARD + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_high + offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=standard_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                    // Check DELAYED (breach on previous bar = A candle)
+                    if show_delayed and breach_is_previous_low
+                        // Check all conditions with explicit failure reasons
+                        body_closed_beyond = a_close < prev_low
+                        b_started_below = b_open < prev_low
+                        b_is_bullish = b_close > b_open
+                        midpoint_passed = dtt_check_midpoint(false, b_close, a_mid)
+
+                        if not body_closed_beyond
+                            del_fail_reason := "DEL✗: A didn't close below the low"
+                        else if not b_started_below
+                            del_fail_reason := "DEL✗: B didn't start below the low"
+                        else if not b_is_bullish
+                            del_fail_reason := "DEL✗: B not bullish"
+                        else if not midpoint_passed
+                            del_fail_reason := "DEL✗: B close below A midpoint"
+                        else
+                            array.push(sess.pattern_is_high, false)
+                            array.push(sess.pattern_formation_rule, PATTERN_DELAYED)
+                            pattern_found := true
+
+                            // Create label immediately
+                            direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
+                            full_text = PATTERN_DELAYED + direction_suffix
+                            price_range = b_high - b_low
+                            offset = math.max(price_range, syminfo.mintick * 50) * 0.25
+                            label_price = b_high + offset
+                            new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=delayed_label_color, size=pattern_label_size, color=color.new(color.white, 100))
+                            array.push(sess.pattern_labels, new_label)
+
+                    // Mark as checked ONLY after checking all patterns (STD/DEL checked at bars_since_breach >= 1)
+                    sess.low_pattern_checked := true
+
+                    // If no pattern found, record PRIMARY failure reason
+                    if not pattern_found
+                        if imm_fail_reason != ""
+                            sess.low_fail_reason := imm_fail_reason
+                        else if std_fail_reason != ""
+                            sess.low_fail_reason := std_fail_reason
+                        else if del_fail_reason != ""
+                            sess.low_fail_reason := del_fail_reason
+
+            // Labels are now created inline when patterns are detected
+            array.set(session_instances, i, sess)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CANDLE HIGHLIGHTING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Check if current bar has a pattern formed (priority: DELAYED > STANDARD > IMMEDIATE)
+color candle_color = na
+
+if enable_pattern_detection and array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+
+        // Check if pattern label was created on this bar
+        if array.size(sess.pattern_labels) > 0
+            for j = 0 to array.size(sess.pattern_labels) - 1
+                pattern_label = array.get(sess.pattern_labels, j)
+                if not na(pattern_label)
+                    label_bar = label.get_x(pattern_label)
+                    if label_bar == bar_index
+                        // Pattern formed on this bar - check priority
+                        has_delayed = false
+                        has_standard = false
+                        has_immediate = false
+
+                        for k = 0 to array.size(sess.pattern_formation_rule) - 1
+                            pattern_type = array.get(sess.pattern_formation_rule, k)
+                            if pattern_type == PATTERN_DELAYED
+                                has_delayed := true
+                            else if pattern_type == PATTERN_STANDARD
+                                has_standard := true
+                            else if pattern_type == PATTERN_IMMEDIATE
+                                has_immediate := true
+
+                        // Apply color based on priority
+                        if has_delayed
+                            candle_color := highlight_delayed ? delayed_highlight_color : na
+                        else if has_standard
+                            candle_color := highlight_standard ? standard_highlight_color : na
+                        else if has_immediate
+                            candle_color := highlight_immediate ? immediate_highlight_color : na
+
+barcolor(candle_color)
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DEBUG TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+if show_debug
+    var debug_table = table.new(position.top_right, 6, 17, border_width=1)
+
+    // Header
+    table.cell(debug_table, 0, 0, "Session", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+    table.cell(debug_table, 1, 0, "Time", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+    table.cell(debug_table, 2, 0, "H", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+    table.cell(debug_table, 3, 0, "H Pattern", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+    table.cell(debug_table, 4, 0, "L", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+    table.cell(debug_table, 5, 0, "L Pattern", text_color=color.white, bgcolor=color.blue, text_size=size.small)
+
+    // Show last 15 sessions only
+    row = 1
+    if array.size(session_instances) > 0
+        start_idx = math.max(0, array.size(session_instances) - 15)
+        for i = start_idx to array.size(session_instances) - 1
+            if row < 16
+                sess = array.get(session_instances, i)
+                table.cell(debug_table, 0, row, sess.name, text_color=color.white, bgcolor=color.black, text_size=size.tiny)
+                table.cell(debug_table, 1, row, str.tostring(sess.start_time) + "-" + str.tostring(sess.end_time), text_color=color.white, bgcolor=color.black, text_size=size.tiny)
+
+                // H Breach column
+                high_breach_display = sess.high_breached ? "✓" : "-"
+                table.cell(debug_table, 2, row, high_breach_display, text_color=color.white, bgcolor=color.black, text_size=size.tiny)
+
+                // H Pattern column - show all HIGH patterns detected
+                high_pattern_display = ""
+                high_pattern_color = color.black
+                high_patterns = array.new_string()
+                if array.size(sess.pattern_formation_rule) > 0
+                    for k = 0 to array.size(sess.pattern_formation_rule) - 1
+                        is_high = array.get(sess.pattern_is_high, k)
+                        if is_high
+                            array.push(high_patterns, array.get(sess.pattern_formation_rule, k))
+
+                if array.size(high_patterns) > 0
+                    high_pattern_display := array.join(high_patterns, "+")
+                    high_pattern_color := color.new(color.green, 50)
+                else if not na(sess.high_fail_reason)
+                    high_pattern_display := sess.high_fail_reason
+                    high_pattern_color := color.new(color.red, 50)
+                else
+                    high_pattern_display := "-"
+                table.cell(debug_table, 3, row, high_pattern_display, text_color=color.white, bgcolor=high_pattern_color, text_size=size.tiny)
+
+                // L Breach column
+                low_breach_display = sess.low_breached ? "✓" : "-"
+                table.cell(debug_table, 4, row, low_breach_display, text_color=color.white, bgcolor=color.black, text_size=size.tiny)
+
+                // L Pattern column - show all LOW patterns detected
+                low_pattern_display = ""
+                low_pattern_color = color.black
+                low_patterns = array.new_string()
+                if array.size(sess.pattern_formation_rule) > 0
+                    for k = 0 to array.size(sess.pattern_formation_rule) - 1
+                        is_high = array.get(sess.pattern_is_high, k)
+                        if not is_high
+                            array.push(low_patterns, array.get(sess.pattern_formation_rule, k))
+
+                if array.size(low_patterns) > 0
+                    low_pattern_display := array.join(low_patterns, "+")
+                    low_pattern_color := color.new(color.green, 50)
+                else if not na(sess.low_fail_reason)
+                    low_pattern_display := sess.low_fail_reason
+                    low_pattern_color := color.new(color.red, 50)
+                else
+                    low_pattern_display := "-"
+                table.cell(debug_table, 5, row, low_pattern_display, text_color=color.white, bgcolor=low_pattern_color, text_size=size.tiny)
+
+                row += 1
+
+    // Determine current session based on time
+    current_session_name = "None"
+    for j = 0 to array.size(session_templates) - 1
+        tmpl = array.get(session_templates, j)
+        is_in = false
+        if tmpl.end_time > tmpl.start_time
+            is_in := current_time >= tmpl.start_time and current_time < tmpl.end_time
+        else
+            is_in := current_time >= tmpl.start_time or current_time < tmpl.end_time
+        if is_in
+            current_session_name := tmpl.name
+            break
+
+    // Calculate pattern type counts separated by HIGH and LOW
+    h_imm_count = 0
+    h_std_count = 0
+    h_del_count = 0
+    l_imm_count = 0
+    l_std_count = 0
+    l_del_count = 0
+    if array.size(session_instances) > 0
+        for i = 0 to array.size(session_instances) - 1
+            sess = array.get(session_instances, i)
+            if array.size(sess.pattern_formation_rule) > 0
+                for k = 0 to array.size(sess.pattern_formation_rule) - 1
+                    is_high = array.get(sess.pattern_is_high, k)
+                    pattern_type = array.get(sess.pattern_formation_rule, k)
+
+                    if is_high
+                        if pattern_type == PATTERN_IMMEDIATE
+                            h_imm_count += 1
+                        else if pattern_type == PATTERN_STANDARD
+                            h_std_count += 1
+                        else if pattern_type == PATTERN_DELAYED
+                            h_del_count += 1
+                    else
+                        if pattern_type == PATTERN_IMMEDIATE
+                            l_imm_count += 1
+                        else if pattern_type == PATTERN_STANDARD
+                            l_std_count += 1
+                        else if pattern_type == PATTERN_DELAYED
+                            l_del_count += 1
+
+    // Add summary info
+    day_names = array.from("", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+    day_name = array.get(day_names, current_day)
+
+    table.cell(debug_table, 0, row, "Time: " + str.tostring(current_time), text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
+    table.cell(debug_table, 1, row, day_name + " | " + current_session_name + " | Total: " + str.tostring(array.size(session_instances)), text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
+    table.cell(debug_table, 2, row, "24/7: " + (is_247_asset ? "Y" : "N"), text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
+    table.cell(debug_table, 3, row, "IMM:" + str.tostring(h_imm_count) + " STD:" + str.tostring(h_std_count) + " DEL:" + str.tostring(h_del_count), text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
+    table.cell(debug_table, 4, row, "", text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
+    table.cell(debug_table, 5, row, "IMM:" + str.tostring(l_imm_count) + " STD:" + str.tostring(l_std_count) + " DEL:" + str.tostring(l_del_count), text_color=color.yellow, bgcolor=color.navy, text_size=size.tiny)
