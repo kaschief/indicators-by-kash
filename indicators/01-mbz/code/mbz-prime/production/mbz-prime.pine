@@ -953,6 +953,7 @@ type ConsolidatedMBZ
     bool is_consolidated_invalidated
     string consolidated_candle_label
     string consolidated_extension_label
+    int last_checked_bar_index  // Track last bar checked for historical breach/invalidation
 
 var array<MBZRecord> all_mbz_records = array.new<MBZRecord>()  // Large pool for history
 var array<MBZRecord> active_mbz_records = array.new<MBZRecord>()  // PERFORMANCE: Only non-invalidated MBZs (for fast invalidation checks)
@@ -1024,6 +1025,7 @@ var int profile_nyam_liq_added = 0
 var int profile_lunch_liq_added = 0
 var int profile_nypm_liq_added = 0
 var int profile_ons_liq_added = 0
+var int profile_dtt_liq_added = 0
 var int profile_daily_liq_total = 0
 var int profile_weekly_liq_total = 0
 var int profile_monthly_liq_total = 0
@@ -1033,6 +1035,7 @@ var int profile_nyam_liq_total = 0
 var int profile_lunch_liq_total = 0
 var int profile_nypm_liq_total = 0
 var int profile_ons_liq_total = 0
+var int profile_dtt_liq_total = 0
 var int profile_daily_sessions = 0
 var int profile_weekly_sessions = 0
 var int profile_monthly_sessions = 0
@@ -1042,6 +1045,7 @@ var int profile_nyam_sessions = 0
 var int profile_lunch_sessions = 0
 var int profile_nypm_sessions = 0
 var int profile_ons_sessions = 0
+var int profile_dtt_sessions = 0
 var int profile_daily_liq_invalidated = 0
 var int profile_weekly_liq_invalidated = 0
 var int profile_monthly_liq_invalidated = 0
@@ -1051,6 +1055,7 @@ var int profile_nyam_liq_invalidated = 0
 var int profile_lunch_liq_invalidated = 0
 var int profile_nypm_liq_invalidated = 0
 var int profile_ons_liq_invalidated = 0
+var int profile_dtt_liq_invalidated = 0
 var int profile_weekly_rejected_direction = 0
 var int profile_weekly_rejected_display = 0
 var table profiling_table = na
@@ -2779,7 +2784,8 @@ group_mbzs_by_candle(mbz_records) =>
                          false,
                          false,
                          "",
-                         ""
+                         "",
+                         current_bar  // Initialize last_checked_bar_index to formation bar
                      )
                     array.push(grouped_mbzs, consolidated)
                     array.push(processed_candles, current_bar)
@@ -2813,6 +2819,7 @@ determine_consolidated_status(consolidated_mbz) =>
     invalidation_threshold = get_mbz_invalidation_threshold()
     is_breached = consolidated_mbz.is_consolidated_breached  // Start with existing breach state
     is_invalidated = consolidated_mbz.is_consolidated_invalidated  // Start with existing invalidation state
+    updated_last_checked = consolidated_mbz.last_checked_bar_index  // Track last checked bar
 
     // First check if any MBZ in group is already invalidated
     for i = 0 to array.size(consolidated_mbz.mbz_group) - 1
@@ -2821,64 +2828,28 @@ determine_consolidated_status(consolidated_mbz) =>
             is_invalidated := true
             break
 
-    // Only check for breach if NOT already breached AND NOT already invalidated
-    if not is_breached and not is_invalidated and enable_breach_detection
-        // Check breach using breach threshold (both real-time and historical) - exclude formation candle
-        if bar_index != consolidated_mbz.bar_index
-            validated_breach_threshold = get_validated_breach_threshold()
+    // Only check for breach/invalidation if NOT already set
+    // IMPORTANT: Only check CURRENT bar to avoid historical buffer errors
+    // Historical bars are already processed during their real-time execution
+    if not is_invalidated and bar_index != consolidated_mbz.bar_index
+        validated_breach_threshold = get_validated_breach_threshold()
 
-            // For current bar, check real-time price using selected breach method
+        // Breach check (current bar only, if not already breached)
+        if not is_breached and enable_breach_detection
             current_penetration = breach_method == BREACH_METHOD_BODY_BREACH ? calculate_mbz_zone_penetration_from_body(open, close, consolidated_mbz.consolidated_zone_top, consolidated_mbz.consolidated_zone_bottom, consolidated_mbz.is_bullish) : calculate_mbz_zone_penetration_from_extreme(consolidated_mbz.is_bullish ? low : high, consolidated_mbz.consolidated_zone_top, consolidated_mbz.consolidated_zone_bottom, consolidated_mbz.is_bullish)
-
-            // Check if current bar breached
             if current_penetration >= validated_breach_threshold
                 is_breached := true
-            else
-                // For old MBZs, check historical breach by looking back from formation
-                bars_since_formation = bar_index - consolidated_mbz.bar_index
-                if bars_since_formation > 1  // Only check history for old MBZs
-                    historical_breach_found = false
-                    // Look back through bars since formation (but not beyond formation)
-                    max_lookback = math.min(bars_since_formation - 1, HISTORICAL_LOOKBACK_LIMIT)  // Limit to bars since formation or 500, whichever is smaller
-                    for i = 1 to max_lookback
-                        historical_penetration = breach_method == BREACH_METHOD_BODY_BREACH ? calculate_mbz_zone_penetration_from_body(open[i], close[i], consolidated_mbz.consolidated_zone_top, consolidated_mbz.consolidated_zone_bottom, consolidated_mbz.is_bullish) : calculate_mbz_zone_penetration_from_extreme(consolidated_mbz.is_bullish ? low[i] : high[i], consolidated_mbz.consolidated_zone_top, consolidated_mbz.consolidated_zone_bottom, consolidated_mbz.is_bullish)
-                        if historical_penetration >= validated_breach_threshold
-                            historical_breach_found := true
-                            break
-                    is_breached := historical_breach_found
 
-        // Check invalidation (confirmed close) - both current and historical
+        // Invalidation check (current bar only, only if confirmed)
         if not is_invalidated and barstate.isconfirmed
-            // Check current bar first
-            current_penetration = calculate_mbz_zone_penetration_from_close(
-                 close,
-                 consolidated_mbz.consolidated_zone_top,
-                 consolidated_mbz.consolidated_zone_bottom,
-                 consolidated_mbz.is_bullish
-             )
+            current_penetration = calculate_mbz_zone_penetration_from_close(close, consolidated_mbz.consolidated_zone_top, consolidated_mbz.consolidated_zone_bottom, consolidated_mbz.is_bullish)
             if current_penetration >= invalidation_threshold
                 is_invalidated := true
-            else
-                // For old MBZs, check historical invalidation by looking back from formation
-                bars_since_formation = bar_index - consolidated_mbz.bar_index
-                if bars_since_formation > 1  // Only check history for old MBZs
-                    historical_invalidation_found = false
-                    // Look back through bars since formation (but not beyond formation)
-                    max_lookback = math.min(bars_since_formation - 1, HISTORICAL_LOOKBACK_LIMIT)  // Limit to bars since formation or 500, whichever is smaller
-                    for i = 1 to max_lookback
-                        historical_close_price = close[i]
-                        historical_penetration = calculate_mbz_zone_penetration_from_close(
-                             historical_close_price,
-                             consolidated_mbz.consolidated_zone_top,
-                             consolidated_mbz.consolidated_zone_bottom,
-                             consolidated_mbz.is_bullish
-                         )
-                        if historical_penetration >= invalidation_threshold
-                            historical_invalidation_found := true
-                            break
-                    is_invalidated := historical_invalidation_found
 
-    [is_breached, is_invalidated]
+        // Update last checked bar to current bar
+        updated_last_checked := bar_index
+
+    [is_breached, is_invalidated, updated_last_checked]
 
 // Build source type statistics for consolidated MBZ groups
 get_source_type_stats(mbz_group) =>
@@ -3137,7 +3108,7 @@ build_source_breakdown(mbz_group) =>
     result
 
 // Build source breakdown for extension labels using consolidated stats
-build_source_breakdown_extension_from_stats(stats) =>
+build_source_breakdown_extension_from_stats(stats, mbz_group) =>
     if stats.group_size == 0
         ""
     else
@@ -3160,8 +3131,12 @@ build_source_breakdown_extension_from_stats(stats) =>
             array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_NYPM, stats.liquidity_nypm_count))
         if stats.liquidity_ons_count > 0
             array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_ONS, stats.liquidity_ons_count))
+        // DTT: Extract specific session names from MBZ records instead of generic "dtt"
         if stats.liquidity_dtt_count > 0
-            array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_DTT, stats.liquidity_dtt_count))
+            for i = 0 to array.size(mbz_group) - 1
+                mbz = array.get(mbz_group, i)
+                if str.startswith(mbz.source_type, "dtt: ")
+                    array.push(parts, mbz.source_type)  // Push full "dtt: judas" instead of "dtt"
 
         breakdown = ""
         for i = 0 to array.size(parts) - 1
@@ -3176,7 +3151,7 @@ build_source_breakdown_extension_from_stats(stats) =>
 
 // Build source breakdown with new Option 1 logic for extension labels
 build_source_breakdown_extension(mbz_group) =>
-    build_source_breakdown_extension_from_stats(get_source_type_stats(mbz_group))
+    build_source_breakdown_extension_from_stats(get_source_type_stats(mbz_group), mbz_group)
 
 // Mirror stacked label content for bearish ordering (parity with SIF)
 mirror_label_stack_for_bearish(label_parts) =>
@@ -3283,7 +3258,7 @@ create_consolidated_candle_label(consolidated_mbz) =>
                 array.push(label_parts, "(" + str.tostring(mbz_count) + ")")
             else if mbz_count == 2
                 // Liquidity-only mode - show source breakdown
-                breakdown = build_source_breakdown_extension_from_stats(source_stats)
+                breakdown = build_source_breakdown_extension_from_stats(source_stats, consolidated_mbz.mbz_group)
                 if str.length(breakdown) > 0
                     array.push(label_parts, "(" + breakdown + ")")
             else if mbz_count == 1
@@ -3400,7 +3375,7 @@ create_consolidated_extension_label(consolidated_mbz) =>
                 extension_result := extension_result + " " + risky_subtype
         else
             // Multiple MBZs - use extension breakdown logic
-            source_breakdown = build_source_breakdown_extension_from_stats(source_stats)
+            source_breakdown = build_source_breakdown_extension_from_stats(source_stats, consolidated_mbz.mbz_group)
 
             extension_result := base_label + " (" + source_breakdown + ")"
 
@@ -3458,7 +3433,7 @@ build_consolidated_tooltip(consolidated_mbz) =>
 
     if mbz_count > 1
         // Show detailed breakdown using new extension logic
-        source_breakdown = build_source_breakdown_extension_from_stats(source_stats)
+        source_breakdown = build_source_breakdown_extension_from_stats(source_stats, consolidated_mbz.mbz_group)
         if str.length(source_breakdown) > 0
             base_text := base_text + " (" + source_breakdown + ")"
     else if mbz_count == 1
@@ -3799,9 +3774,10 @@ manage_consolidated_mbz_display() =>
             current_consolidated_mbz.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
             // Determine consolidated status
-            [is_currently_breached, is_currently_invalidated] = determine_consolidated_status(current_consolidated_mbz)
+            [is_currently_breached, is_currently_invalidated, updated_last_checked] = determine_consolidated_status(current_consolidated_mbz)
             current_consolidated_mbz.is_consolidated_breached := is_currently_breached
             current_consolidated_mbz.is_consolidated_invalidated := is_currently_invalidated
+            current_consolidated_mbz.last_checked_bar_index := updated_last_checked
 
             // Build labels
             current_consolidated_mbz.consolidated_candle_label := create_consolidated_candle_label(current_consolidated_mbz)
@@ -4621,6 +4597,7 @@ enable_nyam_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_lunch_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY and actual_enable_lunch
 enable_nypm_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_ons_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
+enable_dtt_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 
 // Calculate Sunday skip once for all liquidity sources (performance optimization)
 skip_sunday_liquidity = should_skip_sunday_liquidity(time)
@@ -5482,7 +5459,7 @@ if liquidity_detection_enabled
         // ─────────────────────────────────────────────────────────────────────────
         // DTT SESSIONS - Process pattern detection and create MBZ records
         // ─────────────────────────────────────────────────────────────────────────
-        if enable_dtt_sessions
+        if enable_dtt_sessions and enable_dtt_liquidity_tracking
             [dtt_events_is_high, dtt_events_rules, dtt_events_is_exact, dtt_events_source_price, dtt_events_source_bar_index, dtt_events_session_name] = process_dtt_sessions(enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             // Create MBZ records from DTT session events
@@ -5757,6 +5734,10 @@ if should_update_visuals
                         profile_ons_liq_total += 1
                         if rec.is_invalidated
                             profile_ons_liq_invalidated += 1
+                    else if str.startswith(rec.source_type, "dtt: ")
+                        profile_dtt_liq_total += 1
+                        if rec.is_invalidated
+                            profile_dtt_liq_invalidated += 1
 
         // Pool sessions
         profile_daily_sessions := liquidity_pool_session_count(daily_liquidity_pool)
@@ -5768,6 +5749,7 @@ if should_update_visuals
         profile_lunch_sessions := liquidity_pool_session_count(lunch_session_pool)
         profile_nypm_sessions := liquidity_pool_session_count(nypm_session_pool)
         profile_ons_sessions := liquidity_pool_session_count(ons_session_pool)
+        profile_dtt_sessions := array.size(dtt_session_instances)
 
     last_update_bar := bar_index
     needs_full_update := false
@@ -6007,6 +5989,7 @@ if show_profiling
     active_lunch = actual_enable_lunch and enable_lunch_liquidity_tracking
     active_nypm = enable_nypm_liquidity and enable_nypm_liquidity_tracking
     active_ons = enable_ons_liquidity and enable_ons_liquidity_tracking
+    active_dtt = enable_dtt_sessions and enable_dtt_liquidity_tracking
 
     active_pool_count = 0
     if active_daily
@@ -6026,6 +6009,8 @@ if show_profiling
     if active_nypm
         active_pool_count += 1
     if active_ons
+        active_pool_count += 1
+    if active_dtt
         active_pool_count += 1
 
     // Calculate dynamic table height: 1 header + N pools + 1 spacer + 4 summary rows
@@ -6128,6 +6113,15 @@ if show_profiling
         table.cell(profiling_table, 2, current_row, str.tostring(profile_ons_liq_added), text_color=color.lime, text_size=cached_table_size)
         table.cell(profiling_table, 3, current_row, str.tostring(profile_ons_liq_invalidated), text_color=color.orange, text_size=cached_table_size)
         table.cell(profiling_table, 4, current_row, str.tostring(profile_ons_sessions), text_color=color.yellow, text_size=cached_table_size)
+        current_row += 1
+
+    // DTT
+    if active_dtt
+        table.cell(profiling_table, 0, current_row, "dtt", text_color=color.white, text_size=cached_table_size)
+        table.cell(profiling_table, 1, current_row, str.tostring(profile_dtt_liq_total), text_color=color.aqua, text_size=cached_table_size)
+        table.cell(profiling_table, 2, current_row, str.tostring(profile_dtt_liq_added), text_color=color.lime, text_size=cached_table_size)
+        table.cell(profiling_table, 3, current_row, str.tostring(profile_dtt_liq_invalidated), text_color=color.orange, text_size=cached_table_size)
+        table.cell(profiling_table, 4, current_row, str.tostring(profile_dtt_sessions), text_color=color.yellow, text_size=cached_table_size)
         current_row += 1
 
     // Spacer
