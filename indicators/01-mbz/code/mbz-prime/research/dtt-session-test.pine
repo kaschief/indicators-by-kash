@@ -34,6 +34,23 @@ const string SESSION_LUNCH = "Lunch"
 const string SESSION_MODEL1001 = "Model 1001"
 const string SESSION_MODEL111 = "Model 111"
 
+// Session Names (lowercase for labels)
+const string SESSION_DAMASU_LOWER = "damasu"
+const string SESSION_OSAKA_LOWER = "osaka"
+const string SESSION_KYOTO_LOWER = "kyoto"
+const string SESSION_NAGASAKI_LOWER = "nagasaki"
+const string SESSION_TURNCOAT_LOWER = "turncoat"
+const string SESSION_BISHOP_LOWER = "bishop"
+const string SESSION_KNIGHT_LOWER = "knight"
+const string SESSION_BIGBEN_LOWER = "bigben"
+const string SESSION_NYOPEN_LOWER = "ny open"
+const string SESSION_JUDAS_LOWER = "judas"
+const string SESSION_MODEL11_LOWER = "model 11"
+const string SESSION_MODEL110_LOWER = "model 110"
+const string SESSION_LUNCH_LOWER = "lunch"
+const string SESSION_MODEL1001_LOWER = "model 1001"
+const string SESSION_MODEL111_LOWER = "model 111"
+
 // Session Times (HHMM format)
 const int TIME_DAMASU_START = 1800
 const int TIME_DAMASU_END = 1901
@@ -81,6 +98,7 @@ boundary_width = input.int(2, "Width", minval=1, maxval=5, group="Session Bounda
 boundary_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Session Boundaries", inline="boundary")
 
 // Previous Session High & Low Lines
+show_pool_lines = input.bool(true, "Show Pool Lines", group="Previous Session High & Low")
 pool_color = input.color(color.new(color.purple, 50), "Color", group="Previous Session High & Low", inline="pool")
 pool_width = input.int(1, "Width", minval=1, maxval=5, group="Previous Session High & Low", inline="pool")
 pool_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Session High & Low", inline="pool")
@@ -114,6 +132,11 @@ delayed_highlight_color = input.color(color.new(color.red, 70), "Candle Color", 
 
 pattern_label_size = input.string(size.small, "Pattern Label Size", options=[size.tiny, size.small, size.normal, size.large], group="Pattern Detection")
 
+// Verify DTT Sweeps
+verify_dtt_sweeps = input.bool(false, "Verify DTT Sweeps", group="Pattern Detection", tooltip="Show the swept high/low level with session name label")
+verify_line_color = input.color(color.new(color.orange, 30), "Verify Line Color", group="Pattern Detection", inline="verify")
+verify_line_width = input.int(1, "Width", minval=1, maxval=5, group="Pattern Detection", inline="verify")
+verify_label_size = input.string(size.tiny, "Label Size", options=[size.tiny, size.small, size.normal, size.large], group="Pattern Detection", inline="verify2")
 
 // Session definitions
 type DttSession
@@ -126,6 +149,8 @@ type DttSession
     int session_day
     float session_high
     float session_low
+    int session_high_bar                 // Bar index where session high was formed
+    int session_low_bar                  // Bar index where session low was formed
     line pool_high_line
     line pool_low_line
     line start_boundary_line
@@ -145,6 +170,11 @@ type DttSession
     array<label> pattern_labels          // Label objects for each pattern
     string high_fail_reason
     string low_fail_reason
+    // Verify DTT sweeps
+    line verify_high_line                // Line from swept high to breach point
+    line verify_low_line                 // Line from swept low to breach point
+    label verify_high_label              // Label at swept high level
+    label verify_low_label               // Label at swept low level
 
 // Session template
 type SessionTemplate
@@ -194,6 +224,27 @@ dtt_check_midpoint(is_bearish_pattern, close_price, midpoint) =>
     else
         close_price > midpoint
 
+// Convert session name to lowercase for labels
+get_session_name_lower(session_name) =>
+    result = ""
+    switch session_name
+        SESSION_DAMASU => result := SESSION_DAMASU_LOWER
+        SESSION_OSAKA => result := SESSION_OSAKA_LOWER
+        SESSION_KYOTO => result := SESSION_KYOTO_LOWER
+        SESSION_NAGASAKI => result := SESSION_NAGASAKI_LOWER
+        SESSION_TURNCOAT => result := SESSION_TURNCOAT_LOWER
+        SESSION_BISHOP => result := SESSION_BISHOP_LOWER
+        SESSION_KNIGHT => result := SESSION_KNIGHT_LOWER
+        SESSION_BIGBEN => result := SESSION_BIGBEN_LOWER
+        SESSION_NYOPEN => result := SESSION_NYOPEN_LOWER
+        SESSION_JUDAS => result := SESSION_JUDAS_LOWER
+        SESSION_MODEL11 => result := SESSION_MODEL11_LOWER
+        SESSION_MODEL110 => result := SESSION_MODEL110_LOWER
+        SESSION_LUNCH => result := SESSION_LUNCH_LOWER
+        SESSION_MODEL1001 => result := SESSION_MODEL1001_LOWER
+        SESSION_MODEL111 => result := SESSION_MODEL111_LOWER
+    result
+
 // Track all session instances across days
 var session_instances = array.new<DttSession>()
 
@@ -239,7 +290,7 @@ process_sessions = is_247_asset or (current_day != dayofweek.saturday and curren
 
 // Helper function to get the last instance of a session type (completed or active)
 get_last_session_of_type(session_name) =>
-    result = DttSession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na)
+    result = DttSession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na, na, na, na, na)
     if array.size(session_instances) > 0
         for i = array.size(session_instances) - 1 to 0
             sess = array.get(session_instances, i)
@@ -307,6 +358,15 @@ if array.size(session_instances) > 0
                     lbl = array.get(sess.pattern_labels, j)
                     if not na(lbl)
                         label.delete(lbl)
+            // Delete verify lines and labels
+            if not na(sess.verify_high_line)
+                line.delete(sess.verify_high_line)
+            if not na(sess.verify_high_label)
+                label.delete(sess.verify_high_label)
+            if not na(sess.verify_low_line)
+                line.delete(sess.verify_low_line)
+            if not na(sess.verify_low_label)
+                label.delete(sess.verify_low_label)
 
         for i = 0 to sessions_to_delete - 1
             array.shift(session_instances)
@@ -341,7 +401,7 @@ if process_sessions
             // Assign day number: incomplete sessions are in "current day" = completed_days
             day_number = completed_days
 
-            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, day_number, high, low, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na)
+            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, day_number, high, low, bar_index, bar_index, na, na, na, na, na, false, false, na, na, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na, na, na, na, na)
             array.push(session_instances, new_sess)
 
             // Draw boundaries
@@ -389,7 +449,7 @@ if process_sessions
             curr_sess.end_boundary_line := line.new(end_timestamp, 1e10, end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
 
             // Draw high/low lines from previous session extending to end timestamp
-            if not na(prev_session.session_high) and not na(prev_session.session_low)
+            if show_pool_lines and not na(prev_session.session_high) and not na(prev_session.session_low)
                 curr_sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
                 curr_sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
 
@@ -412,8 +472,14 @@ if array.size(session_instances) > 0
                 in_session := (current_time >= sess.start_time and current_time < sess.end_time)
 
             if in_session
-                sess.session_high := math.max(sess.session_high, high)
-                sess.session_low := math.min(sess.session_low, low)
+                // Track high and bar where it was formed
+                if high > sess.session_high
+                    sess.session_high := high
+                    sess.session_high_bar := bar_index
+                // Track low and bar where it was formed
+                if low < sess.session_low
+                    sess.session_low := low
+                    sess.session_low_bar := bar_index
 
                 // Get previous session's high/low for comparison
                 prev_session = get_last_session_of_type(sess.prev_session_name)
@@ -457,6 +523,8 @@ if enable_pattern_detection and array.size(session_instances) > 0
             prev_session = get_last_session_of_type(sess.prev_session_name)
             prev_high = prev_session.session_high
             prev_low = prev_session.session_low
+            prev_high_bar = prev_session.session_high_bar
+            prev_low_bar = prev_session.session_low_bar
 
             // ═══════════════════════════════════════════════════════════════
             // HIGH PATTERN DETECTION (Bearish)
@@ -519,12 +587,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_IMMEDIATE + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_IMMEDIATE + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_low - offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=immediate_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and not na(prev_high_bar)
+                                sess.verify_high_line := line.new(prev_high_bar, prev_high, bar_index, prev_high, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_high_label := label.new(prev_high_bar, prev_high, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                 // ─────────────────────────────────────────────────────────────
                 // STANDARD/DELAYED: Check one bar after breach (bars_since_breach >= 1)
@@ -569,12 +643,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_STANDARD + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_STANDARD + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_low - offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=standard_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and na(sess.verify_high_line) and not na(prev_high_bar)
+                                sess.verify_high_line := line.new(prev_high_bar, prev_high, bar_index, prev_high, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_high_label := label.new(prev_high_bar, prev_high, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                     // Check DELAYED (breach on previous bar = A candle)
                     if show_delayed and breach_is_previous_high
@@ -599,12 +679,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_DELAYED + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_DELAYED + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_low - offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_up, textcolor=delayed_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and na(sess.verify_high_line) and not na(prev_high_bar)
+                                sess.verify_high_line := line.new(prev_high_bar, prev_high, bar_index, prev_high, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_high_label := label.new(prev_high_bar, prev_high, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                     // Mark as checked ONLY after checking all patterns (STD/DEL checked at bars_since_breach >= 1)
                     sess.high_pattern_checked := true
@@ -679,12 +765,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_IMMEDIATE + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_IMMEDIATE + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_high + offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=immediate_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and not na(prev_low_bar)
+                                sess.verify_low_line := line.new(prev_low_bar, prev_low, bar_index, prev_low, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_low_label := label.new(prev_low_bar, prev_low, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                 // ─────────────────────────────────────────────────────────────
                 // STANDARD/DELAYED: Check one bar after breach (bars_since_breach >= 1)
@@ -729,12 +821,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_STANDARD + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_STANDARD + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_high + offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=standard_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and na(sess.verify_low_line) and not na(prev_low_bar)
+                                sess.verify_low_line := line.new(prev_low_bar, prev_low, bar_index, prev_low, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_low_label := label.new(prev_low_bar, prev_low, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                     // Check DELAYED (breach on previous bar = A candle)
                     if show_delayed and breach_is_previous_low
@@ -759,12 +857,18 @@ if enable_pattern_detection and array.size(session_instances) > 0
 
                             // Create label immediately
                             direction_suffix = b_close < b_open ? "⁻" : b_close > b_open ? "⁺" : ""
-                            full_text = PATTERN_DELAYED + direction_suffix
+                            session_name_lower = get_session_name_lower(sess.name)
+                            full_text = PATTERN_DELAYED + direction_suffix + "\n(" + session_name_lower + ")"
                             price_range = b_high - b_low
                             offset = math.max(price_range, syminfo.mintick * 50) * 0.25
                             label_price = b_high + offset
                             new_label = label.new(bar_index, label_price, text=full_text, style=label.style_label_down, textcolor=delayed_label_color, size=pattern_label_size, color=color.new(color.white, 100))
                             array.push(sess.pattern_labels, new_label)
+
+                            // Create verify line and label if enabled
+                            if verify_dtt_sweeps and na(sess.verify_low_line) and not na(prev_low_bar)
+                                sess.verify_low_line := line.new(prev_low_bar, prev_low, bar_index, prev_low, color=verify_line_color, width=verify_line_width, style=line.style_solid)
+                                sess.verify_low_label := label.new(prev_low_bar, prev_low, text=session_name_lower, style=label.style_label_left, textcolor=verify_line_color, size=verify_label_size, color=color.new(color.white, 100))
 
                     // Mark as checked ONLY after checking all patterns (STD/DEL checked at bars_since_breach >= 1)
                     sess.low_pattern_checked := true
