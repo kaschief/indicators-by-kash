@@ -564,28 +564,43 @@ enable_nine_times = input.bool(false, UI_LABEL_NINE_TIMES, group=GROUP_LIQUIDITY
 current_tf_minutes = timeframe.in_seconds() / 60
 
 // Auto-detect 24/7 asset by scanning for weekend bars (excluding Sunday 18:00+ reopen)
-var bool is_247_asset = false
+// STRATEGY: Default TRUE (assume 24/7), only set FALSE after scanning 7+ days with no weekends
+var bool is_247_asset = true
+var bool detection_completed = false
 
-// Run detection when we have at least 100 bars (for replay mode compatibility)
-bars_in_7_days = math.ceil(10080 / current_tf_minutes)
-should_run_detection = not is_247_asset and bar_index >= math.min(bars_in_7_days, 100)
+// Only run detection once after we have 7+ days of data
+if not detection_completed
+    bars_in_7_days = math.ceil(10080 / current_tf_minutes)
 
-if should_run_detection
-    is_247_asset := false
-    // Scan up to 2 weeks or available bars, whichever is less
-    scan_limit = math.min(bars_in_7_days * 2, bar_index)
+    if bar_index >= bars_in_7_days
+        // Check current bar first (fast path - if we loaded on Saturday, instant detect)
+        current_day = dayofweek(time, NY_TIMEZONE)
+        current_hour = hour(time, NY_TIMEZONE)
+        is_saturday_now = current_day == dayofweek.saturday
+        is_early_sunday_now = current_day == dayofweek.sunday and current_hour < SUNDAY_REOPEN_START_HOUR
 
-    if scan_limit > 0
-        for i = 0 to scan_limit
-            check_day = dayofweek(time[i], NY_TIMEZONE)
-            check_hour = hour(time[i], NY_TIMEZONE)
+        if is_saturday_now or is_early_sunday_now
+            // Current bar is weekend - definitely 24/7
+            is_247_asset := true
+        else
+            // Scan last 7 days for weekend bars
+            max_lookback = math.min(9999, bars_in_7_days)
+            found_weekend_bar = false
 
-            // True 24/7: Saturday bars OR Sunday before 18:00 (excludes Sunday 18:00+ futures reopen)
-            is_saturday = check_day == dayofweek.saturday
-            is_early_sunday = check_day == dayofweek.sunday and check_hour < SUNDAY_REOPEN_START_HOUR
-            if is_saturday or is_early_sunday
-                is_247_asset := true
-                break
+            for lookback = 0 to max_lookback by 20
+                check_day = dayofweek(time[lookback], NY_TIMEZONE)
+                check_hour = hour(time[lookback], NY_TIMEZONE)
+
+                is_saturday = check_day == dayofweek.saturday
+                is_early_sunday = check_day == dayofweek.sunday and check_hour < SUNDAY_REOPEN_START_HOUR
+                if is_saturday or is_early_sunday
+                    found_weekend_bar := true
+                    break
+
+            // Set result based on scan
+            is_247_asset := found_weekend_bar
+
+        detection_completed := true
 
 // Auto-apply 24/7 day codes if weekend bars detected
 day_codes = is_247_asset ? DAY_CODE_ALL_DAYS : DAY_CODE_MON_SAT
@@ -3675,8 +3690,10 @@ manage_consolidated_mbz_display() =>
             array.set(consolidated_mbzs, consolidated_group_index, current_consolidated_mbz)
 
             // Check if MBZ is within safe historical buffer range
+            // Note: This only controls visual display (labels/boxes), not historical data access
+            // Safe because we use stored MBZ data, not array lookbacks like high[mbz_age]
             mbz_age = bar_index - current_consolidated_mbz.bar_index
-            max_safe_lookback = 300
+            max_safe_lookback = 500  // Supports weekend MBZs (Sat→Sun = ~300-400 bars on 1-5min)
 
             // Get first MBZ from group for invalidation boundary calculation and label positioning
             first_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, 0)
@@ -5771,8 +5788,8 @@ if show_profiling
     if active_ons
         active_pool_count += 1
 
-    // Calculate dynamic table height: 1 header + N pools + 1 spacer + 3 summary rows
-    table_rows = 1 + active_pool_count + 1 + 3
+    // Calculate dynamic table height: 1 header + N pools + 1 spacer + 4 summary rows
+    table_rows = 1 + active_pool_count + 1 + 4
 
     // Recreate table if size changed (due to TF change or user toggling pools)
     if not na(profiling_table)
@@ -5900,6 +5917,16 @@ if show_profiling
     table.cell(profiling_table, 1, current_row, str.tostring(profile_rejected_by_should_display), text_color=color.red, text_size=cached_table_size)
     table.cell(profiling_table, 2, current_row, "Groups", text_color=color.white, text_size=cached_table_size)
     table.cell(profiling_table, 3, current_row, str.tostring(profile_records_consolidated), text_color=color.aqua, text_size=cached_table_size)
+    table.cell(profiling_table, 4, current_row, "", text_color=color.white, text_size=cached_table_size)
+    current_row += 1
+
+    // Asset Type Detection
+    asset_type_label = is_247_asset ? "24/7" : "Mon-Fri"
+    asset_type_color = is_247_asset ? color.new(color.green, 30) : color.new(color.blue, 30)
+    table.cell(profiling_table, 0, current_row, "Asset", text_color=color.white, text_size=cached_table_size)
+    table.cell(profiling_table, 1, current_row, asset_type_label, text_color=color.white, bgcolor=asset_type_color, text_size=cached_table_size)
+    table.cell(profiling_table, 2, current_row, "Detected", text_color=color.white, text_size=cached_table_size)
+    table.cell(profiling_table, 3, current_row, detection_completed ? "✓" : "...", text_color=detection_completed ? color.lime : color.yellow, text_size=cached_table_size)
     table.cell(profiling_table, 4, current_row, "", text_color=color.white, text_size=cached_table_size)
 
 // ═══════════════════════════════════════════════════════════════════════════════
