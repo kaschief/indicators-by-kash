@@ -301,10 +301,9 @@ SUPER_MBZ_SCAN_LIMIT = 15
 HISTORICAL_LOOKBACK_LIMIT = 75
 MIN_BARS_SINCE_SOURCE_CREATION = 1
 
-// Pine Script hard limit: bar_index references in drawing functions limited to ~500 bars from current bar
-// Attempting to draw beyond this causes: "Bar index value too far from current bar index" error
-// Impact varies by timeframe: 4m = 33 hours, 15m = 5 days, 1H = 21 days, 1D = 1.4 years
-MAX_RENDERABLE_BAR_AGE = 500
+// Using xloc.bar_time avoids Pine's xloc.bar_index buffer limit (~348 bars with complex scripts)
+// Now limited only by Pine's 500 object limit (boxes/labels/lines) and performance
+MAX_RENDERABLE_BAR_AGE = 5000
 ENABLE_HISTORICAL_BACKFILL = false
 MBZ_BULLISH_SUFFIX = "⁺"
 MBZ_BEARISH_SUFFIX = "⁻"
@@ -832,6 +831,7 @@ profiling_header_text_color = color.white
 // MBZ tracking with SUPER MBZ detection
 type MBZRecord
     int bar_index
+    int formation_time  // Store time to avoid historical buffer limits with xloc.bar_time
     float high_price
     float low_price
     float mbz_open
@@ -946,6 +946,7 @@ type SourceTypeStats
 type ConsolidatedMBZ
     array<MBZRecord> mbz_group
     int bar_index
+    int formation_time  // Store time to avoid historical buffer limits with xloc.bar_time
     bool is_bullish
     float consolidated_zone_top
     float consolidated_zone_bottom
@@ -2703,6 +2704,7 @@ cache_mbz_data(mbz_record) =>
     // Return new record with all cached data
     MBZRecord.new(
          mbz_record.bar_index,
+         mbz_record.formation_time,
          mbz_record.high_price,
          mbz_record.low_price,
          mbz_record.mbz_open,
@@ -2778,6 +2780,7 @@ group_mbzs_by_candle(mbz_records) =>
                     consolidated = ConsolidatedMBZ.new(
                          candle_mbzs,
                          current_bar,
+                         first_mbz.formation_time,  // Store formation time for xloc.bar_time
                          first_mbz.is_bullish,  // All MBZs on same candle have same direction
                          0.0,
                          0.0,
@@ -2829,8 +2832,7 @@ determine_consolidated_status(consolidated_mbz) =>
             break
 
     // Only check for breach/invalidation if NOT already set
-    // IMPORTANT: Only check CURRENT bar to avoid historical buffer errors
-    // Historical bars are already processed during their real-time execution
+    // Check CURRENT bar only (historical bars already processed during real-time execution)
     if not is_invalidated and bar_index != consolidated_mbz.bar_index
         validated_breach_threshold = get_validated_breach_threshold()
 
@@ -3020,6 +3022,7 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
 
     base_mbz_record = MBZRecord.new(
          formation_bar_index,
+         time,  // Store formation time for xloc.bar_time
          formation_high,
          formation_low,
          formation_open,
@@ -3687,7 +3690,7 @@ manage_consolidated_mbz_display() =>
         for record_index = total_mbz_records - 1 to 0
             current_mbz_record = array.get(all_mbz_records, record_index)
 
-            // Skip MBZs too old to render (prevents buffer errors and makes "visible" count accurate)
+            // Skip MBZs too old to render (performance optimization)
             mbz_bars_ago = bar_index - current_mbz_record.bar_index
             if mbz_bars_ago >= MAX_RENDERABLE_BAR_AGE
                 continue
@@ -3786,11 +3789,9 @@ manage_consolidated_mbz_display() =>
             // Update the consolidated_mbzs array
             array.set(consolidated_mbzs, consolidated_group_index, current_consolidated_mbz)
 
-            // Check if MBZ is within safe historical buffer range
-            // Note: This only controls visual display (labels/boxes), not historical data access
-            // Safe because we use stored MBZ data, not array lookbacks like high[mbz_age]
+            // Calculate MBZ age for display filtering
             mbz_age = bar_index - current_consolidated_mbz.bar_index
-            max_safe_lookback = 500  // Supports weekend MBZs (Sat→Sun = ~300-400 bars on 1-5min)
+            max_safe_lookback = 5000  // xloc.bar_time has no buffer limit (limited only by object count)
 
             // Get first MBZ from group for invalidation boundary calculation and label positioning
             first_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, 0)
@@ -3848,9 +3849,10 @@ manage_consolidated_mbz_display() =>
                 consolidated_tooltip_text = build_consolidated_tooltip(current_consolidated_mbz)
 
                 new_consolidated_label = label.new(
-                     x=current_consolidated_mbz.bar_index,
+                     x=current_consolidated_mbz.formation_time,
                      y=candle_label_y_position,
                      text=current_consolidated_mbz.consolidated_candle_label,
+                     xloc=xloc.bar_time,
                      style=label.style_none,
                      textcolor=consolidated_label_color,
                      size=consolidated_label_size,
@@ -3866,23 +3868,24 @@ manage_consolidated_mbz_display() =>
                 [consolidated_highlight_color, consolidated_extension_color] = get_consolidated_mbz_colors(current_consolidated_mbz)
 
                 // Highlight box (consolidated zone)
+                bar_duration_ms = current_tf_minutes * 60 * 1000
                 consolidated_highlight_box = box.new(
-                     left=current_consolidated_mbz.bar_index,
-                     right=current_consolidated_mbz.bar_index + 1,
+                     left=current_consolidated_mbz.formation_time,
+                     right=current_consolidated_mbz.formation_time + bar_duration_ms,
                      top=current_consolidated_mbz.consolidated_zone_top,
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
-                     xloc=xloc.bar_index,
+                     xloc=xloc.bar_time,
                      bgcolor=consolidated_highlight_color,
                      border_color=na
                  )
                 array.push(mbz_body_highlights, consolidated_highlight_box)
 
-                // Extension box with consolidated label - Dropdown Extension System
-                extension_right = switch extension_mode
-                    EXTENSION_FIXED => current_consolidated_mbz.bar_index + extended_box_length
-                    EXTENSION_TO_CURRENT => math.max(bar_index, current_consolidated_mbz.bar_index + extended_box_length)
-                    EXTENSION_BEYOND_CURRENT => bar_index + extended_box_length
-                    => current_consolidated_mbz.bar_index + extended_box_length
+                // Extension box with consolidated label
+                extension_right_time = switch extension_mode
+                    EXTENSION_FIXED => current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
+                    EXTENSION_TO_CURRENT => math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms))
+                    EXTENSION_BEYOND_CURRENT => time + (extended_box_length * bar_duration_ms)
+                    => current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
 
                 // Get cached source count for performance
                 mbz_source_count = array.size(current_consolidated_mbz.mbz_group)
@@ -3891,11 +3894,11 @@ manage_consolidated_mbz_display() =>
                 [border_width_to_use, border_color_to_use] = get_border_properties_for_mbz(current_consolidated_mbz, mbz_source_count)
 
                 consolidated_extension_box = box.new(
-                     left=current_consolidated_mbz.bar_index,
-                     right=extension_right,
+                     left=current_consolidated_mbz.formation_time,
+                     right=extension_right_time,
                      top=current_consolidated_mbz.consolidated_zone_top,
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
-                     xloc=xloc.bar_index,
+                     xloc=xloc.bar_time,
                      bgcolor=consolidated_extension_color,
                      border_color=border_color_to_use,
                      border_width=border_width_to_use,
@@ -3917,11 +3920,11 @@ manage_consolidated_mbz_display() =>
                     if not na(breached_level_price)
                         breached_line_color_final = get_breached_line_color()
                         breached_line = line.new(
-                             x1=current_consolidated_mbz.bar_index,
+                             x1=current_consolidated_mbz.formation_time,
                              y1=breached_level_price,
-                             x2=extension_right,
+                             x2=extension_right_time,
                              y2=breached_level_price,
-                             xloc=xloc.bar_index,
+                             xloc=xloc.bar_time,
                              color=breached_line_color_final,
                              style=get_breached_line_style(),
                              width=breached_line_width
@@ -3934,11 +3937,11 @@ manage_consolidated_mbz_display() =>
                     if not na(invalidation_level_price)
                         invalidation_line_color_final = get_invalidation_line_color()
                         invalidation_line = line.new(
-                             x1=current_consolidated_mbz.bar_index,
+                             x1=current_consolidated_mbz.formation_time,
                              y1=invalidation_level_price,
-                             x2=extension_right,
+                             x2=extension_right_time,
                              y2=invalidation_level_price,
-                             xloc=xloc.bar_index,
+                             xloc=xloc.bar_time,
                              color=invalidation_line_color_final,
                              style=get_invalidation_line_style(),
                              width=invalidation_line_width
