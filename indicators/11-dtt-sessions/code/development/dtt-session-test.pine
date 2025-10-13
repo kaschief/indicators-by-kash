@@ -497,12 +497,50 @@ if process_sessions
 
         // Check if this session type already has an active instance
         session_exists = false
+        existing_session_index = -1
         if array.size(session_instances) > 0
             for j = array.size(session_instances) - 1 to 0
                 sess = array.get(session_instances, j)
                 if sess.name == template.name and not na(sess.start_bar) and na(sess.end_bar)
                     session_exists := true
+                    existing_session_index := j
                     break
+
+        // If session was pre-created for root but now officially starting, update start_timestamp
+        if session_exists and session_should_start and existing_session_index >= 0
+            sess = array.get(session_instances, existing_session_index)
+            if na(sess.start_timestamp)
+                sess.start_timestamp := time
+
+                // Draw start boundary line now that session is officially starting
+                if show_boundaries
+                    sess.start_boundary_line := line.new(time, 1e10, time, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+                // Draw high/low lines now that session is officially starting
+                if show_pool_lines
+                    prev_session = get_last_session_of_type(template.prev_session_name)
+                    if not na(prev_session.session_high) and not na(prev_session.session_low)
+                        // Calculate end_timestamp (same logic as in session creation)
+                        end_hour = math.floor(template.end_time / 100)
+                        end_minute = template.end_time % 100
+                        end_minutes_since_midnight = end_hour * 60 + end_minute
+                        end_bar_minutes = math.floor(end_minutes_since_midnight / timeframe.multiplier) * timeframe.multiplier
+                        end_bar_hour = math.floor(end_bar_minutes / 60)
+                        end_bar_minute = end_bar_minutes % 60
+                        current_year = year(time, TIMEZONE)
+                        current_month = month(time, TIMEZONE)
+                        current_date = dayofmonth(time, TIMEZONE)
+                        end_timestamp = timestamp(TIMEZONE, current_year, current_month, current_date, end_bar_hour, end_bar_minute)
+
+                        // If session wraps midnight or end is before start, add a day
+                        if template.end_time < template.start_time or end_timestamp <= time
+                            end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
+
+                        // Draw the high/low lines using start_timestamp (session start time, NOT root time)
+                        sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+                        sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+
+                array.set(session_instances, existing_session_index, sess)
 
         // Create session if it should start OR if root time is reached (and doesn't exist yet)
         if (session_should_start or root_time_reached) and not session_exists
@@ -510,8 +548,12 @@ if process_sessions
             completed_days = get_completed_model111_count()
             day_number = completed_days
 
+            // IMPORTANT: Set start_timestamp to na if this is a pre-creation for root capture
+            // It will be updated to the actual start time when session officially starts
+            session_start_timestamp = session_should_start ? time : na
+
             // Initialize with extreme values so first 1-minute data always sets the high/low
-            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, time, na, day_number, -1e10, 1e10, bar_index, bar_index, na, na, na, na, na, false, false, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na, na, na, na, na, template.root_time, na, na, na, na, false, na, na, na)
+            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, session_start_timestamp, na, day_number, -1e10, 1e10, bar_index, bar_index, na, na, na, na, na, false, false, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na, na, na, na, na, template.root_time, na, na, na, na, false, na, na, na)
             array.push(session_instances, new_sess)
 
             // Draw boundaries
@@ -531,9 +573,10 @@ if process_sessions
                             array.set(session_instances, j, check_sess)
                             break
 
-            // Draw start boundary at CURRENT BAR TIME (only if enabled)
-            if show_boundaries
-                curr_sess.start_boundary_line := line.new(time, 1e10, time, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+            // Draw start boundary at CURRENT BAR TIME (only if enabled and NOT a pre-creation)
+            // If session_start_timestamp is na, this is a pre-creation for root - boundary will be drawn when session officially starts
+            if show_boundaries and not na(session_start_timestamp)
+                curr_sess.start_boundary_line := line.new(session_start_timestamp, 1e10, session_start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
 
             // Calculate which bar the end time will occur on
             // For higher timeframes, round end time down to bar boundary
@@ -562,10 +605,12 @@ if process_sessions
             if show_boundaries
                 curr_sess.end_boundary_line := line.new(end_timestamp, 1e10, end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
 
-            // Draw high/low lines from previous session
-            if show_pool_lines and not na(prev_session.session_high) and not na(prev_session.session_low)
-                curr_sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
-                curr_sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+            // Draw high/low lines from previous session ONLY if this is NOT a pre-creation
+            // If session_start_timestamp is na, this is a pre-creation for root capture
+            // Lines will be drawn later when session officially starts
+            if show_pool_lines and not na(prev_session.session_high) and not na(prev_session.session_low) and not na(session_start_timestamp)
+                curr_sess.pool_high_line := line.new(session_start_timestamp, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+                curr_sess.pool_low_line := line.new(session_start_timestamp, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
 
             // Draw session name label at middle of session
             if show_session_labels

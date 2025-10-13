@@ -191,6 +191,84 @@ This documentation explains the business expectations, critical implementation d
 - Use current bar's high/low or interpolate values
 - Assume roots must fall within their session time range
 
+### 2.9 Session Pre-Creation and Visual Element Drawing (Lines 509-543, 574-577, 599-605)
+
+**⚠️ CRITICAL BUG FIXED - LINES MUST DRAW AT SESSION START, NOT ROOT TIME ⚠️**
+
+**PROBLEM:** When sessions are pre-created for root capture (before session officially starts), visual elements (boundary lines, high/low lines) were being drawn at the ROOT TIME instead of the SESSION START TIME.
+
+**EXAMPLES OF THE BUG:**
+- Judas: Boundary line appeared at 09:53 (root) instead of 09:55 (session start)
+- Model 111: High/low lines appeared at 13:30 (root) instead of 14:09 (session start)
+- Result: Double lines, incorrect session marking
+
+**ROOT CAUSE:** During session creation, if root time was reached, the session was created immediately and lines were drawn using `time` variable, which equaled the root time, not the session start time.
+
+**THE FIX - TWO-PHASE APPROACH:**
+
+**Phase 1 - Pre-Creation at Root Time (Line 541):**
+- `session_start_timestamp = na` (indicates pre-creation)
+- Session object created with `start_timestamp = na`
+- **NO boundary lines drawn** (Line 574: `if show_boundaries and not na(session_start_timestamp)`)
+- **NO high/low lines drawn** (Line 599: `if show_pool_lines ... and not na(session_start_timestamp)`)
+- Root price captured when root time bar is processed
+
+**Phase 2 - Official Start at Session Start Time (Lines 509-543):**
+- When session start time is reached, update `sess.start_timestamp := time` (Line 513)
+- **NOW draw start boundary line** at current time (Lines 515-517)
+- **NOW draw high/low lines** at current time (Lines 519-541)
+- All visual elements use the ACTUAL session start time, not root time
+
+**CRITICAL CODE LOCATIONS:**
+
+**Line 541:** Set `session_start_timestamp = na` during pre-creation
+```pine
+session_start_timestamp = session_should_start ? time : na
+```
+
+**Lines 509-543:** Update session when it officially starts
+```pine
+if session_exists and session_should_start and existing_session_index >= 0
+    sess = array.get(session_instances, existing_session_index)
+    if na(sess.start_timestamp)
+        sess.start_timestamp := time
+        // Draw start boundary line now
+        if show_boundaries
+            sess.start_boundary_line := line.new(time, 1e10, time, -1e6, ...)
+        // Draw high/low lines now
+        if show_pool_lines
+            // ... calculate end_timestamp ...
+            sess.pool_high_line := line.new(time, prev_high, end_timestamp, ...)
+            sess.pool_low_line := line.new(time, prev_low, end_timestamp, ...)
+```
+
+**Lines 574-577:** Prevent boundary line drawing during pre-creation
+```pine
+if show_boundaries and not na(session_start_timestamp)
+    curr_sess.start_boundary_line := line.new(session_start_timestamp, ...)
+```
+
+**Lines 599-605:** Prevent high/low line drawing during pre-creation
+```pine
+if show_pool_lines and not na(prev_high) and not na(prev_low) and not na(session_start_timestamp)
+    curr_sess.pool_high_line := line.new(session_start_timestamp, ...)
+    curr_sess.pool_low_line := line.new(session_start_timestamp, ...)
+```
+
+**VERIFICATION:**
+- Judas: NO lines at 09:53, ALL lines at 09:55 ✓
+- Model 111: NO lines at 13:30, ALL lines at 14:09 ✓
+- Model 1001: ALL lines at 12:35 ✓ (root and start are same time)
+- NY Open: ALL lines at 09:30 ✓ (root and start are same time)
+
+**DO NOT:**
+- Remove `not na(session_start_timestamp)` checks from line drawing conditions
+- Draw visual elements during session pre-creation
+- Use `time` variable directly when session may be pre-created - use `session_start_timestamp` or wait for official start
+- Assume session creation time equals session start time
+
+**REMEMBER:** Visual elements (boundaries, high/low lines) must ONLY appear at session START times, never at root times, even though root capture happens earlier.
+
 ---
 
 ## 3. COMMON PITFALLS & HOW TO AVOID THEM
@@ -302,6 +380,39 @@ This documentation explains the business expectations, critical implementation d
 - Do NOT "fix" these by moving roots to align with session starts
 
 **REMEMBER:** If root times seem unusual or "wrong", they're not - they're based on extensive research
+
+### 3.10 PITFALL: Drawing Visual Elements at Root Time Instead of Session Start Time
+
+❌ **WRONG:** Drawing boundary/high/low lines when session is created (which may be at root time)
+
+❌ **WRONG:** Using `time` variable for line drawing without checking if session is pre-created
+
+❌ **WRONG:** Removing `not na(session_start_timestamp)` checks from line drawing conditions
+
+✅ **CORRECT:** Only draw visual elements when session OFFICIALLY starts, not when pre-created for root capture
+
+**WHY:** Sessions can be pre-created before they start (for root capture), but lines should only appear at session start
+
+**SYMPTOMS:**
+- Double boundary lines (one at root time, one at session start time)
+- High/low lines appearing too early (e.g., Judas lines at 09:53 instead of 09:55)
+- Confusion about when sessions actually start
+
+**THE FIX:**
+- Use `session_start_timestamp = na` during pre-creation (Line 541)
+- Add `not na(session_start_timestamp)` check before drawing lines (Lines 574, 599)
+- Draw lines when session officially starts in Phase 2 (Lines 515-541)
+
+**CRITICAL CHECKS:**
+- Line 574: Boundary line drawing must check `not na(session_start_timestamp)`
+- Line 599: High/low line drawing must check `not na(session_start_timestamp)`
+- Lines 515-541: Visual elements drawn when pre-created session officially starts
+
+**TEST CASES:**
+- Judas: Lines must appear at 09:55, NOT at 09:53 (root time)
+- Model 111: Lines must appear at 14:09, NOT at 13:30 (root time)
+
+**SEE:** Section 2.9 for comprehensive explanation of the two-phase approach
 
 ---
 
@@ -490,8 +601,15 @@ Before committing ANY changes to this file, verify:
 - [ ] 15. Values match third-party DTT indicator
 - [ ] 16. Code compiles without errors
 - [ ] 17. All toggles work correctly (boundaries, labels, root prices)
+- [ ] 18. **⚠️ Visual elements (boundaries/high/low lines) draw at SESSION START, not root time**
+- [ ] 19. **Judas: NO lines at 09:53 root, ALL lines at 09:55 session start**
+- [ ] 20. **Model 111: NO lines at 13:30 root, ALL lines at 14:09 session start**
+- [ ] 21. **`not na(session_start_timestamp)` checks present before drawing lines (Lines 574, 599)**
+- [ ] 22. **Phase 2 drawing logic intact for pre-created sessions (Lines 515-541)**
 
 **CRITICAL REMINDER:** Root times (lines 97-111) are based on years of research. If you changed them, REVERT immediately!
+
+**NEW CRITICAL REMINDER:** Visual elements must ONLY appear at session start times. If you see double lines or lines at root times, check section 2.9 and 3.10!
 
 ---
 
@@ -502,6 +620,7 @@ This documentation was added after extensive debugging and fixes to ensure:
 - Midnight-wrapping sessions (Nagasaki, Turncoat) work correctly
 - Session boundaries and labels display properly
 - Root prices capture correctly, even when root time precedes session start
+- Visual elements (boundaries, high/low lines) draw at session START time, not root time
 
 **Key fixes that led to this documentation:**
 - Fixed session end time boundary inclusiveness (< changed to <=)
@@ -513,18 +632,39 @@ This documentation was added after extensive debugging and fixes to ensure:
 - **Implemented pre-creation of sessions when root time is reached (lines 484-496)**
 - **Fixed root capture logic to handle roots that occur before session starts**
 - **Added critical documentation about root times being sacred constants**
+- **FIXED: Visual elements now draw at session start time, not root time (2025-10-13)**
+
+**LATEST FIX (2025-10-13) - Visual Element Drawing Bug:**
+- **Problem:** Boundary lines and high/low lines were drawing at root time instead of session start time
+- **Symptom:** Double boundary lines (e.g., Judas at 09:53 AND 09:55, Model 111 at 13:30 AND 14:09)
+- **Root Cause:** Lines were drawn when session was created (at root time) rather than when session officially started
+- **Solution:** Two-phase approach with `session_start_timestamp = na` during pre-creation, visual elements drawn only when session officially starts
+- **Code Changes:**
+  - Line 541: Set `session_start_timestamp = na` during pre-creation
+  - Lines 515-517: Draw start boundary when pre-created session officially starts
+  - Lines 519-541: Draw high/low lines when pre-created session officially starts
+  - Line 574: Added `not na(session_start_timestamp)` check before drawing boundary lines
+  - Line 599: Added `not na(session_start_timestamp)` check before drawing high/low lines
+- **Documentation Added:**
+  - Section 2.9: Comprehensive explanation of visual element drawing fix
+  - Section 3.10: Pitfall warning about drawing at root time vs session start time
+  - Checklist items 18-22: Verification steps for visual element timing
 
 **CRITICAL ADDITIONS:**
 - Section 2.8: Comprehensive documentation on root time capture
+- Section 2.9: **NEW - Visual element drawing and session pre-creation (2025-10-13)**
 - Section 3.9: Pitfall warning about never changing root times
+- Section 3.10: **NEW - Pitfall warning about drawing visual elements at wrong time (2025-10-13)**
 - Section 4.7: Architecture decision explaining why roots can precede sessions
 - Updated checklist to verify root times haven't been modified
+- **Updated checklist with visual element timing verification (items 18-22)**
 
 If you encounter issues or have questions about this implementation, review the **CRITICAL IMPLEMENTATION DETAILS** (section 2) and **COMMON PITFALLS** (section 3) before making changes.
 
 **Remember:**
 - Accuracy is non-negotiable. Session highs/lows MUST match across all timeframes
 - Root times are SACRED - never change them
+- Visual elements must ONLY draw at session START times, never at root times
 - Test thoroughly before deploying changes
 
 ---
@@ -534,3 +674,5 @@ If you encounter issues or have questions about this implementation, review the 
 **Documentation Created:** 2025-10-13
 
 **Root Time Implementation:** 2025-10-13
+
+**Visual Element Drawing Fix:** 2025-10-13
