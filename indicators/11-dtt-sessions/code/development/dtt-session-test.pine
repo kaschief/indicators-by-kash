@@ -512,9 +512,42 @@ if process_sessions
             if na(sess.start_timestamp)
                 sess.start_timestamp := time
 
+                // Delete previous session's end boundary (which shares this timestamp)
+                prev_session = get_last_session_of_type(template.prev_session_name)
+                if not na(prev_session.end_boundary_line)
+                    line.delete(prev_session.end_boundary_line)
+                    // Update the previous session in the array
+                    if array.size(session_instances) > 1
+                        for j = array.size(session_instances) - 2 to 0
+                            check_sess = array.get(session_instances, j)
+                            if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
+                                check_sess.end_boundary_line := na
+                                array.set(session_instances, j, check_sess)
+                                break
+
                 // Draw start boundary line now that session is officially starting
                 if show_boundaries
                     sess.start_boundary_line := line.new(time, 1e10, time, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+                // Draw end boundary line now that session is officially starting
+                // Calculate end_timestamp for drawing end boundary
+                end_hour_boundary = math.floor(template.end_time / 100)
+                end_minute_boundary = template.end_time % 100
+                end_minutes_boundary = end_hour_boundary * 60 + end_minute_boundary
+                end_bar_minutes_boundary = math.floor(end_minutes_boundary / timeframe.multiplier) * timeframe.multiplier
+                end_bar_hour_boundary = math.floor(end_bar_minutes_boundary / 60)
+                end_bar_minute_boundary = end_bar_minutes_boundary % 60
+                current_year_boundary = year(time, TIMEZONE)
+                current_month_boundary = month(time, TIMEZONE)
+                current_date_boundary = dayofmonth(time, TIMEZONE)
+                end_timestamp_boundary = timestamp(TIMEZONE, current_year_boundary, current_month_boundary, current_date_boundary, end_bar_hour_boundary, end_bar_minute_boundary)
+
+                // Only add a day if session actually wraps midnight
+                if template.end_time < template.start_time
+                    end_timestamp_boundary := end_timestamp_boundary + MILLISECONDS_PER_DAY
+
+                if show_boundaries
+                    sess.end_boundary_line := line.new(end_timestamp_boundary, 1e10, end_timestamp_boundary, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
 
                 // Draw high/low lines now that session is officially starting
                 if show_pool_lines
@@ -532,13 +565,36 @@ if process_sessions
                         current_date = dayofmonth(time, TIMEZONE)
                         end_timestamp = timestamp(TIMEZONE, current_year, current_month, current_date, end_bar_hour, end_bar_minute)
 
-                        // If session wraps midnight or end is before start, add a day
-                        if template.end_time < template.start_time or end_timestamp <= time
+                        // Only add a day if session actually wraps midnight
+                        if template.end_time < template.start_time
                             end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
 
                         // Draw the high/low lines using start_timestamp (session start time, NOT root time)
                         sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
                         sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+
+                // Draw session label now that session is officially starting
+                if show_session_labels
+                    label_text = template.name
+                    if show_root_time_in_session_label
+                        root_hour_str = str.tostring(math.floor(template.root_time / 100), "#00")
+                        root_minute_str = str.tostring(template.root_time % 100, "#00")
+                        label_text := template.name + "\n(" + root_hour_str + ":" + root_minute_str + ")"
+
+                    // Calculate end_timestamp for label midpoint (reuse logic from above)
+                    label_end_hour = math.floor(template.end_time / 100)
+                    label_end_minute = template.end_time % 100
+                    label_end_minutes = label_end_hour * 60 + label_end_minute
+                    label_end_bar_minutes = math.floor(label_end_minutes / timeframe.multiplier) * timeframe.multiplier
+                    label_end_bar_hour = math.floor(label_end_bar_minutes / 60)
+                    label_end_bar_minute = label_end_bar_minutes % 60
+                    label_end_timestamp = timestamp(TIMEZONE, year(time, TIMEZONE), month(time, TIMEZONE), dayofmonth(time, TIMEZONE), label_end_bar_hour, label_end_bar_minute)
+
+                    if template.end_time < template.start_time
+                        label_end_timestamp := label_end_timestamp + MILLISECONDS_PER_DAY
+
+                    session_midpoint_timestamp = math.round((time + label_end_timestamp) / 2)
+                    sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
 
                 array.set(session_instances, existing_session_index, sess)
 
@@ -552,7 +608,10 @@ if process_sessions
             // It will be updated to the actual start time when session officially starts
             session_start_timestamp = session_should_start ? time : na
 
-            // Initialize with extreme values so first 1-minute data always sets the high/low
+            // ⚠️ CRITICAL: Initialize with extreme values so first 1-minute data always sets the high/low
+            // DO NOT CHANGE -1e10 and 1e10 - see Developer Docs section 2.1
+            // DO NOT use high/low here - session might start mid-bar and capture wrong values
+            // CHANGELOG [2025-10-13]: Reverted from `high, low` back to extreme values
             new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, session_start_timestamp, na, day_number, -1e10, 1e10, bar_index, bar_index, na, na, na, na, na, false, false, na, na, false, false, array.new<bool>(), array.new<string>(), array.new<label>(), na, na, na, na, na, na, template.root_time, na, na, na, na, false, na, na, na)
             array.push(session_instances, new_sess)
 
@@ -560,18 +619,22 @@ if process_sessions
             idx = array.size(session_instances) - 1
             curr_sess = array.get(session_instances, idx)
 
-            // Get previous session to delete its end boundary and replace with shared boundary
-            prev_session = get_last_session_of_type(template.prev_session_name)
-            if not na(prev_session.end_boundary_line)
-                line.delete(prev_session.end_boundary_line)
-                // Update the previous session in the array
-                if array.size(session_instances) > 1
-                    for j = array.size(session_instances) - 2 to 0
-                        check_sess = array.get(session_instances, j)
-                        if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
-                            check_sess.end_boundary_line := na
-                            array.set(session_instances, j, check_sess)
-                            break
+            // ⚠️ CRITICAL: Get previous session to delete its end boundary ONLY if this is NOT a pre-creation
+            // If session_start_timestamp is na, this is a pre-creation - we'll delete it when session officially starts
+            // CHANGELOG [2025-10-13]: Added this check to prevent Model 1001's boundary from disappearing at 13:30
+            // See Developer Docs section 2.9 for two-phase approach
+            if not na(session_start_timestamp)
+                prev_session = get_last_session_of_type(template.prev_session_name)
+                if not na(prev_session.end_boundary_line)
+                    line.delete(prev_session.end_boundary_line)
+                    // Update the previous session in the array
+                    if array.size(session_instances) > 1
+                        for j = array.size(session_instances) - 2 to 0
+                            check_sess = array.get(session_instances, j)
+                            if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
+                                check_sess.end_boundary_line := na
+                                array.set(session_instances, j, check_sess)
+                                break
 
             // Draw start boundary at CURRENT BAR TIME (only if enabled and NOT a pre-creation)
             // If session_start_timestamp is na, this is a pre-creation for root - boundary will be drawn when session officially starts
@@ -597,13 +660,24 @@ if process_sessions
             current_date = dayofmonth(time, TIMEZONE)
             end_timestamp = timestamp(TIMEZONE, current_year, current_month, current_date, end_bar_hour, end_bar_minute)
 
-            // If session wraps midnight or end is before start, add a day
-            if template.end_time < template.start_time or end_timestamp <= time
+            // ⚠️ CRITICAL: Only add a day if session actually wraps midnight (start_time > end_time)
+            // Do NOT add day just because end_timestamp <= time (would break historical session recreation)
+            // CHANGELOG [2025-10-13]: Removed `or end_timestamp <= time` condition
+            // PROBLEM: Lines extending 24 hours into future when changing "Show Last N Days"
+            // ROOT CAUSE: Historical sessions (e.g., Big Ben ending at 9:30 when current time is 13:00)
+            //             would incorrectly add a day, making lines extend to tomorrow 9:30
+            // See Developer Docs section 2.9
+            if template.end_time < template.start_time
                 end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
 
-            // Draw end boundary at the bar where end time will occur (only if enabled)
-            if show_boundaries
+            // Draw end boundary at the bar where end time will occur (only if enabled AND NOT a pre-creation)
+            // If session_start_timestamp is na, this is a pre-creation for root capture
+            // Boundary will be drawn when session officially starts
+            if show_boundaries and not na(session_start_timestamp)
                 curr_sess.end_boundary_line := line.new(end_timestamp, 1e10, end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+            // Get previous session for drawing high/low lines
+            prev_session = get_last_session_of_type(template.prev_session_name)
 
             // Draw high/low lines from previous session ONLY if this is NOT a pre-creation
             // If session_start_timestamp is na, this is a pre-creation for root capture
@@ -612,8 +686,10 @@ if process_sessions
                 curr_sess.pool_high_line := line.new(session_start_timestamp, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
                 curr_sess.pool_low_line := line.new(session_start_timestamp, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
 
-            // Draw session name label at middle of session
-            if show_session_labels
+            // Draw session name label ONLY if this is NOT a pre-creation
+            // If session_start_timestamp is na, this is a pre-creation for root capture
+            // Label will be drawn later when session officially starts
+            if show_session_labels and not na(session_start_timestamp)
                 label_text = template.name
                 if show_root_time_in_session_label
                     root_hour_str = str.tostring(math.floor(template.root_time / 100), "#00")
@@ -621,7 +697,7 @@ if process_sessions
                     label_text := template.name + "\n(" + root_hour_str + ":" + root_minute_str + ")"
 
                 // Calculate midpoint timestamp between session start and end
-                session_midpoint_timestamp = math.round((time + end_timestamp) / 2)
+                session_midpoint_timestamp = math.round((session_start_timestamp + end_timestamp) / 2)
                 curr_sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
 
             array.set(session_instances, idx, curr_sess)
@@ -679,6 +755,15 @@ if array.size(session_instances) > 0
             if in_session
                 // Get all 1-minute bars within the current bar using lower timeframe data
                 [one_min_highs, one_min_lows, one_min_times] = request.security_lower_tf(syminfo.tickerid, "1", [high, low, time])
+
+                // ⚠️ FALLBACK: If no intrabar data (common on real-time bars or chart load), use bar's high/low
+                // CHANGELOG [2025-10-13]: Added fallback to prevent missing high/low lines on fresh chart load
+                // PROBLEM: Big Ben and NY Open were missing high/low lines when chart first loaded
+                // ROOT CAUSE: request.security_lower_tf() returns empty arrays on real-time/initial bars
+                if array.size(one_min_highs) == 0
+                    array.push(one_min_highs, high)
+                    array.push(one_min_lows, low)
+                    array.push(one_min_times, time)
 
                 // Process all 1-minute bars to find true session high/low
                 // IMPORTANT: Filter to only include 1-minute bars that fall within session time range
@@ -1467,7 +1552,7 @@ if show_debug
 // - Common pitfalls & how to avoid them
 // - Architecture decisions & rationale
 // - Mandatory testing requirements
-// - Modification checklist (15-point verification before commits)
+// - Modification checklist (22-point verification before commits)
 //
 // Key reminders:
 // ✓ Session highs/lows MUST match exactly across all timeframes (1m-5m)
@@ -1476,5 +1561,42 @@ if show_debug
 // ✓ Do NOT modify time_in_bar_range() without understanding ROOT CAUSE fix
 // ✓ Do NOT remove 1-minute bar filtering (lines 620-659)
 // ✓ Always use local variable copies in session loops
+// ✓ Visual elements (boundaries/lines) must draw at SESSION START, not root time
+// ✓ Check `not na(session_start_timestamp)` before drawing visual elements
+//
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// CHANGELOG - Record of all changes and WHY they were made
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// [2025-10-13] - Fixed label and boundary timing for pre-created sessions
+// PROBLEM: Model 111 label appeared at 13:30 (root time) instead of 14:09 (start time)
+//          Model 1001 end boundary disappeared at 13:30 when Model 111 was pre-created
+// ROOT CAUSE: Visual elements were drawing during pre-creation instead of session start
+// FIX: Added `not na(session_start_timestamp)` checks before drawing visual elements
+//      Only delete previous boundary when session officially starts, not during pre-creation
+// LOCATIONS: Lines 608, 515-526, 564-584, 641
+// TEST: Model 111 label must appear at 14:09, Model 1001 boundary must stay until 14:09
+//
+// [2025-10-13] - Fixed end_timestamp calculation bug
+// PROBLEM: Lines extending 24 hours into future when changing "Show Last N Days"
+// ROOT CAUSE: `if end_timestamp <= time` incorrectly added a day for historical sessions
+// FIX: Only add day if session wraps midnight, not if end_timestamp is in the past
+// LOCATIONS: Lines 549, 574, 661
+// TEST: Change "Show Last N Days" to 2, verify lines don't extend into tomorrow
+//
+// [2025-10-13] - Added fallback for empty intrabar data
+// PROBLEM: request.security_lower_tf() returns empty arrays on real-time bars/chart load
+// ROOT CAUSE: TradingView data availability issues
+// FIX: If array empty, push current bar's high/low/time as fallback
+// LOCATION: Lines 724-728
+// TEST: Big Ben and NY Open high/low lines must appear on fresh chart load
+//
+// [2025-10-13] - Reverted session initialization to extreme values
+// PROBLEM: Using `high, low` could capture wrong values if session starts mid-bar
+// ROOT CAUSE: Session might start at 9:30 but bar covers 9:28-9:33, so high/low includes pre-session data
+// FIX: Keep -1e10, 1e10 initialization so first 1-minute data always overwrites
+// LOCATION: Line 613
+// TEST: Session highs/lows must match across all timeframes (1m-5m)
 //
 // ══════════════════════════════════════════════════════════════════════════════
