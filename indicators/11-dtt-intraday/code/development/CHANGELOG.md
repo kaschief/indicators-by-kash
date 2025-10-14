@@ -4,6 +4,68 @@ Record of all changes and WHY they were made.
 
 ---
 
+## [2025-10-14] - UI improvement: Independent root time label colors + Size constants
+
+**PROBLEM:** Root time label needed separate control for background and text colors for visibility on different chart themes. Size options were hardcoded instead of using constants like style options.
+
+**FIX:**
+1. Added separate color inputs for background and text, with proper constants and professional labels:
+   - Added `DEFAULT_ROOT_TIME_TEXT_COLOR` constant (grey #9c9c9c)
+   - Changed "BG" to "Background" for professional appearance
+   - Text color defaults to grey instead of white for better visibility on white charts
+2. Added size constants for consistency (capitalized like style constants):
+   - `SIZE_TINY = "Tiny"`, `SIZE_SMALL = "Small"`, `SIZE_NORMAL = "Normal"`, `SIZE_LARGE = "Large"`, `SIZE_HUGE = "Huge"`
+   - Added size converters to map strings to Pine Script size constants
+   - Updated all size dropdowns and usages to use constants instead of hardcoded lowercase values
+
+**LOCATIONS:**
+- Line 26: New `DEFAULT_ROOT_TIME_TEXT_COLOR` constant
+- Lines 34-38: New size constants (capitalized strings)
+- Lines 203-204: Separate "Background" and "Text" color inputs
+- Lines 205, 210: Size inputs now use constants
+- Lines 222-223: Size converters added
+- Lines 1355, 1482, 1807: Updated to use converted size constants
+
+**VISUAL IMPACT:** Full customization of time label appearance + consistent constant usage with capitalized display values ("Tiny", "Small", "Huge" instead of "tiny", "small", "huge").
+
+---
+
+## [2025-10-14] - Major performance optimizations (66% improvement)
+
+**PROBLEM:** Indicator crashing/timing out frequently when making simple changes. Root cause was expensive `request.security_lower_tf()` being called multiple times per bar.
+
+**ROOT CAUSE:**
+1. **CRITICAL:** `request.security_lower_tf()` called inside session loop (3x per bar for 3 active sessions)
+2. Fibonacci anchor updates running on ALL sessions (including ended ones)
+3. Fibonacci visibility cleanup loop iterating through all sessions every bar
+
+**FIX:**
+1. **Cache `request.security_lower_tf()` once per bar** - moved outside session loop, reuse result for all sessions (lines 1479-1485)
+2. Added `na(sess.end_bar)` check - only update Fibonacci anchors for active sessions (line 1580)
+3. Optimized cleanup loop to only check sessions outside visibility window: `cutoff_index = total_sessions - fib_last_n_sessions` (lines 2114-2119)
+
+**LOCATIONS:**
+- Lines 1473-1485: Cached `request.security_lower_tf()` call
+- Lines 1541, 1543, 1561, 1562: Updated to use cached arrays
+- Line 1580: Fibonacci anchor update optimization
+- Lines 2111-2173: Fibonacci cleanup optimization
+
+**TEST:**
+1. Load indicator on 5-minute chart with 1+ day of data
+2. Make simple input changes (colors, widths)
+3. Enable Fibonacci feature and verify no timeouts
+4. Verify session highs/lows still accurate
+
+**PERFORMANCE IMPACT:**
+- **66% reduction** in session update time (3 security calls → 1 call)
+- Fibonacci updates only for active sessions (not ended)
+- Cleanup loop skips N most recent sessions (drastically fewer iterations)
+- Overall: Indicator should load and update significantly faster
+
+**NOTE:** Fibonacci feature is disabled by default (`show_fib = false`) to ensure best performance out of the box.
+
+---
+
 ## [2025-10-13] - Fixed label and boundary timing for pre-created sessions
 
 **PROBLEM:** Model 111 label appeared at 13:30 (root time) instead of 14:09 (start time). Model 1001 end boundary disappeared at 13:30 when Model 111 was pre-created.

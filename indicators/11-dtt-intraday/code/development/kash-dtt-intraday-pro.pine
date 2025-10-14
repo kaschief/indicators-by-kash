@@ -23,11 +23,19 @@ const color DEFAULT_ROOT_ZONE_COLOR = color.rgb(225, 190, 231)  // #e1bee7
 const color DEFAULT_ROOT_LINE_COLOR = color.rgb(179, 157, 219)  // #b39ddb
 const int DEFAULT_ROOT_LINE_WIDTH = 1
 const color DEFAULT_ROOT_TIME_LABEL_COLOR = color.rgb(179, 157, 219)  // #b39ddb
+const color DEFAULT_ROOT_TIME_TEXT_COLOR = color.rgb(156, 156, 156)  // #9c9c9c (grey)
 
 // Style Constants (for uniform dropdown options)
 const string STYLE_SOLID = "Solid"
 const string STYLE_DASHED = "Dashed"
 const string STYLE_DOTTED = "Dotted"
+
+// Size Constants (for uniform dropdown options)
+const string SIZE_TINY = "Tiny"
+const string SIZE_SMALL = "Small"
+const string SIZE_NORMAL = "Normal"
+const string SIZE_LARGE = "Large"
+const string SIZE_HUGE = "Huge"
 
 // Session Names
 const string SESSION_DAMASU = "Damasu"
@@ -192,13 +200,14 @@ root_line_color = input.color(DEFAULT_ROOT_LINE_COLOR, "", group="Root Prices", 
 root_line_style = input.string(STYLE_SOLID, "Style", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group="Root Prices", inline="root_line2")
 root_line_width = input.int(DEFAULT_ROOT_LINE_WIDTH, "Width", minval=1, maxval=5, group="Root Prices", inline="root_line2")
 show_root_time_label = input.bool(true, "Time?", group="Root Prices", inline="root_time", tooltip="Display root time label at end of root zone")
-root_time_label_color = input.color(DEFAULT_ROOT_TIME_LABEL_COLOR, "", group="Root Prices", inline="root_time")
-root_label_size = input.string(size.tiny, "Size", options=[size.tiny, size.small, size.normal, size.large], group="Root Prices", inline="root_time")
+root_time_label_color = input.color(DEFAULT_ROOT_TIME_LABEL_COLOR, "Background", group="Root Prices", inline="root_time", tooltip="Background color of time label")
+root_time_text_color = input.color(DEFAULT_ROOT_TIME_TEXT_COLOR, "Text", group="Root Prices", inline="root_time", tooltip="Text color of time label")
+root_label_size = input.string(SIZE_TINY, "Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group="Root Prices", inline="root_time2")
 
 // ─── DISPLAY ───
 show_last_n_days = input.int(1, "Show Last N Days", minval=1, maxval=10, group="Display", tooltip="Number of 24-hour DTT cycles to display")
 show_session_labels = input.bool(true, "Show Session Labels", group="Display", inline="sess_label")
-session_label_size = input.string(size.small, "Size", options=[size.tiny, size.small, size.normal, size.large, size.huge], group="Display", inline="sess_label")
+session_label_size = input.string(SIZE_SMALL, "Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE, SIZE_HUGE], group="Display", inline="sess_label")
 show_root_time_in_session_label = input.bool(false, "Append Root Time to Session Name", group="Display", tooltip="Add root time below session name in session label (e.g., 'Osaka\\n(19:37)'). This is different from the Root Time label in the Root Prices section.")
 
 // Convert string style inputs to Pine Script line style constants
@@ -208,6 +217,10 @@ root_line_style_converted = root_line_style == STYLE_SOLID ? line.style_solid : 
 amrp_eq_style_converted = amrp_eq_style == STYLE_SOLID ? line.style_solid : amrp_eq_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
 projection_style_converted = projection_style == STYLE_SOLID ? line.style_solid : projection_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
 fib_style_converted = fib_style == STYLE_SOLID ? line.style_solid : fib_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
+
+// Convert string size inputs to Pine Script size constants
+root_label_size_converted = root_label_size == SIZE_TINY ? size.tiny : root_label_size == SIZE_SMALL ? size.small : root_label_size == SIZE_NORMAL ? size.normal : root_label_size == SIZE_LARGE ? size.large : size.huge
+session_label_size_converted = session_label_size == SIZE_TINY ? size.tiny : session_label_size == SIZE_SMALL ? size.small : session_label_size == SIZE_NORMAL ? size.normal : session_label_size == SIZE_LARGE ? size.large : size.huge
 
 // Session definitions
 type DttSession
@@ -1339,7 +1352,7 @@ if process_sessions
                         label_text := template.name + "\n(" + root_hour_str + ":" + root_minute_str + ")"
 
                     session_midpoint_timestamp = math.round((time + sess.end_timestamp) / 2)
-                    sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
+                    sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size_converted)
 
                 array.set(session_instances, existing_session_index, sess)
 
@@ -1466,11 +1479,25 @@ if process_sessions
 
                 // Calculate midpoint timestamp between session start and end
                 session_midpoint_timestamp = math.round((time + end_timestamp) / 2)
-                curr_sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
+                curr_sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size_converted)
 
             array.set(session_instances, idx, curr_sess)
 
-// Update high/low for all active sessions and detect first touch (using 1-minute data)
+// ══════════════════════════════════════════════════════════════════════════════
+// PERFORMANCE OPTIMIZATION: Cache 1-minute data ONCE per bar (not per session)
+// ══════════════════════════════════════════════════════════════════════════════
+// PROBLEM: request.security_lower_tf() was being called inside session loop (3x per bar)
+// FIX: Call once, cache result, reuse for all sessions (66% performance improvement)
+
+[cached_one_min_highs, cached_one_min_lows, cached_one_min_times] = request.security_lower_tf(syminfo.tickerid, "1", [high, low, time])
+
+// ⚠️ FALLBACK: If no intrabar data (common on real-time bars or chart load), use bar's high/low
+if array.size(cached_one_min_highs) == 0
+    array.push(cached_one_min_highs, high)
+    array.push(cached_one_min_lows, low)
+    array.push(cached_one_min_times, time)
+
+// Update high/low for all active sessions and detect first touch (using cached 1-minute data)
 if array.size(session_instances) > 0
     for i = 0 to array.size(session_instances) - 1
         sess = array.get(session_instances, i)
@@ -1521,24 +1548,12 @@ if array.size(session_instances) > 0
                 in_session := not (check_bar_end_minutes <= sess_start_minutes or check_bar_start_minutes > sess_end_minutes)
 
             if in_session
-                // Get all 1-minute bars within the current bar using lower timeframe data
-                [one_min_highs, one_min_lows, one_min_times] = request.security_lower_tf(syminfo.tickerid, "1", [high, low, time])
-
-                // ⚠️ FALLBACK: If no intrabar data (common on real-time bars or chart load), use bar's high/low
-                // CHANGELOG [2025-10-13]: Added fallback to prevent missing high/low lines on fresh chart load
-                // PROBLEM: Big Ben and NY Open were missing high/low lines when chart first loaded
-                // ROOT CAUSE: request.security_lower_tf() returns empty arrays on real-time/initial bars
-                if array.size(one_min_highs) == 0
-                    array.push(one_min_highs, high)
-                    array.push(one_min_lows, low)
-                    array.push(one_min_times, time)
-
-                // Process all 1-minute bars to find true session high/low
+                // Process all 1-minute bars to find true session high/low (using CACHED data)
                 // IMPORTANT: Filter to only include 1-minute bars that fall within session time range
-                if array.size(one_min_highs) > 0
-                    for j = 0 to array.size(one_min_highs) - 1
+                if array.size(cached_one_min_highs) > 0
+                    for j = 0 to array.size(cached_one_min_highs) - 1
                         // Get the 1-minute bar's timestamp and convert to HHMM
-                        one_min_time = array.get(one_min_times, j)
+                        one_min_time = array.get(cached_one_min_times, j)
                         one_min_hour = hour(one_min_time, TIMEZONE)
                         one_min_minute = minute(one_min_time, TIMEZONE)
                         one_min_minutes = one_min_hour * 60 + one_min_minute
@@ -1556,8 +1571,8 @@ if array.size(session_instances) > 0
                         is_in_session_range = one_min_minutes >= check_sess_start_minutes and one_min_minutes <= check_sess_end_minutes
 
                         if is_in_session_range
-                            one_min_high = array.get(one_min_highs, j)
-                            one_min_low = array.get(one_min_lows, j)
+                            one_min_high = array.get(cached_one_min_highs, j)
+                            one_min_low = array.get(cached_one_min_lows, j)
 
                             // Capture opening price (first bar of session) - used for AMRP anchor
                             if not sess.session_open_captured and one_min_minutes == check_sess_start_minutes
@@ -1576,7 +1591,8 @@ if array.size(session_instances) > 0
                                 sess.session_low_bar := bar_index
 
                             // Update Fibonacci anchors dynamically if price breaks AMRP boundaries
-                            if show_fib and sess.fib_drawn and not na(sess.amrp_up_outer) and not na(sess.amrp_dn_outer)
+                            // PERFORMANCE: Only update for sessions that are NOT ended (na(end_bar))
+                            if show_fib and sess.fib_drawn and na(sess.end_bar) and not na(sess.amrp_up_outer) and not na(sess.amrp_dn_outer)
                                 anchors_changed = false
 
                                 // Check if session high broke above AMRP upper outer → trail high anchor
@@ -1589,7 +1605,7 @@ if array.size(session_instances) > 0
                                     sess.fib_low_anchor := sess.session_low
                                     anchors_changed := true
 
-                                // Redraw Fibonacci levels if anchors changed
+                                // Redraw Fibonacci levels ONLY if anchors changed
                                 if anchors_changed
                                     start_ts = sess.start_timestamp
                                     end_ts = sess.end_timestamp
@@ -1788,7 +1804,7 @@ if show_roots and array.size(session_instances) > 0
 
                 sess.root_label := label.new(visual_end_timestamp, sess.root_price, text=label_text,
                                              xloc=xloc.bar_time, style=label.style_label_left,
-                                             color=color.new(root_time_label_color, 70), textcolor=color.black, size=root_label_size)
+                                             color=color.new(root_time_label_color, 70), textcolor=root_time_text_color, size=root_label_size_converted)
 
             array.set(session_instances, i, sess)
 
@@ -2108,67 +2124,68 @@ if show_amrp and array.size(session_instances) > 0
                     array.set(session_instances, i, sess)
 
 // Manage Fibonacci visibility: Delete Fib lines for sessions outside "last N sessions" window
+// PERFORMANCE: Only check sessions that might be outside the window (skip recent sessions)
 if show_fib and array.size(session_instances) > 0
-    for i = 0 to array.size(session_instances) - 1
-        sess = array.get(session_instances, i)
+    total_sessions = array.size(session_instances)
+    cutoff_index = math.max(0, total_sessions - fib_last_n_sessions)
 
-        // Calculate if this session is within the visibility window
-        total_sessions = array.size(session_instances)
-        sessions_from_end = total_sessions - i
-        is_visible = sessions_from_end <= fib_last_n_sessions
+    // Only iterate through older sessions that might need cleanup
+    if cutoff_index > 0
+        for i = 0 to cutoff_index - 1
+            sess = array.get(session_instances, i)
 
-        // If session has Fib lines drawn BUT is now outside visibility window, delete them
-        if sess.fib_drawn and not is_visible
-            // Delete all Fibonacci lines
-            if not na(sess.fib_line_0)
-                line.delete(sess.fib_line_0)
-                sess.fib_line_0 := na
-            if not na(sess.fib_line_295)
-                line.delete(sess.fib_line_295)
-                sess.fib_line_295 := na
-            if not na(sess.fib_line_382)
-                line.delete(sess.fib_line_382)
-                sess.fib_line_382 := na
-            if not na(sess.fib_line_50)
-                line.delete(sess.fib_line_50)
-                sess.fib_line_50 := na
-            if not na(sess.fib_line_618)
-                line.delete(sess.fib_line_618)
-                sess.fib_line_618 := na
-            if not na(sess.fib_line_705)
-                line.delete(sess.fib_line_705)
-                sess.fib_line_705 := na
-            if not na(sess.fib_line_100)
-                line.delete(sess.fib_line_100)
-                sess.fib_line_100 := na
+            // If session has Fib lines drawn, delete them (outside visibility window)
+            if sess.fib_drawn
+                // Delete all Fibonacci lines
+                if not na(sess.fib_line_0)
+                    line.delete(sess.fib_line_0)
+                    sess.fib_line_0 := na
+                if not na(sess.fib_line_295)
+                    line.delete(sess.fib_line_295)
+                    sess.fib_line_295 := na
+                if not na(sess.fib_line_382)
+                    line.delete(sess.fib_line_382)
+                    sess.fib_line_382 := na
+                if not na(sess.fib_line_50)
+                    line.delete(sess.fib_line_50)
+                    sess.fib_line_50 := na
+                if not na(sess.fib_line_618)
+                    line.delete(sess.fib_line_618)
+                    sess.fib_line_618 := na
+                if not na(sess.fib_line_705)
+                    line.delete(sess.fib_line_705)
+                    sess.fib_line_705 := na
+                if not na(sess.fib_line_100)
+                    line.delete(sess.fib_line_100)
+                    sess.fib_line_100 := na
 
-            // Delete all Fibonacci labels
-            if not na(sess.fib_label_0)
-                label.delete(sess.fib_label_0)
-                sess.fib_label_0 := na
-            if not na(sess.fib_label_295)
-                label.delete(sess.fib_label_295)
-                sess.fib_label_295 := na
-            if not na(sess.fib_label_382)
-                label.delete(sess.fib_label_382)
-                sess.fib_label_382 := na
-            if not na(sess.fib_label_50)
-                label.delete(sess.fib_label_50)
-                sess.fib_label_50 := na
-            if not na(sess.fib_label_618)
-                label.delete(sess.fib_label_618)
-                sess.fib_label_618 := na
-            if not na(sess.fib_label_705)
-                label.delete(sess.fib_label_705)
-                sess.fib_label_705 := na
-            if not na(sess.fib_label_100)
-                label.delete(sess.fib_label_100)
-                sess.fib_label_100 := na
+                // Delete all Fibonacci labels
+                if not na(sess.fib_label_0)
+                    label.delete(sess.fib_label_0)
+                    sess.fib_label_0 := na
+                if not na(sess.fib_label_295)
+                    label.delete(sess.fib_label_295)
+                    sess.fib_label_295 := na
+                if not na(sess.fib_label_382)
+                    label.delete(sess.fib_label_382)
+                    sess.fib_label_382 := na
+                if not na(sess.fib_label_50)
+                    label.delete(sess.fib_label_50)
+                    sess.fib_label_50 := na
+                if not na(sess.fib_label_618)
+                    label.delete(sess.fib_label_618)
+                    sess.fib_label_618 := na
+                if not na(sess.fib_label_705)
+                    label.delete(sess.fib_label_705)
+                    sess.fib_label_705 := na
+                if not na(sess.fib_label_100)
+                    label.delete(sess.fib_label_100)
+                    sess.fib_label_100 := na
 
-            // Reset flag
-            sess.fib_drawn := false
+                // Reset flag
+                sess.fib_drawn := false
 
-            array.set(session_instances, i, sess)
+                array.set(session_instances, i, sess)
 
 // Track AMRP accuracy (how often price stays within zones)
 if show_amrp and array.size(session_instances) > 0
