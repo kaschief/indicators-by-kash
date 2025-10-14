@@ -552,7 +552,14 @@ if process_sessions
                 // Draw high/low lines now that session is officially starting
                 if show_pool_lines
                     prev_session = get_last_session_of_type(template.prev_session_name)
-                    if not na(prev_session.session_high) and not na(prev_session.session_low)
+                    // ⚠️ CRITICAL: Check not only for na, but also that values aren't at initialization extremes
+                    // CHANGELOG [2025-10-13]: Added check for initialization values
+                    // PROBLEM: Judas and NY Open missing high/low lines on 1-minute chart
+                    // ROOT CAUSE: Previous session (Big Ben, NY Open) had high/low still at -1e10/1e10 (initialization)
+                    // FIX: Validate that high < 1e9 and low > -1e9 (realistic values)
+                    valid_high = not na(prev_session.session_high) and prev_session.session_high < 1e9
+                    valid_low = not na(prev_session.session_low) and prev_session.session_low > -1e9
+                    if valid_high and valid_low
                         // Calculate end_timestamp (same logic as in session creation)
                         end_hour = math.floor(template.end_time / 100)
                         end_minute = template.end_time % 100
@@ -682,7 +689,10 @@ if process_sessions
             // Draw high/low lines from previous session ONLY if this is NOT a pre-creation
             // If session_start_timestamp is na, this is a pre-creation for root capture
             // Lines will be drawn later when session officially starts
-            if show_pool_lines and not na(prev_session.session_high) and not na(prev_session.session_low) and not na(session_start_timestamp)
+            // ⚠️ CRITICAL: Also validate that values aren't at initialization extremes
+            valid_high = not na(prev_session.session_high) and prev_session.session_high < 1e9
+            valid_low = not na(prev_session.session_low) and prev_session.session_low > -1e9
+            if show_pool_lines and valid_high and valid_low and not na(session_start_timestamp)
                 curr_sess.pool_high_line := line.new(session_start_timestamp, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
                 curr_sess.pool_low_line := line.new(session_start_timestamp, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
 
@@ -826,10 +836,12 @@ if array.size(session_instances) > 0
 // ROOT PRICE CAPTURE
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Capture root prices for ALL sessions that need roots (even if not yet started)
+// ⚠️ CRITICAL: Capture root prices for ALL sessions (ALWAYS, regardless of display toggle)
 // IMPORTANT: Some sessions have roots BEFORE their start time (e.g., Model 111 root at 13:30, starts at 14:09)
 // These root times are based on years of study and must NEVER be changed
-if show_roots
+// CHANGELOG [2025-10-13]: Removed `if show_roots` gate - root CAPTURE must be independent of DISPLAY
+// BUG FIX: Future AMRP integration will require root data even when root visualization is disabled
+if true  // Always capture roots (separation of concerns: capture ≠ display)
     // Check if current bar contains any root time from ANY session template
     for template_idx = 0 to array.size(session_templates) - 1
         template = array.get(session_templates, template_idx)
@@ -1598,5 +1610,23 @@ if show_debug
 // FIX: Keep -1e10, 1e10 initialization so first 1-minute data always overwrites
 // LOCATION: Line 613
 // TEST: Session highs/lows must match across all timeframes (1m-5m)
+//
+// [2025-10-13] - CRITICAL BUG FIX: Separated root capture from root display
+// PROBLEM: Root data wouldn't be captured when "Show Root Prices" toggle was OFF
+// ROOT CAUSE: Root CAPTURE was gated by `if show_roots` at line 832
+// FIX: Changed to `if true` - root capture now ALWAYS happens, display toggle only affects visualization
+// LOCATION: Line 834 (changed from `if show_roots` to `if true`)
+// TEST: Turn OFF "Show Root Prices", root data should still be captured (future AMRP will need this)
+// WHY CRITICAL: Separation of concerns - data capture MUST be independent of display preferences
+//
+// [2025-10-13] - CRITICAL BUG FIX: Validate session high/low before drawing lines
+// PROBLEM: Judas and NY Open missing high/low lines on 1-minute chart ONLY
+// ROOT CAUSE: Previous sessions (Big Ben, NY Open) had high/low still at initialization values (-1e10, 1e10)
+//             These pass `not na()` check but are invalid data that draw lines off-screen
+// FIX: Added validation: high < 1e9 AND low > -1e9 (realistic price ranges)
+// LOCATIONS: Lines 560-562 (phase 2), Lines 693-695 (session creation)
+// TEST: Load 1-minute chart, Judas and NY Open should show high/low lines
+// WHY 1-MIN ONLY: On higher timeframes (2m+), request.security_lower_tf() returns data properly
+//                 On 1-minute, it may return empty arrays, leaving sessions at initialization values
 //
 // ══════════════════════════════════════════════════════════════════════════════

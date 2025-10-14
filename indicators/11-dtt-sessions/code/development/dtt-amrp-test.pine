@@ -1,0 +1,2216 @@
+//@version=6
+indicator("DTT AMRP Test", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+const int SESSIONS_PER_CYCLE = 15
+const int MILLISECONDS_PER_DAY = 86400000
+const int LOOKBACK_BARS = 500
+const string TIMEZONE = "America/New_York"
+
+// Projection Label Settings
+const int PROJECTION_LABEL_MARGIN_SPACES = 12  // Spaces between session boundary and projection label
+const int MAX_PROJECTION_MULTIPLIERS = 4       // Maximum number of projection lines
+
+// Default Colors and Widths
+const color DEFAULT_BOUNDARY_COLOR = color.rgb(156, 156, 156)  // #9c9c9c
+const int DEFAULT_BOUNDARY_WIDTH = 1
+const color DEFAULT_HIGH_LOW_COLOR = color.rgb(250, 161, 164)  // #faa1a4
+const int DEFAULT_HIGH_LOW_WIDTH = 1
+const color DEFAULT_ROOT_ZONE_COLOR = color.rgb(225, 190, 231)  // #e1bee7
+const color DEFAULT_ROOT_LINE_COLOR = color.rgb(179, 157, 219)  // #b39ddb
+const int DEFAULT_ROOT_LINE_WIDTH = 1
+const color DEFAULT_ROOT_TIME_LABEL_COLOR = color.rgb(179, 157, 219)  // #b39ddb
+
+// Session Names
+const string SESSION_DAMASU = "Damasu"
+const string SESSION_OSAKA = "Osaka"
+const string SESSION_KYOTO = "Kyoto"
+const string SESSION_NAGASAKI = "Nagasaki"
+const string SESSION_TURNCOAT = "Turncoat"
+const string SESSION_BISHOP = "Bishop"
+const string SESSION_KNIGHT = "Knight"
+const string SESSION_BIGBEN = "Big Ben"
+const string SESSION_NYOPEN = "NY Open"
+const string SESSION_JUDAS = "Judas"
+const string SESSION_MODEL11 = "Model 11"
+const string SESSION_MODEL110 = "Model 110"
+const string SESSION_LUNCH = "Lunch"
+const string SESSION_MODEL1001 = "Model 1001"
+const string SESSION_MODEL111 = "Model 111"
+
+// Session Names (lowercase for labels)
+const string SESSION_DAMASU_LOWER = "damasu"
+const string SESSION_OSAKA_LOWER = "osaka"
+const string SESSION_KYOTO_LOWER = "kyoto"
+const string SESSION_NAGASAKI_LOWER = "nagasaki"
+const string SESSION_TURNCOAT_LOWER = "turncoat"
+const string SESSION_BISHOP_LOWER = "bishop"
+const string SESSION_KNIGHT_LOWER = "knight"
+const string SESSION_BIGBEN_LOWER = "bigben"
+const string SESSION_NYOPEN_LOWER = "ny open"
+const string SESSION_JUDAS_LOWER = "judas"
+const string SESSION_MODEL11_LOWER = "model 11"
+const string SESSION_MODEL110_LOWER = "model 110"
+const string SESSION_LUNCH_LOWER = "lunch"
+const string SESSION_MODEL1001_LOWER = "model 1001"
+const string SESSION_MODEL111_LOWER = "model 111"
+
+// Session Times (HHMM format)
+const int TIME_DAMASU_START = 1800
+const int TIME_DAMASU_END = 1901
+const int TIME_OSAKA_START = 1901
+const int TIME_OSAKA_END = 2114
+const int TIME_KYOTO_START = 2114
+const int TIME_KYOTO_END = 2304
+const int TIME_NAGASAKI_START = 2304
+const int TIME_NAGASAKI_END = 300
+const int TIME_TURNCOAT_START = 300
+const int TIME_TURNCOAT_END = 344
+const int TIME_BISHOP_START = 344
+const int TIME_BISHOP_END = 520
+const int TIME_KNIGHT_START = 520
+const int TIME_KNIGHT_END = 639
+const int TIME_BIGBEN_START = 639
+const int TIME_BIGBEN_END = 930
+const int TIME_NYOPEN_START = 930
+const int TIME_NYOPEN_END = 955
+const int TIME_JUDAS_START = 955
+const int TIME_JUDAS_END = 1020
+const int TIME_MODEL11_START = 1020
+const int TIME_MODEL11_END = 1110
+const int TIME_MODEL110_START = 1110
+const int TIME_MODEL110_END = 1149
+const int TIME_LUNCH_START = 1149
+const int TIME_LUNCH_END = 1235
+const int TIME_MODEL1001_START = 1235
+const int TIME_MODEL1001_END = 1409
+const int TIME_MODEL111_START = 1409
+const int TIME_MODEL111_END = 1800
+
+// Root Times (specific moments within each session for EQ capture)
+const int TIME_DAMASU_ROOT = 1807
+const int TIME_OSAKA_ROOT = 1937
+const int TIME_KYOTO_ROOT = 2144
+const int TIME_NAGASAKI_ROOT = 8
+const int TIME_TURNCOAT_ROOT = 312
+const int TIME_BISHOP_ROOT = 410
+const int TIME_KNIGHT_ROOT = 529
+const int TIME_BIGBEN_ROOT = 658
+const int TIME_NYOPEN_ROOT = 930
+const int TIME_JUDAS_ROOT = 953
+const int TIME_MODEL11_ROOT = 1034
+const int TIME_MODEL110_ROOT = 1110
+const int TIME_LUNCH_ROOT = 1202
+const int TIME_MODEL1001_ROOT = 1235
+const int TIME_MODEL111_ROOT = 1330
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AMRP (Average Model Range Projection)
+// ══════════════════════════════════════════════════════════════════════════════
+// Uses IQR (Interquartile Range) method: Q1 (25th percentile) and Q3 (75th percentile)
+// Zero expansion values are filtered out automatically
+
+// ─── Zones ───
+show_amrp = input.bool(true, "Enable", group="AMRP Zones", tooltip="Show/hide volatility envelope zones")
+amrp_lookback_mode = input.string("Manual", "Mode", options=["Manual", "Compare 3"], group="AMRP Zones", tooltip="Manual: Choose 1 lookback period | Compare 3: Overlay lookbacks 4, 6, 9 for confluence analysis")
+amrp_lookback = input.int(9, "Lookback Period", minval=1, maxval=15, group="AMRP Zones", tooltip="Sessions to analyze (1-15). Higher = more stable zones | Lower = more reactive to recent volatility")
+amrp_up_color = input.color(color.new(color.gray, 85), "Upper Zone", group="AMRP Zones", inline="zone_colors")
+amrp_dn_color = input.color(color.new(color.gray, 85), "Lower Zone", group="AMRP Zones", inline="zone_colors")
+
+// ─── Equilibrium Lines ───
+show_amrp_eq = input.bool(true, "Enable", group="AMRP EQ Lines", inline="eq_toggle")
+amrp_eq_color = input.color(color.new(color.gray, 60), "Color", group="AMRP EQ Lines", inline="eq_toggle")
+amrp_eq_width = input.int(1, "Width", minval=1, maxval=5, group="AMRP EQ Lines", inline="eq_style")
+amrp_eq_style = input.string("Dashed", "Style", options=["Solid", "Dashed", "Dotted"], group="AMRP EQ Lines", inline="eq_style")
+
+// ─── Deviation Projections ───
+show_deviation_projections = input.bool(true, "Enable", group="AMRP Projections", tooltip="Extension targets beyond outer zones when price breaks out")
+projection_multipliers = input.string("1, 2, 2.5, 4", "Targets", group="AMRP Projections", tooltip="Comma-separated values (max 4). Example: '1, 2, 2.5, 4' displays as -1, -2, -2.5, -4")
+compare3_projection_source = input.string("Largest Zone", "Source (Compare 3)", options=["Largest Zone", "Most Recent (LB 4)", "Combined Envelope"], group="AMRP Projections", tooltip="Largest Zone: Biggest of LB 4/6/9 | Most Recent: Current volatility (LB 4) | Combined Envelope: Extreme boundaries (most conservative)")
+projection_color = input.color(color.new(color.red, 50), "Color", group="AMRP Projections", inline="proj_style")
+projection_style = input.string("Dotted", "Style", options=["Solid", "Dashed", "Dotted"], group="AMRP Projections", inline="proj_style")
+show_projection_labels = input.bool(true, "Labels", group="AMRP Projections", inline="proj_style")
+
+// ─── Accuracy Tracker (Advanced) ───
+show_amrp_accuracy = input.bool(false, "📊 Enable Analytics", group="AMRP Accuracy", tooltip="Advanced: Statistical performance tracking")
+amrp_accuracy_mode = input.string("Auto-Score", "Mode", options=["Single Session", "Aggregate", "Auto-Score"], group="AMRP Accuracy", tooltip="Single Session: Specific session analysis | Aggregate: All sessions combined | Auto-Score: Automated scoring system")
+amrp_accuracy_session = input.string("Model 110", "Session", options=["Damasu", "Osaka", "Kyoto", "Nagasaki", "Turncoat", "Bishop", "Knight", "Big Ben", "NY Open", "Judas", "Model 11", "Model 110", "Lunch", "Model 1001", "Model 111"], group="AMRP Accuracy", tooltip="Select session for Single Session mode")
+
+// ─── DISPLAY ───
+show_last_n_days = input.int(1, "Show Last N Days", minval=1, maxval=10, group="Display", tooltip="Number of 24-hour DTT cycles to display")
+show_session_labels = input.bool(true, "Session Labels", group="Display", inline="sess_label")
+session_label_size = input.string(size.small, "Size", options=[size.tiny, size.small, size.normal, size.large], group="Display", inline="sess_label")
+show_root_time_in_session_label = input.bool(false, "Append Root Time to Session Name", group="Display", tooltip="Add root time below session name in session label (e.g., 'Osaka\\n(19:37)'). This is different from the Root Time label in the Root Prices section.")
+
+// ─── SESSION BOUNDARIES ───
+show_boundaries = input.bool(true, "Start/End?", group="Session Boundaries", inline="boundary1")
+boundary_color = input.color(DEFAULT_BOUNDARY_COLOR, "", group="Session Boundaries", inline="boundary1")
+boundary_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Session Boundaries", inline="boundary2")
+boundary_width = input.int(DEFAULT_BOUNDARY_WIDTH, "Width", minval=1, maxval=5, group="Session Boundaries", inline="boundary2")
+
+// ─── PREVIOUS SESSION HIGH & LOW ───
+show_pool_lines = input.bool(true, "High & Low?", group="Previous Session High & Low", inline="pool1")
+pool_color = input.color(DEFAULT_HIGH_LOW_COLOR, "", group="Previous Session High & Low", inline="pool1")
+pool_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Previous Session High & Low", inline="pool2")
+pool_width = input.int(DEFAULT_HIGH_LOW_WIDTH, "Width", minval=1, maxval=5, group="Previous Session High & Low", inline="pool2")
+
+// ─── ROOT PRICES ───
+show_roots = input.bool(false, "ON/OFF", group="Root Prices", tooltip="Display root prices captured at specific moments within each session")
+show_root_zone = input.bool(true, "Box?", group="Root Prices", inline="root_box", tooltip="Display shaded area between root high and root low")
+root_zone_color = input.color(DEFAULT_ROOT_ZONE_COLOR, "", group="Root Prices", inline="root_box")
+show_root_line = input.bool(true, "Line?", group="Root Prices", inline="root_line", tooltip="Display EQ line at midpoint of root zone")
+root_line_color = input.color(DEFAULT_ROOT_LINE_COLOR, "", group="Root Prices", inline="root_line")
+root_line_style = input.string(line.style_solid, "Style", options=[line.style_solid, line.style_dashed, line.style_dotted], group="Root Prices", inline="root_line2")
+root_line_width = input.int(DEFAULT_ROOT_LINE_WIDTH, "Width", minval=1, maxval=5, group="Root Prices", inline="root_line2")
+show_root_time_label = input.bool(true, "Time?", group="Root Prices", inline="root_time", tooltip="Display root time label at end of root zone")
+root_time_label_color = input.color(DEFAULT_ROOT_TIME_LABEL_COLOR, "", group="Root Prices", inline="root_time")
+root_label_size = input.string(size.tiny, "Size", options=[size.tiny, size.small, size.normal, size.large], group="Root Prices", inline="root_time")
+
+// Session definitions
+type DttSession
+    int start_time
+    int end_time
+    string name
+    string prev_session_name
+    int start_bar
+    int end_bar
+    int start_timestamp                 // Actual timestamp when session started
+    int end_timestamp                   // Actual timestamp when session ended
+    int session_day
+    float session_high
+    float session_low
+    int session_high_bar                 // Bar index where session high was formed
+    int session_low_bar                  // Bar index where session low was formed
+    float session_open_high              // Opening bar's high (first bar of session)
+    float session_open_low               // Opening bar's low (first bar of session)
+    bool session_open_captured           // Flag to prevent re-capture of opening price
+    line pool_high_line
+    line pool_low_line
+    line start_boundary_line
+    line end_boundary_line
+    label session_label
+    // Root price capture
+    int root_time                        // Root time in HHMM format
+    int root_timestamp                   // ACTUAL timestamp when root was captured (from intrabar)
+    float root_price                     // Captured equilibrium price (1min high+low)/2
+    float root_high                      // Captured 1min high at root time
+    float root_low                       // Captured 1min low at root time
+    bool root_captured                   // Flag to prevent re-capture
+    line root_line                       // Horizontal line at root price (EQ)
+    label root_label                     // Label showing time + price
+    box root_box                         // Shaded zone from root_low to root_high
+    // AMRP (Average Model Range Projection)
+    box amrp_up_box                      // Upper AMRP zone (above root)
+    box amrp_dn_box                      // Lower AMRP zone (below root)
+    line amrp_up_eq_line                 // EQ line for upper zone (midpoint)
+    line amrp_dn_eq_line                 // EQ line for lower zone (midpoint)
+    line amrp_up_proj1                   // Upper projection -1x (1x zone size beyond outer)
+    line amrp_up_proj2                   // Upper projection -2x (2x zone size beyond outer)
+    line amrp_up_proj3                   // Upper projection -2.5x (2.5x zone size beyond outer)
+    line amrp_up_proj4                   // Upper projection -4x (4x zone size beyond outer)
+    line amrp_dn_proj1                   // Lower projection -1x (1x zone size beyond outer)
+    line amrp_dn_proj2                   // Lower projection -2x (2x zone size beyond outer)
+    line amrp_dn_proj3                   // Lower projection -2.5x (2.5x zone size beyond outer)
+    line amrp_dn_proj4                   // Lower projection -4x (4x zone size beyond outer)
+    label amrp_up_proj1_label            // Label for upper projection 1
+    label amrp_up_proj2_label            // Label for upper projection 2
+    label amrp_up_proj3_label            // Label for upper projection 3
+    label amrp_up_proj4_label            // Label for upper projection 4
+    label amrp_dn_proj1_label            // Label for lower projection 1
+    label amrp_dn_proj2_label            // Label for lower projection 2
+    label amrp_dn_proj3_label            // Label for lower projection 3
+    label amrp_dn_proj4_label            // Label for lower projection 4
+    bool amrp_drawn                      // Flag to prevent redrawing
+    bool amrp_up_projections_drawn       // Flag to prevent redrawing upper projections
+    bool amrp_dn_projections_drawn       // Flag to prevent redrawing lower projections
+    bool amrp_broke_up                   // Flag: price broke above upper outer zone
+    bool amrp_broke_dn                   // Flag: price broke below lower outer zone
+    float amrp_up_inner                  // Inner upper boundary price
+    float amrp_up_outer                  // Outer upper boundary price
+    float amrp_dn_inner                  // Inner lower boundary price
+    float amrp_dn_outer                  // Outer lower boundary price
+    int amrp_bars_total                  // Total bars during session
+    int amrp_bars_within_inner           // Bars where price stayed within inner zones
+    int amrp_bars_within_outer           // Bars where price stayed within outer zones
+    int amrp_bars_broke_outer            // Bars where price broke outside outer zones
+
+// Session template
+type SessionTemplate
+    int start_time
+    int end_time
+    string name
+    string prev_session_name
+    int root_time
+
+// Convert session name to lowercase for labels
+get_session_name_lower(session_name) =>
+    result = ""
+    switch session_name
+        SESSION_DAMASU => result := SESSION_DAMASU_LOWER
+        SESSION_OSAKA => result := SESSION_OSAKA_LOWER
+        SESSION_KYOTO => result := SESSION_KYOTO_LOWER
+        SESSION_NAGASAKI => result := SESSION_NAGASAKI_LOWER
+        SESSION_TURNCOAT => result := SESSION_TURNCOAT_LOWER
+        SESSION_BISHOP => result := SESSION_BISHOP_LOWER
+        SESSION_KNIGHT => result := SESSION_KNIGHT_LOWER
+        SESSION_BIGBEN => result := SESSION_BIGBEN_LOWER
+        SESSION_NYOPEN => result := SESSION_NYOPEN_LOWER
+        SESSION_JUDAS => result := SESSION_JUDAS_LOWER
+        SESSION_MODEL11 => result := SESSION_MODEL11_LOWER
+        SESSION_MODEL110 => result := SESSION_MODEL110_LOWER
+        SESSION_LUNCH => result := SESSION_LUNCH_LOWER
+        SESSION_MODEL1001 => result := SESSION_MODEL1001_LOWER
+        SESSION_MODEL111 => result := SESSION_MODEL111_LOWER
+    result
+
+// Track all session instances across days
+var session_instances = array.new<DttSession>()
+
+// AMRP expansion data storage (separate arrays per session type)
+var array<float> amrp_damasu_up = array.new<float>()
+var array<float> amrp_damasu_dn = array.new<float>()
+var array<float> amrp_osaka_up = array.new<float>()
+var array<float> amrp_osaka_dn = array.new<float>()
+var array<float> amrp_kyoto_up = array.new<float>()
+var array<float> amrp_kyoto_dn = array.new<float>()
+var array<float> amrp_nagasaki_up = array.new<float>()
+var array<float> amrp_nagasaki_dn = array.new<float>()
+var array<float> amrp_turncoat_up = array.new<float>()
+var array<float> amrp_turncoat_dn = array.new<float>()
+var array<float> amrp_bishop_up = array.new<float>()
+var array<float> amrp_bishop_dn = array.new<float>()
+var array<float> amrp_knight_up = array.new<float>()
+var array<float> amrp_knight_dn = array.new<float>()
+var array<float> amrp_bigben_up = array.new<float>()
+var array<float> amrp_bigben_dn = array.new<float>()
+var array<float> amrp_nyopen_up = array.new<float>()
+var array<float> amrp_nyopen_dn = array.new<float>()
+var array<float> amrp_judas_up = array.new<float>()
+var array<float> amrp_judas_dn = array.new<float>()
+var array<float> amrp_model11_up = array.new<float>()
+var array<float> amrp_model11_dn = array.new<float>()
+var array<float> amrp_model110_up = array.new<float>()
+var array<float> amrp_model110_dn = array.new<float>()
+var array<float> amrp_lunch_up = array.new<float>()
+var array<float> amrp_lunch_dn = array.new<float>()
+var array<float> amrp_model1001_up = array.new<float>()
+var array<float> amrp_model1001_dn = array.new<float>()
+var array<float> amrp_model111_up = array.new<float>()
+var array<float> amrp_model111_dn = array.new<float>()
+
+// Track previous input values to detect changes that require redrawing
+var string prev_amrp_lookback_mode = "Manual"
+var int prev_amrp_lookback = 9
+var string prev_compare3_projection_source = "Largest Zone"
+var string prev_projection_multipliers = "1, 2, 2.5, 4"
+
+// Detect AMRP input changes and force redraw if needed
+bool amrp_inputs_changed = (prev_amrp_lookback_mode != amrp_lookback_mode) or (prev_amrp_lookback != amrp_lookback) or (prev_compare3_projection_source != compare3_projection_source) or (prev_projection_multipliers != projection_multipliers)
+
+if amrp_inputs_changed and barstate.isfirst
+    // Delete all AMRP elements and reset flags for redrawing (only if sessions exist)
+    if array.size(session_instances) > 0
+        for i = 0 to array.size(session_instances) - 1
+            sess = array.get(session_instances, i)
+
+            // Delete AMRP zones
+            if not na(sess.amrp_up_box)
+                box.delete(sess.amrp_up_box)
+                sess.amrp_up_box := na
+            if not na(sess.amrp_dn_box)
+                box.delete(sess.amrp_dn_box)
+                sess.amrp_dn_box := na
+
+            // Delete EQ lines
+            if not na(sess.amrp_up_eq_line)
+                line.delete(sess.amrp_up_eq_line)
+                sess.amrp_up_eq_line := na
+            if not na(sess.amrp_dn_eq_line)
+                line.delete(sess.amrp_dn_eq_line)
+                sess.amrp_dn_eq_line := na
+
+            // Delete all projection lines and labels
+            if not na(sess.amrp_up_proj1)
+                line.delete(sess.amrp_up_proj1)
+                sess.amrp_up_proj1 := na
+            if not na(sess.amrp_up_proj1_label)
+                label.delete(sess.amrp_up_proj1_label)
+                sess.amrp_up_proj1_label := na
+            if not na(sess.amrp_up_proj2)
+                line.delete(sess.amrp_up_proj2)
+                sess.amrp_up_proj2 := na
+            if not na(sess.amrp_up_proj2_label)
+                label.delete(sess.amrp_up_proj2_label)
+                sess.amrp_up_proj2_label := na
+            if not na(sess.amrp_up_proj3)
+                line.delete(sess.amrp_up_proj3)
+                sess.amrp_up_proj3 := na
+            if not na(sess.amrp_up_proj3_label)
+                label.delete(sess.amrp_up_proj3_label)
+                sess.amrp_up_proj3_label := na
+            if not na(sess.amrp_up_proj4)
+                line.delete(sess.amrp_up_proj4)
+                sess.amrp_up_proj4 := na
+            if not na(sess.amrp_up_proj4_label)
+                label.delete(sess.amrp_up_proj4_label)
+                sess.amrp_up_proj4_label := na
+
+            if not na(sess.amrp_dn_proj1)
+                line.delete(sess.amrp_dn_proj1)
+                sess.amrp_dn_proj1 := na
+            if not na(sess.amrp_dn_proj1_label)
+                label.delete(sess.amrp_dn_proj1_label)
+                sess.amrp_dn_proj1_label := na
+            if not na(sess.amrp_dn_proj2)
+                line.delete(sess.amrp_dn_proj2)
+                sess.amrp_dn_proj2 := na
+            if not na(sess.amrp_dn_proj2_label)
+                label.delete(sess.amrp_dn_proj2_label)
+                sess.amrp_dn_proj2_label := na
+            if not na(sess.amrp_dn_proj3)
+                line.delete(sess.amrp_dn_proj3)
+                sess.amrp_dn_proj3 := na
+            if not na(sess.amrp_dn_proj3_label)
+                label.delete(sess.amrp_dn_proj3_label)
+                sess.amrp_dn_proj3_label := na
+            if not na(sess.amrp_dn_proj4)
+                line.delete(sess.amrp_dn_proj4)
+                sess.amrp_dn_proj4 := na
+            if not na(sess.amrp_dn_proj4_label)
+                label.delete(sess.amrp_dn_proj4_label)
+                sess.amrp_dn_proj4_label := na
+
+            // Reset flags to allow redrawing
+            sess.amrp_drawn := false
+            sess.amrp_up_projections_drawn := false
+            sess.amrp_dn_projections_drawn := false
+
+            array.set(session_instances, i, sess)
+
+    // Update previous values
+    prev_amrp_lookback_mode := amrp_lookback_mode
+    prev_amrp_lookback := amrp_lookback
+    prev_compare3_projection_source := compare3_projection_source
+    prev_projection_multipliers := projection_multipliers
+
+// Parse projection multipliers from input string
+parse_projection_multipliers(input_str) =>
+    result = array.new<float>()
+    // Split by comma and parse each value
+    parts = str.split(input_str, ",")
+    for i = 0 to math.min(array.size(parts) - 1, MAX_PROJECTION_MULTIPLIERS - 1)
+        part = str.trim(array.get(parts, i))
+        // Convert string to float
+        value = str.tonumber(part)
+        if not na(value) and value > 0
+            array.push(result, value)
+    result
+
+// Get parsed multipliers (cached to avoid re-parsing every bar)
+var array<float> parsed_multipliers = parse_projection_multipliers(projection_multipliers)
+
+// Generate margin string for projection labels
+get_projection_margin() =>
+    margin = ""
+    for i = 0 to PROJECTION_LABEL_MARGIN_SPACES - 1
+        margin := margin + " "
+    margin
+
+// Format number for projection labels - removes trailing zeros (e.g., "4" instead of "4.00", "2.5" instead of "2.50")
+format_projection_label(value) =>
+    // Check if it's a whole number
+    if value == math.floor(value)
+        str.tostring(int(value))
+    else
+        // Has decimals - convert and remove trailing zeros
+        str_val = str.tostring(value)
+        // Remove trailing zeros after decimal
+        while str.endswith(str_val, "0") and str.contains(str_val, ".")
+            str_val := str.substring(str_val, 0, str.length(str_val) - 1)
+        // Remove trailing decimal point if no decimals left
+        if str.endswith(str_val, ".")
+            str_val := str.substring(str_val, 0, str.length(str_val) - 1)
+        str_val
+
+// Helper to add expansion data to session-specific arrays
+add_to_amrp_arrays(session_name, up_exp, dn_exp, lookback) =>
+    if session_name == SESSION_DAMASU
+        array.unshift(amrp_damasu_up, up_exp)
+        array.unshift(amrp_damasu_dn, dn_exp)
+        while array.size(amrp_damasu_up) > lookback
+            array.pop(amrp_damasu_up)
+        while array.size(amrp_damasu_dn) > lookback
+            array.pop(amrp_damasu_dn)
+    else if session_name == SESSION_OSAKA
+        array.unshift(amrp_osaka_up, up_exp)
+        array.unshift(amrp_osaka_dn, dn_exp)
+        while array.size(amrp_osaka_up) > lookback
+            array.pop(amrp_osaka_up)
+        while array.size(amrp_osaka_dn) > lookback
+            array.pop(amrp_osaka_dn)
+    else if session_name == SESSION_KYOTO
+        array.unshift(amrp_kyoto_up, up_exp)
+        array.unshift(amrp_kyoto_dn, dn_exp)
+        while array.size(amrp_kyoto_up) > lookback
+            array.pop(amrp_kyoto_up)
+        while array.size(amrp_kyoto_dn) > lookback
+            array.pop(amrp_kyoto_dn)
+    else if session_name == SESSION_NAGASAKI
+        array.unshift(amrp_nagasaki_up, up_exp)
+        array.unshift(amrp_nagasaki_dn, dn_exp)
+        while array.size(amrp_nagasaki_up) > lookback
+            array.pop(amrp_nagasaki_up)
+        while array.size(amrp_nagasaki_dn) > lookback
+            array.pop(amrp_nagasaki_dn)
+    else if session_name == SESSION_TURNCOAT
+        array.unshift(amrp_turncoat_up, up_exp)
+        array.unshift(amrp_turncoat_dn, dn_exp)
+        while array.size(amrp_turncoat_up) > lookback
+            array.pop(amrp_turncoat_up)
+        while array.size(amrp_turncoat_dn) > lookback
+            array.pop(amrp_turncoat_dn)
+    else if session_name == SESSION_BISHOP
+        array.unshift(amrp_bishop_up, up_exp)
+        array.unshift(amrp_bishop_dn, dn_exp)
+        while array.size(amrp_bishop_up) > lookback
+            array.pop(amrp_bishop_up)
+        while array.size(amrp_bishop_dn) > lookback
+            array.pop(amrp_bishop_dn)
+    else if session_name == SESSION_KNIGHT
+        array.unshift(amrp_knight_up, up_exp)
+        array.unshift(amrp_knight_dn, dn_exp)
+        while array.size(amrp_knight_up) > lookback
+            array.pop(amrp_knight_up)
+        while array.size(amrp_knight_dn) > lookback
+            array.pop(amrp_knight_dn)
+    else if session_name == SESSION_BIGBEN
+        array.unshift(amrp_bigben_up, up_exp)
+        array.unshift(amrp_bigben_dn, dn_exp)
+        while array.size(amrp_bigben_up) > lookback
+            array.pop(amrp_bigben_up)
+        while array.size(amrp_bigben_dn) > lookback
+            array.pop(amrp_bigben_dn)
+    else if session_name == SESSION_NYOPEN
+        array.unshift(amrp_nyopen_up, up_exp)
+        array.unshift(amrp_nyopen_dn, dn_exp)
+        while array.size(amrp_nyopen_up) > lookback
+            array.pop(amrp_nyopen_up)
+        while array.size(amrp_nyopen_dn) > lookback
+            array.pop(amrp_nyopen_dn)
+    else if session_name == SESSION_JUDAS
+        array.unshift(amrp_judas_up, up_exp)
+        array.unshift(amrp_judas_dn, dn_exp)
+        while array.size(amrp_judas_up) > lookback
+            array.pop(amrp_judas_up)
+        while array.size(amrp_judas_dn) > lookback
+            array.pop(amrp_judas_dn)
+    else if session_name == SESSION_MODEL11
+        array.unshift(amrp_model11_up, up_exp)
+        array.unshift(amrp_model11_dn, dn_exp)
+        while array.size(amrp_model11_up) > lookback
+            array.pop(amrp_model11_up)
+        while array.size(amrp_model11_dn) > lookback
+            array.pop(amrp_model11_dn)
+    else if session_name == SESSION_MODEL110
+        array.unshift(amrp_model110_up, up_exp)
+        array.unshift(amrp_model110_dn, dn_exp)
+        while array.size(amrp_model110_up) > lookback
+            array.pop(amrp_model110_up)
+        while array.size(amrp_model110_dn) > lookback
+            array.pop(amrp_model110_dn)
+    else if session_name == SESSION_LUNCH
+        array.unshift(amrp_lunch_up, up_exp)
+        array.unshift(amrp_lunch_dn, dn_exp)
+        while array.size(amrp_lunch_up) > lookback
+            array.pop(amrp_lunch_up)
+        while array.size(amrp_lunch_dn) > lookback
+            array.pop(amrp_lunch_dn)
+    else if session_name == SESSION_MODEL1001
+        array.unshift(amrp_model1001_up, up_exp)
+        array.unshift(amrp_model1001_dn, dn_exp)
+        while array.size(amrp_model1001_up) > lookback
+            array.pop(amrp_model1001_up)
+        while array.size(amrp_model1001_dn) > lookback
+            array.pop(amrp_model1001_dn)
+    else if session_name == SESSION_MODEL111
+        array.unshift(amrp_model111_up, up_exp)
+        array.unshift(amrp_model111_dn, dn_exp)
+        while array.size(amrp_model111_up) > lookback
+            array.pop(amrp_model111_up)
+        while array.size(amrp_model111_dn) > lookback
+            array.pop(amrp_model111_dn)
+
+// Calculate percentile from array (for AMRP)
+calculate_percentile(arr, pct) =>
+    result = 0.0
+    if array.size(arr) > 0
+        sorted = array.copy(arr)
+        array.sort(sorted, order.ascending)
+        idx = math.floor(array.size(sorted) * pct / 100.0)
+        idx := math.max(0, math.min(idx, array.size(sorted) - 1))
+        result := array.get(sorted, idx)
+    result
+
+// Calculate IQR (Interquartile Range) - returns Q1 and Q3
+calculate_iqr(arr) =>
+    q1 = 0.0
+    q3 = 0.0
+    if array.size(arr) > 0
+        q1 := calculate_percentile(arr, 25)
+        q3 := calculate_percentile(arr, 75)
+    [q1, q3]
+
+// Filter zeros from array
+filter_zeros(arr) =>
+    filtered = array.new<float>()
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            val = array.get(arr, i)
+            if val > 0.0
+                array.push(filtered, val)
+    filtered
+
+// Auto-adaptive lookback based on volatility
+// Returns: 4-6 for high volatility, 7-9 for low volatility
+get_adaptive_lookback() =>
+    // Calculate current ATR (14-period)
+    current_atr = ta.atr(14)
+
+    // Calculate average ATR over 100 bars
+    avg_atr = ta.sma(ta.atr(14), 100)
+
+    // Calculate volatility ratio
+    vol_ratio = current_atr / avg_atr
+
+    // Determine lookback based on volatility
+    // High volatility (>1.3x avg) = shorter lookback (4)
+    // Moderate-high volatility (1.1-1.3x) = lookback 5
+    // Moderate volatility (0.9-1.1x) = lookback 6
+    // Low volatility (0.7-0.9x) = lookback 7
+    // Very low volatility (<0.7x) = lookback 9
+    adaptive_lb = vol_ratio > 1.3 ? 4 : vol_ratio > 1.1 ? 5 : vol_ratio > 0.9 ? 6 : vol_ratio > 0.7 ? 7 : 9
+    adaptive_lb
+
+// Get AMRP percentiles for a session (with optional custom lookback for Compare All mode)
+get_amrp_percentiles(session_name, inner_pct, outer_pct, custom_lookback = 0) =>
+    up_inner = 0.0
+    up_outer = 0.0
+    dn_inner = 0.0
+    dn_outer = 0.0
+    has_data = false
+
+    if session_name == SESSION_DAMASU
+        up_arr_full = filter_zeros(amrp_damasu_up)
+        dn_arr_full = filter_zeros(amrp_damasu_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            // IQR method only
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_OSAKA
+        up_arr_full = filter_zeros(amrp_osaka_up)
+        dn_arr_full = filter_zeros(amrp_osaka_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_KYOTO
+        up_arr_full = filter_zeros(amrp_kyoto_up)
+        dn_arr_full = filter_zeros(amrp_kyoto_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_NAGASAKI
+        up_arr_full = filter_zeros(amrp_nagasaki_up)
+        dn_arr_full = filter_zeros(amrp_nagasaki_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_TURNCOAT
+        up_arr_full = filter_zeros(amrp_turncoat_up)
+        dn_arr_full = filter_zeros(amrp_turncoat_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_BISHOP
+        up_arr_full = filter_zeros(amrp_bishop_up)
+        dn_arr_full = filter_zeros(amrp_bishop_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_KNIGHT
+        up_arr_full = filter_zeros(amrp_knight_up)
+        dn_arr_full = filter_zeros(amrp_knight_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_BIGBEN
+        up_arr_full = filter_zeros(amrp_bigben_up)
+        dn_arr_full = filter_zeros(amrp_bigben_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_NYOPEN
+        up_arr_full = filter_zeros(amrp_nyopen_up)
+        dn_arr_full = filter_zeros(amrp_nyopen_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_JUDAS
+        up_arr_full = filter_zeros(amrp_judas_up)
+        dn_arr_full = filter_zeros(amrp_judas_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_MODEL11
+        up_arr_full = filter_zeros(amrp_model11_up)
+        dn_arr_full = filter_zeros(amrp_model11_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_MODEL110
+        up_arr_full = filter_zeros(amrp_model110_up)
+        dn_arr_full = filter_zeros(amrp_model110_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_LUNCH
+        up_arr_full = filter_zeros(amrp_lunch_up)
+        dn_arr_full = filter_zeros(amrp_lunch_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_MODEL1001
+        up_arr_full = filter_zeros(amrp_model1001_up)
+        dn_arr_full = filter_zeros(amrp_model1001_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+    else if session_name == SESSION_MODEL111
+        up_arr_full = filter_zeros(amrp_model111_up)
+        dn_arr_full = filter_zeros(amrp_model111_dn)
+
+        // Limit array size if custom_lookback is specified (for Compare All mode)
+        up_arr = custom_lookback > 0 and array.size(up_arr_full) > custom_lookback ?
+                 array.slice(up_arr_full, 0, custom_lookback) : up_arr_full
+        dn_arr = custom_lookback > 0 and array.size(dn_arr_full) > custom_lookback ?
+                 array.slice(dn_arr_full, 0, custom_lookback) : dn_arr_full
+
+        if array.size(up_arr) > 0 and array.size(dn_arr) > 0
+            [up_q1, up_q3] = calculate_iqr(up_arr)
+            [dn_q1, dn_q3] = calculate_iqr(dn_arr)
+            up_inner := up_q1
+            up_outer := up_q3
+            dn_inner := dn_q1
+            dn_outer := dn_q3
+            has_data := true
+
+    [has_data, up_inner, up_outer, dn_inner, dn_outer]
+
+// Define session templates (in cascade order - 15 DTT sessions)
+var session_templates = array.new<SessionTemplate>()
+if barstate.isfirst
+    array.push(session_templates, SessionTemplate.new(TIME_DAMASU_START, TIME_DAMASU_END, SESSION_DAMASU, SESSION_MODEL111, TIME_DAMASU_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_OSAKA_START, TIME_OSAKA_END, SESSION_OSAKA, SESSION_DAMASU, TIME_OSAKA_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_KYOTO_START, TIME_KYOTO_END, SESSION_KYOTO, SESSION_OSAKA, TIME_KYOTO_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_NAGASAKI_START, TIME_NAGASAKI_END, SESSION_NAGASAKI, SESSION_KYOTO, TIME_NAGASAKI_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_TURNCOAT_START, TIME_TURNCOAT_END, SESSION_TURNCOAT, SESSION_NAGASAKI, TIME_TURNCOAT_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_BISHOP_START, TIME_BISHOP_END, SESSION_BISHOP, SESSION_TURNCOAT, TIME_BISHOP_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_KNIGHT_START, TIME_KNIGHT_END, SESSION_KNIGHT, SESSION_BISHOP, TIME_KNIGHT_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_BIGBEN_START, TIME_BIGBEN_END, SESSION_BIGBEN, SESSION_KNIGHT, TIME_BIGBEN_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_NYOPEN_START, TIME_NYOPEN_END, SESSION_NYOPEN, SESSION_BIGBEN, TIME_NYOPEN_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_JUDAS_START, TIME_JUDAS_END, SESSION_JUDAS, SESSION_NYOPEN, TIME_JUDAS_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL11_START, TIME_MODEL11_END, SESSION_MODEL11, SESSION_JUDAS, TIME_MODEL11_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL110_START, TIME_MODEL110_END, SESSION_MODEL110, SESSION_MODEL11, TIME_MODEL110_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_LUNCH_START, TIME_LUNCH_END, SESSION_LUNCH, SESSION_MODEL110, TIME_LUNCH_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL1001_START, TIME_MODEL1001_END, SESSION_MODEL1001, SESSION_LUNCH, TIME_MODEL1001_ROOT))
+    array.push(session_templates, SessionTemplate.new(TIME_MODEL111_START, TIME_MODEL111_END, SESSION_MODEL111, SESSION_MODEL1001, TIME_MODEL111_ROOT))
+
+// Validate timeframe (indicator works only up to 5 minutes)
+if timeframe.in_seconds(timeframe.period) > 300
+    runtime.error("This indicator only works on timeframes up to 5 minutes (1m, 2m, 3m, 4m, 5m)")
+
+// Get current time in HHMM format (using TIMEZONE constant)
+// Use bar time, not real-world time
+current_hour = hour(time, TIMEZONE)
+current_minute = minute(time, TIMEZONE)
+current_time = current_hour * 100 + current_minute
+current_day = dayofweek(time, TIMEZONE)
+
+// Auto-detect if asset trades 24/7 by checking if there are weekend bars
+var bool is_247_asset = false
+if barstate.isfirst
+    is_247_asset := false
+    // Check last LOOKBACK_BARS for any weekend activity
+    for i = 0 to math.min(LOOKBACK_BARS, bar_index)
+        check_day = dayofweek(time[i], TIMEZONE)
+        if check_day == dayofweek.saturday or check_day == dayofweek.sunday
+            is_247_asset := true
+            break
+
+// Check if we should process sessions (always process if 24/7 asset detected, or on weekdays)
+process_sessions = is_247_asset or (current_day != dayofweek.saturday and current_day != dayofweek.sunday)
+
+// Helper function to get the last instance of a session type (completed or active)
+get_last_session_of_type(session_name) =>
+    result = DttSession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, na, false, na, na, na, na, na, 0, na, na, na, na, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
+    if array.size(session_instances) > 0
+        for i = array.size(session_instances) - 1 to 0
+            sess = array.get(session_instances, i)
+            if sess.name == session_name and not na(sess.start_bar)
+                result := sess
+                break
+    result
+
+// Get the count of completed Model 111 sessions (marks complete "days")
+get_completed_model111_count() =>
+    count = 0
+    if array.size(session_instances) > 0
+        for i = 0 to array.size(session_instances) - 1
+            sess = array.get(session_instances, i)
+            if sess.name == SESSION_MODEL111 and not na(sess.end_bar)
+                count += 1
+    count
+
+// Helper function: Check if a given HHMM time falls within the current bar's time range
+// Returns true if target_time is in the range [current_time, current_time + timeframe_multiplier)
+time_in_bar_range(target_time, target_wraps_midnight) =>
+    result = false
+
+    if timeframe.multiplier == 1
+        // 1-minute: exact match
+        result := current_time == target_time
+    else
+        // Convert to minutes since midnight for easier math
+        target_hour = math.floor(target_time / 100)
+        target_minute = target_time % 100
+        target_minutes = target_hour * 60 + target_minute
+
+        bar_start_minutes = current_hour * 60 + current_minute
+        bar_end_minutes = bar_start_minutes + timeframe.multiplier
+
+        // Handle target time in "next day" for midnight-wrapping sessions
+        if target_wraps_midnight and target_minutes < 720  // Before noon = next day
+            target_minutes := target_minutes + 1440
+
+            // CRITICAL: Also adjust bar times if bar is in early morning
+            if bar_start_minutes < 720
+                bar_start_minutes := bar_start_minutes + 1440
+                bar_end_minutes := bar_end_minutes + 1440
+
+        // Handle bar crossing midnight
+        if bar_end_minutes >= 1440
+            // Bar crosses midnight: e.g., 23:58 to 00:02 (1438 to 1442)
+            if target_minutes < bar_start_minutes
+                // Target is in the "next day" portion
+                target_minutes := target_minutes + 1440
+
+        // Check if target falls in [bar_start, bar_end)
+        result := target_minutes >= bar_start_minutes and target_minutes < bar_end_minutes
+
+    result
+
+// Mark sessions as ended using mathematical range checking
+if array.size(session_instances) > 0
+    for j = array.size(session_instances) - 1 to 0
+        sess = array.get(session_instances, j)
+        if not na(sess.start_bar) and na(sess.end_bar)
+            // Check if end time falls within current bar's range
+            session_wraps_midnight = sess.end_time < sess.start_time
+            session_should_end = time_in_bar_range(sess.end_time, session_wraps_midnight)
+
+            if session_should_end
+                sess.end_bar := bar_index
+                sess.end_timestamp := time
+
+                // Draw end boundary at CURRENT BAR TIME (only if enabled)
+                if show_boundaries
+                    if not na(sess.end_boundary_line)
+                        line.delete(sess.end_boundary_line)
+                    sess.end_boundary_line := line.new(time, 1e10, time, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+                // Update high/low line endpoints to current bar time
+                if not na(sess.pool_high_line)
+                    line.set_x2(sess.pool_high_line, time)
+                if not na(sess.pool_low_line)
+                    line.set_x2(sess.pool_low_line, time)
+
+                // Collect AMRP expansion data when sessions end
+                if show_amrp
+                    if sess.root_captured and not na(sess.root_high) and not na(sess.root_low)
+                        if not na(sess.session_high) and not na(sess.session_low)
+                            // Calculate expansions
+                            up_exp = sess.session_high - sess.root_high
+                            dn_exp = sess.root_low - sess.session_low
+
+                            // Determine effective lookback based on mode
+                            effective_lookback = amrp_lookback_mode == "Compare 3" ? 9 : amrp_lookback  // Compare All uses max lookback (9) to store all data
+
+                            // Add to session-specific arrays
+                            add_to_amrp_arrays(sess.name, up_exp, dn_exp, effective_lookback)
+
+                array.set(session_instances, j, sess)
+
+// Clean up old sessions BEFORE creating new ones: keep only the last N "cycles"
+if array.size(session_instances) > 0
+    sessions_to_keep = show_last_n_days * SESSIONS_PER_CYCLE
+    total_sessions = array.size(session_instances)
+
+    if total_sessions > sessions_to_keep
+        sessions_to_delete = total_sessions - sessions_to_keep
+
+        for i = 0 to sessions_to_delete - 1
+            sess = array.get(session_instances, i)
+            if not na(sess.start_boundary_line)
+                line.delete(sess.start_boundary_line)
+            if not na(sess.end_boundary_line)
+                line.delete(sess.end_boundary_line)
+            if not na(sess.pool_high_line)
+                line.delete(sess.pool_high_line)
+            if not na(sess.pool_low_line)
+                line.delete(sess.pool_low_line)
+            if not na(sess.session_label)
+                label.delete(sess.session_label)
+            // Delete root line, label, and zone box
+            if not na(sess.root_line)
+                line.delete(sess.root_line)
+            if not na(sess.root_label)
+                label.delete(sess.root_label)
+            if not na(sess.root_box)
+                box.delete(sess.root_box)
+            // Delete AMRP boxes, EQ lines, and projection lines
+            if not na(sess.amrp_up_box)
+                box.delete(sess.amrp_up_box)
+            if not na(sess.amrp_dn_box)
+                box.delete(sess.amrp_dn_box)
+            if not na(sess.amrp_up_eq_line)
+                line.delete(sess.amrp_up_eq_line)
+            if not na(sess.amrp_dn_eq_line)
+                line.delete(sess.amrp_dn_eq_line)
+            if not na(sess.amrp_up_proj1)
+                line.delete(sess.amrp_up_proj1)
+            if not na(sess.amrp_up_proj1_label)
+                label.delete(sess.amrp_up_proj1_label)
+            if not na(sess.amrp_up_proj2)
+                line.delete(sess.amrp_up_proj2)
+            if not na(sess.amrp_up_proj2_label)
+                label.delete(sess.amrp_up_proj2_label)
+            if not na(sess.amrp_up_proj3)
+                line.delete(sess.amrp_up_proj3)
+            if not na(sess.amrp_up_proj3_label)
+                label.delete(sess.amrp_up_proj3_label)
+            if not na(sess.amrp_up_proj4)
+                line.delete(sess.amrp_up_proj4)
+            if not na(sess.amrp_up_proj4_label)
+                label.delete(sess.amrp_up_proj4_label)
+            if not na(sess.amrp_dn_proj1)
+                line.delete(sess.amrp_dn_proj1)
+            if not na(sess.amrp_dn_proj1_label)
+                label.delete(sess.amrp_dn_proj1_label)
+            if not na(sess.amrp_dn_proj2)
+                line.delete(sess.amrp_dn_proj2)
+            if not na(sess.amrp_dn_proj2_label)
+                label.delete(sess.amrp_dn_proj2_label)
+            if not na(sess.amrp_dn_proj3)
+                line.delete(sess.amrp_dn_proj3)
+            if not na(sess.amrp_dn_proj3_label)
+                label.delete(sess.amrp_dn_proj3_label)
+            if not na(sess.amrp_dn_proj4)
+                line.delete(sess.amrp_dn_proj4)
+            if not na(sess.amrp_dn_proj4_label)
+                label.delete(sess.amrp_dn_proj4_label)
+
+        for i = 0 to sessions_to_delete - 1
+            array.shift(session_instances)
+
+// CREATE new sessions using mathematical range checking
+if process_sessions
+    // Process all session templates
+    for i = 0 to array.size(session_templates) - 1
+        template = array.get(session_templates, i)
+
+        // Check if start time falls within current bar's range
+        start_wraps_midnight = template.end_time < template.start_time
+        session_should_start = time_in_bar_range(template.start_time, false)  // Start time never wraps
+
+        // IMPORTANT: Also check if root time is reached (for sessions with roots BEFORE their start time)
+        // Example: Model 111 starts at 14:09 but root is at 13:30
+        // We need to pre-create the session at 13:30 so the root can be captured
+        root_hour = math.floor(template.root_time / 100)
+        root_minute = template.root_time % 100
+        root_time_reached = false
+        if timeframe.multiplier == 1
+            root_time_reached := current_hour == root_hour and current_minute == root_minute
+        else
+            root_minutes_since_midnight = root_hour * 60 + root_minute
+            bar_start_minutes = current_hour * 60 + current_minute
+            bar_end_minutes = bar_start_minutes + timeframe.multiplier
+            root_time_reached := root_minutes_since_midnight >= bar_start_minutes and root_minutes_since_midnight < bar_end_minutes
+
+        // Check if this session type already has an active instance
+        session_exists = false
+        existing_session_index = -1
+        if array.size(session_instances) > 0
+            for j = array.size(session_instances) - 1 to 0
+                sess = array.get(session_instances, j)
+                if sess.name == template.name and not na(sess.start_bar) and na(sess.end_bar)
+                    session_exists := true
+                    existing_session_index := j
+                    break
+
+        // ⚠️ PHASE 2: If session was pre-created for root but now officially starting, update start_timestamp
+        // CHANGELOG [2025-10-13]: Added boundary deletion, end boundary, and label drawing in phase 2
+        if session_exists and session_should_start and existing_session_index >= 0
+            sess = array.get(session_instances, existing_session_index)
+            if na(sess.start_timestamp)
+                sess.start_timestamp := time
+
+                // Delete previous session's end boundary (which shares this timestamp)
+                prev_session = get_last_session_of_type(template.prev_session_name)
+                if not na(prev_session.end_boundary_line)
+                    line.delete(prev_session.end_boundary_line)
+                    // Update the previous session in the array
+                    if array.size(session_instances) > 1
+                        for j = array.size(session_instances) - 2 to 0
+                            check_sess = array.get(session_instances, j)
+                            if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
+                                check_sess.end_boundary_line := na
+                                array.set(session_instances, j, check_sess)
+                                break
+
+                // Draw start boundary line now that session is officially starting
+                if show_boundaries
+                    sess.start_boundary_line := line.new(time, 1e10, time, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+                // Draw end boundary line now that session is officially starting
+                if show_boundaries
+                    sess.end_boundary_line := line.new(sess.end_timestamp, 1e10, sess.end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+                // Draw high/low lines now that session is officially starting
+                if show_pool_lines
+                    // ⚠️ CRITICAL: Check not only for na, but also that values aren't at initialization extremes
+                    // CHANGELOG [2025-10-13]: Added check for initialization values
+                    // PROBLEM: Judas and NY Open missing high/low lines on instruments without 9:30 bar (e.g., NQ)
+                    // ROOT CAUSE: Previous session had high/low still at -1e10/1e10 (initialization)
+                    // FIX: Validate that high < 1e9 and low > -1e9 (realistic values)
+                    valid_high = not na(prev_session.session_high) and prev_session.session_high < 1e9
+                    valid_low = not na(prev_session.session_low) and prev_session.session_low > -1e9
+                    if valid_high and valid_low
+                        // Use the already-calculated end_timestamp from session object
+                        end_timestamp = sess.end_timestamp
+
+                        // Draw the high/low lines using start_timestamp (session start time, NOT root time)
+                        sess.pool_high_line := line.new(time, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+                        sess.pool_low_line := line.new(time, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+
+                // Draw session label now that session is officially starting
+                if show_session_labels
+                    label_text = template.name
+                    if show_root_time_in_session_label
+                        root_hour_str = str.tostring(math.floor(template.root_time / 100), "#00")
+                        root_minute_str = str.tostring(template.root_time % 100, "#00")
+                        label_text := template.name + "\n(" + root_hour_str + ":" + root_minute_str + ")"
+
+                    session_midpoint_timestamp = math.round((time + sess.end_timestamp) / 2)
+                    sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
+
+                array.set(session_instances, existing_session_index, sess)
+
+        // Create session if it should start OR if root time is reached (and doesn't exist yet)
+        if (session_should_start or root_time_reached) and not session_exists
+            // Count completed "days" (Model 111 sessions mark end of day)
+            completed_days = get_completed_model111_count()
+            day_number = completed_days
+
+            // IMPORTANT: Set start_timestamp to na if this is a pre-creation for root capture
+            // It will be updated to the actual start time when session officially starts
+            session_start_timestamp = session_should_start ? time : na
+
+            // Calculate end_timestamp early so it can be used for AMRP zones
+            end_hour = math.floor(template.end_time / 100)
+            end_minute = template.end_time % 100
+            end_minutes_since_midnight = end_hour * 60 + end_minute
+            end_bar_minutes = math.floor(end_minutes_since_midnight / timeframe.multiplier) * timeframe.multiplier
+            end_bar_hour = math.floor(end_bar_minutes / 60)
+            end_bar_minute = end_bar_minutes % 60
+            current_year = year(time, TIMEZONE)
+            current_month = month(time, TIMEZONE)
+            current_date = dayofmonth(time, TIMEZONE)
+            calculated_end_timestamp = timestamp(TIMEZONE, current_year, current_month, current_date, end_bar_hour, end_bar_minute)
+            // ⚠️ CRITICAL: Only add a day if session actually wraps midnight
+            // CHANGELOG [2025-10-13]: Removed `or calculated_end_timestamp <= time` condition
+            // PROBLEM: Lines extending 24 hours into future when changing "Show Last N Days"
+            // FIX: Only add day for midnight-wrapping sessions, not historical sessions
+            if template.end_time < template.start_time
+                calculated_end_timestamp := calculated_end_timestamp + MILLISECONDS_PER_DAY
+
+            // ⚠️ CRITICAL: Initialize with extreme values so first 1-minute data always sets the high/low
+            // DO NOT CHANGE -1e10 and 1e10 - see Developer Docs section 2.1
+            new_sess = DttSession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, session_start_timestamp, calculated_end_timestamp, day_number, -1e10, 1e10, bar_index, bar_index, na, na, false, na, na, na, na, na, template.root_time, na, na, na, na, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
+            array.push(session_instances, new_sess)
+
+            // Draw boundaries
+            idx = array.size(session_instances) - 1
+            curr_sess = array.get(session_instances, idx)
+
+            // ⚠️ CRITICAL: Get previous session to delete its end boundary ONLY if this is NOT a pre-creation
+            // If session_start_timestamp is na, this is a pre-creation - we'll delete it when session officially starts
+            // CHANGELOG [2025-10-13]: Added this check to prevent Model 1001's boundary from disappearing at 13:30
+            // PROBLEM: Model 1001 end boundary disappeared when Model 111 was pre-created at 13:30 (root time)
+            // FIX: Only delete previous boundary when session officially starts, not during pre-creation
+            if not na(session_start_timestamp)
+                prev_session = get_last_session_of_type(template.prev_session_name)
+                if not na(prev_session.end_boundary_line)
+                    line.delete(prev_session.end_boundary_line)
+                    // Update the previous session in the array
+                    if array.size(session_instances) > 1
+                        for j = array.size(session_instances) - 2 to 0
+                            check_sess = array.get(session_instances, j)
+                            if check_sess.name == template.prev_session_name and not na(check_sess.start_bar)
+                                check_sess.end_boundary_line := na
+                                array.set(session_instances, j, check_sess)
+                                break
+
+            // Draw start boundary at CURRENT BAR TIME (only if enabled and NOT a pre-creation)
+            // If session_start_timestamp is na, this is a pre-creation for root - boundary will be drawn when session officially starts
+            if show_boundaries and not na(session_start_timestamp)
+                curr_sess.start_boundary_line := line.new(session_start_timestamp, 1e10, session_start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+            // Use the already-calculated end_timestamp from session object
+            end_timestamp = curr_sess.end_timestamp
+
+            // ⚠️ CRITICAL: Draw end boundary ONLY if this is NOT a pre-creation
+            // CHANGELOG [2025-10-13]: Added `not na(session_start_timestamp)` check
+            // PROBLEM: End boundaries appeared at root time (13:30) instead of session start (14:09)
+            // FIX: Boundary will be drawn when session officially starts (see phase 2 logic earlier)
+            if show_boundaries and not na(session_start_timestamp)
+                curr_sess.end_boundary_line := line.new(end_timestamp, 1e10, end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=boundary_width, style=boundary_style)
+
+            // Get previous session for drawing high/low lines
+            prev_session = get_last_session_of_type(template.prev_session_name)
+
+            // Draw high/low lines from previous session ONLY if this is NOT a pre-creation
+            // If session_start_timestamp is na, this is a pre-creation for root capture
+            // Lines will be drawn later when session officially starts
+            // ⚠️ CRITICAL: Also validate that values aren't at initialization extremes
+            valid_high = not na(prev_session.session_high) and prev_session.session_high < 1e9
+            valid_low = not na(prev_session.session_low) and prev_session.session_low > -1e9
+            if show_pool_lines and valid_high and valid_low and not na(session_start_timestamp)
+                curr_sess.pool_high_line := line.new(session_start_timestamp, prev_session.session_high, end_timestamp, prev_session.session_high, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+                curr_sess.pool_low_line := line.new(session_start_timestamp, prev_session.session_low, end_timestamp, prev_session.session_low, xloc=xloc.bar_time, color=pool_color, width=pool_width, style=pool_style)
+
+            // ⚠️ CRITICAL: Draw session name label ONLY if this is NOT a pre-creation
+            // CHANGELOG [2025-10-13]: Added `not na(session_start_timestamp)` check
+            // PROBLEM: Model 111 label appeared at 13:30 (root time) instead of 14:09 (session start)
+            // FIX: Label will be drawn when session officially starts (see phase 2 logic earlier)
+            if show_session_labels and not na(session_start_timestamp)
+                label_text = template.name
+                if show_root_time_in_session_label
+                    root_hour_str = str.tostring(math.floor(template.root_time / 100), "#00")
+                    root_minute_str = str.tostring(template.root_time % 100, "#00")
+                    label_text := template.name + "\n(" + root_hour_str + ":" + root_minute_str + ")"
+
+                // Calculate midpoint timestamp between session start and end
+                session_midpoint_timestamp = math.round((time + end_timestamp) / 2)
+                curr_sess.session_label := label.new(session_midpoint_timestamp, high, text=label_text, xloc=xloc.bar_time, style=label.style_none, color=color.new(color.white, 100), textcolor=color.new(boundary_color, 50), size=session_label_size)
+
+            array.set(session_instances, idx, curr_sess)
+
+// Update high/low for all active sessions and detect first touch (using 1-minute data)
+if array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+        if not na(sess.start_bar) and (na(sess.end_bar) or sess.end_bar == bar_index)
+            // Session is active, update high/low using 1-minute data
+            // Check if ANY part of current bar overlaps with session time range
+            // Use LOCAL copies to avoid mutation across loop iterations
+            bar_start_minutes = current_hour * 60 + current_minute
+            bar_end_minutes = bar_start_minutes + timeframe.multiplier
+
+            // Convert session times to minutes since midnight
+            sess_start_hour = math.floor(sess.start_time / 100)
+            sess_start_minute = sess.start_time % 100
+            sess_start_minutes = sess_start_hour * 60 + sess_start_minute
+
+            sess_end_hour = math.floor(sess.end_time / 100)
+            sess_end_minute = sess.end_time % 100
+            sess_end_minutes = sess_end_hour * 60 + sess_end_minute
+
+            // Create local copies for this session's calculations
+            check_bar_start_minutes = bar_start_minutes
+            check_bar_end_minutes = bar_end_minutes
+
+            // Handle midnight wrapping for sessions
+            if sess.start_time > sess.end_time
+                sess_end_minutes := sess_end_minutes + 1440  // Add 24 hours
+
+                // For midnight-wrapping sessions, adjust bar times if they're in "early morning"
+                // This handles bars like 03:00 which should be treated as next day (03:00 + 1440)
+                if check_bar_start_minutes < 720  // Bar is before noon, treat as next day
+                    check_bar_start_minutes := check_bar_start_minutes + 1440
+                    check_bar_end_minutes := check_bar_end_minutes + 1440
+
+            // Handle bar crossing midnight
+            in_session = false
+            if check_bar_end_minutes >= 1440 and sess.start_time <= sess.end_time
+                // Bar crosses midnight but session doesn't - special handling needed
+                // Check if session overlaps with either the pre-midnight or post-midnight portion
+                bar_pre_midnight = check_bar_start_minutes < 1440
+                bar_post_midnight = check_bar_end_minutes >= 1440
+                if bar_pre_midnight and not (check_bar_start_minutes > sess_end_minutes)
+                    in_session := true
+                if bar_post_midnight and not ((check_bar_end_minutes - 1440) > sess_end_minutes or sess_start_minutes > (check_bar_end_minutes - 1440))
+                    in_session := true
+            else
+                // Normal case or both bar and session handle midnight consistently
+                // Use > (not >=) for end boundary to include bars that start exactly at end time
+                in_session := not (check_bar_end_minutes <= sess_start_minutes or check_bar_start_minutes > sess_end_minutes)
+
+            if in_session
+                // Get all 1-minute bars within the current bar using lower timeframe data
+                [one_min_highs, one_min_lows, one_min_times] = request.security_lower_tf(syminfo.tickerid, "1", [high, low, time])
+
+                // ⚠️ FALLBACK: If no intrabar data (common on real-time bars or chart load), use bar's high/low
+                // CHANGELOG [2025-10-13]: Added fallback to prevent missing high/low lines on fresh chart load
+                // PROBLEM: Big Ben and NY Open were missing high/low lines when chart first loaded
+                // ROOT CAUSE: request.security_lower_tf() returns empty arrays on real-time/initial bars
+                if array.size(one_min_highs) == 0
+                    array.push(one_min_highs, high)
+                    array.push(one_min_lows, low)
+                    array.push(one_min_times, time)
+
+                // Process all 1-minute bars to find true session high/low
+                // IMPORTANT: Filter to only include 1-minute bars that fall within session time range
+                if array.size(one_min_highs) > 0
+                    for j = 0 to array.size(one_min_highs) - 1
+                        // Get the 1-minute bar's timestamp and convert to HHMM
+                        one_min_time = array.get(one_min_times, j)
+                        one_min_hour = hour(one_min_time, TIMEZONE)
+                        one_min_minute = minute(one_min_time, TIMEZONE)
+                        one_min_minutes = one_min_hour * 60 + one_min_minute
+
+                        // Calculate session time range in minutes
+                        check_sess_start_minutes = sess_start_minutes
+                        check_sess_end_minutes = sess_end_minutes
+
+                        // Handle 1-minute bar crossing midnight for midnight-wrapping sessions
+                        if sess.start_time > sess.end_time and one_min_minutes < 720  // Session wraps midnight and bar is "early morning"
+                            one_min_minutes := one_min_minutes + 1440  // Treat as next day
+
+                        // Check if this 1-minute bar falls within session time range [start, end] (INCLUSIVE on both ends)
+                        // Session ending at 09:01 means it includes the ENTIRE 09:01 minute (09:01:00 to 09:01:59)
+                        is_in_session_range = one_min_minutes >= check_sess_start_minutes and one_min_minutes <= check_sess_end_minutes
+
+                        if is_in_session_range
+                            one_min_high = array.get(one_min_highs, j)
+                            one_min_low = array.get(one_min_lows, j)
+
+                            // Capture opening price (first bar of session) - used for AMRP anchor
+                            if not sess.session_open_captured and one_min_minutes == check_sess_start_minutes
+                                sess.session_open_high := one_min_high
+                                sess.session_open_low := one_min_low
+                                sess.session_open_captured := true
+
+                            // Track high and bar where it was formed (using 1-minute data)
+                            if one_min_high > sess.session_high
+                                sess.session_high := one_min_high
+                                sess.session_high_bar := bar_index
+
+                            // Track low and bar where it was formed (using 1-minute data)
+                            if one_min_low < sess.session_low
+                                sess.session_low := one_min_low
+                                sess.session_low_bar := bar_index
+
+                // Get previous session's high/low for comparison
+                prev_session = get_last_session_of_type(sess.prev_session_name)
+                prev_high = prev_session.session_high
+                prev_low = prev_session.session_low
+
+                array.set(session_instances, i, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ROOT PRICE CAPTURE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ⚠️ CRITICAL: Capture root prices for ALL sessions (ALWAYS, regardless of display toggle)
+// IMPORTANT: Some sessions have roots BEFORE their start time (e.g., Model 111 root at 13:30, starts at 14:09)
+// These root times are based on years of study and must NEVER be changed
+// CHANGELOG [2025-10-13]: Removed `if show_roots` gate - root CAPTURE must be independent of DISPLAY
+// BUG FIX: AMRP requires root data even when root visualization is disabled
+if true  // Always capture roots (used by AMRP even if show_roots is false)
+    // Check if current bar contains any root time from ANY session template
+    for template_idx = 0 to array.size(session_templates) - 1
+        template = array.get(session_templates, template_idx)
+
+        // Check if root time is reached (handle different timeframes)
+        is_root_bar = false
+        root_hour = math.floor(template.root_time / 100)
+        root_minute = template.root_time % 100
+
+        if timeframe.multiplier == 1
+            // 1-minute: exact match
+            is_root_bar := current_hour == root_hour and current_minute == root_minute
+        else
+            // Higher timeframes: check if root time falls within this bar
+            root_minutes_since_midnight = root_hour * 60 + root_minute
+            bar_start_minutes = current_hour * 60 + current_minute
+            bar_end_minutes = bar_start_minutes + timeframe.multiplier
+
+            // Check if root time falls within [bar_start, bar_end) range
+            is_root_bar := root_minutes_since_midnight >= bar_start_minutes and root_minutes_since_midnight < bar_end_minutes
+
+        // If this bar contains a root time, find the session and capture it
+        if is_root_bar
+            // Find the session instance for this template (it may not exist yet if root comes before session start)
+            target_session_index = -1
+            if array.size(session_instances) > 0
+                for i = array.size(session_instances) - 1 to 0
+                    sess = array.get(session_instances, i)
+                    // Find the most recent instance of this session type that hasn't captured root yet
+                    if sess.name == template.name and not sess.root_captured
+                        target_session_index := i
+                        break
+
+            // If session found, capture the root
+            if target_session_index >= 0
+                sess = array.get(session_instances, target_session_index)
+
+                // Get all 1-minute bars within the current bar (high, low, and time)
+                [one_min_highs, one_min_lows, one_min_times] = request.security_lower_tf(syminfo.tickerid, "1", [high, low, time])
+
+                // ⚠️ FALLBACK: If no intrabar data, use bar's high/low for root capture
+                // CHANGELOG [2025-10-13]: Added fallback for root capture on real-time bars
+                if array.size(one_min_highs) == 0
+                    array.push(one_min_highs, high)
+                    array.push(one_min_lows, low)
+                    array.push(one_min_times, time)
+
+                // Find the exact 1-minute bar that matches the root time
+                if array.size(one_min_times) > 0
+                    for j = 0 to array.size(one_min_times) - 1
+                        bar_time = array.get(one_min_times, j)
+                        bar_hour = hour(bar_time, TIMEZONE)
+                        bar_minute = minute(bar_time, TIMEZONE)
+                        bar_time_hhmm = bar_hour * 100 + bar_minute
+
+                        // Check if this 1-minute bar's time matches the root time exactly
+                        if bar_time_hhmm == template.root_time
+                            sess.root_high := array.get(one_min_highs, j)
+                            sess.root_low := array.get(one_min_lows, j)
+                            sess.root_price := (sess.root_high + sess.root_low) / 2.0
+                            sess.root_timestamp := bar_time  // CAPTURE the actual timestamp!
+                            sess.root_captured := true
+                            break
+
+                    array.set(session_instances, target_session_index, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ROOT LINE & ZONE DRAWING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Helper function to get next session name in cascade
+get_next_session_name(current_session_name) =>
+    result = ""
+    switch current_session_name
+        SESSION_DAMASU => result := SESSION_OSAKA
+        SESSION_OSAKA => result := SESSION_KYOTO
+        SESSION_KYOTO => result := SESSION_NAGASAKI
+        SESSION_NAGASAKI => result := SESSION_TURNCOAT
+        SESSION_TURNCOAT => result := SESSION_BISHOP
+        SESSION_BISHOP => result := SESSION_KNIGHT
+        SESSION_KNIGHT => result := SESSION_BIGBEN
+        SESSION_BIGBEN => result := SESSION_NYOPEN
+        SESSION_NYOPEN => result := SESSION_JUDAS
+        SESSION_JUDAS => result := SESSION_MODEL11
+        SESSION_MODEL11 => result := SESSION_MODEL110
+        SESSION_MODEL110 => result := SESSION_LUNCH
+        SESSION_LUNCH => result := SESSION_MODEL1001
+        SESSION_MODEL1001 => result := SESSION_MODEL111
+        SESSION_MODEL111 => result := SESSION_DAMASU
+    result
+
+// Draw root lines and zones for sessions that have captured root price
+if show_roots and array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+
+        // Draw line/zone if root captured but not yet drawn
+        if sess.root_captured and not na(sess.root_price) and na(sess.root_line) and not na(sess.root_timestamp)
+            // Use the ACTUAL captured root timestamp
+            root_timestamp = sess.root_timestamp
+            root_hour = math.floor(sess.root_time / 100)
+            root_minute = sess.root_time % 100
+
+            // Get NEXT session in cascade to determine end boundary
+            next_session_name = get_next_session_name(sess.name)
+            next_session = get_last_session_of_type(next_session_name)
+
+            // Calculate NEXT session's end timestamp from the root timestamp's date
+            root_year = year(root_timestamp, TIMEZONE)
+            root_month = month(root_timestamp, TIMEZONE)
+            root_date = dayofmonth(root_timestamp, TIMEZONE)
+
+            next_end_hour = math.floor(next_session.end_time / 100)
+            next_end_minute = next_session.end_time % 100
+            end_timestamp = timestamp(TIMEZONE, root_year, root_month, root_date, next_end_hour, next_end_minute)
+
+            // If next session wraps midnight OR end is before root, add days as needed
+            if next_session.end_time < next_session.start_time
+                end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
+
+            // Ensure end_timestamp is after root_timestamp
+            while end_timestamp <= root_timestamp
+                end_timestamp := end_timestamp + MILLISECONDS_PER_DAY
+
+            // Draw root zone (shaded box) if enabled
+            if show_root_zone and not na(sess.root_high) and not na(sess.root_low)
+                sess.root_box := box.new(root_timestamp, sess.root_high, end_timestamp, sess.root_low,
+                                         xloc=xloc.bar_time, border_color=color.new(color.blue, 100),
+                                         bgcolor=root_zone_color, border_width=0)
+
+            // Draw horizontal EQ line from root time to next session end
+            if show_root_line
+                sess.root_line := line.new(root_timestamp, sess.root_price, end_timestamp, sess.root_price,
+                                           xloc=xloc.bar_time, color=root_line_color, width=root_line_width, style=root_line_style)
+
+            // Create time label at end of line (no price)
+            if show_root_time_label
+                root_hour_str = str.tostring(root_hour, "#00")
+                root_minute_str = str.tostring(root_minute, "#00")
+                label_text = root_hour_str + ":" + root_minute_str
+
+                sess.root_label := label.new(end_timestamp, sess.root_price, text=label_text,
+                                             xloc=xloc.bar_time, style=label.style_label_left,
+                                             color=color.new(root_time_label_color, 70), textcolor=color.black, size=root_label_size)
+
+            array.set(session_instances, i, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AMRP ZONE DRAWING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Draw AMRP zones for model sessions
+if show_amrp and array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+
+        // Draw AMRP if session has captured opening price and not yet drawn
+        if sess.session_open_captured and not sess.amrp_drawn
+            if not na(sess.session_open_high) and not na(sess.session_open_low)
+                if not na(sess.start_timestamp) and not na(sess.end_timestamp)
+                    start_ts = sess.start_timestamp
+                    end_ts = sess.end_timestamp
+
+                    if amrp_lookback_mode == "Compare 3"
+                        // Draw 3 lookbacks simultaneously: 4, 6, 9
+                        lookbacks = array.from(4, 6, 9)
+                        transparencies = array.from(90, 80, 70)  // Faint to strong
+
+                        // Track zone sizes to find largest
+                        var array<float> zone_sizes_up = array.new<float>()
+                        var array<float> zone_sizes_dn = array.new<float>()
+                        var array<float> stored_up_inner = array.new<float>()
+                        var array<float> stored_up_outer = array.new<float>()
+                        var array<float> stored_dn_inner = array.new<float>()
+                        var array<float> stored_dn_outer = array.new<float>()
+                        array.clear(zone_sizes_up)
+                        array.clear(zone_sizes_dn)
+                        array.clear(stored_up_inner)
+                        array.clear(stored_up_outer)
+                        array.clear(stored_dn_inner)
+                        array.clear(stored_dn_outer)
+
+                        for lb_idx = 0 to 2
+                            lb = array.get(lookbacks, lb_idx)
+                            transp = array.get(transparencies, lb_idx)
+
+                            [has_data, up_inner, up_outer, dn_inner, dn_outer] = get_amrp_percentiles(sess.name, 0, 0, lb)
+
+                            if has_data
+                                amrp_up_inner_price = sess.session_open_high + up_inner
+                                amrp_up_outer_price = sess.session_open_high + up_outer
+                                amrp_dn_inner_price = sess.session_open_low - dn_inner
+                                amrp_dn_outer_price = sess.session_open_low - dn_outer
+
+                                // Calculate zone sizes (outer - inner = zone range)
+                                up_zone_size = amrp_up_outer_price - amrp_up_inner_price
+                                dn_zone_size = amrp_dn_inner_price - amrp_dn_outer_price
+
+                                // Store for later comparison
+                                array.push(zone_sizes_up, up_zone_size)
+                                array.push(zone_sizes_dn, dn_zone_size)
+                                array.push(stored_up_inner, amrp_up_inner_price)
+                                array.push(stored_up_outer, amrp_up_outer_price)
+                                array.push(stored_dn_inner, amrp_dn_inner_price)
+                                array.push(stored_dn_outer, amrp_dn_outer_price)
+
+                                // Draw AMRP+ zone with transparency
+                                box.new(start_ts, amrp_up_outer_price,
+                                       end_ts, amrp_up_inner_price,
+                                       xloc=xloc.bar_time, border_color=color.new(amrp_up_color, 100),
+                                       bgcolor=color.new(amrp_up_color, transp), border_width=0)
+
+                                // Draw AMRP- zone with transparency
+                                box.new(start_ts, amrp_dn_inner_price,
+                                       end_ts, amrp_dn_outer_price,
+                                       xloc=xloc.bar_time, border_color=color.new(amrp_dn_color, 100),
+                                       bgcolor=color.new(amrp_dn_color, transp), border_width=0)
+
+                                // Add lookback identifier labels - centered in zone, floating style
+                                mid_ts = math.floor((start_ts + end_ts) / 2)  // Horizontal center of session
+                                up_label_price = amrp_up_outer_price - (up_zone_size * 0.15)  // 15% down from outer edge
+                                dn_label_price = amrp_dn_outer_price + (dn_zone_size * 0.15)  // 15% up from outer edge
+
+                                // Upper zone label
+                                label.new(mid_ts, up_label_price,
+                                         text="LB" + str.tostring(lb),
+                                         xloc=xloc.bar_time,
+                                         yloc=yloc.price,
+                                         color=color.new(color.white, 100),
+                                         textcolor=color.new(color.gray, 40),
+                                         size=size.tiny,
+                                         style=label.style_label_center,
+                                         textalign=text.align_center)
+
+                                // Lower zone label
+                                label.new(mid_ts, dn_label_price,
+                                         text="LB" + str.tostring(lb),
+                                         xloc=xloc.bar_time,
+                                         yloc=yloc.price,
+                                         color=color.new(color.white, 100),
+                                         textcolor=color.new(color.gray, 40),
+                                         size=size.tiny,
+                                         style=label.style_label_center,
+                                         textalign=text.align_center)
+
+                        // Determine which lookback to use for projections based on toggle (only if we have data)
+                        if array.size(zone_sizes_up) > 0
+                            if compare3_projection_source == "Combined Envelope"
+                                // Use extreme outer boundaries from all 3 lookbacks (widest possible envelope)
+                                combined_up_outer = array.get(stored_up_outer, 0)
+                                combined_up_inner = array.get(stored_up_inner, 0)
+                                combined_dn_outer = array.get(stored_dn_outer, 0)
+                                combined_dn_inner = array.get(stored_dn_inner, 0)
+
+                                // Find extreme boundaries across all lookbacks
+                                for idx = 1 to array.size(stored_up_outer) - 1
+                                    combined_up_outer := math.max(combined_up_outer, array.get(stored_up_outer, idx))  // Highest upper outer (furthest up)
+                                    combined_up_inner := math.min(combined_up_inner, array.get(stored_up_inner, idx))  // Lowest upper inner (closest to root)
+                                    combined_dn_outer := math.min(combined_dn_outer, array.get(stored_dn_outer, idx))  // Lowest lower outer (furthest down)
+                                    combined_dn_inner := math.max(combined_dn_inner, array.get(stored_dn_inner, idx))  // Highest lower inner (closest to root)
+
+                                sess.amrp_up_inner := combined_up_inner
+                                sess.amrp_up_outer := combined_up_outer
+                                sess.amrp_dn_inner := combined_dn_inner
+                                sess.amrp_dn_outer := combined_dn_outer
+                                sess.amrp_bars_total := 0
+                                sess.amrp_bars_within_inner := 0
+                                sess.amrp_bars_within_outer := 0
+                                sess.amrp_bars_broke_outer := 0
+                            else
+                                selected_idx = 0
+                                if compare3_projection_source == "Largest Zone"
+                                    // Find lookback with largest zone (use average of up and down zone sizes)
+                                    largest_size = 0.0
+                                    for idx = 0 to array.size(zone_sizes_up) - 1
+                                        avg_size = (array.get(zone_sizes_up, idx) + array.get(zone_sizes_dn, idx)) / 2
+                                        if avg_size > largest_size
+                                            largest_size := avg_size
+                                            selected_idx := idx
+                                else  // "Most Recent (LB 4)"
+                                    // Use lookback 4 (first index = 0)
+                                    selected_idx := 0
+
+                                // Store selected lookback's boundaries for projections and accuracy tracking
+                                if array.size(stored_up_outer) > selected_idx
+                                    sess.amrp_up_inner := array.get(stored_up_inner, selected_idx)
+                                    sess.amrp_up_outer := array.get(stored_up_outer, selected_idx)
+                                    sess.amrp_dn_inner := array.get(stored_dn_inner, selected_idx)
+                                    sess.amrp_dn_outer := array.get(stored_dn_outer, selected_idx)
+                                    sess.amrp_bars_total := 0
+                                    sess.amrp_bars_within_inner := 0
+                                    sess.amrp_bars_within_outer := 0
+                                    sess.amrp_bars_broke_outer := 0
+
+                        sess.amrp_drawn := true
+
+                    else
+                        // Manual mode - single lookback
+                        effective_lookback = amrp_lookback
+
+                        [has_data, up_inner, up_outer, dn_inner, dn_outer] = get_amrp_percentiles(sess.name, 0, 0, effective_lookback)
+
+                        if has_data
+                            // Calculate zone price levels from session opening price
+                            amrp_up_inner_price = sess.session_open_high + up_inner
+                            amrp_up_outer_price = sess.session_open_high + up_outer
+                            amrp_dn_inner_price = sess.session_open_low - dn_inner
+                            amrp_dn_outer_price = sess.session_open_low - dn_outer
+
+                            // Store boundary values for accuracy tracking
+                            sess.amrp_up_inner := amrp_up_inner_price
+                            sess.amrp_up_outer := amrp_up_outer_price
+                            sess.amrp_dn_inner := amrp_dn_inner_price
+                            sess.amrp_dn_outer := amrp_dn_outer_price
+                            sess.amrp_bars_total := 0
+                            sess.amrp_bars_within_inner := 0
+                            sess.amrp_bars_within_outer := 0
+                            sess.amrp_bars_broke_outer := 0
+
+                            // Draw AMRP+ zone (above root)
+                            sess.amrp_up_box := box.new(start_ts, amrp_up_outer_price,
+                                                         end_ts, amrp_up_inner_price,
+                                                         xloc=xloc.bar_time, border_color=color.new(amrp_up_color, 100),
+                                                         bgcolor=amrp_up_color, border_width=0)
+
+                            // Draw AMRP- zone (below root)
+                            sess.amrp_dn_box := box.new(start_ts, amrp_dn_inner_price,
+                                                         end_ts, amrp_dn_outer_price,
+                                                         xloc=xloc.bar_time, border_color=color.new(amrp_dn_color, 100),
+                                                         bgcolor=amrp_dn_color, border_width=0)
+
+                            // Draw EQ lines at zone midpoints
+                            if show_amrp_eq
+                                amrp_up_eq_price = (amrp_up_inner_price + amrp_up_outer_price) / 2
+                                amrp_dn_eq_price = (amrp_dn_inner_price + amrp_dn_outer_price) / 2
+                                eq_line_style = amrp_eq_style == "Solid" ? line.style_solid : amrp_eq_style == "Dashed" ? line.style_dashed : line.style_dotted
+
+                                sess.amrp_up_eq_line := line.new(start_ts, amrp_up_eq_price, end_ts, amrp_up_eq_price, xloc=xloc.bar_time, color=amrp_eq_color, width=amrp_eq_width, style=eq_line_style)
+                                sess.amrp_dn_eq_line := line.new(start_ts, amrp_dn_eq_price, end_ts, amrp_dn_eq_price, xloc=xloc.bar_time, color=amrp_eq_color, width=amrp_eq_width, style=eq_line_style)
+
+                            sess.amrp_drawn := true
+
+                    array.set(session_instances, i, sess)
+
+// Track AMRP accuracy (how often price stays within zones)
+if show_amrp and array.size(session_instances) > 0
+    for i = 0 to array.size(session_instances) - 1
+        sess = array.get(session_instances, i)
+
+        // Only track if session is active and AMRP is drawn
+        if sess.amrp_drawn and not na(sess.amrp_up_inner)
+            // Check if current bar is within this session's time range
+            if time >= sess.start_timestamp and time <= sess.end_timestamp
+                // Check if bar index is after root (we only care about post-root accuracy)
+                if not na(sess.root_timestamp) and time >= sess.root_timestamp
+                    sess.amrp_bars_total := sess.amrp_bars_total + 1
+
+                    // Check price position relative to zones
+                    in_inner_zone = false
+                    in_outer_zone = false
+                    broke_outer = false
+                    broke_up = false
+                    broke_dn = false
+
+                    // Price within inner zones (between inner bounds)
+                    if high <= sess.amrp_up_inner and low >= sess.amrp_dn_inner
+                        in_inner_zone := true
+                        in_outer_zone := true
+                    // Price within outer zones but outside inner
+                    else if high <= sess.amrp_up_outer and low >= sess.amrp_dn_outer
+                        in_outer_zone := true
+                    // Price broke outer zones
+                    else
+                        broke_outer := true
+                        // Detect which direction
+                        if high > sess.amrp_up_outer
+                            broke_up := true
+                        if low < sess.amrp_dn_outer
+                            broke_dn := true
+
+                    if in_inner_zone
+                        sess.amrp_bars_within_inner := sess.amrp_bars_within_inner + 1
+                    if in_outer_zone
+                        sess.amrp_bars_within_outer := sess.amrp_bars_within_outer + 1
+                    if broke_outer
+                        sess.amrp_bars_broke_outer := sess.amrp_bars_broke_outer + 1
+
+                    // Draw projections independently for each direction
+                    if show_deviation_projections and array.size(parsed_multipliers) > 0
+                        // Prepare shared calculation variables
+                        proj_line_style = projection_style == "Solid" ? line.style_solid : projection_style == "Dashed" ? line.style_dashed : line.style_dotted
+                        num_projections = math.min(array.size(parsed_multipliers), MAX_PROJECTION_MULTIPLIERS)
+                        margin_str = get_projection_margin()
+
+                        // Find max label width for alignment
+                        max_label_width = 0
+                        for proj_idx = 0 to num_projections - 1
+                            multiplier = array.get(parsed_multipliers, proj_idx)
+                            label_str = "-" + format_projection_label(multiplier)
+                            max_label_width := math.max(max_label_width, str.length(label_str))
+
+                        // Draw UPPER projections if broke up and not yet drawn
+                        if broke_up and not sess.amrp_up_projections_drawn
+                            sess.amrp_broke_up := true
+                            up_zone_size = sess.amrp_up_outer - sess.amrp_up_inner
+
+                            for proj_idx = 0 to num_projections - 1
+                                multiplier = array.get(parsed_multipliers, proj_idx)
+                                up_price = sess.amrp_up_outer + (up_zone_size * multiplier)
+                                up_line = line.new(sess.start_timestamp, up_price, sess.end_timestamp, up_price, xloc=xloc.bar_time, color=projection_color, width=1, style=proj_line_style)
+
+                                label up_label = na
+                                if show_projection_labels
+                                    label_str = "-" + format_projection_label(multiplier)
+                                    padding_spaces = ""
+                                    for p = 0 to (max_label_width - str.length(label_str)) - 1
+                                        padding_spaces := padding_spaces + " "
+                                    label_text = margin_str + label_str + padding_spaces
+                                    up_label := label.new(sess.end_timestamp, up_price, label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=projection_color, size=size.tiny, textalign=text.align_left)
+
+                                // Assign to struct
+                                if proj_idx == 0
+                                    sess.amrp_up_proj1 := up_line
+                                    sess.amrp_up_proj1_label := up_label
+                                else if proj_idx == 1
+                                    sess.amrp_up_proj2 := up_line
+                                    sess.amrp_up_proj2_label := up_label
+                                else if proj_idx == 2
+                                    sess.amrp_up_proj3 := up_line
+                                    sess.amrp_up_proj3_label := up_label
+                                else if proj_idx == 3
+                                    sess.amrp_up_proj4 := up_line
+                                    sess.amrp_up_proj4_label := up_label
+
+                            sess.amrp_up_projections_drawn := true
+
+                        // Draw LOWER projections if broke down and not yet drawn
+                        if broke_dn and not sess.amrp_dn_projections_drawn
+                            sess.amrp_broke_dn := true
+                            dn_zone_size = sess.amrp_dn_inner - sess.amrp_dn_outer
+
+                            for proj_idx = 0 to num_projections - 1
+                                multiplier = array.get(parsed_multipliers, proj_idx)
+                                dn_price = sess.amrp_dn_outer - (dn_zone_size * multiplier)
+                                dn_line = line.new(sess.start_timestamp, dn_price, sess.end_timestamp, dn_price, xloc=xloc.bar_time, color=projection_color, width=1, style=proj_line_style)
+
+                                label dn_label = na
+                                if show_projection_labels
+                                    label_str = "-" + format_projection_label(multiplier)
+                                    padding_spaces = ""
+                                    for p = 0 to (max_label_width - str.length(label_str)) - 1
+                                        padding_spaces := padding_spaces + " "
+                                    label_text = margin_str + label_str + padding_spaces
+                                    dn_label := label.new(sess.end_timestamp, dn_price, label_text, xloc=xloc.bar_time, style=label.style_none, textcolor=projection_color, size=size.tiny, textalign=text.align_left)
+
+                                // Assign to struct
+                                if proj_idx == 0
+                                    sess.amrp_dn_proj1 := dn_line
+                                    sess.amrp_dn_proj1_label := dn_label
+                                else if proj_idx == 1
+                                    sess.amrp_dn_proj2 := dn_line
+                                    sess.amrp_dn_proj2_label := dn_label
+                                else if proj_idx == 2
+                                    sess.amrp_dn_proj3 := dn_line
+                                    sess.amrp_dn_proj3_label := dn_label
+                                else if proj_idx == 3
+                                    sess.amrp_dn_proj4 := dn_line
+                                    sess.amrp_dn_proj4_label := dn_label
+
+                            sess.amrp_dn_projections_drawn := true
+
+                    array.set(session_instances, i, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ⚠️ DEVELOPER DOCUMENTATION - MUST READ BEFORE MODIFYING ⚠️
+// ══════════════════════════════════════════════════════════════════════════════
+// AMRP ACCURACY TRACKER (Advanced/Detailed)
+// ══════════════════════════════════════════════════════════════════════════════
+
+if show_amrp_accuracy and barstate.islast
+
+    if amrp_accuracy_mode == "Single Session"
+        // ────────────────────────────────────────────────────────────────────
+        // SINGLE SESSION MODE
+        // ────────────────────────────────────────────────────────────────────
+        var table acc_table = table.new(position.middle_right, 3, 10, bgcolor=color.new(color.black, 10), border_width=1)
+
+        // Headers
+        if barstate.isfirst
+            table.cell(acc_table, 0, 0, "AMRP ACCURACY", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 50))
+            table.merge_cells(acc_table, 0, 0, 2, 0)
+
+            table.cell(acc_table, 0, 1, "Session", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.cell(acc_table, 1, 1, amrp_accuracy_session, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.merge_cells(acc_table, 1, 1, 2, 1)
+
+            table.cell(acc_table, 0, 2, "Method", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.cell(acc_table, 1, 2, "IQR", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.merge_cells(acc_table, 1, 2, 2, 2)
+
+            // Display active lookback
+            effective_lookback_display = amrp_lookback_mode == "Compare 3" ? "4,6,9" : str.tostring(amrp_lookback)
+            table.cell(acc_table, 0, 3, "Lookback", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.cell(acc_table, 1, 3, effective_lookback_display, text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 80))
+            table.merge_cells(acc_table, 1, 3, 2, 3)
+
+            table.cell(acc_table, 0, 4, "Metric", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+            table.cell(acc_table, 1, 4, "Bars", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+            table.cell(acc_table, 2, 4, "%", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+
+        // Find the most recent completed session matching the selected name
+        var int total_bars = na
+        var int inner_bars = na
+        var int outer_bars = na
+        var int broke_bars = na
+
+        if array.size(session_instances) > 0
+            for i = array.size(session_instances) - 1 to 0
+                sess = array.get(session_instances, i)
+                if sess.name == amrp_accuracy_session and sess.amrp_drawn and sess.amrp_bars_total > 0
+                    total_bars := sess.amrp_bars_total
+                    inner_bars := sess.amrp_bars_within_inner
+                    outer_bars := sess.amrp_bars_within_outer
+                    broke_bars := sess.amrp_bars_broke_outer
+                    break
+
+        // Calculate percentages
+        inner_pct_val = not na(total_bars) and total_bars > 0 ? (inner_bars / total_bars) * 100 : 0.0
+        outer_pct_val = not na(total_bars) and total_bars > 0 ? (outer_bars / total_bars) * 100 : 0.0
+        broke_pct_val = not na(total_bars) and total_bars > 0 ? (broke_bars / total_bars) * 100 : 0.0
+
+        // Display data
+        table.cell(acc_table, 0, 5, "Total Bars", text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 1, 5, str.tostring(na(total_bars) ? 0 : total_bars), text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 2, 5, "100%", text_color=color.white, text_size=size.small)
+
+        table.cell(acc_table, 0, 6, "", text_color=color.gray, text_size=size.small)
+        table.cell(acc_table, 1, 6, "", text_color=color.gray, text_size=size.small)
+        table.cell(acc_table, 2, 6, "", text_color=color.gray, text_size=size.small)
+
+        inner_color = inner_pct_val >= 40 ? color.green : inner_pct_val >= 25 ? color.orange : color.red
+        table.cell(acc_table, 0, 7, "Within Inner", text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 1, 7, str.tostring(na(inner_bars) ? 0 : inner_bars), text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 2, 7, str.format("{0,number,#.#}%", inner_pct_val), text_color=inner_color, text_size=size.small, bgcolor=color.new(inner_color, 85))
+
+        outer_color = outer_pct_val >= 60 ? color.green : outer_pct_val >= 40 ? color.orange : color.red
+        table.cell(acc_table, 0, 8, "Within Outer", text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 1, 8, str.tostring(na(outer_bars) ? 0 : outer_bars), text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 2, 8, str.format("{0,number,#.#}%", outer_pct_val), text_color=outer_color, text_size=size.small, bgcolor=color.new(outer_color, 85))
+
+        broke_color = broke_pct_val <= 20 ? color.green : broke_pct_val <= 40 ? color.orange : color.red
+        table.cell(acc_table, 0, 9, "Broke Outer", text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 1, 9, str.tostring(na(broke_bars) ? 0 : broke_bars), text_color=color.white, text_size=size.small)
+        table.cell(acc_table, 2, 9, str.format("{0,number,#.#}%", broke_pct_val), text_color=broke_color, text_size=size.small, bgcolor=color.new(broke_color, 85))
+
+    else if amrp_accuracy_mode == "Aggregate"
+        // ────────────────────────────────────────────────────────────────────
+        // AGGREGATE MODE - All 15 Sessions Overview
+        // ────────────────────────────────────────────────────────────────────
+        var table agg_table = table.new(position.middle_right, 5, 19, bgcolor=color.new(color.black, 10), border_width=1)
+
+        // Headers
+        table.cell(agg_table, 0, 0, "AMRP ACCURACY - ALL SESSIONS", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 50))
+        table.merge_cells(agg_table, 0, 0, 4, 0)
+
+        table.cell(agg_table, 0, 1, "Method: IQR", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(agg_table, 0, 1, 4, 1)
+
+        // Display active lookback
+        effective_lookback_display = amrp_lookback_mode == "Compare 3" ? "4,6,9" : str.tostring(amrp_lookback)
+        table.cell(agg_table, 0, 2, "Lookback: " + effective_lookback_display, text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(agg_table, 0, 2, 4, 2)
+
+        table.cell(agg_table, 0, 3, "Session", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(agg_table, 1, 3, "Bars", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(agg_table, 2, 3, "Inner%", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(agg_table, 3, 3, "Outer%", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(agg_table, 4, 3, "Broke%", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+
+        // Collect data for all 15 sessions
+        session_names = array.from(SESSION_DAMASU, SESSION_OSAKA, SESSION_KYOTO, SESSION_NAGASAKI, SESSION_TURNCOAT, SESSION_BISHOP, SESSION_KNIGHT, SESSION_BIGBEN, SESSION_NYOPEN, SESSION_JUDAS, SESSION_MODEL11, SESSION_MODEL110, SESSION_LUNCH, SESSION_MODEL1001, SESSION_MODEL111)
+
+        total_bars_all = 0
+        inner_bars_all = 0
+        outer_bars_all = 0
+        broke_bars_all = 0
+
+        for row = 0 to 14
+            sess_name = array.get(session_names, row)
+
+            // Find most recent session with this name
+            sess_total = 0
+            sess_inner = 0
+            sess_outer = 0
+            sess_broke = 0
+
+            if array.size(session_instances) > 0
+                for i = array.size(session_instances) - 1 to 0
+                    sess = array.get(session_instances, i)
+                    if sess.name == sess_name and sess.amrp_drawn and sess.amrp_bars_total > 0
+                        sess_total := sess.amrp_bars_total
+                        sess_inner := sess.amrp_bars_within_inner
+                        sess_outer := sess.amrp_bars_within_outer
+                        sess_broke := sess.amrp_bars_broke_outer
+                        break
+
+            // Accumulate totals
+            total_bars_all := total_bars_all + sess_total
+            inner_bars_all := inner_bars_all + sess_inner
+            outer_bars_all := outer_bars_all + sess_outer
+            broke_bars_all := broke_bars_all + sess_broke
+
+            // Calculate percentages
+            inner_pct = sess_total > 0 ? (sess_inner / sess_total) * 100 : 0.0
+            outer_pct = sess_total > 0 ? (sess_outer / sess_total) * 100 : 0.0
+            broke_pct = sess_total > 0 ? (sess_broke / sess_total) * 100 : 0.0
+
+            // Display row
+            table.cell(agg_table, 0, row + 4, sess_name, text_color=color.white, text_size=size.tiny)
+            table.cell(agg_table, 1, row + 4, str.tostring(sess_total), text_color=color.white, text_size=size.tiny)
+
+            inner_col = inner_pct >= 40 ? color.green : inner_pct >= 25 ? color.orange : sess_total > 0 ? color.red : color.gray
+            table.cell(agg_table, 2, row + 4, sess_total > 0 ? str.format("{0,number,#.#}", inner_pct) : "-", text_color=inner_col, text_size=size.tiny)
+
+            outer_col = outer_pct >= 60 ? color.green : outer_pct >= 40 ? color.orange : sess_total > 0 ? color.red : color.gray
+            table.cell(agg_table, 3, row + 4, sess_total > 0 ? str.format("{0,number,#.#}", outer_pct) : "-", text_color=outer_col, text_size=size.tiny)
+
+            broke_col = broke_pct <= 20 ? color.green : broke_pct <= 40 ? color.orange : sess_total > 0 ? color.red : color.gray
+            table.cell(agg_table, 4, row + 4, sess_total > 0 ? str.format("{0,number,#.#}", broke_pct) : "-", text_color=broke_col, text_size=size.tiny)
+
+    else if amrp_accuracy_mode == "Auto-Score"
+        // ────────────────────────────────────────────────────────────────────
+        // AUTO-SCORE MODE - Automatic Method Ranking
+        // ────────────────────────────────────────────────────────────────────
+        var table score_table = table.new(position.middle_right, 3, 12, bgcolor=color.new(color.black, 10), border_width=1)
+
+        // Headers
+        table.cell(score_table, 0, 0, "AMRP AUTO-SCORE", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.purple, 50))
+        table.merge_cells(score_table, 0, 0, 2, 0)
+
+        table.cell(score_table, 0, 1, "Method: IQR", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(score_table, 0, 1, 2, 1)
+
+        // Display active lookback
+        effective_lookback_display = amrp_lookback_mode == "Compare 3" ? "4,6,9" : str.tostring(amrp_lookback)
+        table.cell(score_table, 0, 2, "Lookback: " + effective_lookback_display, text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(score_table, 0, 2, 2, 2)
+
+        // Aggregate all session data
+        total_bars_all = 0
+        inner_bars_all = 0
+        outer_bars_all = 0
+        broke_bars_all = 0
+
+        if array.size(session_instances) > 0
+            for i = 0 to array.size(session_instances) - 1
+                sess = array.get(session_instances, i)
+                if sess.amrp_drawn and sess.amrp_bars_total > 0
+                    total_bars_all := total_bars_all + sess.amrp_bars_total
+                    inner_bars_all := inner_bars_all + sess.amrp_bars_within_inner
+                    outer_bars_all := outer_bars_all + sess.amrp_bars_within_outer
+                    broke_bars_all := broke_bars_all + sess.amrp_bars_broke_outer
+
+        // Calculate aggregate percentages
+        inner_pct_agg = total_bars_all > 0 ? (inner_bars_all / total_bars_all) * 100 : 0.0
+        outer_pct_agg = total_bars_all > 0 ? (outer_bars_all / total_bars_all) * 100 : 0.0
+        broke_pct_agg = total_bars_all > 0 ? (broke_bars_all / total_bars_all) * 100 : 0.0
+
+        // Calculate score (0-100, higher is better)
+        // Target: Inner ~40-50%, Outer ~65-75%, Broke ~15-25%
+        inner_score = math.max(0, 100 - math.abs(inner_pct_agg - 45) * 2)
+        outer_score = math.max(0, 100 - math.abs(outer_pct_agg - 70) * 1.5)
+        broke_score = math.max(0, 100 - math.abs(broke_pct_agg - 20) * 2)
+        overall_score = (inner_score + outer_score + broke_score) / 3
+
+        // Determine rating
+        rating = overall_score >= 80 ? "EXCELLENT ★★★" : overall_score >= 60 ? "GOOD ★★" : overall_score >= 40 ? "FAIR ★" : "POOR"
+        rating_color = overall_score >= 80 ? color.green : overall_score >= 60 ? color.lime : overall_score >= 40 ? color.orange : color.red
+
+        table.cell(score_table, 0, 3, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 1, 3, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 2, 3, "", text_color=color.gray, text_size=size.small)
+
+        table.cell(score_table, 0, 4, "Metric", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(score_table, 1, 4, "Value", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+        table.cell(score_table, 2, 4, "Score", text_color=color.gray, text_size=size.small, bgcolor=color.new(color.gray, 90))
+
+        table.cell(score_table, 0, 5, "Total Bars", text_color=color.white, text_size=size.small)
+        table.cell(score_table, 1, 5, str.tostring(total_bars_all), text_color=color.white, text_size=size.small)
+        table.cell(score_table, 2, 5, "-", text_color=color.gray, text_size=size.small)
+
+        table.cell(score_table, 0, 6, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 1, 6, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 2, 6, "", text_color=color.gray, text_size=size.small)
+
+        inner_col = inner_score >= 80 ? color.green : inner_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 7, "Within Inner", text_color=color.white, text_size=size.small)
+        table.cell(score_table, 1, 7, str.format("{0,number,#.#}%", inner_pct_agg), text_color=color.white, text_size=size.small)
+        table.cell(score_table, 2, 7, str.format("{0,number,#.#}", inner_score), text_color=inner_col, text_size=size.small, bgcolor=color.new(inner_col, 85))
+
+        outer_col = outer_score >= 80 ? color.green : outer_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 8, "Within Outer", text_color=color.white, text_size=size.small)
+        table.cell(score_table, 1, 8, str.format("{0,number,#.#}%", outer_pct_agg), text_color=color.white, text_size=size.small)
+        table.cell(score_table, 2, 8, str.format("{0,number,#.#}", outer_score), text_color=outer_col, text_size=size.small, bgcolor=color.new(outer_col, 85))
+
+        broke_col = broke_score >= 80 ? color.green : broke_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 9, "Broke Outer", text_color=color.white, text_size=size.small)
+        table.cell(score_table, 1, 9, str.format("{0,number,#.#}%", broke_pct_agg), text_color=color.white, text_size=size.small)
+        table.cell(score_table, 2, 9, str.format("{0,number,#.#}", broke_score), text_color=broke_col, text_size=size.small, bgcolor=color.new(broke_col, 85))
+
+        table.cell(score_table, 0, 10, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 1, 10, "", text_color=color.gray, text_size=size.small)
+        table.cell(score_table, 2, 10, "", text_color=color.gray, text_size=size.small)
+
+        table.cell(score_table, 0, 11, "OVERALL", text_color=color.white, text_size=size.small, bgcolor=color.new(color.gray, 80))
+        table.cell(score_table, 1, 11, rating, text_color=rating_color, text_size=size.small, bgcolor=color.new(rating_color, 90))
+        table.cell(score_table, 2, 11, str.format("{0,number,#.#}", overall_score), text_color=rating_color, text_size=size.small, bgcolor=color.new(rating_color, 85))
+
+// Comprehensive developer documentation is available in:
+// ./DTT_SESSION_DEVELOPER_DOCS.md
+//
+// READ THIS DOCUMENTATION BEFORE MAKING ANY CHANGES TO THIS FILE!
+//
+// The documentation covers:
+// - Business requirements & expectations (session accuracy across timeframes)
+// - Critical implementation details (ROOT CAUSE fixes for midnight-wrapping)
+// - Common pitfalls & how to avoid them
+// - Architecture decisions & rationale
+// - Mandatory testing requirements
+// - Modification checklist (15-point verification before commits)
+//
+// Key reminders:
+// ✓ Session highs/lows MUST match exactly across all timeframes (1m-5m)
+// ✓ Test Nagasaki & Turncoat sessions on 3-minute charts (midnight wrapping)
+// ✓ Do NOT change initialization values (-1e10, 1e10)
+// ✓ Do NOT modify time_in_bar_range() without understanding ROOT CAUSE fix
+// ✓ Do NOT remove 1-minute bar filtering (lines 620-659)
+// ✓ Always use local variable copies in session loops
+// ✓ Visual elements (boundaries/lines) must draw at SESSION START, not root time
+// ✓ Check `not na(session_start_timestamp)` before drawing visual elements
+//
+//
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// CHANGELOG - Record of all changes and WHY they were made
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// [2025-10-13] - Fixed label and boundary timing for pre-created sessions
+// PROBLEM: Model 111 label appeared at 13:30 (root time) instead of 14:09 (start time)
+//          Model 1001 end boundary disappeared at 13:30 when Model 111 was pre-created
+// ROOT CAUSE: Visual elements were drawing during pre-creation instead of session start
+// FIX: Added `not na(session_start_timestamp)` checks before drawing visual elements
+//      Only delete previous boundary when session officially starts, not during pre-creation
+//      Added end boundary and label drawing in phase 2 (when pre-created session starts)
+// LOCATIONS: Lines 983, 1008, 1025, 918-967 (phase 2)
+// TEST: Model 111 label must appear at 14:09, Model 1001 boundary must stay until 14:09
+//
+// [2025-10-13] - Fixed end_timestamp calculation bug
+// PROBLEM: Lines extending 24 hours into future when changing "Show Last N Days"
+// ROOT CAUSE: `if calculated_end_timestamp <= time` incorrectly added a day for historical sessions
+// FIX: Only add day if session wraps midnight, not if end_timestamp is in the past
+// LOCATION: Line 966
+// TEST: Change "Show Last N Days" to 2, verify lines don't extend into tomorrow
+//
+// [2025-10-13] - Added fallback for empty intrabar data
+// PROBLEM: request.security_lower_tf() returns empty arrays on real-time bars/chart load
+// ROOT CAUSE: TradingView data availability issues
+// FIX: If array empty, push current bar's high/low/time as fallback
+// LOCATIONS: Lines 1092-1099, 1192-1197
+// TEST: Big Ben and NY Open high/low lines must appear on fresh chart load
+//
+// [2025-10-13] - Protected session initialization extreme values
+// PROBLEM: Risk of changing -1e10, 1e10 to realistic values
+// ROOT CAUSE: Could cause wrong high/low if session starts mid-bar
+// FIX: Added protective comments and documentation
+// LOCATION: Line 969
+// TEST: Session highs/lows must match across all timeframes (1m-5m)
+//
+// [2025-10-13] - Added comprehensive inline documentation
+// PROBLEM: Previous changes were lost when context reset, causing regressions
+// ROOT CAUSE: No CHANGELOG tracking what works and why
+// FIX: Added this CHANGELOG and protective comments throughout code
+// PURPOSE: Prevent future regressions by documenting WHAT changed, WHY, and HOW to test
+//
+// [2025-10-13] - CRITICAL BUG FIX: Separated root capture from root display
+// PROBLEM: AMRP zones not showing when "Show Root Prices" toggle was OFF
+// ROOT CAUSE: Root CAPTURE was gated by `if show_roots` at line 1179
+// FIX: Changed to `if true` - root capture now ALWAYS happens, display toggle only affects visualization
+// LOCATION: Line 1181 (changed from `if show_roots` to `if true`)
+// TEST: Turn OFF "Show Root Prices", AMRP zones should still appear
+// WHY CRITICAL: AMRP requires root data to calculate zones - data capture MUST be independent of display
+//
+// [2025-10-13] - CRITICAL BUG FIX: Validate session high/low before drawing lines
+// PROBLEM: Judas and NY Open missing high/low lines on instruments without 9:30 bar (e.g., NQ on 1-min)
+// ROOT CAUSE: Previous sessions had high/low still at initialization values (-1e10, 1e10)
+//             These pass `not na()` check but are invalid data that draw lines off-screen
+// FIX: Added validation: high < 1e9 AND low > -1e9 (realistic price ranges)
+// LOCATIONS: Lines 953-955 (phase 2), Lines 1053-1055 (session creation)
+// TEST: Load NQ on 1-minute chart, check if Judas/NY Open gracefully handle missing data
+// WHY INSTRUMENT-SPECIFIC: Some instruments (e.g., NQ) don't have bars at certain times (9:30)
+//                         Code should gracefully degrade instead of drawing invisible lines
+//
+// ══════════════════════════════════════════════════════════════════════════════
