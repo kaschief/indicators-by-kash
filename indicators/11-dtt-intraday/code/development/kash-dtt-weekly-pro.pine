@@ -1,0 +1,778 @@
+//@version=6
+indicator('Kash DTT Weekly° [Pro+] (dev)', overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 📋 IMPLEMENTATION NOTES - READ BEFORE MODIFYING
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ CRITICAL: Before making ANY changes to this code, read:
+//    → WEEKLY_DTT_IMPLEMENTATION_NOTES.md (same directory)
+//
+// That file contains:
+//    • Critical code sections that must not be modified
+//    • Resolved issues #1-9 (do not regress!)
+//    • Performance optimizations explained
+//    • Helper function documentation
+//    • Testing checklist
+//    • Known limitations
+//
+// This code has been carefully optimized for correctness and performance.
+// Modifying without reading the notes WILL break functionality.
+//
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+const int SESSIONS_PER_CYCLE = 4
+const string TIMEZONE = "America/New_York"
+
+// Session Name Constants
+const string SESSION_ISCARIOT = "Iscariot"
+const string SESSION_ARIES = "Aries"
+const string SESSION_ASH = "Ash"
+const string SESSION_ICARUS = "Icarus"
+
+// Day of Week Constants (Pine Script standard: 1=Sunday, 7=Saturday)
+const int DAY_SUNDAY = 1
+const int DAY_MONDAY = 2
+const int DAY_TUESDAY = 3
+const int DAY_WEDNESDAY = 4
+const int DAY_THURSDAY = 5
+const int DAY_FRIDAY = 6
+const int DAY_SATURDAY = 7
+
+// Default Colors
+const color DEFAULT_BOUNDARY_COLOR = color.rgb(156, 156, 156)
+const color DEFAULT_INTERVAL_COLOR = color.rgb(200, 200, 200)
+const color DEFAULT_HIGH_LOW_COLOR = color.rgb(250, 161, 164)
+const color DEFAULT_ROOT_ZONE_COLOR = color.rgb(225, 190, 231)
+const color DEFAULT_ROOT_LINE_COLOR = color.rgb(179, 157, 219)
+const color DEFAULT_ROOT_TIME_LABEL_COLOR = color.rgb(179, 157, 219)
+const color DEFAULT_ROOT_TIME_TEXT_COLOR = color.rgb(156, 156, 156)
+
+// Style Constants
+const string STYLE_SOLID = "Solid"
+const string STYLE_DASHED = "Dashed"
+const string STYLE_DOTTED = "Dotted"
+
+// Size Constants
+const string SIZE_TINY = "Tiny"
+const string SIZE_SMALL = "Small"
+const string SIZE_NORMAL = "Normal"
+const string SIZE_LARGE = "Large"
+const string SIZE_HUGE = "Huge"
+
+// Input Group Names
+const string GROUP_SESSIONS = "Sessions"
+const string GROUP_ROOT = "Root Prices"
+
+// Line Width Constants
+const int WIDTH_BOUNDARY = 1
+const int WIDTH_INTERVAL = 1
+const int WIDTH_HIGH_LOW = 1  // Session high/low lines
+const int WIDTH_ROOT = 1  // Root zone line
+
+// Session Time Constants (HHMM format, America/New_York timezone)
+// ⚠️ Based on years of research - see implementation notes before modifying
+
+// Iscariot: Sun 18:00 → Mon 07:00 (13h)
+const int TIME_ISCARIOT_START = 1800
+const int DAY_ISCARIOT_START = DAY_SUNDAY
+const int TIME_ISCARIOT_END = 700
+const int DAY_ISCARIOT_END = DAY_MONDAY
+const int TIME_ISCARIOT_ROOT = 1930
+const int DAY_ISCARIOT_ROOT = DAY_SUNDAY
+const int TIME_ISCARIOT_INTERVAL1 = 1930
+const int DAY_ISCARIOT_INTERVAL1 = DAY_SUNDAY
+const int TIME_ISCARIOT_INTERVAL2 = 2240
+const int DAY_ISCARIOT_INTERVAL2 = DAY_SUNDAY
+const int TIME_ISCARIOT_INTERVAL3 = 120
+const int DAY_ISCARIOT_INTERVAL3 = DAY_MONDAY
+
+// Aries: Mon 07:00 → Tue 12:25 (29.4h)
+const int TIME_ARIES_START = 700
+const int DAY_ARIES_START = DAY_MONDAY
+const int TIME_ARIES_END = 1225
+const int DAY_ARIES_END = DAY_TUESDAY
+const int TIME_ARIES_ROOT = 945
+const int DAY_ARIES_ROOT = DAY_MONDAY
+const int TIME_ARIES_INTERVAL1 = 945
+const int DAY_ARIES_INTERVAL1 = DAY_MONDAY
+const int TIME_ARIES_INTERVAL2 = 2045
+const int DAY_ARIES_INTERVAL2 = DAY_MONDAY
+const int TIME_ARIES_INTERVAL3 = 145
+const int DAY_ARIES_INTERVAL3 = DAY_TUESDAY
+
+// Ash: Tue 12:25 → Wed 12:45 (24.3h)
+const int TIME_ASH_START = 1225
+const int DAY_ASH_START = DAY_TUESDAY
+const int TIME_ASH_END = 1245
+const int DAY_ASH_END = DAY_WEDNESDAY
+const int TIME_ASH_ROOT = 1505
+const int DAY_ASH_ROOT = DAY_TUESDAY
+const int TIME_ASH_INTERVAL1 = 1505
+const int DAY_ASH_INTERVAL1 = DAY_TUESDAY
+const int TIME_ASH_INTERVAL2 = 2150
+const int DAY_ASH_INTERVAL2 = DAY_TUESDAY
+const int TIME_ASH_INTERVAL3 = 235
+const int DAY_ASH_INTERVAL3 = DAY_WEDNESDAY
+
+// Icarus: Wed 12:45 → Sun 18:00 (77.3h - longest, spans Wed→Sun)
+const int TIME_ICARUS_START = 1245
+const int DAY_ICARUS_START = DAY_WEDNESDAY
+const int TIME_ICARUS_END = 1800
+const int DAY_ICARUS_END = DAY_SUNDAY
+const int TIME_ICARUS_ROOT = 1925
+const int DAY_ICARUS_ROOT = DAY_WEDNESDAY
+const int TIME_ICARUS_INTERVAL1 = 1925
+const int DAY_ICARUS_INTERVAL1 = DAY_WEDNESDAY
+const int TIME_ICARUS_INTERVAL2 = 750
+const int DAY_ICARUS_INTERVAL2 = DAY_THURSDAY
+const int TIME_ICARUS_INTERVAL3 = 1900
+const int DAY_ICARUS_INTERVAL3 = DAY_THURSDAY
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TIMEFRAME GATING
+// ══════════════════════════════════════════════════════════════════════════════
+
+int tf_seconds = timeframe.in_seconds(timeframe.period)
+
+if tf_seconds < 300  // < 5 minutes
+    runtime.error("⚠️ Weekly DTT requires minimum 5-minute timeframe. Current: " + timeframe.period)
+
+if tf_seconds > 14400  // > 4 hours
+    runtime.error("⚠️ Weekly DTT requires maximum 4-hour timeframe. Current: " + timeframe.period)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+show_last_n_weeks = input.int(1, "Show Last N Weeks", minval=1, maxval=10, group=GROUP_SESSIONS, tooltip="Number of weeks to display (4 sessions per week)")
+show_boundaries = input.bool(true, "Boundaries?", group=GROUP_SESSIONS, inline="boundary")
+boundary_color = input.color(DEFAULT_BOUNDARY_COLOR, "", group=GROUP_SESSIONS, inline="boundary")
+boundary_style = input.string(STYLE_SOLID, "Style", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_SESSIONS, inline="boundary")
+show_intervals = input.bool(false, "Intervals?", group=GROUP_SESSIONS, inline="interval")
+interval_color = input.color(DEFAULT_INTERVAL_COLOR, "", group=GROUP_SESSIONS, inline="interval")
+interval_style = input.string(STYLE_DOTTED, "Style", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_SESSIONS, inline="interval")
+show_high_low_lines = input.bool(true, "High & Low?", group=GROUP_SESSIONS, inline="highlow")
+high_low_color = input.color(DEFAULT_HIGH_LOW_COLOR, "", group=GROUP_SESSIONS, inline="highlow")
+high_low_style = input.string(STYLE_SOLID, "Style", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_SESSIONS, inline="highlow")
+show_session_labels = input.bool(true, "Labels?", group=GROUP_SESSIONS, inline="label")
+session_label_color = input.color(color.white, "", group=GROUP_SESSIONS, inline="label")
+session_label_size = input.string(SIZE_SMALL, "Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE, SIZE_HUGE], group=GROUP_SESSIONS, inline="label")
+show_root_time_in_session_label = input.bool(false, "Include Root Time", group=GROUP_SESSIONS, tooltip="Add root time below session name in label")
+show_roots = input.bool(false, "ON/OFF", group=GROUP_ROOT, tooltip="Display root prices captured at specific moments within each session")
+show_root_zone = input.bool(true, "Box?", group=GROUP_ROOT, inline="root_box", tooltip="Display shaded area between root high and root low")
+root_zone_color = input.color(DEFAULT_ROOT_ZONE_COLOR, "", group=GROUP_ROOT, inline="root_box")
+show_root_line = input.bool(true, "Line?", group=GROUP_ROOT, inline="root_line", tooltip="Display EQ line at midpoint of root zone")
+root_line_color = input.color(DEFAULT_ROOT_LINE_COLOR, "", group=GROUP_ROOT, inline="root_line")
+root_line_style = input.string(STYLE_SOLID, "Style", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_ROOT, inline="root_line")
+show_root_time_label = input.bool(true, "Time?", group=GROUP_ROOT, inline="root_time", tooltip="Display root time label at end of root zone")
+root_time_label_color = input.color(DEFAULT_ROOT_TIME_LABEL_COLOR, "Background", group=GROUP_ROOT, inline="root_time")
+root_time_text_color = input.color(DEFAULT_ROOT_TIME_TEXT_COLOR, "Text", group=GROUP_ROOT, inline="root_time")
+root_label_size = input.string(SIZE_TINY, "Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_ROOT, inline="root_time2")
+
+// Convert styles
+boundary_style_converted = boundary_style == STYLE_SOLID ? line.style_solid : boundary_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
+interval_style_converted = interval_style == STYLE_SOLID ? line.style_solid : interval_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
+high_low_style_converted = high_low_style == STYLE_SOLID ? line.style_solid : high_low_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
+root_line_style_converted = root_line_style == STYLE_SOLID ? line.style_solid : root_line_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
+
+// Convert sizes
+root_label_size_converted = root_label_size == SIZE_TINY ? size.tiny : root_label_size == SIZE_SMALL ? size.small : root_label_size == SIZE_NORMAL ? size.normal : root_label_size == SIZE_LARGE ? size.large : size.huge
+session_label_size_converted = session_label_size == SIZE_TINY ? size.tiny : session_label_size == SIZE_SMALL ? size.small : session_label_size == SIZE_NORMAL ? size.normal : session_label_size == SIZE_LARGE ? size.large : size.huge
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+type DttWeeklySession
+    string name
+    int start_time
+    int start_day
+    int end_time
+    int end_day
+    int root_time
+    int root_day
+    int interval1_time
+    int interval1_day
+    int interval2_time
+    int interval2_day
+    int interval3_time
+    int interval3_day
+    int start_bar
+    int end_bar
+    int start_timestamp
+    int end_timestamp
+    float session_high = -1e10
+    float session_low = 1e10
+    float root_high
+    float root_low
+    float root_price
+    int root_timestamp
+    line start_boundary_line
+    line end_boundary_line
+    line high_line
+    line low_line
+    box root_zone_box
+    line root_eq_line
+    line interval1_line
+    line interval2_line
+    line interval3_line
+    box session_name_box
+    label root_time_label
+    int interval1_bar
+    int interval2_bar
+    int interval3_bar
+    int interval1_timestamp
+    int interval2_timestamp
+    int interval3_timestamp
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION TEMPLATES
+// ══════════════════════════════════════════════════════════════════════════════
+
+var array<DttWeeklySession> session_templates = array.new<DttWeeklySession>()
+
+if barstate.isfirst
+    array.push(session_templates, DttWeeklySession.new(SESSION_ISCARIOT, TIME_ISCARIOT_START, DAY_ISCARIOT_START, TIME_ISCARIOT_END, DAY_ISCARIOT_END, TIME_ISCARIOT_ROOT, DAY_ISCARIOT_ROOT, TIME_ISCARIOT_INTERVAL1, DAY_ISCARIOT_INTERVAL1, TIME_ISCARIOT_INTERVAL2, DAY_ISCARIOT_INTERVAL2, TIME_ISCARIOT_INTERVAL3, DAY_ISCARIOT_INTERVAL3, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na))
+    array.push(session_templates, DttWeeklySession.new(SESSION_ARIES, TIME_ARIES_START, DAY_ARIES_START, TIME_ARIES_END, DAY_ARIES_END, TIME_ARIES_ROOT, DAY_ARIES_ROOT, TIME_ARIES_INTERVAL1, DAY_ARIES_INTERVAL1, TIME_ARIES_INTERVAL2, DAY_ARIES_INTERVAL2, TIME_ARIES_INTERVAL3, DAY_ARIES_INTERVAL3, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na))
+    array.push(session_templates, DttWeeklySession.new(SESSION_ASH, TIME_ASH_START, DAY_ASH_START, TIME_ASH_END, DAY_ASH_END, TIME_ASH_ROOT, DAY_ASH_ROOT, TIME_ASH_INTERVAL1, DAY_ASH_INTERVAL1, TIME_ASH_INTERVAL2, DAY_ASH_INTERVAL2, TIME_ASH_INTERVAL3, DAY_ASH_INTERVAL3, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na))
+    array.push(session_templates, DttWeeklySession.new(SESSION_ICARUS, TIME_ICARUS_START, DAY_ICARUS_START, TIME_ICARUS_END, DAY_ICARUS_END, TIME_ICARUS_ROOT, DAY_ICARUS_ROOT, TIME_ICARUS_INTERVAL1, DAY_ICARUS_INTERVAL1, TIME_ICARUS_INTERVAL2, DAY_ICARUS_INTERVAL2, TIME_ICARUS_INTERVAL3, DAY_ICARUS_INTERVAL3, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+hhmm_to_minutes(int hhmm) =>
+    math.floor(hhmm / 100) * 60 + (hhmm % 100)
+
+// Check if target time falls within current bar (5m: exact match, HTF: range check)
+time_matches(int target_day, int target_time) =>
+    int current_day = dayofweek(time, TIMEZONE)
+    int current_time = hour(time, TIMEZONE) * 100 + minute(time, TIMEZONE)
+
+    bool matches = false
+
+    if timeframe.multiplier == 5  // 5-minute: exact match
+        matches := current_day == target_day and current_time == target_time
+    else
+        // Higher timeframes: check if target falls within bar's time range
+        int target_minutes = hhmm_to_minutes(target_time)
+        int bar_start_minutes = hhmm_to_minutes(current_time)
+        int bar_end_minutes = bar_start_minutes + timeframe.multiplier
+
+        // Check day match and time falls in [bar_start, bar_end)
+        matches := current_day == target_day and target_minutes >= bar_start_minutes and target_minutes < bar_end_minutes
+
+    matches
+
+// Check if day+time falls within session range (handles multi-day & week-wrapping)
+is_in_session(int bar_day, int bar_minutes, DttWeeklySession sess) =>
+    int start_minutes = hhmm_to_minutes(sess.start_time)
+    int end_minutes = hhmm_to_minutes(sess.end_time)
+    bool in_session = false
+
+    if bar_day == sess.start_day
+        in_session := bar_minutes >= start_minutes
+    else if bar_day == sess.end_day
+        in_session := bar_minutes <= end_minutes
+    else
+        // Check if between start and end days
+        if sess.start_day < sess.end_day
+            // Normal case: start and end in same week
+            in_session := bar_day > sess.start_day and bar_day < sess.end_day
+        else
+            // Week-wrapping (Icarus: Wed→Sun) - ⚠️ Use <= for end_day to include Sunday
+            in_session := bar_day > sess.start_day or bar_day <= sess.end_day
+
+    in_session
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+var array<DttWeeklySession> session_instances = array.new<DttWeeklySession>()
+
+// ⚠️ Get PREVIOUS session (each session shows previous session's high/low)
+get_previous_session(string current_session_name) =>
+    DttWeeklySession result = DttWeeklySession.new(na, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+
+    // Determine previous session name in cycle
+    string prev_name = na
+    if current_session_name == SESSION_ISCARIOT
+        prev_name := SESSION_ICARUS  // Wrap around
+    else if current_session_name == SESSION_ARIES
+        prev_name := SESSION_ISCARIOT
+    else if current_session_name == SESSION_ASH
+        prev_name := SESSION_ARIES
+    else if current_session_name == SESSION_ICARUS
+        prev_name := SESSION_ASH
+
+    // Find most recent completed session with that name
+    if array.size(session_instances) > 0
+        for i = array.size(session_instances) - 1 to 0
+            DttWeeklySession sess = array.get(session_instances, i)
+            if sess.name == prev_name and not na(sess.end_bar)
+                result := sess
+                break
+
+    result
+
+int max_sessions_to_show = show_last_n_weeks * SESSIONS_PER_CYCLE
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CACHED 5-MINUTE INTRABAR DATA
+// ══════════════════════════════════════════════════════════════════════════════
+
+[five_min_highs, five_min_lows, five_min_times] = request.security_lower_tf(syminfo.tickerid, "5", [high, low, time])
+
+var array<int> five_min_days = array.new<int>()
+var array<int> five_min_minutes = array.new<int>()
+var int last_bar_time = 0
+
+// ⚠️ Rebuild cache every bar (not just on size change - Issue #8 fix)
+if not na(five_min_times) and array.size(five_min_times) > 0
+    if time != last_bar_time
+        array.clear(five_min_days)
+        array.clear(five_min_minutes)
+
+        int current_size = array.size(five_min_times)
+        for j = 0 to current_size - 1
+            int bar_time = array.get(five_min_times, j)
+            array.push(five_min_days, dayofweek(bar_time, TIMEZONE))
+            array.push(five_min_minutes, hhmm_to_minutes(hour(bar_time, TIMEZONE) * 100 + minute(bar_time, TIMEZONE)))
+
+        last_bar_time := time
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION & TRACKING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ⚠️ CRITICAL: Process ENDs before STARTs (for correct previous session lookups)
+// PASS 1: Mark session ENDs
+for i = 0 to array.size(session_templates) - 1
+    DttWeeklySession template = array.get(session_templates, i)
+
+    if time_matches(template.end_day, template.end_time) and array.size(session_instances) > 0
+        for j = array.size(session_instances) - 1 to 0
+            DttWeeklySession sess = array.get(session_instances, j)
+            if sess.name == template.name and na(sess.end_bar)
+                sess.end_bar := bar_index
+
+                // Use actual bar time (not calculated) - Issue #1 fix
+                sess.end_timestamp := time
+
+                // Update end boundary line to use actual bar time
+                if not na(sess.end_boundary_line)
+                    line.set_x1(sess.end_boundary_line, sess.end_timestamp)
+                    line.set_x2(sess.end_boundary_line, sess.end_timestamp)
+
+                // Update high/low lines to stop at session end - Issue #4 fix
+                if not na(sess.high_line)
+                    line.set_x2(sess.high_line, sess.end_timestamp)
+                if not na(sess.low_line)
+                    line.set_x2(sess.low_line, sess.end_timestamp)
+
+                break
+
+// PASS 2: Create new sessions (START events)
+for i = 0 to array.size(session_templates) - 1
+    DttWeeklySession template = array.get(session_templates, i)
+
+    // SESSION START: Create new session
+    if time_matches(template.start_day, template.start_time)
+        // Check if session already exists (avoid duplicates)
+        bool session_exists = false
+        if array.size(session_instances) > 0
+            for j = array.size(session_instances) - 1 to 0
+                DttWeeklySession sess = array.get(session_instances, j)
+                if sess.name == template.name and not na(sess.start_bar) and na(sess.end_bar)
+                    session_exists := true
+                    break
+
+        if not session_exists
+            // Use actual bar time for session start - Issue #1 fix
+            int calculated_start_timestamp = time
+
+            // For end timestamp, calculate forward from start using template times
+            // This is temporary - will be recalculated when session actually ends
+            int end_hour = math.floor(template.end_time / 100)
+            int end_minute = template.end_time % 100
+            int calculated_end_timestamp = timestamp(TIMEZONE, year(time, TIMEZONE), month(time, TIMEZONE), dayofmonth(time, TIMEZONE), end_hour, end_minute)
+
+            // Handle multi-day sessions
+            int days_to_add = 0
+            if template.end_day < template.start_day
+                days_to_add := (7 - template.start_day) + template.end_day
+            else if template.end_day > template.start_day
+                days_to_add := template.end_day - template.start_day
+
+            calculated_end_timestamp := calculated_end_timestamp + (days_to_add * 86400000)
+
+            DttWeeklySession new_session = DttWeeklySession.new(template.name, template.start_time, template.start_day, template.end_time, template.end_day, template.root_time, template.root_day, template.interval1_time, template.interval1_day, template.interval2_time, template.interval2_day, template.interval3_time, template.interval3_day, bar_index, na, calculated_start_timestamp, calculated_end_timestamp, -1e10, 1e10, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+            array.push(session_instances, new_session)
+
+            // ⚠️ Draw BOTH boundaries at creation - Issue #2 fix
+            if show_boundaries
+                new_session.start_boundary_line := line.new(calculated_start_timestamp, 1e10, calculated_start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=boundary_style_converted)
+                new_session.end_boundary_line := line.new(calculated_end_timestamp, 1e10, calculated_end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=boundary_style_converted)
+
+            // Draw high/low lines at session creation (showing PREVIOUS session values)
+            DttWeeklySession prev_sess_for_lines = get_previous_session(template.name)
+            if show_high_low_lines and not na(prev_sess_for_lines.name) and prev_sess_for_lines.session_high < 1e9 and prev_sess_for_lines.session_low > -1e9
+                new_session.high_line := line.new(calculated_start_timestamp, prev_sess_for_lines.session_high, calculated_end_timestamp, prev_sess_for_lines.session_high, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=high_low_style_converted)
+                new_session.low_line := line.new(calculated_start_timestamp, prev_sess_for_lines.session_low, calculated_end_timestamp, prev_sess_for_lines.session_low, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=high_low_style_converted)
+
+            // Draw session name as centered box
+            if show_session_labels
+                string label_text = template.name
+                if show_root_time_in_session_label
+                    int root_hour_str = math.floor(template.root_time / 100)
+                    int root_minute_str = template.root_time % 100
+                    label_text := template.name + "\n(" + str.tostring(root_hour_str, "#00") + ":" + str.tostring(root_minute_str, "#00") + ")"
+
+                // Use transparent box spanning from start to end with centered text
+                new_session.session_name_box := box.new(calculated_start_timestamp, high, calculated_end_timestamp, high, xloc=xloc.bar_time, border_color=color.new(color.white, 100), bgcolor=color.new(color.white, 100), text=label_text, text_color=session_label_color, text_size=session_label_size_converted, text_halign=text.align_center, text_valign=text.align_center)
+
+            // ⚠️ Extend PREVIOUS session's root zones (not high/low lines) to current session end
+            DttWeeklySession prev_sess = get_previous_session(template.name)
+            if not na(prev_sess.name) and not na(calculated_end_timestamp)
+                // Extend previous session's root line to current session's end
+                if not na(prev_sess.root_eq_line)
+                    line.set_x2(prev_sess.root_eq_line, calculated_end_timestamp)
+
+                // Extend previous session's root box to current session's end
+                if not na(prev_sess.root_zone_box)
+                    box.set_right(prev_sess.root_zone_box, calculated_end_timestamp)
+
+                // Move previous session's root label to current session's end
+                if not na(prev_sess.root_time_label)
+                    label.set_x(prev_sess.root_time_label, calculated_end_timestamp)
+
+                // NOTE: High/low lines are NOT extended here - they stop at their own session's end
+
+// PASS 3: Process ROOT and INTERVAL events
+for i = 0 to array.size(session_templates) - 1
+    DttWeeklySession template = array.get(session_templates, i)
+
+    // ⚠️ ROOT TIME: Capture from specific 5-minute bar (not current timeframe bar)
+    if time_matches(template.root_day, template.root_time) and array.size(session_instances) > 0
+        for j = array.size(session_instances) - 1 to 0
+            DttWeeklySession sess = array.get(session_instances, j)
+            if sess.name == template.name and na(sess.root_timestamp)
+                // Try to capture from 5-minute intrabar data first
+                bool captured_from_intrabars = false
+                if not na(five_min_times) and array.size(five_min_times) > 0
+                    // Find the exact 5-minute bar at root time
+                    int root_minutes = hhmm_to_minutes(template.root_time)
+                    for k = 0 to array.size(five_min_times) - 1
+                        int bar_day = array.get(five_min_days, k)
+                        int bar_minutes = array.get(five_min_minutes, k)
+                        if bar_day == template.root_day and bar_minutes == root_minutes
+                            // Found the exact root candle - capture its high/low
+                            sess.root_high := array.get(five_min_highs, k)
+                            sess.root_low := array.get(five_min_lows, k)
+                            sess.root_price := (sess.root_high + sess.root_low) / 2.0
+                            sess.root_timestamp := array.get(five_min_times, k)
+                            captured_from_intrabars := true
+                            break
+
+                // Fallback: use current bar if no 5-minute data available
+                if not captured_from_intrabars
+                    sess.root_high := high
+                    sess.root_low := low
+                    sess.root_price := (high + low) / 2.0
+                    sess.root_timestamp := time
+                break
+
+    // ─── INTERVAL TIMES: Mark interval bars ───
+    if array.size(session_instances) > 0
+        DttWeeklySession active_session = na
+        for j = array.size(session_instances) - 1 to 0
+            DttWeeklySession sess = array.get(session_instances, j)
+            if sess.name == template.name and not na(sess.start_bar) and na(sess.end_bar)
+                active_session := sess
+                break
+
+        if not na(active_session)
+            if time_matches(template.interval1_day, template.interval1_time) and na(active_session.interval1_bar)
+                active_session.interval1_bar := bar_index
+            if time_matches(template.interval2_day, template.interval2_time) and na(active_session.interval2_bar)
+                active_session.interval2_bar := bar_index
+            if time_matches(template.interval3_day, template.interval3_time) and na(active_session.interval3_bar)
+                active_session.interval3_bar := bar_index
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HIGH/LOW TRACKING FROM CURRENT TIMEFRAME BARS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ⚠️ Track session highs/lows using current timeframe OHLC - Issue #3 fix
+if array.size(session_instances) > 0
+    int current_day = dayofweek(time, TIMEZONE)
+    int current_minutes = hhmm_to_minutes(hour(time, TIMEZONE) * 100 + minute(time, TIMEZONE))
+
+    // Performance: Only process recent sessions (max_sessions_to_show + 4 buffer)
+    int total_sessions_hl = array.size(session_instances)
+    int session_buffer = 4  // Full week cycle buffer
+    int start_session_index = math.max(0, total_sessions_hl - max_sessions_to_show - session_buffer)
+    for i = start_session_index to total_sessions_hl - 1
+        DttWeeklySession sess = array.get(session_instances, i)
+
+        // Only track for sessions that have started
+        if not na(sess.start_bar)
+            // CRITICAL: Check if bar OVERLAPS with session (not just if bar start is in session)
+            // On higher timeframes, bars can START before session but CONTAIN session start
+            // Example: 4h bar 12:00-16:00 starts before Icarus (12:45) but contains 12:45-16:00
+            // We must check if EITHER bar start OR bar end falls within session
+
+            // Calculate bar end time (in minutes)
+            int bar_end_minutes = current_minutes + timeframe.multiplier
+            int bar_end_day = current_day
+
+            // Handle midnight crossing
+            if bar_end_minutes >= 1440
+                bar_end_minutes := bar_end_minutes - 1440
+                bar_end_day := current_day == DAY_SATURDAY ? DAY_SUNDAY : current_day + 1
+
+            // LEVEL 1: Check if EITHER bar start OR bar end is in session (bar overlaps session)
+            // This is the Issue #7 fix - MUST remain to catch boundary bars
+            bool bar_start_in_session = is_in_session(current_day, current_minutes, sess)
+            bool bar_end_in_session = is_in_session(bar_end_day, bar_end_minutes, sess)
+
+            if bar_start_in_session or bar_end_in_session
+                // LEVEL 2: Detect if this is a BOUNDARY bar (partially overlaps) or FULLY in session
+                // Boundary bar = bar starts BEFORE session OR ends AFTER session
+                // If both start AND end are in session → fully in session (no filtering needed)
+                bool is_boundary_bar = not (bar_start_in_session and bar_end_in_session)
+
+                // LEVEL 3: Check if we have 5-minute intrabar data available for filtering
+                bool has_intrabar_data = not na(five_min_times) and array.size(five_min_times) > 0
+
+                // SMART FILTER: For boundary bars with available intrabar data, use filtered 5-min bars
+                // This solves Issue #9 by excluding out-of-session extremes
+                if is_boundary_bar and has_intrabar_data
+                    // Process only 5-minute intrabars that fall WITHIN session boundaries
+                    for j = 0 to array.size(five_min_times) - 1
+                        int intrabar_day = array.get(five_min_days, j)
+                        int intrabar_minutes = array.get(five_min_minutes, j)
+
+                        // Only include intrabars that are actually IN the session
+                        if is_in_session(intrabar_day, intrabar_minutes, sess)
+                            float intrabar_high = array.get(five_min_highs, j)
+                            float intrabar_low = array.get(five_min_lows, j)
+
+                            // Track session high/low from filtered intrabars only
+                            if intrabar_high > sess.session_high
+                                sess.session_high := intrabar_high
+                            if intrabar_low < sess.session_low
+                                sess.session_low := intrabar_low
+                else
+                    // FALLBACK: Use full bar OHLC for:
+                    // 1. Bars fully in session (no filtering needed - performance optimization)
+                    // 2. Boundary bars without intrabar data (historical bars - graceful degradation)
+                    if high > sess.session_high
+                        sess.session_high := high
+                    if low < sess.session_low
+                        sess.session_low := low
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISUAL ELEMENTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+int total_sessions = array.size(session_instances)
+int start_index = math.max(0, total_sessions - max_sessions_to_show)
+
+// CRITICAL: Delete old visual elements that are outside the display window
+if total_sessions > 0
+    for i = 0 to math.min(start_index - 1, total_sessions - 1)
+        DttWeeklySession sess = array.get(session_instances, i)
+
+        // Delete all visual elements for sessions outside display window
+        if not na(sess.start_boundary_line)
+            line.delete(sess.start_boundary_line)
+            sess.start_boundary_line := na
+        if not na(sess.end_boundary_line)
+            line.delete(sess.end_boundary_line)
+            sess.end_boundary_line := na
+        if not na(sess.high_line)
+            line.delete(sess.high_line)
+            sess.high_line := na
+        if not na(sess.low_line)
+            line.delete(sess.low_line)
+            sess.low_line := na
+        if not na(sess.session_name_box)
+            box.delete(sess.session_name_box)
+            sess.session_name_box := na
+        if not na(sess.root_zone_box)
+            box.delete(sess.root_zone_box)
+            sess.root_zone_box := na
+        if not na(sess.root_eq_line)
+            line.delete(sess.root_eq_line)
+            sess.root_eq_line := na
+        if not na(sess.root_time_label)
+            label.delete(sess.root_time_label)
+            sess.root_time_label := na
+        if not na(sess.interval1_line)
+            line.delete(sess.interval1_line)
+            sess.interval1_line := na
+        if not na(sess.interval2_line)
+            line.delete(sess.interval2_line)
+            sess.interval2_line := na
+        if not na(sess.interval3_line)
+            line.delete(sess.interval3_line)
+            sess.interval3_line := na
+
+// ⚠️ Session pruning - prevents unbounded memory growth (see implementation notes)
+int buffer_size = 20
+int max_sessions_to_keep = max_sessions_to_show + buffer_size
+
+if total_sessions > max_sessions_to_keep
+    int sessions_to_remove = total_sessions - max_sessions_to_keep
+    for i = 0 to sessions_to_remove - 1
+        array.remove(session_instances, 0)
+    total_sessions := array.size(session_instances)
+    start_index := math.max(0, total_sessions - max_sessions_to_show)
+
+// Draw visual elements for sessions in display window
+if total_sessions > 0
+    for i = start_index to total_sessions - 1
+        DttWeeklySession sess = array.get(session_instances, i)
+
+        if na(sess.start_bar)
+            continue
+
+        bool is_active = na(sess.end_bar)
+        int display_end_bar = is_active ? bar_index : sess.end_bar
+        // CRITICAL: Always use calculated end_timestamp (calculated at session creation)
+        // This ensures high/low lines and roots extend to session end even for active sessions
+        int display_end_time = sess.end_timestamp
+
+        // CRITICAL: Find NEXT session to extend roots/high/low lines through it
+        // Roots extend from current session → end of FOLLOWING session
+        DttWeeklySession next_sess = DttWeeklySession.new(na, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+        string next_name = na
+        if sess.name == SESSION_ISCARIOT
+            next_name := SESSION_ARIES
+        else if sess.name == SESSION_ARIES
+            next_name := SESSION_ASH
+        else if sess.name == SESSION_ASH
+            next_name := SESSION_ICARUS
+        else if sess.name == SESSION_ICARUS
+            next_name := SESSION_ISCARIOT  // Wrap around
+
+        // Find the next session
+        if i + 1 < total_sessions
+            DttWeeklySession candidate = array.get(session_instances, i + 1)
+            if candidate.name == next_name
+                next_sess := candidate
+
+        // Extension end time: use next session's end if it exists, otherwise current session end
+        int extension_end_time = not na(next_sess.name) ? next_sess.end_timestamp : display_end_time
+
+        // ─── BOUNDARIES ───
+        // CRITICAL: Recreate both boundaries if missing (happens when session was outside display window)
+        if show_boundaries
+            // Recreate start boundary if missing
+            if na(sess.start_boundary_line)
+                sess.start_boundary_line := line.new(sess.start_timestamp, 1e10, sess.start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=boundary_style_converted)
+
+            // Recreate end boundary if missing (only for completed sessions)
+            if na(sess.end_boundary_line) and not na(sess.end_bar)
+                sess.end_boundary_line := line.new(sess.end_timestamp, 1e10, sess.end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=boundary_style_converted)
+
+        // ─── HIGH/LOW LINES ───
+        // CRITICAL: Recreate high/low lines if they were deleted (when session was outside display window)
+        // Each session shows the PREVIOUS session's high/low
+        // OPTIMIZATION: Only lookup previous session if lines are missing
+        if show_high_low_lines and (na(sess.high_line) or na(sess.low_line))
+            // Get previous session
+            DttWeeklySession prev_sess_for_lines = get_previous_session(sess.name)
+
+            // Create lines if they don't exist but previous session has valid high/low
+            if not na(prev_sess_for_lines.name) and prev_sess_for_lines.session_high < 1e9 and prev_sess_for_lines.session_low > -1e9
+                if na(sess.high_line)
+                    sess.high_line := line.new(sess.start_timestamp, prev_sess_for_lines.session_high, display_end_time, prev_sess_for_lines.session_high, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=high_low_style_converted)
+                if na(sess.low_line)
+                    sess.low_line := line.new(sess.start_timestamp, prev_sess_for_lines.session_low, display_end_time, prev_sess_for_lines.session_low, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=high_low_style_converted)
+
+        // ─── SESSION NAME BOX ───
+        // CRITICAL: Position box between session high and low - text auto-centers vertically
+        // Box spans from session start to session end horizontally
+        // Box spans from session high to session low vertically (text centered in middle)
+        if show_session_labels and not na(sess.session_name_box)
+            // Use session's tracked high/low, fallback to current high/low if not yet tracked
+            float box_high = sess.session_high > -1e9 ? sess.session_high : high
+            float box_low = sess.session_low < 1e9 ? sess.session_low : low
+            box.set_lefttop(sess.session_name_box, sess.start_timestamp, box_high)
+            box.set_rightbottom(sess.session_name_box, display_end_time, box_low)
+
+        // ─── ROOT ZONES ───
+        // CRITICAL: Anchor root zone to actual root timestamp (intraday line 2051), not session start
+        if show_roots and not na(sess.root_high) and not na(sess.root_low) and not na(sess.root_timestamp)
+            // Root zones extend to NEXT session's end (extension_end_time)
+            if show_root_zone
+                if na(sess.root_zone_box)
+                    sess.root_zone_box := box.new(sess.root_timestamp, sess.root_high, extension_end_time, sess.root_low, xloc=xloc.bar_time, border_color=color.new(root_zone_color, 100), bgcolor=color.new(root_zone_color, 85), border_width=0)
+                else
+                    box.set_lefttop(sess.root_zone_box, sess.root_timestamp, sess.root_high)
+                    box.set_rightbottom(sess.root_zone_box, extension_end_time, sess.root_low)
+
+            if show_root_line
+                if na(sess.root_eq_line)
+                    sess.root_eq_line := line.new(sess.root_timestamp, sess.root_price, extension_end_time, sess.root_price, xloc=xloc.bar_time, color=root_line_color, style=root_line_style_converted, width=WIDTH_ROOT)
+                else
+                    line.set_xy1(sess.root_eq_line, sess.root_timestamp, sess.root_price)
+                    line.set_xy2(sess.root_eq_line, extension_end_time, sess.root_price)
+
+            if show_root_time_label and not na(sess.root_timestamp)
+                string root_time_text = str.format("{0,date,EEE HH:mm}", sess.root_timestamp)
+
+                if na(sess.root_time_label)
+                    sess.root_time_label := label.new(extension_end_time, sess.root_price, root_time_text, xloc=xloc.bar_time, color=root_time_label_color, textcolor=root_time_text_color, style=label.style_label_left, size=root_label_size_converted)
+                else
+                    label.set_xy(sess.root_time_label, extension_end_time, sess.root_price)
+                    label.set_text(sess.root_time_label, root_time_text)
+                    label.set_color(sess.root_time_label, root_time_label_color)
+                    label.set_textcolor(sess.root_time_label, root_time_text_color)
+                    label.set_size(sess.root_time_label, root_label_size_converted)
+
+        // ─── INTERVAL LINES ───
+        if show_intervals
+            // Note: We need to get interval timestamps for proper drawing
+            // For now, calculate timestamps from bar indices
+            // TODO: Store interval timestamps in the type
+            if not na(sess.interval1_bar)
+                int interval1_time = time[bar_index - sess.interval1_bar]
+                if na(sess.interval1_line)
+                    sess.interval1_line := line.new(interval1_time, 1e10, interval1_time, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=interval_style_converted, width=WIDTH_INTERVAL)
+                else
+                    line.set_xy1(sess.interval1_line, interval1_time, 1e10)
+                    line.set_xy2(sess.interval1_line, interval1_time, -1e6)
+
+            if not na(sess.interval2_bar)
+                int interval2_time = time[bar_index - sess.interval2_bar]
+                if na(sess.interval2_line)
+                    sess.interval2_line := line.new(interval2_time, 1e10, interval2_time, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=interval_style_converted, width=WIDTH_INTERVAL)
+                else
+                    line.set_xy1(sess.interval2_line, interval2_time, 1e10)
+                    line.set_xy2(sess.interval2_line, interval2_time, -1e6)
+
+            if not na(sess.interval3_bar)
+                int interval3_time = time[bar_index - sess.interval3_bar]
+                if na(sess.interval3_line)
+                    sess.interval3_line := line.new(interval3_time, 1e10, interval3_time, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=interval_style_converted, width=WIDTH_INTERVAL)
+                else
+                    line.set_xy1(sess.interval3_line, interval3_time, 1e10)
+                    line.set_xy2(sess.interval3_line, interval3_time, -1e6)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CHANGELOG & DETAILS
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ For complete changelog, resolved issues, and implementation details:
+//    → See WEEKLY_DTT_IMPLEMENTATION_NOTES.md (same directory)
+//
+// Production Ready ✅ | Last Updated: 2025-10-17 | Pine Script v6
