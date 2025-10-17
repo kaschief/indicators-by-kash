@@ -48,7 +48,19 @@ const int MIN_FIB_HISTORY = 1
 const int MAX_FIB_HISTORY = 10
 
 // Input Label Strings
+const string LABEL_ON_OFF = "ON/OFF"
 const string LABEL_HISTORY = "History"
+
+// Display Mode Constants
+const string DISPLAY_ALL_MODELS = "All Models"
+const string DISPLAY_ACTIVE_ONLY = "Active Only"
+
+// Position Constants
+const string POSITION_LEFT = "Left"
+const string POSITION_MIDDLE = "Middle"
+const string POSITION_RIGHT = "Right"
+const string POSITION_TOP = "Top"
+const string POSITION_BOTTOM = "Bottom"
 
 // Session Name Constants
 const string SESSION_ISCARIOT = "Iscariot"
@@ -92,6 +104,8 @@ const string GROUP_ROOT = "Root Prices"
 const string GROUP_AMRP_ZONES = "AMRP Zones"
 const string GROUP_AMRP_EQ = "AMRP EQ Lines"
 const string GROUP_AMRP_PROJECTIONS = "AMRP Projections"
+const string GROUP_AMRP_RANGE_ANALYSIS = "AMRP Range Analysis"
+const string GROUP_AMRP_ACCURACY = "AMRP Accuracy"
 const string GROUP_FIB = "Dynamic Fibonacci"
 const string GROUP_FIB_LEVELS = "Dynamic Fibonacci Levels"
 
@@ -100,10 +114,6 @@ const int WIDTH_BOUNDARY = 1
 const int WIDTH_INTERVAL = 1
 const int WIDTH_HIGH_LOW = 1  // Session high/low lines
 const int WIDTH_ROOT = 1  // Root zone line
-
-// Input Label Strings
-const string LABEL_ON_OFF = "ON/OFF"
-const string LABEL_WIDTH = "Width"
 
 // Session Time Constants (HHMM format, America/New_York timezone)
 // ⚠️ Based on years of research - see implementation notes before modifying
@@ -202,7 +212,7 @@ show_projection_labels = input.bool(true, "Show Labels", group=GROUP_AMRP_PROJEC
 show_fib = input.bool(false, LABEL_ON_OFF, group=GROUP_FIB, inline="fib_toggle", tooltip="Show dynamic Fibonacci levels anchored to AMRP boundaries, trailing with price extremes")
 fib_last_n_sessions = input.int(DEFAULT_FIB_HISTORY, LABEL_HISTORY, minval=MIN_FIB_HISTORY, maxval=MAX_FIB_HISTORY, group=GROUP_FIB, inline="fib_toggle", tooltip="Number of sessions to display Fibonacci levels for")
 show_fib_labels = input.bool(true, "Show Labels", group=GROUP_FIB, inline="fib_labels")
-fib_width = input.int(DEFAULT_FIB_WIDTH, LABEL_WIDTH, minval=MIN_FIB_WIDTH, maxval=MAX_FIB_WIDTH, group=GROUP_FIB, inline="fib_style")
+fib_width = input.int(DEFAULT_FIB_WIDTH, "", minval=MIN_FIB_WIDTH, maxval=MAX_FIB_WIDTH, group=GROUP_FIB, inline="fib_style")
 fib_style = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_FIB, inline="fib_style")
 
 show_fib_100 = input.bool(true, "1", group=GROUP_FIB_LEVELS, inline="fibrow1")
@@ -247,6 +257,21 @@ show_root_time_label = input.bool(true, "Time?", group=GROUP_ROOT, inline="root_
 root_time_label_color = input.color(DEFAULT_ROOT_TIME_LABEL_COLOR, "Background", group=GROUP_ROOT, inline="root_time")
 root_time_text_color = input.color(DEFAULT_ROOT_TIME_TEXT_COLOR, "Text", group=GROUP_ROOT, inline="root_time")
 root_label_size = input.string(SIZE_TINY, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_ROOT, inline="root_time2")
+
+// ─── AMRP Range Analysis ───
+show_range_analysis = input.bool(false, "Show Range Analysis Table", group=GROUP_AMRP_RANGE_ANALYSIS, tooltip="Display Expected vs Actual range for each session with % filled and room left")
+range_analysis_display = input.string(DISPLAY_ALL_MODELS, "Display", options=[DISPLAY_ALL_MODELS, DISPLAY_ACTIVE_ONLY], group=GROUP_AMRP_RANGE_ANALYSIS, tooltip="All Models: Show last weeks (rolling) | Active Only: Show only currently active session")
+range_analysis_text_size = input.string(SIZE_TINY, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_AMRP_RANGE_ANALYSIS, inline="settings", tooltip="Table text size")
+range_analysis_horizontal = input.string(POSITION_RIGHT, "", options=[POSITION_LEFT, POSITION_MIDDLE, POSITION_RIGHT], group=GROUP_AMRP_RANGE_ANALYSIS, inline="settings", tooltip="Horizontal position")
+range_analysis_vertical = input.string(POSITION_TOP, "", options=[POSITION_TOP, POSITION_MIDDLE, POSITION_BOTTOM], group=GROUP_AMRP_RANGE_ANALYSIS, inline="settings", tooltip="Vertical position")
+
+// ─── AMRP Accuracy Tracker ───
+show_amrp_accuracy = input.bool(false, "Show AMRP Accuracy Table", group=GROUP_AMRP_ACCURACY, tooltip="Statistical performance tracking for AMRP predictions")
+amrp_accuracy_mode = input.string("Auto-Score", "Mode", options=["Single Session", "Auto-Score"], group=GROUP_AMRP_ACCURACY, tooltip="Single Session: Specific session analysis | Auto-Score: Automated scoring system")
+amrp_accuracy_session = input.string("Aries", "Session", options=["Iscariot", "Aries", "Ash", "Icarus"], group=GROUP_AMRP_ACCURACY, tooltip="Select session for Single Session mode")
+amrp_accuracy_text_size = input.string(SIZE_SMALL, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_AMRP_ACCURACY, inline="settings", tooltip="Table text size")
+amrp_accuracy_horizontal = input.string(POSITION_MIDDLE, "", options=[POSITION_LEFT, POSITION_MIDDLE, POSITION_RIGHT], group=GROUP_AMRP_ACCURACY, inline="settings", tooltip="Horizontal position")
+amrp_accuracy_vertical = input.string(POSITION_MIDDLE, "", options=[POSITION_TOP, POSITION_MIDDLE, POSITION_BOTTOM], group=GROUP_AMRP_ACCURACY, inline="settings", tooltip="Vertical position")
 
 // Convert styles
 boundary_style_converted = boundary_style == STYLE_SOLID ? line.style_solid : boundary_style == STYLE_DASHED ? line.style_dashed : line.style_dotted
@@ -1340,6 +1365,12 @@ if total_sessions > 0
                         sess.amrp_dn_inner := sess.session_open_low - dn_inner
                         sess.amrp_dn_outer := sess.session_open_low - dn_outer
 
+                        // Initialize accuracy tracking counters
+                        sess.amrp_bars_total := 0
+                        sess.amrp_bars_within_inner := 0
+                        sess.amrp_bars_within_outer := 0
+                        sess.amrp_bars_broke_outer := 0
+
                         // Draw AMRP boxes (stored in struct)
                         if na(sess.amrp_up_box)
                             sess.amrp_up_box := box.new(sess.start_timestamp, sess.amrp_up_outer, display_end_time, sess.amrp_up_inner, xloc=xloc.bar_time, border_color=color.new(amrp_zone_color, 100), bgcolor=amrp_zone_color)
@@ -1474,6 +1505,39 @@ if total_sessions > 0
             if not sess.amrp_broke_dn and sess.session_low < sess.amrp_dn_outer
                 sess.amrp_broke_dn := true
 
+        // ─── AMRP ACCURACY TRACKING ───
+        // Track bar-by-bar accuracy metrics for statistical analysis
+        if sess.amrp_drawn and not na(sess.amrp_up_inner)
+            // Check if current bar is within this session's time range
+            if time >= sess.start_timestamp and (na(sess.end_timestamp) or time <= sess.end_timestamp)
+                // Check if bar is after root (we only care about post-root accuracy)
+                if not na(sess.root_timestamp) and time >= sess.root_timestamp
+                    sess.amrp_bars_total := sess.amrp_bars_total + 1
+
+                    // Check price position relative to zones
+                    bool in_inner_zone = false
+                    bool in_outer_zone = false
+                    bool broke_outer = false
+
+                    // Price within inner zones (between inner bounds)
+                    if high <= sess.amrp_up_inner and low >= sess.amrp_dn_inner
+                        in_inner_zone := true
+                        in_outer_zone := true
+                    // Price within outer zones but outside inner
+                    else if high <= sess.amrp_up_outer and low >= sess.amrp_dn_outer
+                        in_outer_zone := true
+                    // Price broke outer zones
+                    else
+                        broke_outer := true
+
+                    if in_inner_zone
+                        sess.amrp_bars_within_inner := sess.amrp_bars_within_inner + 1
+                    if in_outer_zone
+                        sess.amrp_bars_within_outer := sess.amrp_bars_within_outer + 1
+                    if broke_outer
+                        sess.amrp_bars_broke_outer := sess.amrp_bars_broke_outer + 1
+
+        if show_deviation_projections and sess.amrp_drawn and not na(sess.amrp_up_outer)
             // Draw projections ONLY in Manual mode (Compare 3 is visualization only)
             bool should_draw_up_proj = sess.amrp_broke_up and amrp_lookback_mode == "Manual" and not sess.amrp_up_projections_drawn
 
@@ -1817,6 +1881,273 @@ if show_fib and array.size(session_instances) > 0
 
                 // Update the session in the array
                 array.set(session_instances, i, sess)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AMRP RANGE ANALYSIS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+if show_range_analysis and array.size(session_instances) > 0 and barstate.islast
+    string table_position = range_analysis_horizontal == POSITION_LEFT ? (range_analysis_vertical == POSITION_TOP ? position.top_left : range_analysis_vertical == POSITION_MIDDLE ? position.middle_left : position.bottom_left) : range_analysis_horizontal == POSITION_MIDDLE ? (range_analysis_vertical == POSITION_TOP ? position.top_center : range_analysis_vertical == POSITION_MIDDLE ? position.middle_center : position.bottom_center) : (range_analysis_vertical == POSITION_TOP ? position.top_right : range_analysis_vertical == POSITION_MIDDLE ? position.middle_right : position.bottom_right)
+
+    string text_size_value = range_analysis_text_size == SIZE_TINY ? size.tiny : range_analysis_text_size == SIZE_SMALL ? size.small : size.normal
+
+    int total_sessions = array.size(session_instances)
+    bool display_active_only = range_analysis_display == DISPLAY_ACTIVE_ONLY
+    int target_session_count = display_active_only ? 99 : SESSIONS_PER_CYCLE
+    int max_table_rows = SESSIONS_PER_CYCLE + 1
+
+    var table range_table = na
+    var string prev_position_h = ""
+    var string prev_position_v = ""
+    var string prev_text_size = ""
+
+    bool settings_changed = prev_position_h != range_analysis_horizontal or prev_position_v != range_analysis_vertical or prev_text_size != range_analysis_text_size
+
+    if na(range_table) or settings_changed
+        if not na(range_table)
+            table.delete(range_table)
+        range_table := table.new(table_position, 5, max_table_rows, bgcolor=color.new(color.black, 10), border_width=1)
+        prev_position_h := range_analysis_horizontal
+        prev_position_v := range_analysis_vertical
+        prev_text_size := range_analysis_text_size
+
+    table.cell(range_table, 0, 0, "Model", text_color=color.white, text_size=text_size_value, bgcolor=color.new(color.gray, 60))
+    table.cell(range_table, 1, 0, "Expected", text_color=color.white, text_size=text_size_value, bgcolor=color.new(color.blue, 60))
+    table.cell(range_table, 2, 0, "Actual", text_color=color.white, text_size=text_size_value, bgcolor=color.new(color.purple, 60))
+    table.cell(range_table, 3, 0, "% Filled", text_color=color.white, text_size=text_size_value, bgcolor=color.new(color.orange, 60))
+    table.cell(range_table, 4, 0, "Remaining %", text_color=color.white, text_size=text_size_value, bgcolor=color.new(color.teal, 60))
+
+    array<string> displayed_names = array.new<string>()
+    int row_index = 1
+
+    for i = total_sessions - 1 to 0
+        if row_index > target_session_count
+            break
+
+        DttWeeklySession sess = array.get(session_instances, i)
+
+        if na(sess.amrp_up_outer) or na(sess.amrp_dn_outer)
+            continue
+
+        if array.includes(displayed_names, sess.name)
+            continue
+
+        if display_active_only and not na(sess.end_bar)
+            continue
+
+        array.push(displayed_names, sess.name)
+
+        bool is_active = na(sess.end_bar)
+        color row_bg = is_active ? color.new(color.blue, 85) : color.new(color.black, 100)
+
+        float expected_range = sess.amrp_up_outer - sess.amrp_dn_outer
+        float actual_range = sess.session_high > sess.session_low ? sess.session_high - sess.session_low : na
+        float pct_filled = expected_range > 0 and not na(actual_range) ? (actual_range / expected_range) * 100 : na
+        float remaining_pct = not na(pct_filled) ? 100 - pct_filled : na
+
+        table.cell(range_table, 0, row_index, sess.name, text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+
+        string expected_str = str.tostring(expected_range, "#.##")
+        table.cell(range_table, 1, row_index, expected_str, text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+
+        if not na(actual_range)
+            string actual_str = str.tostring(actual_range, "#.##")
+            table.cell(range_table, 2, row_index, actual_str, text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+        else
+            table.cell(range_table, 2, row_index, "—", text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+
+        if not na(pct_filled)
+            string pct_str = str.tostring(pct_filled, "#.#") + "%"
+            table.cell(range_table, 3, row_index, pct_str, text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+        else
+            table.cell(range_table, 3, row_index, "—", text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+
+        if not na(remaining_pct)
+            string remaining_str = str.tostring(remaining_pct, "#.#") + "%"
+            color remaining_color = remaining_pct > 0 ? color.lime : color.red
+            table.cell(range_table, 4, row_index, remaining_str, text_color=remaining_color, text_size=text_size_value, bgcolor=row_bg)
+        else
+            table.cell(range_table, 4, row_index, "—", text_color=color.white, text_size=text_size_value, bgcolor=row_bg)
+
+        row_index := row_index + 1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AMRP ACCURACY TRACKER
+// ══════════════════════════════════════════════════════════════════════════════
+
+if show_amrp_accuracy and barstate.islast
+    string acc_table_position = amrp_accuracy_horizontal == POSITION_LEFT ? (amrp_accuracy_vertical == POSITION_TOP ? position.top_left : amrp_accuracy_vertical == POSITION_MIDDLE ? position.middle_left : position.bottom_left) : amrp_accuracy_horizontal == POSITION_MIDDLE ? (amrp_accuracy_vertical == POSITION_TOP ? position.top_center : amrp_accuracy_vertical == POSITION_MIDDLE ? position.middle_center : position.bottom_center) : (amrp_accuracy_vertical == POSITION_TOP ? position.top_right : amrp_accuracy_vertical == POSITION_MIDDLE ? position.middle_right : position.bottom_right)
+
+    string acc_text_size_value = amrp_accuracy_text_size == SIZE_TINY ? size.tiny : amrp_accuracy_text_size == SIZE_SMALL ? size.small : size.normal
+
+    if amrp_accuracy_mode == "Single Session"
+        var table acc_table = na
+        var string acc_prev_position_h = ""
+        var string acc_prev_position_v = ""
+        var string acc_prev_text_size = ""
+
+        bool acc_settings_changed = acc_prev_position_h != amrp_accuracy_horizontal or acc_prev_position_v != amrp_accuracy_vertical or acc_prev_text_size != amrp_accuracy_text_size
+
+        if na(acc_table) or acc_settings_changed
+            if not na(acc_table)
+                table.delete(acc_table)
+            acc_table := table.new(acc_table_position, 3, 10, bgcolor=color.new(color.black, 10), border_width=1)
+            acc_prev_position_h := amrp_accuracy_horizontal
+            acc_prev_position_v := amrp_accuracy_vertical
+            acc_prev_text_size := amrp_accuracy_text_size
+
+        table.cell(acc_table, 0, 0, "AMRP ACCURACY", text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.blue, 50))
+        table.merge_cells(acc_table, 0, 0, 2, 0)
+
+        table.cell(acc_table, 0, 1, "Session", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.cell(acc_table, 1, 1, amrp_accuracy_session, text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(acc_table, 1, 1, 2, 1)
+
+        table.cell(acc_table, 0, 2, "Method", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.cell(acc_table, 1, 2, "IQR", text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(acc_table, 1, 2, 2, 2)
+
+        effective_lookback_display = amrp_lookback_mode == "Compare 3" ? "4,6,9" : str.tostring(amrp_lookback)
+        table.cell(acc_table, 0, 3, "Lookback", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.cell(acc_table, 1, 3, effective_lookback_display, text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(acc_table, 1, 3, 2, 3)
+
+        table.cell(acc_table, 0, 4, "Metric", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+        table.cell(acc_table, 1, 4, "Bars", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+        table.cell(acc_table, 2, 4, "%", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+
+        var int total_bars = na
+        var int inner_bars = na
+        var int outer_bars = na
+        var int broke_bars = na
+
+        if array.size(session_instances) > 0
+            for i = array.size(session_instances) - 1 to 0
+                sess = array.get(session_instances, i)
+                if sess.name == amrp_accuracy_session and sess.amrp_drawn and sess.amrp_bars_total > 0
+                    total_bars := sess.amrp_bars_total
+                    inner_bars := sess.amrp_bars_within_inner
+                    outer_bars := sess.amrp_bars_within_outer
+                    broke_bars := sess.amrp_bars_broke_outer
+                    break
+
+        inner_pct_val = not na(total_bars) and total_bars > 0 ? (inner_bars / total_bars) * 100 : 0.0
+        outer_pct_val = not na(total_bars) and total_bars > 0 ? (outer_bars / total_bars) * 100 : 0.0
+        broke_pct_val = not na(total_bars) and total_bars > 0 ? (broke_bars / total_bars) * 100 : 0.0
+
+        table.cell(acc_table, 0, 5, "Total Bars", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 1, 5, str.tostring(na(total_bars) ? 0 : total_bars), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 2, 5, "100%", text_color=color.white, text_size=acc_text_size_value)
+
+        table.cell(acc_table, 0, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(acc_table, 1, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(acc_table, 2, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+
+        inner_color = inner_pct_val >= 40 ? color.green : inner_pct_val >= 25 ? color.orange : color.red
+        table.cell(acc_table, 0, 7, "Within Inner", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 1, 7, str.tostring(na(inner_bars) ? 0 : inner_bars), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 2, 7, str.format("{0,number,#.#}%", inner_pct_val), text_color=inner_color, text_size=acc_text_size_value, bgcolor=color.new(inner_color, 85))
+
+        outer_color = outer_pct_val >= 60 ? color.green : outer_pct_val >= 40 ? color.orange : color.red
+        table.cell(acc_table, 0, 8, "Within Outer", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 1, 8, str.tostring(na(outer_bars) ? 0 : outer_bars), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 2, 8, str.format("{0,number,#.#}%", outer_pct_val), text_color=outer_color, text_size=acc_text_size_value, bgcolor=color.new(outer_color, 85))
+
+        broke_color = broke_pct_val <= 20 ? color.green : broke_pct_val <= 40 ? color.orange : color.red
+        table.cell(acc_table, 0, 9, "Broke Outer", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 1, 9, str.tostring(na(broke_bars) ? 0 : broke_bars), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(acc_table, 2, 9, str.format("{0,number,#.#}%", broke_pct_val), text_color=broke_color, text_size=acc_text_size_value, bgcolor=color.new(broke_color, 85))
+
+    else if amrp_accuracy_mode == "Auto-Score"
+        var table score_table = na
+        var string score_prev_position_h = ""
+        var string score_prev_position_v = ""
+        var string score_prev_text_size = ""
+
+        bool score_settings_changed = score_prev_position_h != amrp_accuracy_horizontal or score_prev_position_v != amrp_accuracy_vertical or score_prev_text_size != amrp_accuracy_text_size
+
+        if na(score_table) or score_settings_changed
+            if not na(score_table)
+                table.delete(score_table)
+            score_table := table.new(acc_table_position, 3, 12, bgcolor=color.new(color.black, 10), border_width=1)
+            score_prev_position_h := amrp_accuracy_horizontal
+            score_prev_position_v := amrp_accuracy_vertical
+            score_prev_text_size := amrp_accuracy_text_size
+
+        table.cell(score_table, 0, 0, "AMRP AUTO-SCORE", text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.purple, 50))
+        table.merge_cells(score_table, 0, 0, 2, 0)
+
+        table.cell(score_table, 0, 1, "Method: IQR", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(score_table, 0, 1, 2, 1)
+
+        effective_lookback_display = amrp_lookback_mode == "Compare 3" ? "4,6,9" : str.tostring(amrp_lookback)
+        table.cell(score_table, 0, 2, "Lookback: " + effective_lookback_display, text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.merge_cells(score_table, 0, 2, 2, 2)
+
+        total_bars_all = 0
+        inner_bars_all = 0
+        outer_bars_all = 0
+        broke_bars_all = 0
+
+        if array.size(session_instances) > 0
+            for i = 0 to array.size(session_instances) - 1
+                sess = array.get(session_instances, i)
+                if sess.amrp_drawn and sess.amrp_bars_total > 0
+                    total_bars_all := total_bars_all + sess.amrp_bars_total
+                    inner_bars_all := inner_bars_all + sess.amrp_bars_within_inner
+                    outer_bars_all := outer_bars_all + sess.amrp_bars_within_outer
+                    broke_bars_all := broke_bars_all + sess.amrp_bars_broke_outer
+
+        inner_pct_agg = total_bars_all > 0 ? (inner_bars_all / total_bars_all) * 100 : 0.0
+        outer_pct_agg = total_bars_all > 0 ? (outer_bars_all / total_bars_all) * 100 : 0.0
+        broke_pct_agg = total_bars_all > 0 ? (broke_bars_all / total_bars_all) * 100 : 0.0
+
+        inner_score = math.max(0, 100 - math.abs(inner_pct_agg - 45) * 2)
+        outer_score = math.max(0, 100 - math.abs(outer_pct_agg - 70) * 1.5)
+        broke_score = math.max(0, 100 - math.abs(broke_pct_agg - 20) * 2)
+        overall_score = (inner_score + outer_score + broke_score) / 3
+
+        rating = overall_score >= 80 ? "EXCELLENT ★★★" : overall_score >= 60 ? "GOOD ★★" : overall_score >= 40 ? "FAIR ★" : "POOR"
+        rating_color = overall_score >= 80 ? color.green : overall_score >= 60 ? color.lime : overall_score >= 40 ? color.orange : color.red
+
+        table.cell(score_table, 0, 3, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 3, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 3, "", text_color=color.gray, text_size=acc_text_size_value)
+
+        table.cell(score_table, 0, 4, "Metric", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+        table.cell(score_table, 1, 4, "Value", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+        table.cell(score_table, 2, 4, "Score", text_color=color.gray, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 90))
+
+        table.cell(score_table, 0, 5, "Total Bars", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 5, str.tostring(total_bars_all), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 5, "-", text_color=color.gray, text_size=acc_text_size_value)
+
+        table.cell(score_table, 0, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 6, "", text_color=color.gray, text_size=acc_text_size_value)
+
+        inner_col = inner_score >= 80 ? color.green : inner_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 7, "Within Inner", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 7, str.format("{0,number,#.#}%", inner_pct_agg), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 7, str.format("{0,number,#.#}", inner_score), text_color=inner_col, text_size=acc_text_size_value, bgcolor=color.new(inner_col, 85))
+
+        outer_col = outer_score >= 80 ? color.green : outer_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 8, "Within Outer", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 8, str.format("{0,number,#.#}%", outer_pct_agg), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 8, str.format("{0,number,#.#}", outer_score), text_color=outer_col, text_size=acc_text_size_value, bgcolor=color.new(outer_col, 85))
+
+        broke_col = broke_score >= 80 ? color.green : broke_score >= 60 ? color.orange : color.red
+        table.cell(score_table, 0, 9, "Broke Outer", text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 9, str.format("{0,number,#.#}%", broke_pct_agg), text_color=color.white, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 9, str.format("{0,number,#.#}", broke_score), text_color=broke_col, text_size=acc_text_size_value, bgcolor=color.new(broke_col, 85))
+
+        table.cell(score_table, 0, 10, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 1, 10, "", text_color=color.gray, text_size=acc_text_size_value)
+        table.cell(score_table, 2, 10, "", text_color=color.gray, text_size=acc_text_size_value)
+
+        table.cell(score_table, 0, 11, "OVERALL", text_color=color.white, text_size=acc_text_size_value, bgcolor=color.new(color.gray, 80))
+        table.cell(score_table, 1, 11, rating, text_color=rating_color, text_size=acc_text_size_value, bgcolor=color.new(rating_color, 90))
+        table.cell(score_table, 2, 11, str.format("{0,number,#.#}", overall_score), text_color=rating_color, text_size=acc_text_size_value, bgcolor=color.new(rating_color, 85))
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CHANGELOG & DETAILS
