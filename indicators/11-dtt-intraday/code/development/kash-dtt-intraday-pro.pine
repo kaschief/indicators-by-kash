@@ -1283,10 +1283,10 @@ current_day = dayofweek(time, TIMEZONE)
 
 // Auto-detect if asset trades 24/7 by checking if there are weekend bars
 var bool is_247_asset = false
-if barstate.isfirst
-    is_247_asset := false
-    // Check last LOOKBACK_BARS for any weekend activity
-    for i = 0 to math.min(LOOKBACK_BARS, bar_index)
+if not is_247_asset
+    // Scan recent history until we encounter weekend trading (handles contracts that reopen Sunday evening)
+    bars_to_check = math.min(LOOKBACK_BARS - 1, bar_index)
+    for i = 0 to bars_to_check
         check_day = dayofweek(time[i], TIMEZONE)
         if check_day == dayofweek.saturday or check_day == dayofweek.sunday
             is_247_asset := true
@@ -1550,7 +1550,20 @@ if process_sessions
 
         // ⚠️ PHASE 2: If session was pre-created for root but now officially starting, update start_timestamp
         // CHANGELOG [2025-10-13]: Added boundary deletion, end boundary, and label drawing in phase 2
-        if session_exists and session_should_start and existing_session_index >= 0
+        // PHASE 2B: Also finalize if we've moved PAST start time (handles gaps in 5-min data)
+        session_start_passed = false
+        if session_exists and existing_session_index >= 0
+            sess = array.get(session_instances, existing_session_index)
+            if na(sess.start_timestamp)
+                start_hour = math.floor(template.start_time / 100)
+                start_minute = template.start_time % 100
+                start_minutes = start_hour * 60 + start_minute
+                current_minutes = current_hour * 60 + current_minute
+                // If current time is past start time, finalize the session
+                if current_minutes > start_minutes
+                    session_start_passed := true
+
+        if session_exists and (session_should_start or session_start_passed) and existing_session_index >= 0
             sess = array.get(session_instances, existing_session_index)
             if na(sess.start_timestamp)
                 sess.start_timestamp := time
