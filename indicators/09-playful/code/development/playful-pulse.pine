@@ -586,15 +586,39 @@ if barstate.isfirst
     monthly_pool.current_low := low
     monthly_pool.current_high_time := time
     monthly_pool.current_low_time := time
-else if not skip_sunday_liquidity
-    // Normal operation: track sessions (Sunday included when setting ON, or non-Sunday days)
-    // Daily
+else
+    // Daily tracking - runs on all non-first bars
     if is_new_daily_bar
-        pool_store_session(daily_pool)
-        daily_pool.current_high := high
-        daily_pool.current_low := low
-        daily_pool.current_high_time := time
-        daily_pool.current_low_time := time
+        // Don't store if coming from Sunday evening (traditional markets only)
+        // Sunday data was already merged into Friday's stored pool
+        coming_from_sunday_evening = not is247Asset and dayofweek(time[1], NY_TIMEZONE) == dayofweek.sunday and hour(time[1], NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+        if not coming_from_sunday_evening
+            pool_store_session(daily_pool)
+
+        // Only initialize new tracking if NOT skipping Sunday
+        if not skip_sunday_liquidity
+            if not coming_from_sunday_evening
+                // Normal start: initialize with opening prices
+                daily_pool.current_high := high
+                daily_pool.current_low := low
+                daily_pool.current_high_time := time
+                daily_pool.current_low_time := time
+            else
+                // Coming from Sunday evening: Start fresh Monday tracking
+                // Each day should have its own high/low recorded
+                // Friday's levels (including Sunday extension) are already stored
+                daily_pool.current_high := high
+                daily_pool.current_low := low
+                daily_pool.current_high_time := time
+                daily_pool.current_low_time := time
+    else if not skip_sunday_liquidity
+        // Update tracking during the day
+        if high > daily_pool.current_high
+            daily_pool.current_high := high
+            daily_pool.current_high_time := time
+        if low < daily_pool.current_low
+            daily_pool.current_low := low
+            daily_pool.current_low_time := time
     else
         if high > daily_pool.current_high
             daily_pool.current_high := high
@@ -659,6 +683,44 @@ if timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
 
     if showOvernightFiltered
         track_intraday_session(overnight_pool, actualOvernightSession, skip_sunday_liquidity)
+
+// Sunday 18:00-23:59 Continuation for Traditional Markets
+// For futures/forex: Sunday evening is part of Friday's trading session
+// Update Friday's stored daily pool if new highs/lows occur during Sunday reopen
+if not is247Asset and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday and hour(time, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+    // Update DAILY pool only (Friday's stored high/low)
+    if showDaily and array.size(daily_pool.highs) > 0
+        last_index = array.size(daily_pool.highs) - 1
+        last_high = array.get(daily_pool.highs, last_index)
+        last_low = array.get(daily_pool.lows, last_index)
+
+
+        // Update both price AND timestamp when new highs/lows are made
+        // Also reset breach status since this is a new level
+        if high > last_high
+            array.set(daily_pool.highs, last_index, high)
+            array.set(daily_pool.high_times, last_index, time)
+            array.set(daily_pool.high_breached, last_index, false)
+            array.set(daily_pool.high_breach_times, last_index, na)
+            // Also update current tracking
+            daily_pool.current_high := high
+            daily_pool.current_high_time := time
+        if low < last_low
+            array.set(daily_pool.lows, last_index, low)
+            array.set(daily_pool.low_times, last_index, time)
+            array.set(daily_pool.low_breached, last_index, false)
+            array.set(daily_pool.low_breach_times, last_index, na)
+            // Also update current tracking
+            daily_pool.current_low := low
+            daily_pool.current_low_time := time
+
+        // Maintain Friday's levels in current tracking even if no new highs/lows
+        // This ensures Monday starts with Friday's levels, not Sunday's gap prices
+        // ALWAYS set to Friday's stored values during Sunday evening
+        daily_pool.current_high := last_high
+        daily_pool.current_high_time := array.get(daily_pool.high_times, last_index)
+        daily_pool.current_low := last_low
+        daily_pool.current_low_time := array.get(daily_pool.low_times, last_index)
 
 // Range box tracking
 if not skip_sunday_liquidity
