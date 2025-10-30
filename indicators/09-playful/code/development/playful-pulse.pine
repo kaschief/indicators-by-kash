@@ -328,6 +328,7 @@ showWeekly = input.bool(true, GROUP_WEEKLY, group=GROUP_WEEKLY)
 weeklyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_WEEKLY, inline='weekly')
 weeklyColor = input.color(DEFAULT_WEEKLY_COLOR, UI_COLOR, group=GROUP_WEEKLY, inline='weekly')
 weeklyLineWidth = input.int(3, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY, inline='weekly')
+useTradingWeek = input.bool(false, "Week Starts Sunday 18:00", group=GROUP_WEEKLY, tooltip="Toggle week start behavior:\n• OFF (default): Week starts Monday 00:00 ET (calendar week)\n• ON: Week starts Sunday 18:00 ET (market reopen)\n\nON aligns weekly pools with futures trading cycle (Sunday evening open through Friday close)")
 
 showMonthly = input.bool(true, GROUP_MONTHLY, group=GROUP_MONTHLY)
 monthlyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_MONTHLY, inline='monthly')
@@ -704,6 +705,20 @@ is_new_daily_bar = ta.change(dayofmonth(time, NY_TIMEZONE)) != 0
 is_new_weekly_bar = ta.change(weekofyear(time, NY_TIMEZONE)) != 0
 is_new_monthly_bar = ta.change(month(time, NY_TIMEZONE)) != 0
 
+// Trading week detection: Triggers when market reopens Sunday 18:00 ET (new trading week)
+is_new_trading_week = false
+if not is247Asset  // Only for traditional assets
+    currentDay = dayofweek(time, NY_TIMEZONE)
+    currentHour = hour(time, NY_TIMEZONE)
+    prevDay = dayofweek(time[1], NY_TIMEZONE)
+    prevHour = hour(time[1], NY_TIMEZONE)
+
+    // New trading week = crossing into Sunday 18:00+ from before
+    isSundayReopenNow = currentDay == dayofweek.sunday and currentHour >= SUNDAY_REOPEN_START_HOUR
+    wasSundayReopenBefore = prevDay == dayofweek.sunday and prevHour >= SUNDAY_REOPEN_START_HOUR
+
+    is_new_trading_week := isSundayReopenNow and not wasSundayReopenBefore
+
 // Calculate Sunday skip once for all liquidity sources (performance optimization)
 skip_sunday_liquidity = should_skip_sunday_liquidity(time)
 
@@ -763,8 +778,9 @@ else
             daily_pool.current_low := low
             daily_pool.current_low_time := time
 
-    // Weekly
-    if is_new_weekly_bar
+    // Weekly (toggle between calendar week and trading week)
+    weekly_reset_trigger = useTradingWeek ? is_new_trading_week : is_new_weekly_bar
+    if weekly_reset_trigger
         pool_store_session(weekly_pool)
         weekly_pool.current_high := high
         weekly_pool.current_low := low
