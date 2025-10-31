@@ -84,6 +84,14 @@ WICK_DOMINANCE_STANDARD_THRESHOLD = 1.0
 WICK_DOMINANCE_RELAXED_THRESHOLD = 0.85
 WICK_DOMINANCE_RISKY_THRESHOLD = 0.80
 
+// Momentum MBZ Constants
+MOMENTUM_MAX_PENETRATION_25 = "25%"
+MOMENTUM_MAX_PENETRATION_50 = "50%"
+MOMENTUM_MAX_PENETRATION_100 = "100%"
+
+MBZ_MOMENTUM_TYPE_ALL = "All"
+MBZ_MOMENTUM_TYPE_MOMENTUM = "Momentum Only"
+MBZ_MOMENTUM_TYPE_NON_MOMENTUM = "Non-Momentum Only"
 
 // MBZ Invalidation Mode Constants
 INVALIDATION_STANDARD = "Standard (100%)"
@@ -271,6 +279,7 @@ GROUP_MULTI_SOURCE_PROPERTIES = '📦 Multi-Source Properties'
 GROUP_BREAKAWAY_PROPERTIES = '🔥 Breakaway Properties'
 GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 GROUP_PROJECTIONS = '📈 Projections'
+GROUP_MOMENTUM_MBZS = '⚡ Momentum MBZs'
 
 // Display text & abbreviation constants
 GAP_SOURCE_FVG_DISPLAY = ""
@@ -437,6 +446,11 @@ show_bullish_mbzs = input.bool(true, INPUT_LABEL_SHOW_MBZ_PLUS, group=GROUP_VISI
 show_bearish_mbzs = input.bool(true, INPUT_LABEL_SHOW_MBZ_MINUS, group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Display MBZ⁻ zones and labels')
 filter_single_source_mbzs = input.bool(true, 'Single-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show MBZs formed from a single gap source (clean zones)')
 filter_multi_source_mbzs = input.bool(true, 'Multi-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show MBZs formed from multiple gap sources (confluence zones)')
+mbz_momentum_type_filter = input.string(MBZ_MOMENTUM_TYPE_ALL, 'Momentum Type', options=[MBZ_MOMENTUM_TYPE_ALL, MBZ_MOMENTUM_TYPE_MOMENTUM, MBZ_MOMENTUM_TYPE_NON_MOMENTUM], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter MBZs by momentum validation:\n• All: Show all MBZs\n• Momentum Only: Show only momentum-validated MBZs (next candle confirmed rejection with wick)\n• Non-Momentum Only: Show only non-momentum MBZs')
+
+// === ⚡ MOMENTUM MBZS ===
+enable_momentum_mbzs = input.bool(false, "Enable Momentum MBZs", group=GROUP_MOMENTUM_MBZS, tooltip="Validates MBZs where momentum candle confirms rejection")
+momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_25, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_MBZS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
 
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of MBZ detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
@@ -652,6 +666,8 @@ type MBZRecord
     int overlapping_mbz_bar_index // Which MBZ we overlapped with
     // Breakaway MBZ detection
     bool is_breakaway_mbz        // true if source gap was a breakaway gap
+    // Momentum MBZ validation
+    bool is_momentum_mbz         // true if next candle confirms rejection with wick
 
 // Cached counts for multi-source evaluation
 type SourceTypeStats
@@ -1323,6 +1339,35 @@ classify_wick_dominance(mbz_body_size, mbz_upper_wick, mbz_lower_wick) =>
         else
             [WICK_TIER_NONE, false]     // <80%
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOMENTUM MBZ VALIDATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+validate_momentum_mbz(zone_top, zone_bottom, mbz_is_bullish, next_open, next_close, next_high, next_low, threshold_percent) =>
+    zone_height = zone_top - zone_bottom
+    is_valid = false
+
+    if mbz_is_bullish
+        // For bullish MBZ: bullish candle with lower wick testing into zone
+        is_next_bullish = next_close > next_open
+        next_body_bottom = math.min(next_open, next_close)
+        has_lower_wick = next_low < next_body_bottom
+        wick_enters_zone = next_low <= zone_top
+        max_penetration = zone_top - (zone_height * threshold_percent)
+        wick_respects_threshold = next_low >= max_penetration
+        is_valid := is_next_bullish and has_lower_wick and wick_enters_zone and wick_respects_threshold
+    else
+        // For bearish MBZ: bearish candle with upper wick testing into zone
+        is_next_bearish = next_close < next_open
+        next_body_top = math.max(next_open, next_close)
+        has_upper_wick = next_high > next_body_top
+        wick_enters_zone = next_high >= zone_bottom
+        max_penetration = zone_bottom + (zone_height * threshold_percent)
+        wick_respects_threshold = next_high <= max_penetration
+        is_valid := is_next_bearish and has_upper_wick and wick_enters_zone and wick_respects_threshold
+
+    is_valid
+
 // ENHANCED: Advanced MBZ detection and classification with simple majority wick classification
 // Uses clear majority rule: biggest wick wins, no tie-breaking complexity
 detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_gap_type) =>
@@ -1943,7 +1988,8 @@ cache_mbz_data(mbz_record) =>
          mbz_record.is_super_mbz,
          mbz_record.overlap_percentage,
          mbz_record.overlapping_mbz_bar_index,
-         mbz_record.is_breakaway_mbz
+         mbz_record.is_breakaway_mbz,
+         mbz_record.is_momentum_mbz
      )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
@@ -2143,6 +2189,17 @@ has_super_mbzs(mbz_group) =>
             break
 
     has_super
+
+has_momentum_mbzs(mbz_group) =>
+    has_momentum = false
+
+    for i = 0 to array.size(mbz_group) - 1
+        mbz_record = array.get(mbz_group, i)
+        if mbz_record.is_momentum_mbz
+            has_momentum := true
+            break
+
+    has_momentum
 
 // Build source breakdown with counts - USED for candle label logic
 build_source_breakdown(mbz_group) =>
@@ -2536,6 +2593,11 @@ create_consolidated_extension_label(consolidated_mbz) =>
     if has_deeper_wick_border
         extension_result := extension_result + " " + get_deeper_wick_icon()
 
+    // Add Momentum MBZ indicator
+    has_momentum = has_momentum_mbzs(consolidated_mbz.mbz_group)
+    if has_momentum
+        extension_result := extension_result + " ✅"
+
     // Add status indicators AFTER special markers - invalidation takes precedence
     if consolidated_mbz.is_consolidated_invalidated
         extension_result := extension_result + " [X]"
@@ -2716,6 +2778,10 @@ get_consolidated_mbz_colors(consolidated_mbz) =>
 
 should_display_mbz(mbz_record) =>
     if mbz_record.is_invalidated and not show_invalidated_mbzs
+        false
+    else if mbz_momentum_type_filter == MBZ_MOMENTUM_TYPE_MOMENTUM and not mbz_record.is_momentum_mbz
+        false
+    else if mbz_momentum_type_filter == MBZ_MOMENTUM_TYPE_NON_MOMENTUM and mbz_record.is_momentum_mbz
         false
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_TRUE) and not enable_true_gaps
         false  // Hide True Gap MBZs when source disabled
@@ -3424,6 +3490,28 @@ if array.size(all_mbz_records) > 0
                 //     log.info("MBZ " + str.tostring(updated_mbz.bar_index) + " invalidated by " + invalidation_type +
                 //              " - Open:" + str.tostring(open) + " Close:" + str.tostring(close) +
                 //              " Zone:" + str.tostring(zone_top) + "-" + str.tostring(zone_bottom))
+
+            // Momentum MBZ validation for all MBZs
+            if enable_momentum_mbzs and not updated_mbz.is_momentum_mbz and not updated_mbz.is_invalidated
+                if updated_mbz.bar_index == bar_index - 1
+                    // Get the actual MBZ zone
+                    [zone_top, zone_bottom] = get_mbz_subtype_zone(updated_mbz)
+                    threshold_decimal = momentum_max_penetration == MOMENTUM_MAX_PENETRATION_25 ? 0.25 : momentum_max_penetration == MOMENTUM_MAX_PENETRATION_50 ? 0.50 : 1.00
+                    is_valid = validate_momentum_mbz(
+                         zone_top,
+                         zone_bottom,
+                         updated_mbz.is_bullish,
+                         open,
+                         close,
+                         high,
+                         low,
+                         threshold_decimal
+                     )
+                    if is_valid
+                        updated_mbz.is_momentum_mbz := true
+                        updated_mbz.cached_data_valid := false
+                        needs_visual_update := true
+
             array.set(all_mbz_records, i, updated_mbz)
 
 // Process gaps for MBZ detection with unified gap source support
@@ -3508,7 +3596,8 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              gap.gap_id, gap.bar_index, gap.top, gap.bottom, gap.gap_type,
                              gap_deeper, pattern_deeper,
                              false, 0.0, int(na),
-                             gap.is_breakaway_gap
+                             gap.is_breakaway_gap,
+                             false
                          )
 
                         // Detect SUPER MBZ strength
@@ -3523,7 +3612,8 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              gap.gap_id, gap.bar_index, gap.top, gap.bottom, gap.gap_type,
                              gap_deeper, pattern_deeper,
                              is_super, overlap_pct, overlapped_bar,
-                             gap.is_breakaway_gap
+                             gap.is_breakaway_gap,
+                             false
                          )
 
                         // Cache data immediately for performance (with corrected zones)

@@ -81,6 +81,18 @@ INVALIDATION_STRICT = "Strict (55%)"
 INVALIDATION_LENIENT = "Lenient (85%)"
 INVALIDATION_CUSTOM = "Custom"
 
+MOMENTUM_MAX_PENETRATION_25 = "25%"
+MOMENTUM_MAX_PENETRATION_50 = "50%"
+MOMENTUM_MAX_PENETRATION_100 = "100%"
+
+SIF_MOMENTUM_TYPE_ALL = "All"
+SIF_MOMENTUM_TYPE_MOMENTUM = "Momentum Only"
+SIF_MOMENTUM_TYPE_NON_MOMENTUM = "Non-Momentum Only"
+
+SIF_INVERSION_TYPE_ALL = "All"
+SIF_INVERSION_TYPE_IMMEDIATE = "Immediate Only"
+SIF_INVERSION_TYPE_REGULAR = "Regular Only"
+
 EXTENSION_FIXED = "Fixed Length"
 EXTENSION_TO_CURRENT = "To Current Price"
 EXTENSION_BEYOND_CURRENT = "Beyond Current Price"
@@ -265,6 +277,7 @@ GROUP_ALERT_SETTINGS = '🚨 Alert Settings'
 GROUP_IMPLIED_SOURCE_SETTINGS = '⚙️ Implied Source Settings'
 GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 GROUP_PROJECTIONS = '📈 Projections'
+GROUP_MOMENTUM_SIFS = '⚡ Momentum SIFs'
 
 GAP_SOURCE_FVG_DISPLAY = ""
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
@@ -436,6 +449,12 @@ show_bullish_sifs = input.bool(true, INPUT_LABEL_SHOW_SIF_PLUS, group=GROUP_VISI
 show_bearish_sifs = input.bool(true, INPUT_LABEL_SHOW_SIF_MINUS, group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Display SIF⁻ zones and labels')
 filter_single_source_sifs = input.bool(true, 'Single-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show SIFs formed from a single gap source (clean zones)')
 filter_multi_source_sifs = input.bool(true, 'Multi-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show SIFs formed from multiple gap sources (confluence zones)')
+sif_inversion_type_filter = input.string(SIF_INVERSION_TYPE_ALL, 'Inversion Type', options=[SIF_INVERSION_TYPE_ALL, SIF_INVERSION_TYPE_IMMEDIATE, SIF_INVERSION_TYPE_REGULAR], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter SIFs by inversion type:\n• All: Show all SIFs\n• Immediate Only: Show only immediate SIF inversions (gap formation & closure on same candle)\n• Regular Only: Show only regular SIFs (multi-candle gap closures)')
+sif_momentum_type_filter = input.string(SIF_MOMENTUM_TYPE_ALL, 'Momentum Type', options=[SIF_MOMENTUM_TYPE_ALL, SIF_MOMENTUM_TYPE_MOMENTUM, SIF_MOMENTUM_TYPE_NON_MOMENTUM], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter SIFs by momentum validation:\n• All: Show all SIFs\n• Momentum Only: Show only momentum-validated SIFs (immediate SIFs confirmed with rejection wick)\n• Non-Momentum Only: Show only non-momentum SIFs')
+
+// === ⚡ MOMENTUM SIFS ===
+enable_momentum_sifs = input.bool(false, "Enable Momentum SIFs", group=GROUP_MOMENTUM_SIFS, tooltip="Validates immediate SIFs where momentum candle confirms rejection")
+momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_25, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_SIFS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
 
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of SIF detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
@@ -695,8 +714,8 @@ type SIFRecord
     float overlap_percentage       // 0.0 to 100.0
     int overlapping_sif_bar_index  // Which SIF we overlapped with
     bool is_immediate_sif_inversion    // true if formation candle also closes the gap
-    // Breakaway SIF detection
-    bool is_breakaway_sif          // true if source gap was a breakaway gap
+    bool is_breakaway_sif
+    bool is_momentum_sif
 
 // Consolidated SIF group type
 type ConsolidatedSIF
@@ -890,7 +909,15 @@ has_immediate_sif_inversion(consolidated_sif) =>
             break
     has_inversion
 
-// Enhanced border properties with immediate SIF inversion priority (similar to MBZ source gap wick detection)
+has_momentum_sif(consolidated_sif) =>
+    has_momentum = false
+    for i = 0 to array.size(consolidated_sif.sif_group) - 1
+        sif_record = array.get(consolidated_sif.sif_group, i)
+        if sif_record.is_momentum_sif
+            has_momentum := true
+            break
+    has_momentum
+
 get_border_properties_for_sif(consolidated_sif, sif_source_count) =>
     is_multi_source = enable_multi_source_highlighting and sif_source_count > 1
     has_immediate_inversion = has_immediate_sif_inversion(consolidated_sif)
@@ -1456,6 +1483,35 @@ detect_sif_subtype(sif_open, sif_close, sif_high, sif_low, source_gap_type) =>
             [final_subtype, true]
         else
             [base_classification, false]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MOMENTUM SIF VALIDATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+validate_momentum_sif(zone_top, zone_bottom, sif_is_bullish, next_open, next_close, next_high, next_low, threshold_percent) =>
+    zone_height = zone_top - zone_bottom
+    is_valid = false
+
+    if sif_is_bullish
+        // For bullish SIF: bullish candle with lower wick testing into zone
+        is_next_bullish = next_close > next_open
+        next_body_bottom = math.min(next_open, next_close)
+        has_lower_wick = next_low < next_body_bottom
+        wick_enters_zone = next_low <= zone_top
+        max_penetration = zone_top - (zone_height * threshold_percent)
+        wick_respects_threshold = next_low >= max_penetration
+        is_valid := is_next_bullish and has_lower_wick and wick_enters_zone and wick_respects_threshold
+    else
+        // For bearish SIF: bearish candle with upper wick testing into zone
+        is_next_bearish = next_close < next_open
+        next_body_top = math.max(next_open, next_close)
+        has_upper_wick = next_high > next_body_top
+        wick_enters_zone = next_high >= zone_bottom
+        max_penetration = zone_bottom + (zone_height * threshold_percent)
+        wick_respects_threshold = next_high <= max_penetration
+        is_valid := is_next_bearish and has_upper_wick and wick_enters_zone and wick_respects_threshold
+
+    is_valid
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ZONE CALCULATION FUNCTIONS
@@ -2175,6 +2231,11 @@ create_consolidated_extension_label(consolidated_sif) =>
     if has_immediate_inversion and (immediate_sif_inversion_mode == IMMEDIATE_SIF_INVERSION_ICON or immediate_sif_inversion_mode == IMMEDIATE_SIF_INVERSION_BOTH)
         extension_result := extension_result + " " + immediate_icon
 
+    // Add Momentum SIF indicator
+    has_momentum = has_momentum_sif(consolidated_sif)
+    if has_momentum
+        extension_result := extension_result + " ✅"
+
     // Add status indicators (always last - after special properties)
     if consolidated_sif.is_consolidated_breached
         extension_result := extension_result + " [BREACHED]"
@@ -2373,6 +2434,14 @@ format_level_label(level) =>
 
 should_display_sif(sif_record) =>
     if sif_record.is_invalidated and not show_invalidated_sifs
+        false
+    else if sif_inversion_type_filter == SIF_INVERSION_TYPE_IMMEDIATE and not sif_record.is_immediate_sif_inversion
+        false
+    else if sif_inversion_type_filter == SIF_INVERSION_TYPE_REGULAR and sif_record.is_immediate_sif_inversion
+        false
+    else if sif_momentum_type_filter == SIF_MOMENTUM_TYPE_MOMENTUM and not sif_record.is_momentum_sif
+        false
+    else if sif_momentum_type_filter == SIF_MOMENTUM_TYPE_NON_MOMENTUM and sif_record.is_momentum_sif
         false
     else
         // Check if source type is enabled
@@ -2702,6 +2771,27 @@ if array.size(all_sif_records) > 0
                 updated_sif.cached_data_valid := false  // Invalidate cache
                 needs_visual_update := true
 
+            // Momentum SIF validation for immediate SIFs
+            if enable_momentum_sifs and updated_sif.is_immediate_sif_inversion and not updated_sif.is_momentum_sif and not updated_sif.is_invalidated
+                if updated_sif.bar_index == bar_index - 1
+                    // Get the actual SIF zone (not the gap zone)
+                    [zone_top, zone_bottom] = get_subtype_zone(updated_sif)
+                    threshold_decimal = momentum_max_penetration == MOMENTUM_MAX_PENETRATION_25 ? 0.25 : momentum_max_penetration == MOMENTUM_MAX_PENETRATION_50 ? 0.50 : 1.00
+                    is_valid = validate_momentum_sif(
+                         zone_top,
+                         zone_bottom,
+                         updated_sif.is_bullish,
+                         open,
+                         close,
+                         high,
+                         low,
+                         threshold_decimal
+                     )
+                    if is_valid
+                        updated_sif.is_momentum_sif := true
+                        updated_sif.cached_data_valid := false
+                        needs_visual_update := true
+
             array.set(all_sif_records, i, updated_sif)
 
 // Gap processing and SIF detection with correct timing
@@ -2795,7 +2885,8 @@ if array.size(active_gaps) > 0
                          0.0,
                          int(na),
                          false,
-                         gap.is_breakaway_gap
+                         gap.is_breakaway_gap,
+                         false
                      )
 
                     // Detect SUPER SIF strength
@@ -2832,7 +2923,8 @@ if array.size(active_gaps) > 0
                          overlap_pct,
                          overlapped_bar,
                          is_immediate_sif_inversion,
-                         gap.is_breakaway_gap
+                         gap.is_breakaway_gap,
+                         false
                      )
 
                     array.push(all_sif_records, sif_record)
@@ -3411,6 +3503,7 @@ if alert_mode == ALERT_MODE_GROUPED or alert_mode == ALERT_MODE_BOTH
         plus_n = extra > 0 ? (" +" + str.tostring(extra)) : ""
         timeframe_string = str.tostring(timeframe.period)
         alert(lead_text + plus_n + " • " + timeframe_string)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // SIF Core° [Pro+]
