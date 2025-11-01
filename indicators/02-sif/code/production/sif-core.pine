@@ -164,6 +164,13 @@ IMPLIED_DISPLACEMENT_MULTIPLIER_STEP = 0.1
 TRANSPARENCY_LIGHT = 20
 TRANSPARENCY_MEDIUM = 30
 TRANSPARENCY_HEAVY = 40
+DEFAULT_DISTANCE_FADE_MIN_TRANSPARENCY = 70
+DEFAULT_DISTANCE_FADE_MAX_TRANSPARENCY = 95
+MIN_DISTANCE_FADE_TRANSPARENCY = 0
+MAX_DISTANCE_FADE_TRANSPARENCY = 95
+DEFAULT_DISTANCE_FADE_RANGE = 0.5
+MIN_DISTANCE_FADE_RANGE = 0.5
+MAX_DISTANCE_FADE_RANGE = 20.0
 LINE_WIDTH_THIN = 1
 LINE_WIDTH_MEDIUM = 2
 
@@ -436,8 +443,8 @@ sif_inversion_type_filter = input.string(SIF_INVERSION_TYPE_ALL, 'Inversion Type
 sif_momentum_type_filter = input.string(SIF_MOMENTUM_TYPE_ALL, 'Momentum Type', options=[SIF_MOMENTUM_TYPE_ALL, SIF_MOMENTUM_TYPE_MOMENTUM, SIF_MOMENTUM_TYPE_NON_MOMENTUM], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter SIFs by momentum validation:\n• All: Show all SIFs\n• Momentum Only: Show only momentum-validated SIFs (immediate SIFs confirmed with rejection wick)\n• Non-Momentum Only: Show only non-momentum SIFs')
 
 // === ⚡ MOMENTUM SIFS ===
-enable_momentum_sifs = input.bool(false, "Enable Momentum SIFs", group=GROUP_MOMENTUM_SIFS, tooltip="Validates immediate SIFs where momentum candle confirms rejection")
-momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_25, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_SIFS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
+enable_momentum_sifs = input.bool(true, "Enable Momentum SIFs", group=GROUP_MOMENTUM_SIFS, tooltip="Validates immediate SIFs where momentum candle confirms rejection")
+momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_50, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_SIFS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
 
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of SIF detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
@@ -478,6 +485,10 @@ extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertic
 extension_label_horizontal_padding = input.int(1, 'Horizontal Padding', minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of spaces for left/right padding (0-10)')
 extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of newlines for top/bottom padding (0-5)')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_EXTENSION_BARS, minval=1, maxval=MAX_EXTENSION_BARS, group=GROUP_SIF_EXTENSION, inline='ext_mode', tooltip='Number of bars for extension (meaning changes based on Extension Mode selected). Max: 50')
+enable_distance_based_fading = input.bool(false, 'Distance-Based Fading', group=GROUP_SIF_EXTENSION, inline='fade1', tooltip='Fade extension boxes gradually based on their distance from current price\n\nZones closer to price = more opaque\nZones farther from price = more transparent')
+distance_fade_min_transparency = input.int(DEFAULT_DISTANCE_FADE_MIN_TRANSPARENCY, 'Min', minval=MIN_DISTANCE_FADE_TRANSPARENCY, maxval=MAX_DISTANCE_FADE_TRANSPARENCY, group=GROUP_SIF_EXTENSION, inline='fade2', tooltip='Minimum transparency for zones closest to price (0-95)')
+distance_fade_max_transparency = input.int(DEFAULT_DISTANCE_FADE_MAX_TRANSPARENCY, 'Max', minval=MIN_DISTANCE_FADE_TRANSPARENCY, maxval=MAX_DISTANCE_FADE_TRANSPARENCY, group=GROUP_SIF_EXTENSION, inline='fade2', tooltip='Maximum transparency for zones farthest from price (0-95)')
+distance_fade_range = input.float(DEFAULT_DISTANCE_FADE_RANGE, 'Range (%)', minval=MIN_DISTANCE_FADE_RANGE, maxval=MAX_DISTANCE_FADE_RANGE, step=0.5, group=GROUP_SIF_EXTENSION, inline='fade3', tooltip='Price distance range as percentage of current price (0.5-20.0%)\n\nDefault 2.5% works well across futures, forex, stocks, and crypto\nZones within this distance range will fade from min to max transparency')
 
 // === 🎭 SIF WICK BEHAVIORS ===
 enable_inclusion = input.bool(true, INPUT_LABEL_INCLUSION, group=GROUP_SIF_BEHAVIORS, inline='behaviors')
@@ -2191,6 +2202,45 @@ should_highlight_consolidated_sif(consolidated_sif) =>
     else
         true
 
+// Calculate price distance from SIF zone as percentage of current price
+// @param zone_top float - Top of the SIF zone
+// @param zone_bottom float - Bottom of the SIF zone
+// @param current_price float - Current price to measure from
+// @returns float - Distance percentage (0.0 = price inside zone, positive = price away from zone)
+calculate_price_distance_from_zone(zone_top, zone_bottom, current_price) =>
+    distance_percent = 0.0
+
+    if current_price > zone_top
+        // Price above zone - measure from zone top
+        distance = current_price - zone_top
+        distance_percent := (distance / current_price) * 100.0
+    else if current_price < zone_bottom
+        // Price below zone - measure from zone bottom
+        distance = zone_bottom - current_price
+        distance_percent := (distance / current_price) * 100.0
+    // else: price inside zone, distance = 0.0
+
+    distance_percent
+
+// Calculate transparency based on distance using linear interpolation
+// @param distance_percent float - Distance from zone as percentage
+// @param min_transp int - Minimum transparency (for zones close to price)
+// @param max_transp int - Maximum transparency (for zones far from price)
+// @param fade_range float - Distance range for fading (in percentage)
+// @returns int - Calculated transparency value
+calculate_distance_based_transparency(distance_percent, min_transp, max_transp, fade_range) =>
+    if distance_percent <= 0.0
+        // Price inside or at zone - use minimum transparency
+        min_transp
+    else if distance_percent >= fade_range
+        // Price beyond fade range - use maximum transparency
+        max_transp
+    else
+        // Linear interpolation between min and max
+        fade_progress = distance_percent / fade_range
+        interpolated = min_transp + ((max_transp - min_transp) * fade_progress)
+        int(math.round(interpolated))
+
 get_sif_colors(sif_record) =>
     // Determine base color (breakaway custom colors override normal colors for active zones)
     original_color = if enable_breakaway_custom_colors and sif_record.is_breakaway_sif and not sif_record.is_invalidated
@@ -2198,8 +2248,29 @@ get_sif_colors(sif_record) =>
     else
         sif_record.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
 
-    // Use original color for both candle highlight and extension
-    [original_color, original_color]
+    // Apply distance-based fading to extension color if enabled
+    extension_color = original_color
+    if enable_distance_based_fading and not sif_record.is_invalidated
+        // Use cached zone boundaries
+        zone_top = sif_record.cached_zone_top
+        zone_bottom = sif_record.cached_zone_bottom
+
+        // Calculate distance from current price to zone
+        distance_percent = calculate_price_distance_from_zone(zone_top, zone_bottom, close)
+
+        // Calculate transparency based on distance
+        calculated_transparency = calculate_distance_based_transparency(
+             distance_percent,
+             distance_fade_min_transparency,
+             distance_fade_max_transparency,
+             distance_fade_range
+         )
+
+        // Apply the calculated transparency to the extension color
+        extension_color := color.new(original_color, calculated_transparency)
+
+    // Return candle highlight color and extension color
+    [original_color, extension_color]
 
 get_consolidated_sif_colors(consolidated_sif) =>
     // Check if any SIF in group is breakaway
@@ -2217,8 +2288,29 @@ get_consolidated_sif_colors(consolidated_sif) =>
     else
         consolidated_sif.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
 
-    // Use original color for both candle highlight and extension
-    [original_color, original_color]
+    // Apply distance-based fading to extension color if enabled
+    extension_color = original_color
+    if enable_distance_based_fading and not consolidated_sif.is_consolidated_invalidated
+        // Calculate distance from current price to zone
+        distance_percent = calculate_price_distance_from_zone(
+             consolidated_sif.consolidated_zone_top,
+             consolidated_sif.consolidated_zone_bottom,
+             close
+         )
+
+        // Calculate transparency based on distance
+        calculated_transparency = calculate_distance_based_transparency(
+             distance_percent,
+             distance_fade_min_transparency,
+             distance_fade_max_transparency,
+             distance_fade_range
+         )
+
+        // Apply the calculated transparency to the extension color
+        extension_color := color.new(original_color, calculated_transparency)
+
+    // Return candle highlight color and extension color
+    [original_color, extension_color]
 
 // Get appropriate text color for SIF extension labels
 get_sif_extension_text_color(sif_record, default_text_color) =>

@@ -158,6 +158,13 @@ TRANSPARENCY_HEAVY = 40
 MAX_FADE_TRANSPARENCY = 95
 MIN_LINE_TRANSPARENCY = 0
 MAX_LINE_TRANSPARENCY = 90
+DEFAULT_DISTANCE_FADE_MIN_TRANSPARENCY = 70
+DEFAULT_DISTANCE_FADE_MAX_TRANSPARENCY = 95
+MIN_DISTANCE_FADE_TRANSPARENCY = 0
+MAX_DISTANCE_FADE_TRANSPARENCY = 95
+DEFAULT_DISTANCE_FADE_RANGE = 0.5
+MIN_DISTANCE_FADE_RANGE = 0.5
+MAX_DISTANCE_FADE_RANGE = 20.0
 MIN_BORDER_WIDTH = 1
 MAX_BORDER_WIDTH = 5
 LINE_WIDTH_THIN = 1
@@ -422,8 +429,8 @@ filter_multi_source_mbzs = input.bool(true, 'Multi-Source', group=GROUP_VISIBILI
 mbz_momentum_type_filter = input.string(MBZ_MOMENTUM_TYPE_ALL, 'Momentum Type', options=[MBZ_MOMENTUM_TYPE_ALL, MBZ_MOMENTUM_TYPE_MOMENTUM, MBZ_MOMENTUM_TYPE_NON_MOMENTUM], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter MBZs by momentum validation:\n• All: Show all MBZs\n• Momentum Only: Show only momentum-validated MBZs (next candle confirmed rejection with wick)\n• Non-Momentum Only: Show only non-momentum MBZs')
 
 // === ⚡ MOMENTUM MBZS ===
-enable_momentum_mbzs = input.bool(false, "Enable Momentum MBZs", group=GROUP_MOMENTUM_MBZS, tooltip="Validates MBZs where momentum candle confirms rejection")
-momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_25, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_MBZS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
+enable_momentum_mbzs = input.bool(true, "Enable Momentum MBZs", group=GROUP_MOMENTUM_MBZS, tooltip="Validates MBZs where momentum candle confirms rejection")
+momentum_max_penetration = input.string(MOMENTUM_MAX_PENETRATION_50, "Max Penetration", options=[MOMENTUM_MAX_PENETRATION_25, MOMENTUM_MAX_PENETRATION_50, MOMENTUM_MAX_PENETRATION_100], group=GROUP_MOMENTUM_MBZS, tooltip="Maximum wick penetration into the zone:\n• 25%: Strict - wick limited to top 25% of zone\n• 50%: Moderate - wick limited to top 50% of zone\n• 100%: Lenient - wick can fully penetrate zone")
 
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of MBZ detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
@@ -464,6 +471,10 @@ extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertic
 extension_label_horizontal_padding = input.int(1, 'Horizontal Padding', minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Number of spaces for left/right padding (0-10)')
 extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Number of newlines for top/bottom padding (0-5)')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_mode', tooltip='Number of bars for extension (1-50 limit, meaning changes based on Extension Mode selected)')
+enable_distance_based_fading = input.bool(false, 'Distance-Based Fading', group=GROUP_MBZ_EXTENSION, inline='fade1', tooltip='Fade extension boxes gradually based on their distance from current price\n\nZones closer to price = more opaque\nZones farther from price = more transparent')
+distance_fade_min_transparency = input.int(DEFAULT_DISTANCE_FADE_MIN_TRANSPARENCY, 'Min', minval=MIN_DISTANCE_FADE_TRANSPARENCY, maxval=MAX_DISTANCE_FADE_TRANSPARENCY, group=GROUP_MBZ_EXTENSION, inline='fade2', tooltip='Minimum transparency for zones closest to price (0-95)')
+distance_fade_max_transparency = input.int(DEFAULT_DISTANCE_FADE_MAX_TRANSPARENCY, 'Max', minval=MIN_DISTANCE_FADE_TRANSPARENCY, maxval=MAX_DISTANCE_FADE_TRANSPARENCY, group=GROUP_MBZ_EXTENSION, inline='fade2', tooltip='Maximum transparency for zones farthest from price (0-95)')
+distance_fade_range = input.float(DEFAULT_DISTANCE_FADE_RANGE, 'Range (%)', minval=MIN_DISTANCE_FADE_RANGE, maxval=MAX_DISTANCE_FADE_RANGE, step=0.5, group=GROUP_MBZ_EXTENSION, inline='fade3', tooltip='Price distance range as percentage of current price (0.5-20.0%)\n\nDefault 2.5% works well across futures, forex, stocks, and crypto\nZones within this distance range will fade from min to max transparency')
 
 // === 🎭 MBZ WICK BEHAVIORS ===
 enable_inclusion = input.bool(true, 'Inclusion', group=GROUP_MBZ_BEHAVIORS, inline='behaviors', tooltip='MBZ WICK BEHAVIORS:\n• Inclusion: Wick toward body direction (bullish=lower wick, bearish=upper wick)\n• Reflection: Wick away from body direction (bullish=upper wick, bearish=lower wick)\n\nThese determine MBZ subtype based on dominant wick direction relative to candle body')
@@ -2416,6 +2427,45 @@ build_consolidated_tooltip(consolidated_mbz) =>
 // DISPLAY HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Calculate price distance from MBZ zone as percentage of current price
+// @param zone_top float - Top of the MBZ zone
+// @param zone_bottom float - Bottom of the MBZ zone
+// @param current_price float - Current price to measure from
+// @returns float - Distance percentage (0.0 = price inside zone, positive = price away from zone)
+calculate_price_distance_from_zone(zone_top, zone_bottom, current_price) =>
+    distance_percent = 0.0
+
+    if current_price > zone_top
+        // Price above zone - measure from zone top
+        distance = current_price - zone_top
+        distance_percent := (distance / current_price) * 100.0
+    else if current_price < zone_bottom
+        // Price below zone - measure from zone bottom
+        distance = zone_bottom - current_price
+        distance_percent := (distance / current_price) * 100.0
+    // else: price inside zone, distance = 0.0
+
+    distance_percent
+
+// Calculate transparency based on distance using linear interpolation
+// @param distance_percent float - Distance from zone as percentage
+// @param min_transp int - Minimum transparency (for zones close to price)
+// @param max_transp int - Maximum transparency (for zones far from price)
+// @param fade_range float - Distance range for fading (in percentage)
+// @returns int - Calculated transparency value
+calculate_distance_based_transparency(distance_percent, min_transp, max_transp, fade_range) =>
+    if distance_percent <= 0.0
+        // Price inside or at zone - use minimum transparency
+        min_transp
+    else if distance_percent >= fade_range
+        // Price beyond fade range - use maximum transparency
+        max_transp
+    else
+        // Linear interpolation between min and max
+        fade_progress = distance_percent / fade_range
+        interpolated = min_transp + ((max_transp - min_transp) * fade_progress)
+        int(math.round(interpolated))
+
 get_mbz_colors(mbz_record) =>
     // Determine base color (breakaway custom colors override normal colors for active zones)
     original_color = if enable_breakaway_custom_colors and mbz_record.is_breakaway_mbz and not mbz_record.is_invalidated
@@ -2423,8 +2473,28 @@ get_mbz_colors(mbz_record) =>
     else
         mbz_record.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
 
-    // Use original color for both candle highlight and extension
-    [original_color, original_color]
+    // Apply distance-based fading to extension color if enabled
+    extension_color = original_color
+    if enable_distance_based_fading and not mbz_record.is_invalidated
+        // Get zone boundaries
+        [zone_top, zone_bottom] = get_cached_mbz_subtype_zone(mbz_record)
+
+        // Calculate distance from current price to zone
+        distance_percent = calculate_price_distance_from_zone(zone_top, zone_bottom, close)
+
+        // Calculate transparency based on distance
+        calculated_transparency = calculate_distance_based_transparency(
+             distance_percent,
+             distance_fade_min_transparency,
+             distance_fade_max_transparency,
+             distance_fade_range
+         )
+
+        // Apply the calculated transparency to the extension color
+        extension_color := color.new(original_color, calculated_transparency)
+
+    // Return candle highlight color and extension color
+    [original_color, extension_color]
 
 // Get appropriate text color for MBZ labels
 get_mbz_extension_text_color(mbz_record, default_text_color) =>
@@ -2450,8 +2520,29 @@ get_consolidated_mbz_colors(consolidated_mbz) =>
     else
         consolidated_mbz.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
 
-    // Use original color for both candle highlight and extension
-    [original_color, original_color]
+    // Apply distance-based fading to extension color if enabled
+    extension_color = original_color
+    if enable_distance_based_fading and not consolidated_mbz.is_consolidated_invalidated
+        // Calculate distance from current price to zone
+        distance_percent = calculate_price_distance_from_zone(
+             consolidated_mbz.consolidated_zone_top,
+             consolidated_mbz.consolidated_zone_bottom,
+             close
+         )
+
+        // Calculate transparency based on distance
+        calculated_transparency = calculate_distance_based_transparency(
+             distance_percent,
+             distance_fade_min_transparency,
+             distance_fade_max_transparency,
+             distance_fade_range
+         )
+
+        // Apply the calculated transparency to the extension color
+        extension_color := color.new(original_color, calculated_transparency)
+
+    // Return candle highlight color and extension color
+    [original_color, extension_color]
 
 should_display_mbz(mbz_record) =>
     if mbz_record.is_invalidated and not show_invalidated_mbzs
