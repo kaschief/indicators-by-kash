@@ -107,6 +107,11 @@ EXTENSION_FIXED = "Fixed Length"
 EXTENSION_TO_CURRENT = "To Current Price"
 EXTENSION_BEYOND_CURRENT = "Beyond Current Price"
 
+// Same-FVG MBZ Filter Constants
+SAME_FVG_FILTER_ALL_TOUCHES = "All Touches"
+SAME_FVG_FILTER_FIRST_TOUCH = "First Touch"
+SAME_FVG_FILTER_LATEST_TOUCH = "Latest Touch"
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PERFORMANCE & THRESHOLD CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -427,6 +432,7 @@ show_bearish_mbzs = input.bool(true, INPUT_LABEL_SHOW_MBZ_MINUS, group=GROUP_VIS
 filter_single_source_mbzs = input.bool(true, 'Single-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show MBZs formed from a single gap source (clean zones)')
 filter_multi_source_mbzs = input.bool(true, 'Multi-Source', group=GROUP_VISIBILITY_FILTERS, inline='source', tooltip='Show MBZs formed from multiple gap sources (confluence zones)')
 mbz_momentum_type_filter = input.string(MBZ_MOMENTUM_TYPE_ALL, 'Momentum Type', options=[MBZ_MOMENTUM_TYPE_ALL, MBZ_MOMENTUM_TYPE_MOMENTUM, MBZ_MOMENTUM_TYPE_NON_MOMENTUM], group=GROUP_VISIBILITY_FILTERS, tooltip='Filter MBZs by momentum validation:\n• All: Show all MBZs\n• Momentum Only: Show only momentum-validated MBZs (next candle confirmed rejection with wick)\n• Non-Momentum Only: Show only non-momentum MBZs')
+same_fvg_mbz_filter = input.string(SAME_FVG_FILTER_ALL_TOUCHES, 'Same-FVG MBZs', options=[SAME_FVG_FILTER_ALL_TOUCHES, SAME_FVG_FILTER_FIRST_TOUCH, SAME_FVG_FILTER_LATEST_TOUCH], group=GROUP_VISIBILITY_FILTERS, tooltip='Control display when multiple MBZs form from the same FVG:\n• All Touches: Show all MBZs (default)\n• First Touch: Show only the first non-invalidated MBZ from each FVG\n• Latest Touch: Show only the most recent MBZ from each FVG')
 
 // === ⚡ MOMENTUM MBZS ===
 enable_momentum_mbzs = input.bool(true, "Enable Momentum MBZs", group=GROUP_MOMENTUM_MBZS, tooltip="Validates MBZs where momentum candle confirms rejection")
@@ -2685,21 +2691,59 @@ manage_consolidated_mbz_display() =>
         valid_mbz_count = 0           // Counter for valid MBZs
         invalidated_mbz_count = 0     // Counter for invalidated MBZs
 
+        // Same-FVG MBZ filter tracking
+        seen_gap_ids = map.new<int, bool>()  // For LATEST TOUCH mode
+        first_touch_index_per_gap = map.new<int, int>()  // For FIRST TOUCH mode: gap_id -> bar_index of first non-invalidated MBZ
+
+        // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ per gap_id
+        if same_fvg_mbz_filter == SAME_FVG_FILTER_FIRST_TOUCH
+            for record_index = total_mbz_records - 1 to 0
+                current_mbz = array.get(all_mbz_records, record_index)
+                if should_display_mbz_direction(current_mbz) and not current_mbz.is_invalidated
+                    gap_id = current_mbz.source_gap_id
+                    // Loop backwards, so keep updating - last one seen = oldest (first) chronologically
+                    map.put(first_touch_index_per_gap, gap_id, record_index)
+
         for record_index = total_mbz_records - 1 to 0
             current_mbz_record = array.get(all_mbz_records, record_index)
 
             if should_display_mbz_direction(current_mbz_record)
-                // SEPARATE LIMITS SYSTEM: Process valid and invalidated MBZs with independent counters
-                if not current_mbz_record.is_invalidated and valid_mbz_count < max_valid_mbzs_effective
-                    // Add valid MBZs up to configured limit
-                    if should_display_mbz(current_mbz_record)
-                        array.push(displayable_mbzs, current_mbz_record)
-                        valid_mbz_count += 1
-                else if current_mbz_record.is_invalidated and invalidated_mbz_count < max_invalidated_mbzs and show_invalidated_mbzs
-                    // Add invalidated MBZs only when display is enabled and under limit
-                    if should_display_mbz(current_mbz_record)
-                        array.push(displayable_mbzs, current_mbz_record)
-                        invalidated_mbz_count += 1
+                // Same-FVG MBZ filter logic (inline for efficiency)
+                should_add_based_on_shared_fvg = true
+
+                if same_fvg_mbz_filter == SAME_FVG_FILTER_LATEST_TOUCH
+                    // LATEST TOUCH: Only add first (most recent) MBZ per gap_id
+                    // Since we loop backwards (newest first), first occurrence IS latest
+                    gap_id = current_mbz_record.source_gap_id
+                    if map.contains(seen_gap_ids, gap_id)
+                        should_add_based_on_shared_fvg := false  // Already added latest for this gap
+                    else
+                        map.put(seen_gap_ids, gap_id, true)  // Mark as seen
+                else if same_fvg_mbz_filter == SAME_FVG_FILTER_FIRST_TOUCH
+                    // FIRST TOUCH: Only add FIRST (oldest) non-invalidated MBZ per gap_id
+                    gap_id = current_mbz_record.source_gap_id
+                    if map.contains(first_touch_index_per_gap, gap_id)
+                        first_touch_idx = map.get(first_touch_index_per_gap, gap_id)
+                        // Only add if this IS the first touch for this gap_id
+                        if record_index != first_touch_idx
+                            should_add_based_on_shared_fvg := false
+                    else
+                        // No non-invalidated MBZ exists for this gap_id, skip it
+                        should_add_based_on_shared_fvg := false
+
+                // Apply all filters together
+                if should_add_based_on_shared_fvg
+                    // SEPARATE LIMITS SYSTEM: Process valid and invalidated MBZs with independent counters
+                    if not current_mbz_record.is_invalidated and valid_mbz_count < max_valid_mbzs_effective
+                        // Add valid MBZs up to configured limit
+                        if should_display_mbz(current_mbz_record)
+                            array.push(displayable_mbzs, current_mbz_record)
+                            valid_mbz_count += 1
+                    else if current_mbz_record.is_invalidated and invalidated_mbz_count < max_invalidated_mbzs and show_invalidated_mbzs
+                        // Add invalidated MBZs only when display is enabled and under limit
+                        if should_display_mbz(current_mbz_record)
+                            array.push(displayable_mbzs, current_mbz_record)
+                            invalidated_mbz_count += 1
 
                 // PERFORMANCE OPTIMIZATION: Early termination when limits reached
                 if valid_mbz_count >= max_valid_mbzs_effective and
