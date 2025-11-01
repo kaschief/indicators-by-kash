@@ -1,0 +1,316 @@
+//@version=6
+indicator("Kash RTH Gaps° [Pro+]", overlay=true, max_boxes_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const int RIGHT_EDGE_CUSHION = 3  // Bars to extend boxes/lines beyond current bar
+const float CE_LEVEL = 0.50  // CE at 50%
+const float Q1_LEVEL = 0.25  // First quartile at 25%
+const float Q3_LEVEL = 0.75  // Third quartile at 75%
+const int COMPACT_WIDTH = 5  // Width in bars for compact preview mode
+const int COMPACT_OFFSET = 10  // Bars to offset compact preview from current bar
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Gap Display
+gapsToShow = input.int(10, "Gaps to Display", minval=1, maxval=50, group="Gap Display", tooltip="Number of historical gaps to show on chart")
+unfilledColor = input.color(color.new(color.gray, 70), "Unfilled", inline="colors", group="Gap Display")
+filledColor = input.color(color.new(color.gray, 90), "Filled", inline="colors", group="Gap Display")
+
+// Preview Gap
+showPreview = input.bool(true, "Show Preview", inline="preview", group="Preview Gap", tooltip="Display live preview of forming gap during ETH hours")
+previewMode = input.string("Full", "", inline="preview", options=["Full", "Compact"], group="Preview Gap")
+previewColor = input.color(color.new(color.orange, 85), "", inline="preview", group="Preview Gap")
+
+// Internal Lines
+showCE = input.bool(true, "CE", inline="ce", group="Internal Lines")
+ceStyle = input.string("Solid", "", inline="ce", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
+ceColor = input.color(color.new(color.gray, 0), "", inline="ce", group="Internal Lines")
+
+showQuarters = input.bool(true, "Quarters", inline="quarters", group="Internal Lines")
+quartersStyle = input.string("Dashed", "", inline="quarters", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
+quartersColor = input.color(color.new(color.gray, 30), "", inline="quarters", group="Internal Lines")
+
+// ETH Session
+muteETHCandles = input.bool(true, "Mute ETH Candles", inline="eth", group="ETH Session", tooltip="Dim candle colors outside RTH hours (09:30-16:15 ET)")
+ethCandleColor = input.color(color.new(color.gray, 70), "", inline="eth", group="ETH Session")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RTH SESSION DETECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+rthSession = "0930-1615:1234567"
+inRTH = not na(time(timeframe.period, rthSession, "America/New_York"))
+rthStart = inRTH and not inRTH[1]
+rthEnd = not inRTH and inRTH[1]
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GAP TRACKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+type GapData
+    box topUnfilledBox
+    box filledBox
+    box bottomUnfilledBox
+    line ceLine
+    line q1Line
+    line q3Line
+    float top
+    float bottom
+    float penetrationLevel
+    string entryDirection
+    bool filled
+    bool passedNextRthOpen
+    bool isPreview
+
+var float rthClosePrice = na
+var int previewStartBar = na
+var array<GapData> gapsArray = array.new<GapData>()
+var GapData previewGap = na
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PREVIEW GAP CREATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+if rthEnd
+    rthClosePrice := close[1]
+    previewStartBar := bar_index
+
+    if showPreview
+        previewTop = math.max(rthClosePrice, close)
+        previewBottom = math.min(rthClosePrice, close)
+
+        isCompact = previewMode == "Compact"
+        previewLeft = isCompact ? bar_index + COMPACT_OFFSET : previewStartBar
+        previewRight = isCompact ? previewLeft + COMPACT_WIDTH : bar_index
+
+        previewTopUnfilledBox = box.new(previewLeft, previewTop, previewRight, previewBottom, bgcolor=previewColor, border_color=na)
+        previewFilledBox = box.new(previewLeft, previewBottom, previewRight, previewBottom, bgcolor=na, border_color=na)
+        previewBottomUnfilledBox = box.new(previewLeft, previewBottom, previewRight, previewBottom, bgcolor=na, border_color=na)
+
+        previewRange = previewTop - previewBottom
+        previewMid = previewBottom + previewRange * CE_LEVEL
+
+        ceLineStyle = ceStyle == "Solid" ? line.style_solid : ceStyle == "Dotted" ? line.style_dotted : line.style_dashed
+
+        previewCeLine = showCE ? line.new(previewLeft, previewMid, previewRight, previewMid, color=ceColor, style=ceLineStyle, width=1) : na
+
+        previewGap := GapData.new(
+             topUnfilledBox=previewTopUnfilledBox,
+             filledBox=previewFilledBox,
+             bottomUnfilledBox=previewBottomUnfilledBox,
+             ceLine=previewCeLine,
+             q1Line=na,
+             q3Line=na,
+             top=previewTop,
+             bottom=previewBottom,
+             penetrationLevel=na,
+             entryDirection="none",
+             filled=false,
+             passedNextRthOpen=false,
+             isPreview=true
+         )
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PREVIEW GAP UPDATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview
+    newTop = math.max(rthClosePrice, close)
+    newBottom = math.min(rthClosePrice, close)
+
+    isCompact = previewMode == "Compact"
+    previewLeft = isCompact ? bar_index + COMPACT_OFFSET : previewStartBar
+    previewRight = isCompact ? previewLeft + COMPACT_WIDTH : bar_index
+
+    box.set_top(previewGap.topUnfilledBox, newTop)
+    box.set_bottom(previewGap.topUnfilledBox, newBottom)
+    box.set_left(previewGap.topUnfilledBox, previewLeft)
+    box.set_right(previewGap.topUnfilledBox, previewRight)
+
+    previewRange = newTop - newBottom
+    if previewRange > 0
+        newMid = newBottom + previewRange * CE_LEVEL
+
+        if not na(previewGap.ceLine)
+            line.set_y1(previewGap.ceLine, newMid)
+            line.set_y2(previewGap.ceLine, newMid)
+            line.set_x1(previewGap.ceLine, previewLeft)
+            line.set_x2(previewGap.ceLine, previewRight)
+
+    previewGap.top := newTop
+    previewGap.bottom := newBottom
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RTH OPEN PROCESSING
+// ═══════════════════════════════════════════════════════════════════════════
+
+if rthStart and array.size(gapsArray) > 0
+    for i = 0 to array.size(gapsArray) - 1
+        gap = array.get(gapsArray, i)
+        gap.passedNextRthOpen := true
+
+if rthStart
+    if not na(previewGap)
+        box.delete(previewGap.topUnfilledBox)
+        box.delete(previewGap.filledBox)
+        box.delete(previewGap.bottomUnfilledBox)
+        if not na(previewGap.ceLine)
+            line.delete(previewGap.ceLine)
+        if not na(previewGap.q1Line)
+            line.delete(previewGap.q1Line)
+        if not na(previewGap.q3Line)
+            line.delete(previewGap.q3Line)
+        previewGap := na
+        previewStartBar := na
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ACTUAL GAP CREATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+if rthStart and not na(rthClosePrice)
+    rthOpenPrice = open
+
+    if rthOpenPrice != rthClosePrice
+        gapTop = math.max(rthClosePrice, rthOpenPrice)
+        gapBottom = math.min(rthClosePrice, rthOpenPrice)
+
+        gapRange = gapTop - gapBottom
+        gapMid = gapBottom + gapRange * CE_LEVEL
+        gapQ1 = gapBottom + gapRange * Q1_LEVEL
+        gapQ3 = gapBottom + gapRange * Q3_LEVEL
+
+        topUnfilledBox = box.new(bar_index, gapTop, bar_index, gapBottom, bgcolor=unfilledColor, border_color=na)
+        filledBox = box.new(bar_index, gapBottom, bar_index, gapBottom, bgcolor=filledColor, border_color=na)
+        bottomUnfilledBox = box.new(bar_index, gapBottom, bar_index, gapBottom, bgcolor=unfilledColor, border_color=na)
+
+        ceLineStyle = ceStyle == "Solid" ? line.style_solid : ceStyle == "Dotted" ? line.style_dotted : line.style_dashed
+        quartersLineStyle = quartersStyle == "Solid" ? line.style_solid : quartersStyle == "Dotted" ? line.style_dotted : line.style_dashed
+
+        ceLine = showCE ? line.new(bar_index, gapMid, bar_index, gapMid, color=ceColor, style=ceLineStyle, width=1) : na
+        q1Line = showQuarters ? line.new(bar_index, gapQ1, bar_index, gapQ1, color=quartersColor, style=quartersLineStyle, width=1) : na
+        q3Line = showQuarters ? line.new(bar_index, gapQ3, bar_index, gapQ3, color=quartersColor, style=quartersLineStyle, width=1) : na
+
+        initialDirection = "none"
+        if close < gapBottom
+            initialDirection := "from_below"
+        else if close > gapTop
+            initialDirection := "from_above"
+
+        gapData = GapData.new(
+             topUnfilledBox=topUnfilledBox,
+             filledBox=filledBox,
+             bottomUnfilledBox=bottomUnfilledBox,
+             ceLine=ceLine,
+             q1Line=q1Line,
+             q3Line=q3Line,
+             top=gapTop,
+             bottom=gapBottom,
+             penetrationLevel=na,
+             entryDirection=initialDirection,
+             filled=false,
+             passedNextRthOpen=false,
+             isPreview=false
+         )
+
+        array.push(gapsArray, gapData)
+
+        if array.size(gapsArray) > gapsToShow
+            oldGap = array.shift(gapsArray)
+            box.delete(oldGap.topUnfilledBox)
+            box.delete(oldGap.filledBox)
+            box.delete(oldGap.bottomUnfilledBox)
+            if not na(oldGap.ceLine)
+                line.delete(oldGap.ceLine)
+            if not na(oldGap.q1Line)
+                line.delete(oldGap.q1Line)
+            if not na(oldGap.q3Line)
+                line.delete(oldGap.q3Line)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN GAP PROCESSING LOOP
+// ═══════════════════════════════════════════════════════════════════════════
+
+if array.size(gapsArray) > 0
+    for i = 0 to array.size(gapsArray) - 1
+        gap = array.get(gapsArray, i)
+
+        if gap.filled and gap.passedNextRthOpen
+            continue
+
+        if gap.entryDirection == "none"
+            if high >= gap.bottom and low <= gap.bottom
+                gap.entryDirection := "from_below"
+            else if low <= gap.top and high >= gap.top
+                gap.entryDirection := "from_above"
+
+        if not gap.filled
+            if gap.entryDirection == "from_below"
+                if high >= gap.bottom and high <= gap.top
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? high : math.max(gap.penetrationLevel, high)
+                if high >= gap.top
+                    gap.penetrationLevel := gap.top
+                    gap.filled := true
+
+            else if gap.entryDirection == "from_above"
+                if low <= gap.top and low >= gap.bottom
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? low : math.min(gap.penetrationLevel, low)
+                if low <= gap.bottom
+                    gap.penetrationLevel := gap.bottom
+                    gap.filled := true
+
+            if not gap.filled and not na(gap.penetrationLevel)
+                if gap.entryDirection == "from_below"
+                    if gap.penetrationLevel >= gap.top
+                        gap.filled := true
+                else if gap.entryDirection == "from_above"
+                    if gap.penetrationLevel <= gap.bottom
+                        gap.filled := true
+
+        if not na(gap.penetrationLevel)
+            if gap.entryDirection == "from_below"
+                box.set_top(gap.filledBox, gap.penetrationLevel)
+                box.set_bottom(gap.filledBox, gap.bottom)
+                box.set_top(gap.topUnfilledBox, gap.top)
+                box.set_bottom(gap.topUnfilledBox, gap.penetrationLevel)
+                box.set_top(gap.bottomUnfilledBox, gap.bottom)
+                box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
+
+            else if gap.entryDirection == "from_above"
+                box.set_top(gap.filledBox, gap.top)
+                box.set_bottom(gap.filledBox, gap.penetrationLevel)
+                box.set_top(gap.bottomUnfilledBox, gap.penetrationLevel)
+                box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
+                box.set_top(gap.topUnfilledBox, gap.top)
+                box.set_bottom(gap.topUnfilledBox, gap.top)
+        else
+            box.set_top(gap.topUnfilledBox, gap.top)
+            box.set_bottom(gap.topUnfilledBox, gap.bottom)
+            box.set_top(gap.filledBox, gap.bottom)
+            box.set_bottom(gap.filledBox, gap.bottom)
+            box.set_top(gap.bottomUnfilledBox, gap.bottom)
+            box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
+
+        shouldExtend = not gap.passedNextRthOpen or (gap.passedNextRthOpen and not gap.filled)
+
+        if shouldExtend
+            rightEdge = bar_index + RIGHT_EDGE_CUSHION
+            box.set_right(gap.topUnfilledBox, rightEdge)
+            box.set_right(gap.filledBox, rightEdge)
+            box.set_right(gap.bottomUnfilledBox, rightEdge)
+            if not na(gap.ceLine)
+                line.set_x2(gap.ceLine, rightEdge)
+            if not na(gap.q1Line)
+                line.set_x2(gap.q1Line, rightEdge)
+            if not na(gap.q3Line)
+                line.set_x2(gap.q3Line, rightEdge)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ETH CANDLE MUTING
+// ═══════════════════════════════════════════════════════════════════════════
+
+plotcandle(muteETHCandles and not inRTH ? open : na, high, low, close, color=ethCandleColor, bordercolor=ethCandleColor, wickcolor=ethCandleColor, editable=false, display=display.pane, force_overlay=true)
