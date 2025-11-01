@@ -66,7 +66,9 @@ GROUP_PULSE_MODE = "Pulse Mode"
 GROUP_DAILY = "Daily"
 GROUP_WEEKLY = "Weekly"
 GROUP_MONTHLY = "Monthly"
+GROUP_HTF_LIQUIDITY_DEPTH = "HTF Liquidity Depth"
 GROUP_INTRADAY = "Intraday Sessions"
+GROUP_INTRADAY_LIQUIDITY_DEPTH = "Intraday Liquidity Depth"
 GROUP_POISZN = "PoiSzn Sessions"
 GROUP_RANGE_BOX = "Range Box"
 GROUP_TIME_DIVIDERS = "Time Dividers"
@@ -108,7 +110,7 @@ DEFAULT_RANGE_BOX_COLOR = #2196f3
 DEFAULT_RANGE_MIDDLE_COLOR = #ff9800
 DEFAULT_TIME_DIVIDER_COLOR = #808080
 DEFAULT_1600_OPEN_COLOR = #ff5722
-DEFAULT_EXTENSION_COLOR = #03a9f4
+DEFAULT_LIQUIDITY_DEPTH_COLOR = #03a9f4
 DEFAULT_LABEL_TEXT_COLOR = color.black
 
 // Default session background colors (with transparency)
@@ -165,19 +167,26 @@ LABEL_OFFSET_SINGLE = 0.02  // Offset when only one pool is enabled
 // TYPE DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Extension constants (modular for future adjustments)
-NUM_EXTENSION_LEVELS = 3  // L1, L2, L3 (easily configurable)
+// Liquidity Depth constants (modular for future adjustments)
+NUM_LIQUIDITY_DEPTH_LEVELS = 3  // L1, L2, L3 (easily configurable)
+NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS = 3  // Intraday L1, L2, L3
+DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_1 = 0.09  // First intraday liquidity depth level (%)
+DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_2 = 0.18  // Second intraday liquidity depth level (%)
+DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_3 = 0.27  // Third intraday liquidity depth level (%)
 
 // Asset family configuration (data-driven approach)
 type AssetFamily
     array<string> identifiers           // Contract codes (e.g., ["NQ", "MNQ"])
-    float daily_extension_distance      // Daily L1 distance (e.g., 27)
-    float weekly_extension_distance     // Weekly L1 distance (e.g., 81)
-    float monthly_extension_distance    // Monthly L1 distance (e.g., 243)
+    float daily_liquidity_depth_distance      // Daily L1 distance (e.g., 27)
+    float weekly_liquidity_depth_distance     // Weekly L1 distance (e.g., 81)
+    float monthly_liquidity_depth_distance    // Monthly L1 distance (e.g., 243)
+    float intraday_liquidity_depth_percent_1  // Intraday L1 percentage (e.g., 0.09)
+    float intraday_liquidity_depth_percent_2  // Intraday L2 percentage (e.g., 0.18)
+    float intraday_liquidity_depth_percent_3  // Intraday L3 percentage (e.g., 0.27)
     string display_name                 // Display name (e.g., "NASDAQ")
 
-// Stores extension level data for a single pool entry (one high or low)
-type ExtensionLevels
+// Stores liquidity depth level data for a single pool entry (one high or low)
+type LiquidityDepthLevels
     array<bool> breached      // Index 0 = L1, 1 = L2, 2 = L3, etc.
     array<int> breach_times   // Corresponding breach timestamps
 
@@ -192,9 +201,12 @@ type LiquidityPool
     array<int> low_breach_times
     array<int> session_start_times
     array<int> session_end_times
-    // Extension tracking: one ExtensionLevels per pool entry (HTF only)
-    array<ExtensionLevels> high_extensions
-    array<ExtensionLevels> low_extensions
+    // Liquidity Depth tracking: one LiquidityDepthLevels per pool entry (HTF only)
+    array<LiquidityDepthLevels> high_liquidity_depths
+    array<LiquidityDepthLevels> low_liquidity_depths
+    // Intraday Liquidity Depth tracking: one LiquidityDepthLevels per pool entry (intraday sessions only)
+    array<LiquidityDepthLevels> intraday_high_liquidity_depths
+    array<LiquidityDepthLevels> intraday_low_liquidity_depths
     float current_high
     float current_low
     int current_high_time
@@ -235,15 +247,15 @@ type SixteenHundredOpen
 var array<AssetFamily> ASSET_FAMILIES = array.new<AssetFamily>()
 
 if barstate.isfirst
-    //                                                                      Daily  Weekly Monthly
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("NQ", "MNQ"), 27, 81, 243, "NASDAQ"))           // Daily: 27,54,81 | Weekly: 81,162,243 | Monthly: 243,486,729
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("ES", "MES"), 9, 18, 54, "S&P500"))             // Daily: 9,18,27 | Weekly: 18,36,54 | Monthly: 54,108,162
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("YM", "MYM"), 81, 243, 243, "DOW"))             // Daily: 81,162,243 | Weekly: 243,486,729 | Monthly: 243,486,729
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("RTY", "M2K"), 4, 12, 36, "RUSSELL"))           // TODO: Verify Monthly
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("GC", "MGC"), 3, 6, 18, "GOLD"))                // Daily: 3,6,9 | Weekly: 6,12,18 | Monthly: 18,36,54
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("CL", "MCL", "QM"), 0.125, 0.375, 1.125, "OIL")) // Daily: 0.125,0.25,0.375 | Weekly: 0.375,0.75,1.125 | Monthly: 1.125,2.25,3.375
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("BTC", "MBT"), 100, 300, 900, "BTC"))           // TODO: Verify Monthly
-    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("ETH", "MET"), 10, 30, 90, "ETH"))              // TODO: Verify Monthly
+    //                                                                      Daily  Weekly Monthly  Intraday%: L1    L2    L3
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("NQ", "MNQ"), 27, 81, 243, 0.09, 0.18, 0.27, "NASDAQ"))           // Daily: 27,54,81 | Weekly: 81,162,243 | Monthly: 243,486,729 | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("ES", "MES"), 9, 18, 54, 0.03, 0.06, 0.09, "S&P500"))             // Daily: 9,18,27 | Weekly: 18,36,54 | Monthly: 54,108,162 | Intraday: 0.03%, 0.06%, 0.09%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("YM", "MYM"), 81, 243, 243, 0.09, 0.18, 0.27, "DOW"))             // Daily: 81,162,243 | Weekly: 243,486,729 | Monthly: 243,486,729 | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("RTY", "M2K"), 4, 12, 36, 0.09, 0.18, 0.27, "RUSSELL"))           // TODO: Verify Monthly | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("GC", "MGC"), 3, 6, 18, 0.09, 0.18, 0.27, "GOLD"))                // Daily: 3,6,9 | Weekly: 6,12,18 | Monthly: 18,36,54 | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("CL", "MCL", "QM"), 0.125, 0.375, 1.125, 0.09, 0.18, 0.27, "OIL")) // Daily: 0.125,0.25,0.375 | Weekly: 0.375,0.75,1.125 | Monthly: 1.125,2.25,3.375 | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("BTC", "MBT"), 100, 300, 900, 0.09, 0.18, 0.27, "BTC"))           // TODO: Verify Monthly | Intraday: 0.09%, 0.18%, 0.27%
+    array.push(ASSET_FAMILIES, AssetFamily.new(array.from("ETH", "MET"), 10, 30, 90, 0.09, 0.18, 0.27, "ETH"))           // TODO: Verify Monthly | Intraday: 0.09%, 0.18%, 0.27%
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET DETECTION FUNCTIONS (must be defined before INPUTS)
@@ -274,6 +286,16 @@ find_asset_family() =>
 // Performance optimization: Cache lookup result in global scope (runs once)
 var AssetFamily CACHED_ASSET_FAMILY = na
 
+// Session string cache (performance: calculated once)
+var string actualAsiaSession = na
+var string actualLondonSession = na
+var string actualNyamSession = na
+var string actualLunchSession = na
+var string actualNypmSession = na
+var string actualPremarketSession = na
+var string actualOvernightSession = na
+var string actualRangeSession = na
+
 // Initialize cache on first bar
 if barstate.isfirst
     CACHED_ASSET_FAMILY := find_asset_family()
@@ -282,17 +304,26 @@ if barstate.isfirst
 is_asset_supported() =>
     not na(CACHED_ASSET_FAMILY)
 
-get_daily_extension_distance() =>
-    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.daily_extension_distance
+get_daily_liquidity_depth_distance() =>
+    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.daily_liquidity_depth_distance
 
-get_weekly_extension_distance() =>
-    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.weekly_extension_distance
+get_weekly_liquidity_depth_distance() =>
+    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.weekly_liquidity_depth_distance
 
-get_monthly_extension_distance() =>
-    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.monthly_extension_distance
+get_monthly_liquidity_depth_distance() =>
+    na(CACHED_ASSET_FAMILY) ? 0.0 : CACHED_ASSET_FAMILY.monthly_liquidity_depth_distance
 
 get_detected_asset_name() =>
     na(CACHED_ASSET_FAMILY) ? "NOT SUPPORTED" : CACHED_ASSET_FAMILY.display_name
+
+get_intraday_liquidity_depth_percent_1() =>
+    na(CACHED_ASSET_FAMILY) ? DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_1 : CACHED_ASSET_FAMILY.intraday_liquidity_depth_percent_1
+
+get_intraday_liquidity_depth_percent_2() =>
+    na(CACHED_ASSET_FAMILY) ? DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_2 : CACHED_ASSET_FAMILY.intraday_liquidity_depth_percent_2
+
+get_intraday_liquidity_depth_percent_3() =>
+    na(CACHED_ASSET_FAMILY) ? DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_3 : CACHED_ASSET_FAMILY.intraday_liquidity_depth_percent_3
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
@@ -300,24 +331,6 @@ get_detected_asset_name() =>
 
 // ─── Pulse Mode (Global Override) ───
 pulseModeFilter = input.string(FILTER_ALL, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_MONTHLY, FILTER_WEEKLY, FILTER_DAILY, FILTER_INTRADAY, FILTER_OVERNIGHT, FILTER_PREMARKET, FILTER_1600, FILTER_RANGE_BOX], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Monthly/Weekly/Daily/16:00/Range Box: Show ONLY that type\n• Intraday: Show Asia + London + NYAM + Lunch + NYPM\n• Overnight/Premarket: Show ONLY that session")
-
-// ─── Extensions (HTF Only: Daily/Weekly/Monthly) ───
-applyExtension = input.bool(false, "Apply Extension", group="Extensions", tooltip="Projects extension levels (L1, L2, L3) above highs and below lows for HTF pools (Daily/Weekly/Monthly only). Automatically adjusts distance based on detected asset.\n\nDaily: Valid on 15min-1hr charts\nWeekly: Valid on 4hr-12hr charts\nMonthly: Valid on 12hr-1W charts")
-extensionColor = input.color(DEFAULT_EXTENSION_COLOR, "Extension Color", group="Extensions", inline="extension_style")
-extensionLineWidth = input.int(1, "Extension Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group="Extensions", inline="extension_style")
-
-// Asset detection and extension distances (automatic, cached for performance)
-detectedAsset = get_detected_asset_name()
-dailyExtensionDistance = get_daily_extension_distance()
-weeklyExtensionDistance = get_weekly_extension_distance()
-monthlyExtensionDistance = get_monthly_extension_distance()
-isAssetSupported = is_asset_supported()
-
-// Timeframe gating for extensions (performance: computed once per bar)
-currentTimeframeMinutes = timeframe.in_seconds() / 60
-isDailyExtensionTimeframeValid = currentTimeframeMinutes >= 15 and currentTimeframeMinutes <= 60  // 15min to 1hr
-isWeeklyExtensionTimeframeValid = currentTimeframeMinutes >= 240 and currentTimeframeMinutes <= 720  // 4hr to 12hr
-isMonthlyExtensionTimeframeValid = currentTimeframeMinutes >= 720 and currentTimeframeMinutes <= 10080  // 12hr to 1W
 
 showDaily = input.bool(true, GROUP_DAILY, group=GROUP_DAILY)
 dailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_DAILY, inline='daily')
@@ -335,6 +348,24 @@ monthlyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_L
 monthlyColor = input.color(DEFAULT_MONTHLY_COLOR, UI_COLOR, group=GROUP_MONTHLY, inline='monthly')
 monthlyLineWidth = input.int(4, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY, inline='monthly')
 
+// ─── HTF Liquidity Depth (Daily/Weekly/Monthly) ───
+enableLiquidityDepth = input.bool(false, "Enable HTF Liquidity Depth", group=GROUP_HTF_LIQUIDITY_DEPTH, tooltip="Projects liquidity depth levels (L1, L2, L3) above highs and below lows for HTF pools (Daily/Weekly/Monthly). Automatically adjusts distance based on detected asset.\n\nDaily: Valid on 15min-1hr charts\nWeekly: Valid on 4hr-12hr charts\nMonthly: Valid on 12hr-1W charts")
+liquidityDepthColor = input.color(DEFAULT_LIQUIDITY_DEPTH_COLOR, "Color", group=GROUP_HTF_LIQUIDITY_DEPTH, inline="liquidity_depth_style")
+liquidityDepthLineWidth = input.int(1, "Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_HTF_LIQUIDITY_DEPTH, inline="liquidity_depth_style")
+
+// Asset detection and liquidity depth distances (automatic, cached for performance)
+detectedAsset = get_detected_asset_name()
+dailyLiquidityDepthDistance = get_daily_liquidity_depth_distance()
+weeklyLiquidityDepthDistance = get_weekly_liquidity_depth_distance()
+monthlyLiquidityDepthDistance = get_monthly_liquidity_depth_distance()
+isAssetSupported = is_asset_supported()
+
+// Timeframe gating for liquidity depth (performance: computed once per bar)
+currentTimeframeMinutes = timeframe.in_seconds() / 60
+isDailyLiquidityDepthTimeframeValid = currentTimeframeMinutes >= 15 and currentTimeframeMinutes <= 60  // 15min to 1hr
+isWeeklyLiquidityDepthTimeframeValid = currentTimeframeMinutes >= 240 and currentTimeframeMinutes <= 720  // 4hr to 12hr
+isMonthlyLiquidityDepthTimeframeValid = currentTimeframeMinutes >= 720 and currentTimeframeMinutes <= 10080  // 12hr to 1W
+
 showAsia = input.bool(true, UI_ASIA_SESSION, group=GROUP_INTRADAY, inline='intraday1')
 showLondon = input.bool(true, UI_LONDON_SESSION, group=GROUP_INTRADAY, inline='intraday1')
 showNyam = input.bool(true, UI_NYAM_SESSION, group=GROUP_INTRADAY, inline='intraday1')
@@ -347,6 +378,21 @@ intradayLineWidth = input.int(2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WI
 
 showIntradayBackground = input.bool(false, UI_BACKGROUND, group=GROUP_INTRADAY, inline='intraday_bg')
 intradayBackgroundColor = input.color(DEFAULT_INTRADAY_BG_COLOR, "", group=GROUP_INTRADAY, inline='intraday_bg')
+
+// ─── Intraday Liquidity Depth (Asia/London/NY AM/Lunch/NY PM/Premarket/Overnight) ───
+enableIntradayLiquidityDepth = input.bool(false, "Enable Intraday Liquidity Depth", group=GROUP_INTRADAY_LIQUIDITY_DEPTH, tooltip="Projects percentage-based liquidity depth levels (L1, L2, L3) above highs and below lows for intraday sessions only (Asia, London, NY AM, Lunch, NY PM, Premarket, Overnight).\n\nLiquidity Depth calculated as percentage of the high/low price.\n\nPercentages automatically adjust based on detected asset.")
+useManualIntradayPercentages = input.bool(false, "Use Manual %", group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_override", tooltip="Enable to override auto-detected percentages and use manual values below. When disabled, percentages automatically adjust based on asset (NQ/CL/GC: 0.09/0.18/0.27%, ES: 0.03/0.06/0.09%).")
+intradayLiquidityDepthPercent1Input = input.float(DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_1, "L1 %", minval=0.01, maxval=5.0, step=0.01, group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_liquidity_depth_pct")
+intradayLiquidityDepthPercent2Input = input.float(DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_2, "L2 %", minval=0.01, maxval=5.0, step=0.01, group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_liquidity_depth_pct")
+intradayLiquidityDepthPercent3Input = input.float(DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_3, "L3 %", minval=0.01, maxval=5.0, step=0.01, group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_liquidity_depth_pct")
+intradayLiquidityDepthColor = input.color(DEFAULT_LIQUIDITY_DEPTH_COLOR, "Color", group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_liquidity_depth_style")
+intradayLiquidityDepthLineWidth = input.int(1, "Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_LIQUIDITY_DEPTH, inline="intraday_liquidity_depth_style")
+
+// Apply detected asset percentages (override inputs if asset supported and manual override not enabled)
+useAutoPercentages = isAssetSupported and not useManualIntradayPercentages
+intradayLiquidityDepthPercent1 = useAutoPercentages ? get_intraday_liquidity_depth_percent_1() : intradayLiquidityDepthPercent1Input
+intradayLiquidityDepthPercent2 = useAutoPercentages ? get_intraday_liquidity_depth_percent_2() : intradayLiquidityDepthPercent2Input
+intradayLiquidityDepthPercent3 = useAutoPercentages ? get_intraday_liquidity_depth_percent_3() : intradayLiquidityDepthPercent3Input
 
 showOvernight = input.bool(true, UI_OVERNIGHT_SESSION, group=GROUP_POISZN, inline='overnight')
 overnightColor = input.color(DEFAULT_OVERNIGHT_COLOR, UI_COLOR, group=GROUP_POISZN, inline='overnight')
@@ -385,6 +431,9 @@ mondayLabelColor = input.color(color.white, "Monday", group=GROUP_TIME_DIVIDERS,
 showLabels = input.bool(true, GROUP_LABELS, group=GROUP_LABELS, inline='labels')
 labelTextColor = input.color(DEFAULT_LABEL_TEXT_COLOR, UI_TEXT_COLOR, group=GROUP_LABELS, inline='labels')
 labelOffsetEnabled = input.bool(false, "Smart Label Separation", group=GROUP_LABELS, inline='labels', tooltip="Enable vertical offset stacking to prevent label collisions. Automatically adapts spacing based on asset volatility. Turn ON only if you see overlapping labels.")
+
+// ─── Asset Levels Table ───
+showAssetLevelsTable = input.bool(true, "Show Asset Levels", group=GROUP_LABELS, tooltip="Display a table showing detected asset and its liquidity depth levels")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PULSE MODE FILTER LOGIC
@@ -476,24 +525,23 @@ if not detectionCompleted
 
         detectionCompleted := true
 
-// Apply day codes - use all 7 days for both asset types
+// Calculate session strings after detection (apply day codes)
 // Traditional assets handle Sunday evening exclusion via should_skip_sunday_liquidity()
-// For 24/7 assets, use default times; for traditional markets, use custom times
-actualAsiaSession = is247Asset ? ("2000-0000" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_ASIA_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualLondonSession = is247Asset ? ("0200-0500" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_LONDON_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualNyamSession = is247Asset ? ("0930-1200" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_NYAM_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualLunchSession = is247Asset ? ("1200-1330" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_LUNCH_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualNypmSession = is247Asset ? ("1330-1600" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_NYPM_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualPremarketSession = is247Asset ? ("0500-0915" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_PREMARKET_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualOvernightSession = is247Asset ? ("1600-0500" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_OVERNIGHT_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
-actualRangeSession = is247Asset ? ("0200-0215" + DAY_CODE_ALL_DAYS) : (str.replace_all(rangeSessionTime, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualAsiaSession := is247Asset ? ("2000-0000" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_ASIA_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualLondonSession := is247Asset ? ("0200-0500" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_LONDON_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualNyamSession := is247Asset ? ("0930-1200" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_NYAM_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualLunchSession := is247Asset ? ("1200-1330" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_LUNCH_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualNypmSession := is247Asset ? ("1330-1600" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_NYPM_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualPremarketSession := is247Asset ? ("0500-0915" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_PREMARKET_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualOvernightSession := is247Asset ? ("1600-0500" + DAY_CODE_ALL_DAYS) : (str.replace_all(DEFAULT_OVERNIGHT_SESSION_TIME, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
+actualRangeSession := is247Asset ? ("0200-0215" + DAY_CODE_ALL_DAYS) : (str.replace_all(rangeSessionTime, DAY_CODE_MON_SAT, "") + DAY_CODE_ALL_DAYS)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 create_pool() =>
-    LiquidityPool.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), array.new_bool(), array.new_bool(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new<ExtensionLevels>(), array.new<ExtensionLevels>(), na, na, na, na, na)
+    LiquidityPool.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), array.new_bool(), array.new_bool(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), na, na, na, na, na)
 
 create_range_box() =>
     RangeBox.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), na, na, na)
@@ -525,13 +573,13 @@ pool_store_session(pool) =>
         array.push(pool.high_breach_times, na)
         array.push(pool.low_breach_times, na)
 
-        // Initialize extension levels for this pool entry (HTF only)
-        high_ext = ExtensionLevels.new(array.new_bool(NUM_EXTENSION_LEVELS, false), array.new_int(NUM_EXTENSION_LEVELS, na))
-        low_ext = ExtensionLevels.new(array.new_bool(NUM_EXTENSION_LEVELS, false), array.new_int(NUM_EXTENSION_LEVELS, na))
-        array.push(pool.high_extensions, high_ext)
-        array.push(pool.low_extensions, low_ext)
+        // Initialize liquidity depth levels for this pool entry (HTF only)
+        high_liquidity_depth = LiquidityDepthLevels.new(array.new_bool(NUM_LIQUIDITY_DEPTH_LEVELS, false), array.new_int(NUM_LIQUIDITY_DEPTH_LEVELS, na))
+        low_liquidity_depth = LiquidityDepthLevels.new(array.new_bool(NUM_LIQUIDITY_DEPTH_LEVELS, false), array.new_int(NUM_LIQUIDITY_DEPTH_LEVELS, na))
+        array.push(pool.high_liquidity_depths, high_liquidity_depth)
+        array.push(pool.low_liquidity_depths, low_liquidity_depth)
 
-pool_detect_breaches(pool, scan_cap, extension_distance) =>
+pool_detect_breaches(pool, scan_cap, liquidity_depth_distance) =>
     if array.size(pool.highs) > 0
         scan_size = math.min(array.size(pool.highs), scan_cap)
         start_index = math.max(0, array.size(pool.highs) - scan_size)
@@ -550,32 +598,80 @@ pool_detect_breaches(pool, scan_cap, extension_distance) =>
                     array.set(pool.low_breached, i, true)
                     array.set(pool.low_breach_times, i, time)
 
-            // Extension level breach detection (only if distance > 0 for performance)
-            if extension_distance > 0
+            // Liquidity Depth level breach detection (only if distance > 0 for performance)
+            if liquidity_depth_distance > 0
                 tracked_high = array.get(pool.highs, i)
                 tracked_low = array.get(pool.lows, i)
-                high_ext = array.get(pool.high_extensions, i)
-                low_ext = array.get(pool.low_extensions, i)
+                high_liquidity_depth = array.get(pool.high_liquidity_depths, i)
+                low_liquidity_depth = array.get(pool.low_liquidity_depths, i)
 
-                for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                     multiplier = level_idx + 1  // L1=1x, L2=2x, L3=3x
 
-                    // Check high extension level
-                    if not array.get(high_ext.breached, level_idx)
-                        level_price = tracked_high + (multiplier * extension_distance)
+                    // Check high liquidity depth level
+                    if not array.get(high_liquidity_depth.breached, level_idx)
+                        level_price = tracked_high + (multiplier * liquidity_depth_distance)
                         if high >= level_price
-                            array.set(high_ext.breached, level_idx, true)
-                            array.set(high_ext.breach_times, level_idx, time)
+                            array.set(high_liquidity_depth.breached, level_idx, true)
+                            array.set(high_liquidity_depth.breach_times, level_idx, time)
 
-                    // Check low extension level
-                    if not array.get(low_ext.breached, level_idx)
-                        level_price = tracked_low - (multiplier * extension_distance)
+                    // Check low liquidity depth level
+                    if not array.get(low_liquidity_depth.breached, level_idx)
+                        level_price = tracked_low - (multiplier * liquidity_depth_distance)
                         if low <= level_price
-                            array.set(low_ext.breached, level_idx, true)
-                            array.set(low_ext.breach_times, level_idx, time)
+                            array.set(low_liquidity_depth.breached, level_idx, true)
+                            array.set(low_liquidity_depth.breach_times, level_idx, time)
+
+pool_detect_intraday_breaches(pool, scan_cap, percent1, percent2, percent3) =>
+    if array.size(pool.highs) > 0
+        scan_size = math.min(array.size(pool.highs), scan_cap)
+        start_index = math.max(0, array.size(pool.highs) - scan_size)
+
+        for i = start_index to array.size(pool.highs) - 1
+            // Base level (L0) breach detection
+            if not array.get(pool.high_breached, i)
+                tracked_high = array.get(pool.highs, i)
+                if high >= tracked_high
+                    array.set(pool.high_breached, i, true)
+                    array.set(pool.high_breach_times, i, time)
+
+            if not array.get(pool.low_breached, i)
+                tracked_low = array.get(pool.lows, i)
+                if low <= tracked_low
+                    array.set(pool.low_breached, i, true)
+                    array.set(pool.low_breach_times, i, time)
+
+            // Intraday liquidity depth level breach detection (percentage-based)
+            if percent1 > 0
+                tracked_high = array.get(pool.highs, i)
+                tracked_low = array.get(pool.lows, i)
+                intraday_high_liquidity_depth = array.get(pool.intraday_high_liquidity_depths, i)
+                intraday_low_liquidity_depth = array.get(pool.intraday_low_liquidity_depths, i)
+                percents = array.from(percent1, percent2, percent3)
+
+                for level_idx = 0 to NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS - 1
+                    percent = array.get(percents, level_idx)
+
+                    // Check high liquidity depth level
+                    if not array.get(intraday_high_liquidity_depth.breached, level_idx)
+                        level_price = tracked_high + (tracked_high * (percent / 100.0))
+                        if high >= level_price
+                            array.set(intraday_high_liquidity_depth.breached, level_idx, true)
+                            array.set(intraday_high_liquidity_depth.breach_times, level_idx, time)
+
+                    // Check low liquidity depth level
+                    if not array.get(intraday_low_liquidity_depth.breached, level_idx)
+                        level_price = tracked_low - (tracked_low * (percent / 100.0))
+                        if low <= level_price
+                            array.set(intraday_low_liquidity_depth.breached, level_idx, true)
+                            array.set(intraday_low_liquidity_depth.breach_times, level_idx, time)
 
 build_label(pool_type) =>
     pool_type
+
+// Helper: Get intraday liquidity depth percentage for a given level (0, 1, 2)
+get_intraday_percent(level_idx) =>
+    level_idx == 0 ? intradayLiquidityDepthPercent1 : (level_idx == 1 ? intradayLiquidityDepthPercent2 : intradayLiquidityDepthPercent3)
 
 should_skip_sunday_liquidity(time_value) =>
     // Traditional markets: skip Sunday 18:00-23:59 (thin reopening liquidity)
@@ -602,6 +698,19 @@ track_intraday_session(pool, sessionString, skipSunday) =>
             array.push(pool.low_breach_times, na)
             array.push(pool.session_start_times, pool.current_session_start_time)
             array.push(pool.session_end_times, time)
+
+            // Initialize intraday liquidity depth levels for this pool entry
+            intraday_high_liquidity_depth = LiquidityDepthLevels.new(array.new_bool(NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS, false), array.new_int(NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS, na))
+            intraday_low_liquidity_depth = LiquidityDepthLevels.new(array.new_bool(NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS, false), array.new_int(NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS, na))
+            array.push(pool.intraday_high_liquidity_depths, intraday_high_liquidity_depth)
+            array.push(pool.intraday_low_liquidity_depths, intraday_low_liquidity_depth)
+
+        // CRITICAL: Clear current session tracking after storing (prevents Sunday ghost sessions)
+        pool.current_high := na
+        pool.current_low := na
+        pool.current_high_time := na
+        pool.current_low_time := na
+        pool.current_session_start_time := na
 
     // Only process session starts/updates when NOT skipping Sunday
     if not skipSunday
@@ -632,6 +741,11 @@ track_range_session(rangeBox, sessionString) =>
             array.push(rangeBox.lows, rangeBox.current_low)
             array.push(rangeBox.start_times, rangeBox.current_start_time)
             array.push(rangeBox.end_times, time)
+
+        // Clear current session tracking after storing
+        rangeBox.current_high := na
+        rangeBox.current_low := na
+        rangeBox.current_start_time := na
 
     if sessionJustStarted
         rangeBox.current_high := high
@@ -696,6 +810,7 @@ var SixteenHundredOpen sixteen_hundred_open = create_1600_open()
 var array<line> all_lines = array.new<line>()
 var array<label> all_labels = array.new<label>()
 var array<box> all_boxes = array.new<box>()
+var table asset_levels_table = table.new(position.top_right, 3, 6, border_width=1)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA COLLECTION
@@ -733,8 +848,8 @@ if useTradingWeek != prev_trading_week_mode
     array.clear(weekly_pool.low_breach_times)
     array.clear(weekly_pool.session_start_times)
     array.clear(weekly_pool.session_end_times)
-    array.clear(weekly_pool.high_extensions)
-    array.clear(weekly_pool.low_extensions)
+    array.clear(weekly_pool.high_liquidity_depths)
+    array.clear(weekly_pool.low_liquidity_depths)
     prev_trading_week_mode := useTradingWeek
 
 // Calculate Sunday skip once for all liquidity sources (performance optimization)
@@ -983,45 +1098,52 @@ plotchar(showDayLabels and isMidpoint and currentDay == dayofweek.sunday, char="
 
 if not skip_sunday_liquidity
     if showDaily
-        // Only track extensions if enabled, asset supported, and timeframe valid
-        daily_ext_dist = (applyExtension and isAssetSupported and isDailyExtensionTimeframeValid) ? dailyExtensionDistance : 0
-        pool_detect_breaches(daily_pool, DAILY_SCAN_CAP, daily_ext_dist)
+        // Only track liquidity depth if enabled, asset supported, and timeframe valid
+        daily_liquidity_depth_dist = (enableLiquidityDepth and isAssetSupported and isDailyLiquidityDepthTimeframeValid) ? dailyLiquidityDepthDistance : 0
+        pool_detect_breaches(daily_pool, DAILY_SCAN_CAP, daily_liquidity_depth_dist)
 
     if showMonthly
-        // Only track extensions if enabled, asset supported, and timeframe valid
-        monthly_ext_dist = (applyExtension and isAssetSupported and isMonthlyExtensionTimeframeValid) ? monthlyExtensionDistance : 0
-        pool_detect_breaches(monthly_pool, MONTHLY_SCAN_CAP, monthly_ext_dist)
+        // Only track liquidity depth if enabled, asset supported, and timeframe valid
+        monthly_liquidity_depth_dist = (enableLiquidityDepth and isAssetSupported and isMonthlyLiquidityDepthTimeframeValid) ? monthlyLiquidityDepthDistance : 0
+        pool_detect_breaches(monthly_pool, MONTHLY_SCAN_CAP, monthly_liquidity_depth_dist)
 
 // Weekly breach detection: Allow Sunday evening breaches when using trading week mode
 weekly_should_detect = not skip_sunday_liquidity or useTradingWeek
 if weekly_should_detect and showWeekly
-    // Only track extensions if enabled, asset supported, and timeframe valid
-    weekly_ext_dist = (applyExtension and isAssetSupported and isWeeklyExtensionTimeframeValid) ? weeklyExtensionDistance : 0
-    pool_detect_breaches(weekly_pool, WEEKLY_SCAN_CAP, weekly_ext_dist)
+    // Only track liquidity depth if enabled, asset supported, and timeframe valid
+    weekly_liquidity_depth_dist = (enableLiquidityDepth and isAssetSupported and isWeeklyLiquidityDepthTimeframeValid) ? weeklyLiquidityDepthDistance : 0
+    pool_detect_breaches(weekly_pool, WEEKLY_SCAN_CAP, weekly_liquidity_depth_dist)
 
 if not skip_sunday_liquidity
-    // Intraday session breach detection (no extensions for intraday)
+    // Intraday session breach detection (percentage-based liquidity depth)
+    // NOTE: Use base toggles (showAsia, showNyam, etc.) NOT filtered versions
+    // Breach detection must run for ALL enabled pools regardless of Pulse Mode filter
     if timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
-        if showAsiaFiltered
-            pool_detect_breaches(asia_pool, ASIA_SCAN_CAP, 0)
+        // Determine liquidity depth percentages based on toggle
+        intraday_liquidity_depth_pct1 = enableIntradayLiquidityDepth ? intradayLiquidityDepthPercent1 : 0
+        intraday_liquidity_depth_pct2 = enableIntradayLiquidityDepth ? intradayLiquidityDepthPercent2 : 0
+        intraday_liquidity_depth_pct3 = enableIntradayLiquidityDepth ? intradayLiquidityDepthPercent3 : 0
 
-        if showLondonFiltered
-            pool_detect_breaches(london_pool, LONDON_SCAN_CAP, 0)
+        if showAsia
+            pool_detect_intraday_breaches(asia_pool, ASIA_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
-        if showNyamFiltered
-            pool_detect_breaches(nyam_pool, NYAM_SCAN_CAP, 0)
+        if showLondon
+            pool_detect_intraday_breaches(london_pool, LONDON_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
-        if showLunchFiltered
-            pool_detect_breaches(lunch_pool, LUNCH_SCAN_CAP, 0)
+        if showNyam
+            pool_detect_intraday_breaches(nyam_pool, NYAM_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
-        if showNypmFiltered
-            pool_detect_breaches(nypm_pool, NYPM_SCAN_CAP, 0)
+        if showLunch
+            pool_detect_intraday_breaches(lunch_pool, LUNCH_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
-        if showPremarketFiltered
-            pool_detect_breaches(premarket_pool, PREMARKET_SCAN_CAP, 0)
+        if showNypm
+            pool_detect_intraday_breaches(nypm_pool, NYPM_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
-        if showOvernightFiltered
-            pool_detect_breaches(overnight_pool, OVERNIGHT_SCAN_CAP, 0)
+        if showPremarket
+            pool_detect_intraday_breaches(premarket_pool, PREMARKET_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
+
+        if showOvernight
+            pool_detect_intraday_breaches(overnight_pool, OVERNIGHT_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
 // Detect 16:00 open mitigation (ONLY after 05:00 next day)
 // NOTE: Mitigation detection skips Sunday evening for traditional assets (16:00 is traditional market concept)
@@ -1204,6 +1326,7 @@ draw_intraday_pool(pool, poolType, showLast, lineColor, lineWidth) =>
         low_val = array.get(pool.lows, idx)
         high_time = array.get(pool.high_times, idx)
         low_time = array.get(pool.low_times, idx)
+        session_end_time = array.get(pool.session_end_times, idx)
 
         high_end_time = pool_get_high_end_time(pool, idx, time)
         low_end_time = pool_get_low_end_time(pool, idx, time)
@@ -1213,6 +1336,52 @@ draw_intraday_pool(pool, poolType, showLast, lineColor, lineWidth) =>
 
         low_line = line.new(low_time, low_val, low_end_time, low_val, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid)
         array.push(all_lines, low_line)
+
+        // Draw intraday liquidity depth lines (percentage-based)
+        if enableIntradayLiquidityDepth
+            high_breached_liquidity_depth = array.get(pool.high_breached, idx)
+            low_breached_liquidity_depth = array.get(pool.low_breached, idx)
+
+            // Only draw liquidity depth if L0 is breached (prerequisite)
+            if high_breached_liquidity_depth
+                intraday_high_liquidity_depth = array.get(pool.intraday_high_liquidity_depths, idx)
+
+                for level_idx = 0 to NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS - 1
+                    percent = get_intraday_percent(level_idx)
+                    liquidity_depth_high_val = high_val + (high_val * (percent / 100.0))
+
+                    // Get end time: if breached use breach time, otherwise extend to current bar
+                    level_breached = array.get(intraday_high_liquidity_depth.breached, level_idx)
+                    level_breach_time = array.get(intraday_high_liquidity_depth.breach_times, level_idx)
+                    level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
+
+                    // Draw horizontal liquidity depth line
+                    high_liquidity_depth_line = line.new(high_time, liquidity_depth_high_val, level_end_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=intradayLiquidityDepthColor, width=intradayLiquidityDepthLineWidth, style=line.style_dashed)
+                    array.push(all_lines, high_liquidity_depth_line)
+
+                    // Draw vertical connector
+                    high_connector = line.new(high_time, high_val, high_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=color.new(intradayLiquidityDepthColor, 80), width=intradayLiquidityDepthLineWidth, style=line.style_solid)
+                    array.push(all_lines, high_connector)
+
+            if low_breached_liquidity_depth
+                intraday_low_liquidity_depth = array.get(pool.intraday_low_liquidity_depths, idx)
+
+                for level_idx_low = 0 to NUM_INTRADAY_LIQUIDITY_DEPTH_LEVELS - 1
+                    percent_low = get_intraday_percent(level_idx_low)
+                    liquidity_depth_low_val = low_val - (low_val * (percent_low / 100.0))
+
+                    // Get end time: if breached use breach time, otherwise extend to current bar
+                    level_breached_low = array.get(intraday_low_liquidity_depth.breached, level_idx_low)
+                    level_breach_time_low = array.get(intraday_low_liquidity_depth.breach_times, level_idx_low)
+                    level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
+
+                    // Draw horizontal liquidity depth line
+                    low_liquidity_depth_line = line.new(low_time, liquidity_depth_low_val, level_end_time_low, liquidity_depth_low_val, xloc=xloc.bar_time, color=intradayLiquidityDepthColor, width=intradayLiquidityDepthLineWidth, style=line.style_dashed)
+                    array.push(all_lines, low_liquidity_depth_line)
+
+                    // Draw vertical connector
+                    low_connector = line.new(low_time, low_val, low_time, liquidity_depth_low_val, xloc=xloc.bar_time, color=color.new(intradayLiquidityDepthColor, 80), width=intradayLiquidityDepthLineWidth, style=line.style_solid)
+                    array.push(all_lines, low_connector)
 
         if showLabels
             label_text = build_label(poolType)
@@ -1279,48 +1448,48 @@ if barstate.islast
                 low_line = line.new(low_time, low_val, low_end_time, low_val, xloc=xloc.bar_time, color=dailyColor, width=dailyLineWidth, style=line.style_solid)
                 array.push(all_lines, low_line)
 
-                // Draw extension lines (HTF only: Daily)
-                if applyExtension and isAssetSupported and isDailyExtensionTimeframeValid and dailyExtensionDistance > 0
-                    high_breached_ext = array.get(daily_pool.high_breached, idx)
-                    low_breached_ext = array.get(daily_pool.low_breached, idx)
+                // Draw liquidity depth lines (HTF only: Daily)
+                if enableLiquidityDepth and isAssetSupported and isDailyLiquidityDepthTimeframeValid and dailyLiquidityDepthDistance > 0
+                    high_breached_liquidity_depth = array.get(daily_pool.high_breached, idx)
+                    low_breached_liquidity_depth = array.get(daily_pool.low_breached, idx)
 
-                    // Only draw extensions if L0 is breached (prerequisite)
-                    if high_breached_ext
-                        high_ext = array.get(daily_pool.high_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    // Only draw liquidity depth if L0 is breached (prerequisite)
+                    if high_breached_liquidity_depth
+                        high_liquidity_depth = array.get(daily_pool.high_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_high_val = high_val + (multiplier * dailyExtensionDistance)
+                            liquidity_depth_high_val = high_val + (multiplier * dailyLiquidityDepthDistance)
 
                             // Get end time for this level
-                            level_breached = array.get(high_ext.breached, level_idx)
-                            level_breach_time = array.get(high_ext.breach_times, level_idx)
+                            level_breached = array.get(high_liquidity_depth.breached, level_idx)
+                            level_breach_time = array.get(high_liquidity_depth.breach_times, level_idx)
                             level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
 
-                            // Draw horizontal extension line
-                            high_ext_line = line.new(high_time, extended_high_val, level_end_time, extended_high_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, high_ext_line)
+                            // Draw horizontal liquidity depth line
+                            high_liquidity_depth_line = line.new(high_time, liquidity_depth_high_val, level_end_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, high_liquidity_depth_line)
 
                             // Draw vertical connector
-                            high_connector = line.new(high_time, high_val, high_time, extended_high_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            high_connector = line.new(high_time, high_val, high_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, high_connector)
 
-                    if low_breached_ext
-                        low_ext = array.get(daily_pool.low_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    if low_breached_liquidity_depth
+                        low_liquidity_depth = array.get(daily_pool.low_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_low_val = low_val - (multiplier * dailyExtensionDistance)
+                            liquidity_depth_low_val = low_val - (multiplier * dailyLiquidityDepthDistance)
 
                             // Get end time for this level
-                            level_breached_low = array.get(low_ext.breached, level_idx)
-                            level_breach_time_low = array.get(low_ext.breach_times, level_idx)
+                            level_breached_low = array.get(low_liquidity_depth.breached, level_idx)
+                            level_breach_time_low = array.get(low_liquidity_depth.breach_times, level_idx)
                             level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
 
-                            // Draw horizontal extension line
-                            low_ext_line = line.new(low_time, extended_low_val, level_end_time_low, extended_low_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, low_ext_line)
+                            // Draw horizontal liquidity depth line
+                            low_liquidity_depth_line = line.new(low_time, liquidity_depth_low_val, level_end_time_low, liquidity_depth_low_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, low_liquidity_depth_line)
 
                             // Draw vertical connector
-                            low_connector = line.new(low_time, low_val, low_time, extended_low_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            low_connector = line.new(low_time, low_val, low_time, liquidity_depth_low_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, low_connector)
 
                 // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
@@ -1345,28 +1514,28 @@ if barstate.islast
                     low_label = label.new(low_label_time, low_label_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
                     array.push(all_labels, low_label)
 
-                    // Extension labels if enabled
-                    if applyExtension and isAssetSupported and isDailyExtensionTimeframeValid and dailyExtensionDistance > 0
+                    // Liquidity Depth labels if enabled
+                    if enableLiquidityDepth and isAssetSupported and isDailyLiquidityDepthTimeframeValid and dailyLiquidityDepthDistance > 0
                         high_breached_labels = array.get(daily_pool.high_breached, idx)
                         low_breached_labels = array.get(daily_pool.low_breached, idx)
 
                         if high_breached_labels
-                            high_ext_labels = array.get(daily_pool.high_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            high_liquidity_depth_labels = array.get(daily_pool.high_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_high_val_label = high_val + (multiplier * dailyExtensionDistance)
-                                ext_high_label = label.new(high_label_time, extended_high_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_high_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_high_val_label = high_val + (multiplier * dailyLiquidityDepthDistance)
+                                liquidity_depth_high_label = label.new(high_label_time, liquidity_depth_high_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_high_label)
 
                         if low_breached_labels
-                            low_ext_labels = array.get(daily_pool.low_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            low_liquidity_depth_labels = array.get(daily_pool.low_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_low_val_label = low_val - (multiplier * dailyExtensionDistance)
-                                ext_low_label = label.new(low_label_time, extended_low_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_low_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_low_val_label = low_val - (multiplier * dailyLiquidityDepthDistance)
+                                liquidity_depth_low_label = label.new(low_label_time, liquidity_depth_low_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_low_label)
 
     // Draw Weekly
     if showWeeklyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
@@ -1392,35 +1561,35 @@ if barstate.islast
                 low_line = line.new(low_time, low_val, low_end_time, low_val, xloc=xloc.bar_time, color=weeklyColor, width=weeklyLineWidth, style=line.style_solid)
                 array.push(all_lines, low_line)
 
-                // Draw extension lines (HTF only: Weekly)
-                if applyExtension and isAssetSupported and isWeeklyExtensionTimeframeValid and weeklyExtensionDistance > 0
-                    high_breached_ext = array.get(weekly_pool.high_breached, idx)
-                    low_breached_ext = array.get(weekly_pool.low_breached, idx)
+                // Draw liquidity depth lines (HTF only: Weekly)
+                if enableLiquidityDepth and isAssetSupported and isWeeklyLiquidityDepthTimeframeValid and weeklyLiquidityDepthDistance > 0
+                    high_breached_liquidity_depth = array.get(weekly_pool.high_breached, idx)
+                    low_breached_liquidity_depth = array.get(weekly_pool.low_breached, idx)
 
-                    if high_breached_ext
-                        high_ext = array.get(weekly_pool.high_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    if high_breached_liquidity_depth
+                        high_liquidity_depth = array.get(weekly_pool.high_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_high_val = high_val + (multiplier * weeklyExtensionDistance)
-                            level_breached = array.get(high_ext.breached, level_idx)
-                            level_breach_time = array.get(high_ext.breach_times, level_idx)
+                            liquidity_depth_high_val = high_val + (multiplier * weeklyLiquidityDepthDistance)
+                            level_breached = array.get(high_liquidity_depth.breached, level_idx)
+                            level_breach_time = array.get(high_liquidity_depth.breach_times, level_idx)
                             level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
-                            high_ext_line = line.new(high_time, extended_high_val, level_end_time, extended_high_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, high_ext_line)
-                            high_connector = line.new(high_time, high_val, high_time, extended_high_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            high_liquidity_depth_line = line.new(high_time, liquidity_depth_high_val, level_end_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, high_liquidity_depth_line)
+                            high_connector = line.new(high_time, high_val, high_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, high_connector)
 
-                    if low_breached_ext
-                        low_ext = array.get(weekly_pool.low_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    if low_breached_liquidity_depth
+                        low_liquidity_depth = array.get(weekly_pool.low_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_low_val = low_val - (multiplier * weeklyExtensionDistance)
-                            level_breached_low = array.get(low_ext.breached, level_idx)
-                            level_breach_time_low = array.get(low_ext.breach_times, level_idx)
+                            liquidity_depth_low_val = low_val - (multiplier * weeklyLiquidityDepthDistance)
+                            level_breached_low = array.get(low_liquidity_depth.breached, level_idx)
+                            level_breach_time_low = array.get(low_liquidity_depth.breach_times, level_idx)
                             level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
-                            low_ext_line = line.new(low_time, extended_low_val, level_end_time_low, extended_low_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, low_ext_line)
-                            low_connector = line.new(low_time, low_val, low_time, extended_low_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            low_liquidity_depth_line = line.new(low_time, liquidity_depth_low_val, level_end_time_low, liquidity_depth_low_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, low_liquidity_depth_line)
+                            low_connector = line.new(low_time, low_val, low_time, liquidity_depth_low_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, low_connector)
 
                 // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
@@ -1445,28 +1614,28 @@ if barstate.islast
                     low_label = label.new(low_label_time, low_label_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
                     array.push(all_labels, low_label)
 
-                    // Extension labels if enabled
-                    if applyExtension and isAssetSupported and isWeeklyExtensionTimeframeValid and weeklyExtensionDistance > 0
+                    // Liquidity Depth labels if enabled
+                    if enableLiquidityDepth and isAssetSupported and isWeeklyLiquidityDepthTimeframeValid and weeklyLiquidityDepthDistance > 0
                         high_breached_labels = array.get(weekly_pool.high_breached, idx)
                         low_breached_labels = array.get(weekly_pool.low_breached, idx)
 
                         if high_breached_labels
-                            high_ext_labels = array.get(weekly_pool.high_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            high_liquidity_depth_labels = array.get(weekly_pool.high_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_high_val_label = high_val + (multiplier * weeklyExtensionDistance)
-                                ext_high_label = label.new(high_label_time, extended_high_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_high_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_high_val_label = high_val + (multiplier * weeklyLiquidityDepthDistance)
+                                liquidity_depth_high_label = label.new(high_label_time, liquidity_depth_high_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_high_label)
 
                         if low_breached_labels
-                            low_ext_labels = array.get(weekly_pool.low_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            low_liquidity_depth_labels = array.get(weekly_pool.low_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_low_val_label = low_val - (multiplier * weeklyExtensionDistance)
-                                ext_low_label = label.new(low_label_time, extended_low_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_low_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_low_val_label = low_val - (multiplier * weeklyLiquidityDepthDistance)
+                                liquidity_depth_low_label = label.new(low_label_time, liquidity_depth_low_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_low_label)
 
     // Draw Monthly
     if showMonthlyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
@@ -1492,35 +1661,35 @@ if barstate.islast
                 low_line = line.new(low_time, low_val, low_end_time, low_val, xloc=xloc.bar_time, color=monthlyColor, width=monthlyLineWidth, style=line.style_solid)
                 array.push(all_lines, low_line)
 
-                // Draw extension lines (HTF only: Monthly)
-                if applyExtension and isAssetSupported and isMonthlyExtensionTimeframeValid and monthlyExtensionDistance > 0
-                    high_breached_ext = array.get(monthly_pool.high_breached, idx)
-                    low_breached_ext = array.get(monthly_pool.low_breached, idx)
+                // Draw liquidity depth lines (HTF only: Monthly)
+                if enableLiquidityDepth and isAssetSupported and isMonthlyLiquidityDepthTimeframeValid and monthlyLiquidityDepthDistance > 0
+                    high_breached_liquidity_depth = array.get(monthly_pool.high_breached, idx)
+                    low_breached_liquidity_depth = array.get(monthly_pool.low_breached, idx)
 
-                    if high_breached_ext
-                        high_ext = array.get(monthly_pool.high_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    if high_breached_liquidity_depth
+                        high_liquidity_depth = array.get(monthly_pool.high_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_high_val = high_val + (multiplier * monthlyExtensionDistance)
-                            level_breached = array.get(high_ext.breached, level_idx)
-                            level_breach_time = array.get(high_ext.breach_times, level_idx)
+                            liquidity_depth_high_val = high_val + (multiplier * monthlyLiquidityDepthDistance)
+                            level_breached = array.get(high_liquidity_depth.breached, level_idx)
+                            level_breach_time = array.get(high_liquidity_depth.breach_times, level_idx)
                             level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
-                            high_ext_line = line.new(high_time, extended_high_val, level_end_time, extended_high_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, high_ext_line)
-                            high_connector = line.new(high_time, high_val, high_time, extended_high_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            high_liquidity_depth_line = line.new(high_time, liquidity_depth_high_val, level_end_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, high_liquidity_depth_line)
+                            high_connector = line.new(high_time, high_val, high_time, liquidity_depth_high_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, high_connector)
 
-                    if low_breached_ext
-                        low_ext = array.get(monthly_pool.low_extensions, idx)
-                        for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                    if low_breached_liquidity_depth
+                        low_liquidity_depth = array.get(monthly_pool.low_liquidity_depths, idx)
+                        for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                             multiplier = level_idx + 1
-                            extended_low_val = low_val - (multiplier * monthlyExtensionDistance)
-                            level_breached_low = array.get(low_ext.breached, level_idx)
-                            level_breach_time_low = array.get(low_ext.breach_times, level_idx)
+                            liquidity_depth_low_val = low_val - (multiplier * monthlyLiquidityDepthDistance)
+                            level_breached_low = array.get(low_liquidity_depth.breached, level_idx)
+                            level_breach_time_low = array.get(low_liquidity_depth.breach_times, level_idx)
                             level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
-                            low_ext_line = line.new(low_time, extended_low_val, level_end_time_low, extended_low_val, xloc=xloc.bar_time, color=extensionColor, width=extensionLineWidth, style=line.style_dashed)
-                            array.push(all_lines, low_ext_line)
-                            low_connector = line.new(low_time, low_val, low_time, extended_low_val, xloc=xloc.bar_time, color=color.new(extensionColor, 80), width=extensionLineWidth, style=line.style_solid)
+                            low_liquidity_depth_line = line.new(low_time, liquidity_depth_low_val, level_end_time_low, liquidity_depth_low_val, xloc=xloc.bar_time, color=liquidityDepthColor, width=liquidityDepthLineWidth, style=line.style_dashed)
+                            array.push(all_lines, low_liquidity_depth_line)
+                            low_connector = line.new(low_time, low_val, low_time, liquidity_depth_low_val, xloc=xloc.bar_time, color=color.new(liquidityDepthColor, 80), width=liquidityDepthLineWidth, style=line.style_solid)
                             array.push(all_lines, low_connector)
 
                 // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
@@ -1545,28 +1714,28 @@ if barstate.islast
                     low_label = label.new(low_label_time, low_label_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
                     array.push(all_labels, low_label)
 
-                    // Extension labels if enabled
-                    if applyExtension and isAssetSupported and isMonthlyExtensionTimeframeValid and monthlyExtensionDistance > 0
+                    // Liquidity Depth labels if enabled
+                    if enableLiquidityDepth and isAssetSupported and isMonthlyLiquidityDepthTimeframeValid and monthlyLiquidityDepthDistance > 0
                         high_breached_labels = array.get(monthly_pool.high_breached, idx)
                         low_breached_labels = array.get(monthly_pool.low_breached, idx)
 
                         if high_breached_labels
-                            high_ext_labels = array.get(monthly_pool.high_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            high_liquidity_depth_labels = array.get(monthly_pool.high_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_high_val_label = high_val + (multiplier * monthlyExtensionDistance)
-                                ext_high_label = label.new(high_label_time, extended_high_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_high_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_high_val_label = high_val + (multiplier * monthlyLiquidityDepthDistance)
+                                liquidity_depth_high_label = label.new(high_label_time, liquidity_depth_high_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_high_label)
 
                         if low_breached_labels
-                            low_ext_labels = array.get(monthly_pool.low_extensions, idx)
-                            for level_idx = 0 to NUM_EXTENSION_LEVELS - 1
+                            low_liquidity_depth_labels = array.get(monthly_pool.low_liquidity_depths, idx)
+                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
                                 multiplier = level_idx + 1
-                                label_text_ext = "L" + str.tostring(multiplier)
-                                extended_low_val_label = low_val - (multiplier * monthlyExtensionDistance)
-                                ext_low_label = label.new(low_label_time, extended_low_val_label, label_text_ext, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(all_labels, ext_low_label)
+                                label_text_liquidity_depth = "L" + str.tostring(multiplier)
+                                liquidity_depth_low_val_label = low_val - (multiplier * monthlyLiquidityDepthDistance)
+                                liquidity_depth_low_label = label.new(low_label_time, liquidity_depth_low_val_label, label_text_liquidity_depth, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                                array.push(all_labels, liquidity_depth_low_label)
 
     // Draw Intraday Session Backgrounds (Completed + Live Sessions)
     if showIntradayBackground and timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
@@ -1642,7 +1811,7 @@ if barstate.islast
             start_time = array.get(range_box.start_times, idx)
             end_time = array.get(range_box.end_times, idx)
 
-            // Determine extension end time: next range's start OR current time if most recent
+            // Determine liquidity depth end time: next range's start OR current time if most recent
             extend_end_time = i > 0 ? array.get(range_box.start_times, idx + 1) : time
 
             // Draw high line (extended to next range start)
@@ -1737,3 +1906,64 @@ if barstate.islast
                     array.push(all_labels, open_label)
 
                 levels_drawn += 1
+
+    // Draw Asset Levels Table (optimized: only update when values change)
+    var string prev_asset_table = ""
+    var string prev_tf_table = ""
+    var float prev_daily_dist = 0.0
+    var float prev_intraday_pct1 = 0.0
+    var bool prev_use_auto = true
+
+    if showAssetLevelsTable and (detectedAsset != prev_asset_table or timeframe.period != prev_tf_table or dailyLiquidityDepthDistance != prev_daily_dist or intradayLiquidityDepthPercent1 != prev_intraday_pct1 or useAutoPercentages != prev_use_auto)
+        prev_asset_table := detectedAsset
+        prev_tf_table := timeframe.period
+        prev_daily_dist := dailyLiquidityDepthDistance
+        prev_intraday_pct1 := intradayLiquidityDepthPercent1
+        prev_use_auto := useAutoPercentages
+
+        // Calculate dynamic row count (no label rows)
+        rowCount = 2  // Asset + TF
+        rowCount := rowCount + (isDailyLiquidityDepthTimeframeValid ? 1 : 0)
+        rowCount := rowCount + (isWeeklyLiquidityDepthTimeframeValid ? 1 : 0)
+        rowCount := rowCount + (isMonthlyLiquidityDepthTimeframeValid ? 1 : 0)
+        rowCount := rowCount + 1  // Intraday (always shown)
+
+        // Clear and recreate table
+        table.clear(asset_levels_table, 0, 0, 2, rowCount)
+
+        currentRow = 0
+
+        // Asset
+        table.cell(asset_levels_table, 0, currentRow, "Asset", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+        table.cell(asset_levels_table, 1, currentRow, detectedAsset, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
+        currentRow := currentRow + 1
+
+        // Timeframe
+        table.cell(asset_levels_table, 0, currentRow, "TF", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+        table.cell(asset_levels_table, 1, currentRow, timeframe.period, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
+        currentRow := currentRow + 1
+
+        // HTF Liquidity Depth (only if valid)
+        if isDailyLiquidityDepthTimeframeValid
+            dailyLevels = str.tostring(dailyLiquidityDepthDistance) + " | " + str.tostring(dailyLiquidityDepthDistance * 2) + " | " + str.tostring(dailyLiquidityDepthDistance * 3)
+            table.cell(asset_levels_table, 0, currentRow, "Daily", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+            table.cell(asset_levels_table, 1, currentRow, dailyLevels, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
+            currentRow := currentRow + 1
+
+        if isWeeklyLiquidityDepthTimeframeValid
+            weeklyLevels = str.tostring(weeklyLiquidityDepthDistance) + " | " + str.tostring(weeklyLiquidityDepthDistance * 2) + " | " + str.tostring(weeklyLiquidityDepthDistance * 3)
+            table.cell(asset_levels_table, 0, currentRow, "Weekly", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+            table.cell(asset_levels_table, 1, currentRow, weeklyLevels, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
+            currentRow := currentRow + 1
+
+        if isMonthlyLiquidityDepthTimeframeValid
+            monthlyLevels = str.tostring(monthlyLiquidityDepthDistance) + " | " + str.tostring(monthlyLiquidityDepthDistance * 2) + " | " + str.tostring(monthlyLiquidityDepthDistance * 3)
+            table.cell(asset_levels_table, 0, currentRow, "Monthly", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+            table.cell(asset_levels_table, 1, currentRow, monthlyLevels, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
+            currentRow := currentRow + 1
+
+        // Intraday Liquidity Depth (percentage-based with source indicator)
+        sourceIndicator = useAutoPercentages ? " (Auto)" : " (Manual)"
+        intradayLevels = str.tostring(intradayLiquidityDepthPercent1, "#.##") + "% | " + str.tostring(intradayLiquidityDepthPercent2, "#.##") + "% | " + str.tostring(intradayLiquidityDepthPercent3, "#.##") + "%" + sourceIndicator
+        table.cell(asset_levels_table, 0, currentRow, "Intraday", text_color=color.white, bgcolor=color.new(color.gray, 10), text_size=size.tiny)
+        table.cell(asset_levels_table, 1, currentRow, intradayLevels, text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.tiny)
