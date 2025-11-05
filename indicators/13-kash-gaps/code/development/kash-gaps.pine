@@ -24,12 +24,14 @@ const string ENTRY_FROM_ABOVE = "from_above"
 showNWOG = input.bool(true, "Show NWOG", group="NWOG", tooltip="Display New Week Opening Gaps")
 nwogGapsToShow = input.int(5, "NWOGs to Display", minval=1, maxval=20, group="NWOG", tooltip="Number of historical NWOGs to show")
 extendNWOGToPresent = input.bool(false, "Extend to Present", group="NWOG", tooltip="Extend NWOG gaps to current time instead of stopping at next session")
+hideFilledNWOG = input.bool(false, "Hide Filled", group="NWOG", tooltip="Hide NWOG gaps once they are completely filled")
 nwogUnfilledColor = input.color(color.new(color.blue, 70), "Unfilled", inline="nwog_colors", group="NWOG")
 nwogFilledColor = input.color(color.new(color.blue, 90), "Filled", inline="nwog_colors", group="NWOG")
 
 showNDOG = input.bool(true, "Show NDOG", group="NDOG", tooltip="Display New Day Opening Gaps")
 ndogGapsToShow = input.int(5, "NDOGs to Display", minval=1, maxval=20, group="NDOG", tooltip="Number of historical NDOGs to show")
 extendNDOGToPresent = input.bool(false, "Extend to Present", group="NDOG", tooltip="Extend NDOG gaps to current time instead of stopping at next session")
+hideFilledNDOG = input.bool(false, "Hide Filled", group="NDOG", tooltip="Hide NDOG gaps once they are completely filled")
 ndogUnfilledColor = input.color(color.new(color.purple, 70), "Unfilled", inline="ndog_colors", group="NDOG")
 ndogFilledColor = input.color(color.new(color.purple, 90), "Filled", inline="ndog_colors", group="NDOG")
 
@@ -45,10 +47,11 @@ ethCandleColor = input.color(color.new(color.gray, 70), "", inline="eth", group=
 
 showCE = input.bool(true, "CE", inline="ce", group="Internal Lines")
 ceStyle = input.string("Solid", "", inline="ce", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
-ceColor = input.color(color.new(color.gray, 0), "", inline="ce", group="Internal Lines")
+ceColor = input.color(#808080, "", inline="ce", group="Internal Lines")
 showQuarters = input.bool(true, "Quarters", inline="quarters", group="Internal Lines")
 quartersStyle = input.string("Dashed", "", inline="quarters", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
-quartersColor = input.color(color.new(color.gray, 30), "", inline="quarters", group="Internal Lines")
+quartersColor = input.color(#808080, "", inline="quarters", group="Internal Lines")
+labelColor = input.color(#808080, "Label Color", group="Internal Lines", tooltip="Color for NWOG/NDOG labels on most recent gaps")
 
 isValidRTHTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
 isValidNWOGTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("240")
@@ -65,6 +68,7 @@ type GapData
     line ceLine
     line q1Line
     line q3Line
+    label gapLabel
     float top
     float bottom
     float penetrationLevel
@@ -112,6 +116,9 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
     q1Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ1, rightBar, gapQ1, color=quartersColor, style=quartersLineStyle, width=1) : na
     q3Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ3, rightBar, gapQ3, color=quartersColor, style=quartersLineStyle, width=1) : na
 
+    showLabel = (gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG) and not isPreview
+    gapLabel = showLabel ? label.new(leftBar, gapMid, gapType, color=color.new(color.white, 100), textcolor=labelColor, style=label.style_none, size=size.tiny) : na
+
     initialDirection = ENTRY_NONE
     if close < bottomPrice
         initialDirection := ENTRY_FROM_BELOW
@@ -125,6 +132,7 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          ceLine=ceLine,
          q1Line=q1Line,
          q3Line=q3Line,
+         gapLabel=gapLabel,
          top=topPrice,
          bottom=bottomPrice,
          penetrationLevel=na,
@@ -146,6 +154,8 @@ deleteGap(GapData gap) =>
         line.delete(gap.q1Line)
     if not na(gap.q3Line)
         line.delete(gap.q3Line)
+    if not na(gap.gapLabel)
+        label.delete(gap.gapLabel)
 
 countGapsByType(string gapType) =>
     count = 0
@@ -242,7 +252,17 @@ if rthStart and not na(rthClosePrice) and showRTHGaps
             removeOldestGap(GAP_TYPE_RTH)
 
 if array.size(gapsArray) > 0
+    mostRecentUnfilledNWOGBar = -1
+    mostRecentUnfilledNDOGBar = -1
+
     for i = 0 to array.size(gapsArray) - 1
+        gap = array.get(gapsArray, i)
+        if gap.gapType == GAP_TYPE_NWOG and not gap.filled and gap.creationBar > mostRecentUnfilledNWOGBar
+            mostRecentUnfilledNWOGBar := gap.creationBar
+        if gap.gapType == GAP_TYPE_NDOG and not gap.filled and gap.creationBar > mostRecentUnfilledNDOGBar
+            mostRecentUnfilledNDOGBar := gap.creationBar
+
+    for i = array.size(gapsArray) - 1 to 0
         gap = array.get(gapsArray, i)
 
         if gap.gapType == GAP_TYPE_RTH and not showRTHGaps
@@ -283,6 +303,12 @@ if array.size(gapsArray) > 0
                 else if gap.entryDirection == ENTRY_FROM_ABOVE
                     if gap.penetrationLevel <= gap.bottom
                         gap.filled := true
+
+        if gap.filled
+            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG)
+                deleteGap(gap)
+                array.remove(gapsArray, i)
+                continue
 
         gapUnfilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : rthUnfilledColor
         gapFilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogFilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogFilledColor : rthFilledColor
@@ -329,6 +355,24 @@ if array.size(gapsArray) > 0
                 line.set_x2(gap.q1Line, rightEdge)
             if not na(gap.q3Line)
                 line.set_x2(gap.q3Line, rightEdge)
+
+        if not na(gap.gapLabel)
+            isMostRecentUnfilled = not gap.filled and ((gap.gapType == GAP_TYPE_NWOG and gap.creationBar == mostRecentUnfilledNWOGBar) or (gap.gapType == GAP_TYPE_NDOG and gap.creationBar == mostRecentUnfilledNDOGBar))
+
+            if isMostRecentUnfilled
+                gapMidPrice = gap.bottom + (gap.top - gap.bottom) * CE_LEVEL
+                leftEdge = box.get_left(gap.topUnfilledBox)
+                rightEdgeForLabel = shouldExtend ? bar_index + RIGHT_EDGE_CUSHION : box.get_right(gap.topUnfilledBox)
+                centerBar = math.round((leftEdge + rightEdgeForLabel) / 2)
+
+                label.set_xy(gap.gapLabel, centerBar, gapMidPrice)
+                label.set_color(gap.gapLabel, color.new(color.white, 100))
+                label.set_textcolor(gap.gapLabel, labelColor)
+                label.set_style(gap.gapLabel, label.style_none)
+                label.set_size(gap.gapLabel, size.tiny)
+            else
+                label.set_color(gap.gapLabel, color.new(color.white, 100))
+                label.set_textcolor(gap.gapLabel, color.new(labelColor, 100))
 
 if showNWOG and isValidNWOGTimeframe
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
