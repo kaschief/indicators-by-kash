@@ -1,67 +1,62 @@
 //@version=6
 indicator("Kash RTH Gaps° [Pro+]", overlay=true, max_boxes_count=500, max_lines_count=500)
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
+const int RIGHT_EDGE_CUSHION = 3
+const float CE_LEVEL = 0.50
+const float Q1_LEVEL = 0.25
+const float Q3_LEVEL = 0.75
+const int COMPACT_WIDTH = 5
+const int COMPACT_OFFSET = 10
 
-const int RIGHT_EDGE_CUSHION = 3  // Bars to extend boxes/lines beyond current bar
-const float CE_LEVEL = 0.50  // CE at 50%
-const float Q1_LEVEL = 0.25  // First quartile at 25%
-const float Q3_LEVEL = 0.75  // Third quartile at 75%
-const int COMPACT_WIDTH = 5  // Width in bars for compact preview mode
-const int COMPACT_OFFSET = 10  // Bars to offset compact preview from current bar
+const int CLOSE_HOUR = 16
+const int CLOSE_MINUTE = 59
+const int SESSION_OPEN_HOUR = 18
+const int ZERO_MINUTE = 0
 
-// Gap Type Constants
 const string GAP_TYPE_RTH = "RTH"
+const string GAP_TYPE_NWOG = "NWOG"
+const string GAP_TYPE_NDOG = "NDOG"
 
-// Entry Direction Constants
 const string ENTRY_NONE = "none"
 const string ENTRY_FROM_BELOW = "from_below"
 const string ENTRY_FROM_ABOVE = "from_above"
 
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS
-// ═══════════════════════════════════════════════════════════════════════════
+showNWOG = input.bool(true, "Show NWOG", group="NWOG", tooltip="Display New Week Opening Gaps")
+nwogGapsToShow = input.int(5, "NWOGs to Display", minval=1, maxval=20, group="NWOG", tooltip="Number of historical NWOGs to show")
+extendNWOGToPresent = input.bool(false, "Extend to Present", group="NWOG", tooltip="Extend NWOG gaps to current time instead of stopping at next session")
+nwogUnfilledColor = input.color(color.new(color.blue, 70), "Unfilled", inline="nwog_colors", group="NWOG")
+nwogFilledColor = input.color(color.new(color.blue, 90), "Filled", inline="nwog_colors", group="NWOG")
 
-// Gap Display
-gapsToShow = input.int(10, "Gaps to Display", minval=1, maxval=50, group="Gap Display", tooltip="Number of historical gaps to show on chart")
-unfilledColor = input.color(color.new(color.gray, 70), "Unfilled", inline="colors", group="Gap Display")
-filledColor = input.color(color.new(color.gray, 90), "Filled", inline="colors", group="Gap Display")
+showNDOG = input.bool(true, "Show NDOG", group="NDOG", tooltip="Display New Day Opening Gaps")
+ndogGapsToShow = input.int(5, "NDOGs to Display", minval=1, maxval=20, group="NDOG", tooltip="Number of historical NDOGs to show")
+extendNDOGToPresent = input.bool(false, "Extend to Present", group="NDOG", tooltip="Extend NDOG gaps to current time instead of stopping at next session")
+ndogUnfilledColor = input.color(color.new(color.purple, 70), "Unfilled", inline="ndog_colors", group="NDOG")
+ndogFilledColor = input.color(color.new(color.purple, 90), "Filled", inline="ndog_colors", group="NDOG")
 
-// Preview Gap
-showPreview = input.bool(true, "Show Preview", inline="preview", group="Preview Gap", tooltip="Display live preview of forming gap during ETH hours")
-previewMode = input.string("Full", "", inline="preview", options=["Full", "Compact"], group="Preview Gap")
-previewColor = input.color(color.new(color.orange, 85), "", inline="preview", group="Preview Gap")
+showRTHGaps = input.bool(false, "Show RTH Gaps", group="RTH Gaps", tooltip="Enable/disable RTH gap display")
+rthGapsToShow = input.int(10, "RTH Gaps to Display", minval=1, maxval=50, group="RTH Gaps", tooltip="Number of historical RTH gaps to show")
+rthUnfilledColor = input.color(color.new(color.gray, 85), "Unfilled", inline="rth_colors", group="RTH Gaps")
+rthFilledColor = input.color(color.new(color.gray, 92), "Filled", inline="rth_colors", group="RTH Gaps")
+showPreview = input.bool(true, "Show Preview", inline="preview", group="RTH Gaps", tooltip="Display live preview of forming gap during ETH hours")
+previewMode = input.string("Full", "", inline="preview", options=["Full", "Compact"], group="RTH Gaps")
+previewColor = input.color(color.new(color.orange, 85), "", inline="preview", group="RTH Gaps")
+muteETHCandles = input.bool(true, "Mute ETH Candles", inline="eth", group="RTH Gaps", tooltip="Dim candle colors outside RTH hours (09:30-16:15 ET)")
+ethCandleColor = input.color(color.new(color.gray, 70), "", inline="eth", group="RTH Gaps")
 
-// Internal Lines
 showCE = input.bool(true, "CE", inline="ce", group="Internal Lines")
 ceStyle = input.string("Solid", "", inline="ce", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
 ceColor = input.color(color.new(color.gray, 0), "", inline="ce", group="Internal Lines")
-
 showQuarters = input.bool(true, "Quarters", inline="quarters", group="Internal Lines")
 quartersStyle = input.string("Dashed", "", inline="quarters", options=["Solid", "Dashed", "Dotted"], group="Internal Lines")
 quartersColor = input.color(color.new(color.gray, 30), "", inline="quarters", group="Internal Lines")
 
-// ETH Session
-muteETHCandles = input.bool(true, "Mute ETH Candles", inline="eth", group="ETH Session", tooltip="Dim candle colors outside RTH hours (09:30-16:15 ET)")
-ethCandleColor = input.color(color.new(color.gray, 70), "", inline="eth", group="ETH Session")
-
-// ═══════════════════════════════════════════════════════════════════════════
-// RTH SESSION DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Check if timeframe is between 1 minute and 15 minutes
-isValidTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
+isValidRTHTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
+isValidNWOGTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("240")
 
 rthSession = "0930-1615:1234567"
-inRTH = isValidTimeframe and not na(time(timeframe.period, rthSession, "America/New_York"))
+inRTH = isValidRTHTimeframe and not na(time(timeframe.period, rthSession, "America/New_York"))
 rthStart = inRTH and not inRTH[1]
 rthEnd = not inRTH and inRTH[1]
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GAP TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
 
 type GapData
     box topUnfilledBox
@@ -85,47 +80,44 @@ var int previewStartBar = na
 var array<GapData> gapsArray = array.new<GapData>()
 var GapData previewGap = na
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
+var float fridayClosePrice = na
+var float sundayOpenPrice = na
 
-// Create a gap with specified parameters
+var float prevDayClosePrice = na
+var float newDayOpenPrice = na
+var int lastNDOGDay = na
+
 createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false) =>
     gapRange = topPrice - bottomPrice
     gapMid = bottomPrice + gapRange * CE_LEVEL
     gapQ1 = bottomPrice + gapRange * Q1_LEVEL
     gapQ3 = bottomPrice + gapRange * Q3_LEVEL
 
-    // Determine colors based on preview mode
-    boxColor = isPreview ? previewColor : unfilledColor
+    unfilled = gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : rthUnfilledColor
+    filled = gapType == GAP_TYPE_NWOG ? nwogFilledColor : gapType == GAP_TYPE_NDOG ? ndogFilledColor : rthFilledColor
+    boxColor = isPreview ? previewColor : unfilled
 
-    // Calculate bar positions
     isCompact = isPreview and previewMode == "Compact"
     leftBar = isPreview ? (isCompact ? bar_index + COMPACT_OFFSET : previewStartBar) : bar_index
     rightBar = isPreview ? (isCompact ? leftBar + COMPACT_WIDTH : bar_index) : bar_index
 
-    // Create boxes
     topUnfilledBox = box.new(leftBar, topPrice, rightBar, bottomPrice, bgcolor=boxColor, border_color=na)
-    filledBox = box.new(leftBar, bottomPrice, rightBar, bottomPrice, bgcolor=filledColor, border_color=na)
+    filledBox = box.new(leftBar, bottomPrice, rightBar, bottomPrice, bgcolor=filled, border_color=na)
     bottomUnfilledBox = box.new(leftBar, bottomPrice, rightBar, bottomPrice, bgcolor=na, border_color=na)
 
-    // Line styles
     ceLineStyle = ceStyle == "Solid" ? line.style_solid : ceStyle == "Dotted" ? line.style_dotted : line.style_dashed
     quartersLineStyle = quartersStyle == "Solid" ? line.style_solid : quartersStyle == "Dotted" ? line.style_dotted : line.style_dashed
 
-    // Create lines
     ceLine = showCE ? line.new(leftBar, gapMid, rightBar, gapMid, color=ceColor, style=ceLineStyle, width=1) : na
     q1Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ1, rightBar, gapQ1, color=quartersColor, style=quartersLineStyle, width=1) : na
     q3Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ3, rightBar, gapQ3, color=quartersColor, style=quartersLineStyle, width=1) : na
 
-    // Determine initial entry direction
     initialDirection = ENTRY_NONE
     if close < bottomPrice
         initialDirection := ENTRY_FROM_BELOW
     else if close > topPrice
         initialDirection := ENTRY_FROM_ABOVE
 
-    // Return GapData object
     GapData.new(
          topUnfilledBox=topUnfilledBox,
          filledBox=filledBox,
@@ -144,7 +136,6 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          creationBar=bar_index
      )
 
-// Delete a gap and clean up all drawing objects
 deleteGap(GapData gap) =>
     box.delete(gap.topUnfilledBox)
     box.delete(gap.filledBox)
@@ -156,7 +147,6 @@ deleteGap(GapData gap) =>
     if not na(gap.q3Line)
         line.delete(gap.q3Line)
 
-// Count gaps of a specific type
 countGapsByType(string gapType) =>
     count = 0
     if array.size(gapsArray) > 0
@@ -166,7 +156,6 @@ countGapsByType(string gapType) =>
                 count += 1
     count
 
-// Remove oldest gap of a specific type
 removeOldestGap(string gapType) =>
     if array.size(gapsArray) > 0
         for i = 0 to array.size(gapsArray) - 1
@@ -176,11 +165,7 @@ removeOldestGap(string gapType) =>
                 array.remove(gapsArray, i)
                 break
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PREVIEW GAP CREATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-if rthEnd
+if rthEnd and showRTHGaps
     rthClosePrice := close[1]
     previewStartBar := bar_index
 
@@ -189,11 +174,7 @@ if rthEnd
         previewBottom = math.min(rthClosePrice, close)
         previewGap := createGap(previewTop, previewBottom, GAP_TYPE_RTH, true)
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PREVIEW GAP UPDATE
-// ═══════════════════════════════════════════════════════════════════════════
-
-if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview
+if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview and showRTHGaps
     newTop = math.max(rthClosePrice, close)
     newBottom = math.min(rthClosePrice, close)
 
@@ -219,27 +200,35 @@ if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview
     previewGap.top := newTop
     previewGap.bottom := newBottom
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RTH OPEN PROCESSING
-// ═══════════════════════════════════════════════════════════════════════════
-
-if rthStart and array.size(gapsArray) > 0
+if rthStart and showRTHGaps and array.size(gapsArray) > 0
     for i = 0 to array.size(gapsArray) - 1
         gap = array.get(gapsArray, i)
         if gap.gapType == GAP_TYPE_RTH
             gap.passedNextSession := true
 
-if rthStart
+if showNWOG and isValidNWOGTimeframe and not extendNWOGToPresent and array.size(gapsArray) > 0
+    [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
+
+    if not na(arrayTimes) and array.size(arrayTimes) > 0
+        for i = 0 to array.size(arrayTimes) - 1
+            barTime = array.get(arrayTimes, i)
+            barDay = dayofweek(barTime, "America/New_York")
+            barHour = hour(barTime, "America/New_York")
+            barMinute = minute(barTime, "America/New_York")
+
+            if barDay == 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+                for j = 0 to array.size(gapsArray) - 1
+                    gap = array.get(gapsArray, j)
+                    if gap.gapType == GAP_TYPE_NWOG
+                        gap.passedNextSession := true
+
+if rthStart and showRTHGaps
     if not na(previewGap)
         deleteGap(previewGap)
         previewGap := na
         previewStartBar := na
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RTH GAP CREATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-if rthStart and not na(rthClosePrice)
+if rthStart and not na(rthClosePrice) and showRTHGaps
     rthOpenPrice = open
 
     if rthOpenPrice != rthClosePrice
@@ -249,30 +238,29 @@ if rthStart and not na(rthClosePrice)
         rthGap = createGap(gapTop, gapBottom, GAP_TYPE_RTH, false)
         array.push(gapsArray, rthGap)
 
-        // Remove oldest RTH gap if limit exceeded
-        if countGapsByType(GAP_TYPE_RTH) > gapsToShow
+        if countGapsByType(GAP_TYPE_RTH) > rthGapsToShow
             removeOldestGap(GAP_TYPE_RTH)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MAIN GAP PROCESSING LOOP
-// ═══════════════════════════════════════════════════════════════════════════
 
 if array.size(gapsArray) > 0
     for i = 0 to array.size(gapsArray) - 1
         gap = array.get(gapsArray, i)
 
-        // Skip filled gaps that have passed next session (only for RTH type)
-        if gap.filled and gap.passedNextSession and gap.gapType == GAP_TYPE_RTH
+        if gap.gapType == GAP_TYPE_RTH and not showRTHGaps
+            continue
+        if gap.gapType == GAP_TYPE_NWOG and not showNWOG
+            continue
+        if gap.gapType == GAP_TYPE_NDOG and not showNDOG
             continue
 
-        // Detect entry direction if not yet determined
+        if gap.filled and gap.passedNextSession
+            continue
+
         if gap.entryDirection == ENTRY_NONE
             if high >= gap.bottom and low <= gap.bottom
                 gap.entryDirection := ENTRY_FROM_BELOW
             else if low <= gap.top and high >= gap.top
                 gap.entryDirection := ENTRY_FROM_ABOVE
 
-        // Track gap fill progress
         if not gap.filled
             if gap.entryDirection == ENTRY_FROM_BELOW
                 if high >= gap.bottom and high <= gap.top
@@ -296,32 +284,38 @@ if array.size(gapsArray) > 0
                     if gap.penetrationLevel <= gap.bottom
                         gap.filled := true
 
-        // Update box visuals based on fill status
+        gapUnfilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : rthUnfilledColor
+        gapFilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogFilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogFilledColor : rthFilledColor
+
         if not na(gap.penetrationLevel)
             if gap.entryDirection == ENTRY_FROM_BELOW
                 box.set_top(gap.filledBox, gap.penetrationLevel)
                 box.set_bottom(gap.filledBox, gap.bottom)
+                box.set_bgcolor(gap.filledBox, gapFilledColor)
                 box.set_top(gap.topUnfilledBox, gap.top)
                 box.set_bottom(gap.topUnfilledBox, gap.penetrationLevel)
+                box.set_bgcolor(gap.topUnfilledBox, gapUnfilledColor)
                 box.set_top(gap.bottomUnfilledBox, gap.bottom)
                 box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
 
             else if gap.entryDirection == ENTRY_FROM_ABOVE
                 box.set_top(gap.filledBox, gap.top)
                 box.set_bottom(gap.filledBox, gap.penetrationLevel)
+                box.set_bgcolor(gap.filledBox, gapFilledColor)
                 box.set_top(gap.bottomUnfilledBox, gap.penetrationLevel)
                 box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
+                box.set_bgcolor(gap.bottomUnfilledBox, gapUnfilledColor)
                 box.set_top(gap.topUnfilledBox, gap.top)
                 box.set_bottom(gap.topUnfilledBox, gap.top)
         else
             box.set_top(gap.topUnfilledBox, gap.top)
             box.set_bottom(gap.topUnfilledBox, gap.bottom)
+            box.set_bgcolor(gap.topUnfilledBox, gapUnfilledColor)
             box.set_top(gap.filledBox, gap.bottom)
             box.set_bottom(gap.filledBox, gap.bottom)
             box.set_top(gap.bottomUnfilledBox, gap.bottom)
             box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
 
-        // Extend boxes/lines for unfilled gaps or gaps before next session
         shouldExtend = not gap.passedNextSession or (gap.passedNextSession and not gap.filled)
 
         if shouldExtend
@@ -336,8 +330,77 @@ if array.size(gapsArray) > 0
             if not na(gap.q3Line)
                 line.set_x2(gap.q3Line, rightEdge)
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ETH CANDLE MUTING
-// ═══════════════════════════════════════════════════════════════════════════
+if showNWOG and isValidNWOGTimeframe
+    [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
+
+    if not na(arrayTimes) and array.size(arrayTimes) > 0
+        for i = 0 to array.size(arrayTimes) - 1
+            barTime = array.get(arrayTimes, i)
+            barDay = dayofweek(barTime, "America/New_York")
+            barHour = hour(barTime, "America/New_York")
+            barMinute = minute(barTime, "America/New_York")
+
+            if barDay == 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
+                fridayClosePrice := array.get(arrayCloses, i)
+
+            if barDay == 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE and not na(fridayClosePrice)
+                sundayOpenPrice := array.get(arrayOpens, i)
+
+                if sundayOpenPrice != fridayClosePrice
+                    nwogTop = math.max(fridayClosePrice, sundayOpenPrice)
+                    nwogBottom = math.min(fridayClosePrice, sundayOpenPrice)
+
+                    nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false)
+                    array.push(gapsArray, nwogGap)
+
+                    if countGapsByType(GAP_TYPE_NWOG) > nwogGapsToShow
+                        removeOldestGap(GAP_TYPE_NWOG)
+
+                fridayClosePrice := na
+
+if showNDOG and isValidNWOGTimeframe
+    [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
+
+    if not na(arrayTimes) and array.size(arrayTimes) > 0
+        for i = 0 to array.size(arrayTimes) - 1
+            barTime = array.get(arrayTimes, i)
+            barDay = dayofweek(barTime, "America/New_York")
+            barHour = hour(barTime, "America/New_York")
+            barMinute = minute(barTime, "America/New_York")
+
+            if barDay >= 2 and barDay <= 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
+                prevDayClosePrice := array.get(arrayCloses, i)
+
+            if barDay >= 2 and barDay <= 6 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+                if not na(prevDayClosePrice)
+                    newDayOpenPrice := array.get(arrayOpens, i)
+
+                    if newDayOpenPrice != prevDayClosePrice
+                        ndogTop = math.max(prevDayClosePrice, newDayOpenPrice)
+                        ndogBottom = math.min(prevDayClosePrice, newDayOpenPrice)
+
+                        ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false)
+                        array.push(gapsArray, ndogGap)
+
+                        if countGapsByType(GAP_TYPE_NDOG) > ndogGapsToShow
+                            removeOldestGap(GAP_TYPE_NDOG)
+
+                    prevDayClosePrice := na
+if showNDOG and isValidNWOGTimeframe and not extendNDOGToPresent and array.size(gapsArray) > 0
+    [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
+
+    if not na(arrayTimes) and array.size(arrayTimes) > 0
+        for i = 0 to array.size(arrayTimes) - 1
+            barTime = array.get(arrayTimes, i)
+            barDay = dayofweek(barTime, "America/New_York")
+            barHour = hour(barTime, "America/New_York")
+            barMinute = minute(barTime, "America/New_York")
+
+            // Detect 18:00 (next NDOG opening - exclude Sunday which is NWOG)
+            if barDay != 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+                for j = 0 to array.size(gapsArray) - 1
+                    gap = array.get(gapsArray, j)
+                    if gap.gapType == GAP_TYPE_NDOG
+                        gap.passedNextSession := true
 
 plotcandle(muteETHCandles and not inRTH ? open : na, high, low, close, color=ethCandleColor, bordercolor=ethCandleColor, wickcolor=ethCandleColor, editable=false, display=display.pane, force_overlay=true)
