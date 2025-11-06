@@ -13,6 +13,10 @@ const int CLOSE_MINUTE = 59
 const int SESSION_OPEN_HOUR = 18
 const int ZERO_MINUTE = 0
 
+// Performance optimization: Limit historical lookback
+const int MILLISECONDS_PER_WEEK = 604800000
+const int MILLISECONDS_PER_DAY = 86400000
+
 const string GAP_TYPE_RTH = "RTH"
 const string GAP_TYPE_NWOG = "NWOG"
 const string GAP_TYPE_NDOG = "NDOG"
@@ -32,9 +36,9 @@ const string LABEL_HIDE_FILLED = "Hide Filled"
 const string LABEL_DIVIDERS = "Dividers"
 const string LABEL_PREVIEW = "Preview"
 const string LABEL_MUTE_ETH = "Mute ETH"
-const string LABEL_CE = "CE"
-const string LABEL_QUARTERS = "Quarters"
-const string LABEL_LINES = "Lines"
+const string LABEL_INTERNAL_LINES = "Internal Lines"
+const string LABEL_BORDER_LABEL = "Border + Label"
+const string LABEL_DATE_LABEL = "Date Label"
 const string LABEL_LABELS = "Labels"
 
 // Group Names
@@ -52,6 +56,8 @@ extendNWOGToPresent = input.bool(false, LABEL_EXTEND, group=GROUP_NWOG, inline="
 hideFilledNWOG = input.bool(false, LABEL_HIDE_FILLED, group=GROUP_NWOG, inline="3")
 showNWOGDividers = input.bool(false, LABEL_DIVIDERS, group=GROUP_NWOG, inline="4")
 nwogDividerColor = input.color(color.new(color.blue, 50), "", group=GROUP_NWOG, inline="4")
+showNWOGDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_NWOG, inline="5")
+nwogBoundaryColor = input.color(color.blue, LABEL_BORDER_LABEL, group=GROUP_NWOG, inline="6")
 
 // NDOG
 showNDOG = input.bool(true, LABEL_NDOG, group=GROUP_NDOG, inline="1")
@@ -62,6 +68,8 @@ extendNDOGToPresent = input.bool(false, LABEL_EXTEND, group=GROUP_NDOG, inline="
 hideFilledNDOG = input.bool(false, LABEL_HIDE_FILLED, group=GROUP_NDOG, inline="3")
 showNDOGDividers = input.bool(false, LABEL_DIVIDERS, group=GROUP_NDOG, inline="4")
 ndogDividerColor = input.color(color.new(color.purple, 50), "", group=GROUP_NDOG, inline="4")
+showNDOGDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_NDOG, inline="5")
+ndogBoundaryColor = input.color(color.purple, LABEL_BORDER_LABEL, group=GROUP_NDOG, inline="6")
 
 // RTH
 showRTHGaps = input.bool(false, LABEL_RTH, group=GROUP_RTH, inline="1")
@@ -73,11 +81,12 @@ previewMode = input.string("Full", "", group=GROUP_RTH, inline="3", options=["Fu
 previewColor = input.color(color.new(color.orange, 85), "", group=GROUP_RTH, inline="3")
 muteETHCandles = input.bool(true, LABEL_MUTE_ETH, group=GROUP_RTH, inline="4")
 ethCandleColor = input.color(color.new(color.gray, 70), "", group=GROUP_RTH, inline="4")
+showRTHDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_RTH, inline="5")
+rthBoundaryColor = input.color(color.gray, LABEL_BORDER_LABEL, group=GROUP_RTH, inline="6")
 
 // Appearance
-showCE = input.bool(true, LABEL_CE, group=GROUP_APPEARANCE, inline="1")
-showQuarters = input.bool(true, LABEL_QUARTERS, group=GROUP_APPEARANCE, inline="1")
-linesColor = input.color(#808080, LABEL_LINES, group=GROUP_APPEARANCE, inline="1")
+showInternalLines = input.bool(true, LABEL_INTERNAL_LINES, group=GROUP_APPEARANCE, inline="1")
+internalLinesColor = input.color(#808080, "", group=GROUP_APPEARANCE, inline="1")
 labelColor = input.color(#808080, LABEL_LABELS, group=GROUP_APPEARANCE, inline="1")
 
 isValidRTHTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
@@ -95,7 +104,10 @@ type GapData
     line ceLine
     line q1Line
     line q3Line
+    line topBoundaryLine
+    line bottomBoundaryLine
     label gapLabel
+    label dateLabel
     float top
     float bottom
     float penetrationLevel
@@ -143,12 +155,41 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
     filledBox = box.new(leftBar, bottomPrice, rightBar, bottomPrice, bgcolor=filled, border_color=na)
     bottomUnfilledBox = box.new(leftBar, bottomPrice, rightBar, bottomPrice, bgcolor=na, border_color=na)
 
-    ceLine = showCE ? line.new(leftBar, gapMid, rightBar, gapMid, color=linesColor, style=line.style_solid, width=1) : na
-    q1Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ1, rightBar, gapQ1, color=linesColor, style=line.style_dashed, width=1) : na
-    q3Line = (showQuarters and not isPreview) ? line.new(leftBar, gapQ3, rightBar, gapQ3, color=linesColor, style=line.style_dashed, width=1) : na
+    // All internal lines are now dotted and uniform
+    ceLine = (showInternalLines and not isPreview) ? line.new(leftBar, gapMid, rightBar, gapMid, color=internalLinesColor, style=line.style_dotted, width=1) : na
+    q1Line = (showInternalLines and not isPreview) ? line.new(leftBar, gapQ1, rightBar, gapQ1, color=internalLinesColor, style=line.style_dotted, width=1) : na
+    q3Line = (showInternalLines and not isPreview) ? line.new(leftBar, gapQ3, rightBar, gapQ3, color=internalLinesColor, style=line.style_dotted, width=1) : na
+
+    // Outer boundary lines (top and bottom edges) - solid, width 1
+    boundaryColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : gapType == GAP_TYPE_RTH ? rthBoundaryColor : na
+    topBoundaryLine = not isPreview ? line.new(leftBar, topPrice, rightBar, topPrice, color=boundaryColor, style=line.style_solid, width=1) : na
+    bottomBoundaryLine = not isPreview ? line.new(leftBar, bottomPrice, rightBar, bottomPrice, color=boundaryColor, style=line.style_solid, width=1) : na
 
     showLabel = (gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG) and not isPreview
     gapLabel = showLabel ? label.new(leftBar, gapMid, gapType, color=color.new(color.white, 100), textcolor=labelColor, style=label.style_none, size=size.tiny) : na
+
+    // Create date label for NWOG, NDOG, and RTH gaps (when enabled)
+    label dateLabel = na
+    showDateLabel = (gapType == GAP_TYPE_NWOG and showNWOGDateLabel) or (gapType == GAP_TYPE_NDOG and showNDOGDateLabel) or (gapType == GAP_TYPE_RTH and showRTHDateLabel)
+
+    if showDateLabel and not isPreview
+        gapYear = year(time)
+        gapMonth = month(time)
+        gapDay = dayofmonth(time)
+
+        // Format month name
+        monthName = gapMonth == 1 ? "Jan" : gapMonth == 2 ? "Feb" : gapMonth == 3 ? "Mar" : gapMonth == 4 ? "Apr" : gapMonth == 5 ? "May" : gapMonth == 6 ? "Jun" : gapMonth == 7 ? "Jul" : gapMonth == 8 ? "Aug" : gapMonth == 9 ? "Sep" : gapMonth == 10 ? "Oct" : gapMonth == 11 ? "Nov" : "Dec"
+
+        // Create date string: "NWOG Oct 26, 2025", "NDOG Oct 26, 2025", or "RTH Oct 26, 2025"
+        gapPrefix = gapType == GAP_TYPE_NWOG ? "NWOG" : gapType == GAP_TYPE_NDOG ? "NDOG" : "RTH"
+        dateStr = gapPrefix + " " + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+
+        // Use boundary color for text (same color as boundary lines)
+        dateLabelColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : rthBoundaryColor
+
+        // Position at horizontal center, just below bottom boundary
+        centerX = math.round((leftBar + rightBar) / 2)
+        dateLabel := label.new(centerX, bottomPrice, dateStr, color=color.new(color.white, 100), textcolor=dateLabelColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
     initialDirection = ENTRY_NONE
     if close < bottomPrice
@@ -163,7 +204,10 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          ceLine=ceLine,
          q1Line=q1Line,
          q3Line=q3Line,
+         topBoundaryLine=topBoundaryLine,
+         bottomBoundaryLine=bottomBoundaryLine,
          gapLabel=gapLabel,
+         dateLabel=dateLabel,
          top=topPrice,
          bottom=bottomPrice,
          penetrationLevel=na,
@@ -186,8 +230,14 @@ deleteGap(GapData gap) =>
         line.delete(gap.q1Line)
     if not na(gap.q3Line)
         line.delete(gap.q3Line)
+    if not na(gap.topBoundaryLine)
+        line.delete(gap.topBoundaryLine)
+    if not na(gap.bottomBoundaryLine)
+        line.delete(gap.bottomBoundaryLine)
     if not na(gap.gapLabel)
         label.delete(gap.gapLabel)
+    if not na(gap.dateLabel)
+        label.delete(gap.dateLabel)
 
 countGapsByType(string gapType) =>
     count = 0
@@ -252,8 +302,16 @@ if showNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
+        // Calculate lookback limit: only process recent weeks
+        lookbackLimit = time - (nwogGapsToShow * 3 * MILLISECONDS_PER_WEEK)
+
         for i = 0 to array.size(arrayTimes) - 1
             barTime = array.get(arrayTimes, i)
+
+            // Skip bars that are too old for performance
+            if barTime < lookbackLimit
+                continue
+
             barDay = dayofweek(barTime, "America/New_York")
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
@@ -411,6 +469,15 @@ if array.size(gapsArray) > 0
                 line.set_x2(gap.q1Line, rightEdge)
             if not na(gap.q3Line)
                 line.set_x2(gap.q3Line, rightEdge)
+            if not na(gap.topBoundaryLine)
+                line.set_x2(gap.topBoundaryLine, rightEdge)
+            if not na(gap.bottomBoundaryLine)
+                line.set_x2(gap.bottomBoundaryLine, rightEdge)
+            // Update date label position to maintain center alignment below bottom boundary
+            if not na(gap.dateLabel)
+                leftEdge = box.get_left(gap.topUnfilledBox)
+                centerX = math.round((leftEdge + rightEdge) / 2)
+                label.set_xy(gap.dateLabel, centerX, gap.bottom)
 
         if not na(gap.gapLabel)
             isMostRecentUnfilled = not gap.filled and ((gap.gapType == GAP_TYPE_NWOG and gap.creationBar == mostRecentUnfilledNWOGBar) or (gap.gapType == GAP_TYPE_NDOG and gap.creationBar == mostRecentUnfilledNDOGBar))
@@ -434,8 +501,16 @@ if showNWOG and isValidNWOGTimeframe
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
+        // Calculate lookback limit: only process recent weeks (3x buffer for safety)
+        lookbackLimit = time - (nwogGapsToShow * 3 * MILLISECONDS_PER_WEEK)
+
         for i = 0 to array.size(arrayTimes) - 1
             barTime = array.get(arrayTimes, i)
+
+            // Skip bars that are too old for performance
+            if barTime < lookbackLimit
+                continue
+
             barDay = dayofweek(barTime, "America/New_York")
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
@@ -463,8 +538,18 @@ if (showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
+        // Calculate lookback limit based on which dividers are enabled
+        maxGapsToShow = showNWOGDividers ? nwogGapsToShow : ndogGapsToShow
+        lookbackPeriod = showNWOGDividers ? MILLISECONDS_PER_WEEK : MILLISECONDS_PER_DAY
+        lookbackLimit = time - (maxGapsToShow * 3 * lookbackPeriod)
+
         for i = 0 to array.size(arrayTimes) - 1
             barTime = array.get(arrayTimes, i)
+
+            // Skip bars that are too old for performance
+            if barTime < lookbackLimit
+                continue
+
             barDay = dayofweek(barTime, "America/New_York")
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
@@ -483,8 +568,16 @@ if showNDOG and isValidNWOGTimeframe
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
+        // Calculate lookback limit: only process recent days (3x buffer for safety)
+        lookbackLimit = time - (ndogGapsToShow * 3 * MILLISECONDS_PER_DAY)
+
         for i = 0 to array.size(arrayTimes) - 1
             barTime = array.get(arrayTimes, i)
+
+            // Skip bars that are too old for performance
+            if barTime < lookbackLimit
+                continue
+
             barDay = dayofweek(barTime, "America/New_York")
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
@@ -514,8 +607,16 @@ if showNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
+        // Calculate lookback limit: only process recent days
+        lookbackLimit = time - (ndogGapsToShow * 3 * MILLISECONDS_PER_DAY)
+
         for i = 0 to array.size(arrayTimes) - 1
             barTime = array.get(arrayTimes, i)
+
+            // Skip bars that are too old for performance
+            if barTime < lookbackLimit
+                continue
+
             barDay = dayofweek(barTime, "America/New_York")
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
