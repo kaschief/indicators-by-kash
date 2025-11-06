@@ -78,6 +78,7 @@ type GapData
     bool isPreview
     string gapType
     int creationBar
+    int creationTime
 
 var float rthClosePrice = na
 var int previewStartBar = na
@@ -141,7 +142,8 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          passedNextSession=false,
          isPreview=isPreview,
          gapType=gapType,
-         creationBar=bar_index
+         creationBar=bar_index,
+         creationTime=time
      )
 
 deleteGap(GapData gap) =>
@@ -216,7 +218,7 @@ if rthStart and showRTHGaps and array.size(gapsArray) > 0
         if gap.gapType == GAP_TYPE_RTH
             gap.passedNextSession := true
 
-if showNWOG and isValidNWOGTimeframe and not extendNWOGToPresent and array.size(gapsArray) > 0
+if showNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
@@ -229,7 +231,9 @@ if showNWOG and isValidNWOGTimeframe and not extendNWOGToPresent and array.size(
             if barDay == 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
                 for j = 0 to array.size(gapsArray) - 1
                     gap = array.get(gapsArray, j)
-                    if gap.gapType == GAP_TYPE_NWOG
+                    // Only mark NWOG gaps that were created at least 6 days before this session
+                    // (6 days = 518400000 ms, ensures it's the NEXT Sunday not the same one)
+                    if gap.gapType == GAP_TYPE_NWOG and (barTime - gap.creationTime) >= 518400000
                         gap.passedNextSession := true
 
 if rthStart and showRTHGaps
@@ -272,7 +276,17 @@ if array.size(gapsArray) > 0
         if gap.gapType == GAP_TYPE_NDOG and not showNDOG
             continue
 
+        // Skip filled gaps that passed next session UNLESS "Extend to Present" is ON
+        skipGap = false
         if gap.filled and gap.passedNextSession
+            if gap.gapType == GAP_TYPE_RTH
+                skipGap := true
+            else if gap.gapType == GAP_TYPE_NWOG and not extendNWOGToPresent
+                skipGap := true
+            else if gap.gapType == GAP_TYPE_NDOG and not extendNDOGToPresent
+                skipGap := true
+
+        if skipGap
             continue
 
         if gap.entryDirection == ENTRY_NONE
@@ -342,7 +356,19 @@ if array.size(gapsArray) > 0
             box.set_top(gap.bottomUnfilledBox, gap.bottom)
             box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
 
-        shouldExtend = not gap.passedNextSession or (gap.passedNextSession and not gap.filled)
+        // Extension logic varies by gap type
+        // RTH: Continue extending unfilled gaps past next session
+        // NWOG/NDOG: "Extend to Present" ON → extend all gaps to present
+        //            "Extend to Present" OFF → unfilled extends to present, filled extends minimum to next session
+        shouldExtend = false
+        if gap.gapType == GAP_TYPE_RTH
+            shouldExtend := not gap.passedNextSession or (gap.passedNextSession and not gap.filled)
+        else if gap.gapType == GAP_TYPE_NWOG
+            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled extends until next session
+            shouldExtend := extendNWOGToPresent or not gap.filled or not gap.passedNextSession
+        else if gap.gapType == GAP_TYPE_NDOG
+            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled extends until next session
+            shouldExtend := extendNDOGToPresent or not gap.filled or not gap.passedNextSession
 
         if shouldExtend
             rightEdge = bar_index + RIGHT_EDGE_CUSHION
@@ -412,10 +438,13 @@ if showNDOG and isValidNWOGTimeframe
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
 
+            // Capture close price Monday-Friday (16:59)
             if barDay >= 2 and barDay <= 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
                 prevDayClosePrice := array.get(arrayCloses, i)
 
-            if barDay >= 2 and barDay <= 6 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+            // Detect 18:00 session open Monday-Friday and Sunday
+            // Note: Friday→Sunday creates both NDOG and NWOG (not mutually exclusive)
+            if ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
                 if not na(prevDayClosePrice)
                     newDayOpenPrice := array.get(arrayOpens, i)
 
@@ -430,7 +459,7 @@ if showNDOG and isValidNWOGTimeframe
                             removeOldestGap(GAP_TYPE_NDOG)
 
                     prevDayClosePrice := na
-if showNDOG and isValidNWOGTimeframe and not extendNDOGToPresent and array.size(gapsArray) > 0
+if showNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     [arrayTimes, arrayOpens, arrayCloses] = request.security_lower_tf(syminfo.tickerid, "1", [time, open, close])
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
@@ -440,11 +469,13 @@ if showNDOG and isValidNWOGTimeframe and not extendNDOGToPresent and array.size(
             barHour = hour(barTime, "America/New_York")
             barMinute = minute(barTime, "America/New_York")
 
-            // Detect 18:00 (next NDOG opening - exclude Sunday which is NWOG)
-            if barDay != 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+            // Mark NDOG gaps as passed when reaching next 18:00 session (Mon-Fri + Sunday)
+            if ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
                 for j = 0 to array.size(gapsArray) - 1
                     gap = array.get(gapsArray, j)
-                    if gap.gapType == GAP_TYPE_NDOG
+                    // Only mark gaps created at least 20 hours before this session
+                    // 20 hours = 72000000 ms (handles daily ~24h and Friday→Sunday ~50h gaps)
+                    if gap.gapType == GAP_TYPE_NDOG and (barTime - gap.creationTime) >= 72000000
                         gap.passedNextSession := true
 
 plotcandle(showRTHGaps and muteETHCandles and not inRTH ? open : na, high, low, close, color=ethCandleColor, bordercolor=ethCandleColor, wickcolor=ethCandleColor, editable=false, display=display.pane, force_overlay=true)
