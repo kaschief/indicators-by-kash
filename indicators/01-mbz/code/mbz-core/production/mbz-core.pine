@@ -494,6 +494,7 @@ deeper_wick_icon_style = input.string(SOURCE_GAP_DEEPER_WICK_LABEL, SOURCE_GAP_D
 enable_reflection_pattern_deeper = input.bool(true, 'Enhanced Reflection Detection', group=GROUP_MBZ_DETECTION_MARKERS, inline='reflection1', tooltip='For reflection MBZs: also check if projected pattern zone would penetrate gap deeper than mitigating candle')
 enable_super_mbzs = input.bool(true, 'Mark Nested MBZs', group=GROUP_MBZ_DETECTION_MARKERS, inline='nested', tooltip='Mark MBZs that overlap with other same-direction MBZs using ✔️ checkmark')
 show_50_percent_tags = input.bool(true, 'Mark 50% Formation MBZs', group=GROUP_MBZ_DETECTION_MARKERS, inline='fifty', tooltip='Add [½] tag when MBZ forms at exactly 50% of mitigation candle')
+mark_quality_mitigation_position = input.bool(false, 'Mark Overshoot MBZs', group=GROUP_MBZ_DETECTION_MARKERS, inline='quality', tooltip='Add ❌ to extension when mitigating candle body overshoots into non-optimal FVG half:\n• Bullish FVG: body touches lower 50%\n• Bearish FVG: body touches upper 50%')
 
 // === 📦 MULTI-SOURCE PROPERTIES ===
 enable_multi_source_highlighting = input.bool(true, "Show Multi-Source MBZ Borders", group=GROUP_MULTI_SOURCE_PROPERTIES, inline='multi', tooltip='Display enhanced borders around MBZs formed from multiple gap sources for visual distinction')
@@ -582,6 +583,9 @@ type MBZRecord
     bool is_breakaway_mbz        // true if source gap was a breakaway gap
     // Momentum MBZ validation
     bool is_momentum_mbz         // true if next candle confirms rejection with wick
+    // Quality mitigation position detection
+    bool fails_quality_mitigation  // true if mitigating candle body enters non-optimal FVG half
+    float quality_fail_percentage  // percentage of penetration into non-optimal half (0-100)
 
 // Cached counts for multi-source evaluation
 type SourceTypeStats
@@ -1764,7 +1768,9 @@ cache_mbz_data(mbz_record) =>
          mbz_record.overlap_percentage,
          mbz_record.overlapping_mbz_bar_index,
          mbz_record.is_breakaway_mbz,
-         mbz_record.is_momentum_mbz
+         mbz_record.is_momentum_mbz,
+         mbz_record.fails_quality_mitigation,
+         mbz_record.quality_fail_percentage
      )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
@@ -2270,6 +2276,20 @@ create_consolidated_extension_label(consolidated_mbz) =>
                 break
         if has_50_percent
             mbz_text := mbz_text + " [½]"
+
+    // Add quality mitigation marker if any MBZ fails the check
+    if mark_quality_mitigation_position
+        max_fail_percentage = 0.0
+        has_failed_quality = false
+        for i = 0 to array.size(consolidated_mbz.mbz_group) - 1
+            mbz = array.get(consolidated_mbz.mbz_group, i)
+            if mbz.fails_quality_mitigation
+                has_failed_quality := true
+                if mbz.quality_fail_percentage > max_fail_percentage
+                    max_fail_percentage := mbz.quality_fail_percentage
+        if has_failed_quality
+            pct_rounded = math.round(max_fail_percentage)
+            mbz_text := mbz_text + " ❌ (" + str.tostring(pct_rounded) + "%)"
 
     // Check for SUPER MBZs in group
     has_super = has_super_mbzs(consolidated_mbz.mbz_group)
@@ -3176,6 +3196,28 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                         // Check if MBZ wick penetrated deeper (gap-side and pattern-side)
                         [gap_deeper, pattern_deeper] = check_deeper_wick_penetration(high, low, open, close, gap.is_bullish, mbz_subtype, high[1], low[1], gap.gap_id)
 
+                        // Check quality mitigation position
+                        fails_quality_check = false
+                        quality_penetration_pct = 0.0
+                        if mark_quality_mitigation_position
+                            gap_midpoint = (gap.top + gap.bottom) / 2
+                            gap_half_size = (gap.top - gap.bottom) / 2
+                            mitigating_body_top = math.max(open[1], close[1])
+                            mitigating_body_bottom = math.min(open[1], close[1])
+
+                            if gap.is_bullish
+                                // Bullish FVG: fails if body touches lower half
+                                if mitigating_body_bottom < gap_midpoint
+                                    fails_quality_check := true
+                                    penetration_distance = gap_midpoint - mitigating_body_bottom
+                                    quality_penetration_pct := (penetration_distance / gap_half_size) * 100
+                            else
+                                // Bearish FVG: fails if body touches upper half
+                                if mitigating_body_top > gap_midpoint
+                                    fails_quality_check := true
+                                    penetration_distance = mitigating_body_top - gap_midpoint
+                                    quality_penetration_pct := (penetration_distance / gap_half_size) * 100
+
                         temporary_mbz_record = MBZRecord.new(
                              bar_index, time, high, low, open, close,
                              gap.is_bullish, false, 0.0,
@@ -3186,7 +3228,9 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              gap_deeper, pattern_deeper,
                              false, 0.0, int(na),
                              gap.is_breakaway_gap,
-                             false
+                             false,
+                             fails_quality_check,
+                             quality_penetration_pct
                          )
 
                         // Detect SUPER MBZ strength
@@ -3202,7 +3246,9 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              gap_deeper, pattern_deeper,
                              is_super, overlap_pct, overlapped_bar,
                              gap.is_breakaway_gap,
-                             false
+                             false,
+                             fails_quality_check,
+                             quality_penetration_pct
                          )
 
                         // Cache data immediately for performance (with corrected zones)
