@@ -1,3 +1,18 @@
+# Code Quality Rules
+
+## Never Add Subjective Commentary
+**NEVER add subjective or editorial comments in code such as:**
+- "(most important)"
+- "(2nd most important)"
+- "(3rd importance)"
+- Any commentary about priority, ranking, or personal opinion
+- Any parenthetical explanations that aren't objectively technical
+
+**Only include comments that provide:**
+- Technical clarification (e.g., "positioned after behavior")
+- Context about behavior (e.g., "Reverse the array for bearish stacking")
+- Warnings or constraints (e.g., "Must be called before X")
+
 # Git Command Rules
 
 ## Core Rule
