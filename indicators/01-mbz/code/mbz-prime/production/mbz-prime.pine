@@ -288,7 +288,6 @@ MULTI_SOURCE_STRONG_DISPLAY_OFF = "Off"
 MULTI_SOURCE_STRONG_DISPLAY_LABEL = "Label"
 MULTI_SOURCE_STRONG_DISPLAY_EXTENSION = "Extension"
 MULTI_SOURCE_STRONG_DISPLAY_BOTH = "Label + Extension"
-DEFAULT_MULTI_SOURCE_BORDER_WIDTH = 2
 
 // Visual & Input Defaults
 DEFAULT_EXTENSION_BARS = 20
@@ -429,7 +428,7 @@ INPUT_LABEL_INCLUSION = 'Inclusion'
 INPUT_LABEL_REFLECTION = 'Reflection'
 INPUT_LABEL_RELAXED = 'Relaxed'
 INPUT_LABEL_RISKY = 'Risky'
-INPUT_LABEL_SHOW_MULTI_SOURCE_BORDERS = 'Show Multi-Source MBZ Borders'
+INPUT_LABEL_SHOW_MULTI_SOURCE_BORDERS = 'Mark Multi-Source MBZs'
 INPUT_LABEL_WIDTH = 'Width'
 INPUT_LABEL_STRENGTH_TAG = 'Strength Tag'
 INPUT_LABEL_MIN_SOURCES = 'Min Sources'
@@ -646,11 +645,9 @@ confirm_on_midpoint_close = true
 allow_standard_extreme_equality = input.bool(false, "Standard: allow B = A's extreme", group=GROUP_MBZ_SPECIAL_PROPERTIES, inline='std_eq', tooltip='Relax the Standard liquidity rule so the confirming bar can match (not exceed) the initial sweep extreme.')
 
 // === 🎨 MULTI-SOURCE MBZ ===
-enable_multi_source_highlighting = input.bool(true, INPUT_LABEL_SHOW_MULTI_SOURCE_BORDERS, group=GROUP_MULTI_SOURCE_MBZ, inline='multi', tooltip='Display enhanced borders around MBZs formed from multiple liquidity source origins for visual distinction')
-multi_source_border_color = input.color(color.new(color.orange, 0), "Color", group=GROUP_MULTI_SOURCE_MBZ, inline='multi', tooltip='Border color for multi-source MBZ highlighting')
-multi_source_border_width = input.int(DEFAULT_MULTI_SOURCE_BORDER_WIDTH, INPUT_LABEL_WIDTH, minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_MULTI_SOURCE_MBZ, inline='multi', tooltip='Border width for MBZs formed from multiple liquidity source origins (1-5px limit)')
-multi_source_strong_display_mode = input.string(MULTI_SOURCE_STRONG_DISPLAY_BOTH, INPUT_LABEL_STRENGTH_TAG, options=[MULTI_SOURCE_STRONG_DISPLAY_OFF, MULTI_SOURCE_STRONG_DISPLAY_LABEL, MULTI_SOURCE_STRONG_DISPLAY_EXTENSION, MULTI_SOURCE_STRONG_DISPLAY_BOTH], group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong_toggle', tooltip='Where to show the [STRONG] marker when the consolidated zone meets the multi-source strength criteria.')
-strong_label_position_above = input.bool(true, '[STRONG] Above Extension Text', group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong_toggle', tooltip='Position [STRONG] label above extension text (ON) or below (OFF)')
+enable_multi_source_highlighting = input.bool(true, INPUT_LABEL_SHOW_MULTI_SOURCE_BORDERS, group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong1', tooltip='Display [STRONG] marker on MBZs formed from multiple liquidity source origins for visual distinction')
+multi_source_strong_display_mode = input.string(MULTI_SOURCE_STRONG_DISPLAY_BOTH, INPUT_LABEL_STRENGTH_TAG, options=[MULTI_SOURCE_STRONG_DISPLAY_OFF, MULTI_SOURCE_STRONG_DISPLAY_LABEL, MULTI_SOURCE_STRONG_DISPLAY_EXTENSION, MULTI_SOURCE_STRONG_DISPLAY_BOTH], group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong1', tooltip='Where to show the [STRONG] marker when the consolidated zone meets the multi-source strength criteria.')
+strong_label_position_above = input.bool(true, '[STRONG] Above Extension Text', group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong1', tooltip='Position [STRONG] label above extension text (ON) or below (OFF)')
 multi_source_strong_min_sources = input.int(DEFAULT_MULTI_SOURCE_STRENGTH_MIN_SOURCES, INPUT_LABEL_MIN_SOURCES, minval=MIN_MULTI_SOURCE_STRENGTH_MIN_SOURCES, maxval=MAX_MULTI_SOURCE_STRENGTH_MIN_SOURCES, group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong_logic', tooltip='Minimum number of MBZ source regions consolidated on the candle before [STRONG] is applied.')
 multi_source_strong_include_distinct = input.bool(true, 'Distinct Types', group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong_logic', tooltip='Mark [STRONG] when the consolidated MBZ blends different liquidity source types (e.g., daily + weekly).')
 multi_source_strong_include_same = input.bool(false, 'Same Type', group=GROUP_MULTI_SOURCE_MBZ, inline='multi_strong_logic', tooltip='Mark [STRONG] when the consolidated MBZ is built from the same source type repeated (e.g., daily×2).')
@@ -700,8 +697,6 @@ type MBZRecord
     string source_family
     string source_type
     string pool_boundary
-    bool wicked_deeper_into_source    // Track if wick penetrated deeper into the source origin
-    bool reflection_pattern_deeper // Track if reflection pattern wick was deeper
     string variant               // Variant that produced this MBZ (imbalance/liquidity)
     string formation_rule          // Formation rule (e.g., imbalance_standard, liquidity_standard)
     string source_origin_token   // Unified token describing the origin (e.g., fvg, daily)
@@ -2339,8 +2334,6 @@ cache_mbz_data(mbz_record) =>
          mbz_record.source_family,
          mbz_record.source_type,
          mbz_record.pool_boundary,
-         mbz_record.wicked_deeper_into_source,
-         mbz_record.reflection_pattern_deeper,
          mbz_record.variant,
          mbz_record.formation_rule,
          mbz_record.source_origin_token
@@ -2589,8 +2582,6 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
          SOURCE_FAMILY_LIQUIDITY,
          pool_type,
          pool_boundary,
-         false,
-         false,
          VARIANT_LIQUIDITY,
          formation_rule,
          source_origin_token
@@ -3092,23 +3083,6 @@ should_display_mbz(mbz_record) =>
 should_display_mbz_direction(mbz_record) =>
     mbz_record.is_bullish ? show_bullish_mbzs : show_bearish_mbzs
 
-// @function get_border_properties_for_mbz
-// @description Returns border width and color based on MBZ properties (deeper wick > multi-source > single)
-// @param consolidated_mbz ConsolidatedMBZ - the consolidated MBZ to analyze
-// @param mbz_source_count int - cached source count for performance
-// @returns [int, color] - [border_width, border_color]
-get_border_properties_for_mbz(consolidated_mbz, mbz_source_count) =>
-    is_multi_source = enable_multi_source_highlighting and mbz_source_count > 1
-
-    // Get default border color (same as extension background color)
-    default_border_color = consolidated_mbz.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
-
-    // Determine final border properties (multi-source > default)
-    border_width_final = is_multi_source ? multi_source_border_width : 1
-    border_color_final = is_multi_source ? multi_source_border_color : default_border_color
-
-    [border_width_final, border_color_final]
-
 should_display_consolidated_mbz(consolidated_mbz) =>
     // Liquidity-only mode - show all consolidated MBZs, check individual display rules
     should_display = false
@@ -3118,19 +3092,6 @@ should_display_consolidated_mbz(consolidated_mbz) =>
             should_display := true
             break
     should_display
-
-should_highlight_mbz(mbz_record) =>
-    // Show extensions for valid MBZs OR invalidated based on display mode
-    if mbz_record.is_invalidated
-        show_invalidated_mbzs
-    else
-        true
-
-should_highlight_consolidated_mbz(consolidated_mbz) =>
-    if consolidated_mbz.is_consolidated_invalidated
-        show_invalidated_mbzs
-    else
-        true
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROJECTION SYSTEM FUNCTIONS (Removed to reduce external elements)
@@ -3417,7 +3378,7 @@ manage_consolidated_mbz_display() =>
                 array.push(mbz_labels, new_consolidated_label)
 
             // Create consolidated extension box
-            should_highlight_consolidated_zone = show_extended_boxes and should_highlight_consolidated_mbz(current_consolidated_mbz) and mbz_age <= max_safe_lookback
+            should_highlight_consolidated_zone = show_extended_boxes and (not current_consolidated_mbz.is_consolidated_invalidated or show_invalidated_mbzs) and mbz_age <= max_safe_lookback
             if should_highlight_consolidated_zone
                 [consolidated_highlight_color, consolidated_extension_color] = get_consolidated_mbz_colors(current_consolidated_mbz)
 
@@ -3440,12 +3401,6 @@ manage_consolidated_mbz_display() =>
                     EXTENSION_BEYOND_CURRENT => time + (extended_box_length * bar_duration_ms)
                     => current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
 
-                // Get cached source count for performance
-                mbz_source_count = array.size(current_consolidated_mbz.mbz_group)
-
-                // Get border properties for multi-source highlighting
-                [border_width_to_use, border_color_to_use] = get_border_properties_for_mbz(current_consolidated_mbz, mbz_source_count)
-
                 // Determine internal text (controlled by show_extension_text_inside toggle)
                 box_text = show_extension_text_inside ? current_consolidated_mbz.consolidated_extension_label : ""
 
@@ -3456,8 +3411,8 @@ manage_consolidated_mbz_display() =>
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
                      xloc=xloc.bar_time,
                      bgcolor=consolidated_extension_color,
-                     border_color=border_color_to_use,
-                     border_width=border_width_to_use,
+                     border_color=current_consolidated_mbz.is_bullish ? extended_box_bullish_color : extended_box_bearish_color,
+                     border_width=1,
                      text=box_text,
                      text_halign=get_extension_label_halign(),
                      text_valign=text.align_center,
