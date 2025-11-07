@@ -274,7 +274,6 @@ MIN_BORDER_WIDTH = 1
 MAX_BORDER_WIDTH = 5
 LINE_WIDTH_THIN = 1
 LINE_WIDTH_MEDIUM = 2
-SUPER_MBZ_SCAN_LIMIT = 15
 HISTORICAL_LOOKBACK_LIMIT = 75
 MIN_BARS_SINCE_SOURCE_CREATION = 1
 
@@ -285,8 +284,6 @@ ENABLE_HISTORICAL_BACKFILL = false
 MBZ_BULLISH_SUFFIX = "⁺"
 MBZ_BEARISH_SUFFIX = "⁻"
 FIFTY_PERCENT_TAG = " [½]"
-SUPER_PREFIX = "SUPER "
-CHECKMARK_SYMBOL = "✔️ "
 ARROW_UP_SYMBOL = "▲"
 ARROW_DOWN_SYMBOL = "▼"
 MULTI_SOURCE_STRENGTH_LABEL = "[STRONG]"
@@ -452,7 +449,6 @@ INPUT_LABEL_HORIZONTAL_PADDING = 'Horizontal Padding'
 INPUT_LABEL_VERTICAL_PADDING = 'Vertical Padding'
 INPUT_LABEL_INCLUSION = 'Inclusion'
 INPUT_LABEL_REFLECTION = 'Reflection'
-INPUT_LABEL_MARK_NESTED_MBZS = 'Mark Nested MBZs'
 INPUT_LABEL_MARK_WICK_DOMINANT = 'Mark Wick-Dominant MBZs'
 INPUT_LABEL_RELAXED = 'Relaxed'
 INPUT_LABEL_RISKY = 'Risky'
@@ -667,7 +663,6 @@ enable_inclusion = input.bool(true, INPUT_LABEL_INCLUSION, group=GROUP_MBZ_BEHAV
 enable_reflection = input.bool(true, INPUT_LABEL_REFLECTION, group=GROUP_MBZ_BEHAVIORS, inline='behaviors', tooltip='MBZ BEHAVIORS:\n• Inclusion: Wick toward body direction (bullish=lower wick, bearish=upper wick)\n• Reflection: Wick away from body direction (bullish=upper wick, bearish=lower wick)')
 
 // === 🏷️ MBZ SPECIAL PROPERTIES ===
-enable_super_mbzs = input.bool(false, INPUT_LABEL_MARK_NESTED_MBZS, group=GROUP_MBZ_SPECIAL_PROPERTIES, inline='nested', tooltip='Mark MBZs that overlap with other same-direction MBZs using ✔️ checkmark')
 show_50_percent_tags = input.bool(true, 'Mark 50% Formation MBZs', group=GROUP_MBZ_SPECIAL_PROPERTIES, inline='fifty', tooltip='Add [½] tag when MBZ forms at exactly 50% of mitigation candle')
 // Always confirm on midpoint close (at or beyond 50%) - detecting exactly 50% automatically marked with [½]
 confirm_on_midpoint_close = true
@@ -733,7 +728,7 @@ profiling_header_text_color = color.white
 // ═══════════════════════════════════════════════════════════════════════════════
 
 
-// MBZ tracking with SUPER MBZ detection
+// MBZ tracking
 type MBZRecord
     int bar_index
     int formation_time  // Store time to avoid historical buffer limits with xloc.bar_time
@@ -763,10 +758,6 @@ type MBZRecord
     string pool_boundary
     bool wicked_deeper_into_source    // Track if wick penetrated deeper into the source origin
     bool reflection_pattern_deeper // Track if reflection pattern wick was deeper
-    // SUPER MBZ detection
-    bool is_super_mbz            // true if overlapping with any same-direction MBZ
-    float overlap_percentage     // 0.0 to 100.0
-    int overlapping_mbz_bar_index // Which MBZ we overlapped with
     string variant               // Variant that produced this MBZ (imbalance/liquidity)
     string formation_rule          // Formation rule (e.g., imbalance_standard, liquidity_standard)
     string source_origin_token   // Unified token describing the origin (e.g., fvg, daily)
@@ -2253,83 +2244,6 @@ get_invalidation_level_price(mbz_record) =>
             boundary_bottom + invalidation_distance
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SUPER MBZ DETECTION SYSTEM - REFLECTION ZONE OVERLAP FIXED
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// @function detect_mbz_strength
-// @description Detects if new MBZ overlaps with existing same-direction MBZs using proper zone-to-zone comparison
-// @param new_mbz_record MBZRecord The new MBZ to check for nested/super status
-// @returns tuple [bool, float, int] [is_super, overlap_percentage, overlapping_bar_index]
-// @note Uses zone-based overlap detection for all MBZ types including reflection zones
-detect_mbz_strength(new_mbz_record) =>
-    if not enable_super_mbzs or array.size(all_mbz_records) == 0
-        [false, 0.0, int(na)]
-    else
-        is_super = false
-        stored_percentage = 0.0
-        overlapped_bar = int(na)
-
-        // OPTIMIZED: Limit scanning to recent records only (massive performance gain)
-        if array.size(all_mbz_records) > 0
-            scan_limit = math.min(SUPER_MBZ_SCAN_LIMIT, array.size(all_mbz_records))
-            start_index = math.max(0, array.size(all_mbz_records) - scan_limit)
-
-            for record_index = start_index to array.size(all_mbz_records) - 1
-                existing_mbz = array.get(all_mbz_records, record_index)
-                if not existing_mbz.is_invalidated and
-                   existing_mbz.bar_index < new_mbz_record.bar_index and
-                   existing_mbz.is_bullish == new_mbz_record.is_bullish  // SAME DIRECTION ONLY
-
-                    // Use zone-to-zone for reflection MBZs, preserve candle-to-zone for standard MBZs
-                    // This ensures reflection zones are detected while maintaining backward compatibility
-                    has_overlap = false
-
-                    // Check if either MBZ has reflection subtype - use zone-to-zone comparison
-                    if str.contains(existing_mbz.mbz_subtype, SUBTYPE_REFLECTION) or str.contains(new_mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
-                        // Zone-to-zone comparison for reflection MBZs (needed for zones extending beyond candles)
-                        [existing_zone_top, existing_zone_bottom] = get_mbz_subtype_zone(existing_mbz)
-                        [new_zone_top, new_zone_bottom] = get_mbz_subtype_zone(new_mbz_record)
-                        has_overlap := new_zone_bottom < existing_zone_top and new_zone_top > existing_zone_bottom
-                    else
-                        // Original candle-to-zone comparison for standard MBZs (preserves existing behavior)
-                        if new_mbz_record.low_price < existing_mbz.high_price and new_mbz_record.high_price > existing_mbz.low_price
-                            [zone_top, zone_bottom] = get_mbz_subtype_zone(existing_mbz)
-                            has_overlap := new_mbz_record.low_price < zone_top and new_mbz_record.high_price > zone_bottom
-
-                    if has_overlap
-                        // Calculate overlap percentage based on detection method used
-                        overlap_top = 0.0
-                        overlap_bottom = 0.0
-                        new_mbz_range = 0.0
-
-                        if str.contains(existing_mbz.mbz_subtype, SUBTYPE_REFLECTION) or str.contains(new_mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
-                            // Zone-based calculation for reflection MBZs
-                            [existing_zone_top, existing_zone_bottom] = get_mbz_subtype_zone(existing_mbz)
-                            [new_zone_top, new_zone_bottom] = get_mbz_subtype_zone(new_mbz_record)
-                            overlap_top := math.min(new_zone_top, existing_zone_top)
-                            overlap_bottom := math.max(new_zone_bottom, existing_zone_bottom)
-                            new_mbz_range := new_zone_top - new_zone_bottom
-                        else
-                            // Original candle-based calculation for standard MBZs
-                            [zone_top, zone_bottom] = get_mbz_subtype_zone(existing_mbz)
-                            overlap_top := math.min(new_mbz_record.high_price, zone_top)
-                            overlap_bottom := math.max(new_mbz_record.low_price, zone_bottom)
-                            new_mbz_range := new_mbz_record.high_price - new_mbz_record.low_price
-
-                        overlap_range = overlap_top - overlap_bottom
-
-                        if new_mbz_range > 0
-                            overlap_pct = (overlap_range / new_mbz_range) * 100
-
-                            // Store the data - ANY zone overlap makes it SUPER (shows checkmark ✔️)
-                            stored_percentage := overlap_pct
-                            overlapped_bar := existing_mbz.bar_index
-                            is_super := true
-                            break  // Take first overlap found
-
-        [is_super, stored_percentage, overlapped_bar]
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // BREACH CONFIRMATION SYSTEM FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2658,9 +2572,6 @@ cache_mbz_data(mbz_record) =>
          mbz_record.pool_boundary,
          mbz_record.wicked_deeper_into_source,
          mbz_record.reflection_pattern_deeper,
-         mbz_record.is_super_mbz,
-         mbz_record.overlap_percentage,
-         mbz_record.overlapping_mbz_bar_index,
          mbz_record.variant,
          mbz_record.formation_rule,
          mbz_record.source_origin_token
@@ -2875,27 +2786,8 @@ should_show_strong_on_labels() =>
 should_show_strong_on_extensions() =>
     multi_source_strong_display_mode == MULTI_SOURCE_STRONG_DISPLAY_EXTENSION or multi_source_strong_display_mode == MULTI_SOURCE_STRONG_DISPLAY_BOTH
 
-// Check if any MBZ in group is SUPER
-has_super_mbzs(mbz_group) =>
-    has_super = false
-
-    for i = 0 to array.size(mbz_group) - 1
-        mbz_record = array.get(mbz_group, i)
-        if mbz_record.is_super_mbz
-            has_super := true
-            break
-
-    has_super
-
-// Register a newly created MBZ record into the global state (handles SUPER detection, caching, alerts)
+// Register a newly created MBZ record into the global state (handles caching, alerts)
 register_new_mbz_record(mbz_record) =>
-    // Detect SUPER MBZ strength before caching
-    [is_super, overlap_pct, overlapped_bar] = detect_mbz_strength(mbz_record)
-
-    mbz_record.is_super_mbz := is_super
-    mbz_record.overlap_percentage := overlap_pct
-    mbz_record.overlapping_mbz_bar_index := overlapped_bar
-
     // Cache derived data for performant reuse
     cached_mbz = cache_mbz_data(mbz_record)
 
@@ -2940,9 +2832,6 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
          pool_boundary,
          false,
          false,
-         false,
-         0.0,
-         int(na),
          VARIANT_LIQUIDITY,
          formation_rule,
          source_origin_token
@@ -3128,7 +3017,7 @@ get_consolidated_formation_rule(mbz_group) =>
     else
         FORMATION_RULE_LIQUIDITY_STANDARD  // Default for liquidity-only mode
 
-// Create consolidated candle label with 5-4-3-2-1 reversal - SUPER MBZ support
+// Create consolidated candle label with 5-4-3-2-1 reversal
 create_consolidated_candle_label(consolidated_mbz) =>
     mbz_count = array.size(consolidated_mbz.mbz_group)
     source_stats = get_source_type_stats(consolidated_mbz.mbz_group)
@@ -3225,7 +3114,7 @@ create_consolidated_candle_label(consolidated_mbz) =>
 
         result
 
-// Create consolidated extension label with SUPER MBZ checkmark support
+// Create consolidated extension label
 create_consolidated_extension_label(consolidated_mbz) =>
     mbz_count = array.size(consolidated_mbz.mbz_group)
 
@@ -3259,9 +3148,7 @@ create_consolidated_extension_label(consolidated_mbz) =>
         if has_50_percent
             mbz_text := mbz_text + " [½]"
 
-    // Check for SUPER MBZs in group
-    has_super = has_super_mbzs(consolidated_mbz.mbz_group)
-    base_label = has_super ? CHECKMARK_SYMBOL + mbz_text : mbz_text
+    base_label = mbz_text
 
     // Only show advanced info when show_enhanced_label_details = true
     if show_enhanced_label_details
@@ -3284,7 +3171,6 @@ create_consolidated_extension_label(consolidated_mbz) =>
             [wick_tier, has_wick_dominance] = classify_wick_dominance(body_size, upper_wick, lower_wick)
             risky_prefix = wick_tier == WICK_TIER_RISKY ? "*" : ""
 
-            // Apply checkmark for SUPER MBZs in extensions
             extension_result := base_label + origin_suffix
 
             if subtype_display != ""
@@ -3302,7 +3188,7 @@ create_consolidated_extension_label(consolidated_mbz) =>
             if unified_subtype != ""
                 extension_result := extension_result + " " + unified_subtype
     else
-        // When advanced labels are OFF, show clean MBZ⁺/MBZ⁻ with checkmark for SUPER
+        // When advanced labels are OFF, show clean MBZ⁺/MBZ⁻
         extension_result := base_label
 
     // Add status indicators AFTER special markers - invalidation takes precedence
@@ -3362,7 +3248,7 @@ build_alert_message_from_consolidated(consolidated_mbz) =>
 
     direction + source_text
 
-// Build consolidated tooltip with SUPER MBZ info
+// Build consolidated tooltip
 build_consolidated_tooltip(consolidated_mbz) =>
     mbz_count = array.size(consolidated_mbz.mbz_group)
     source_stats = get_source_type_stats(consolidated_mbz.mbz_group)
