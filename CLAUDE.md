@@ -1,5 +1,48 @@
 # Code Quality Rules
 
+## Never Take Shortcuts - Always Refactor Properly
+
+**CORE PRINCIPLE: Be an expert developer who values clean code. NEVER take shortcuts.**
+
+When removing UI controls (inputs) that are no longer needed:
+- ❌ **WRONG**: Remove from UI and create a hardcoded variable
+- ✅ **CORRECT**: Remove the variable entirely and use the value directly where it's used
+
+### Examples
+
+#### ❌ LAZY (WRONG)
+```pine
+// Removed input, but kept variable with hardcoded value
+show_labels = true  // This shouldn't exist
+projection_style = STYLE_DOTTED  // This shouldn't exist
+amrp_eq_style_converted = line.style_dashed  // This shouldn't exist
+
+// Later in code:
+if show_labels
+    label.new(...)
+
+line.new(..., style=projection_style_converted)
+```
+
+#### ✅ CLEAN (CORRECT)
+```pine
+// Variable removed entirely, value used directly
+
+// Later in code:
+label.new(...)  // Always drawn, no check needed
+
+line.new(..., style=line.style_dotted)  // Value used directly
+```
+
+### When Refactoring
+1. **Remove the variable completely** - don't leave it as a hardcoded value
+2. **Find all usages** - use Grep to find where the variable is used
+3. **Replace with direct values** - use the actual value directly in each location
+4. **Remove conditional checks** - if something is always on, don't check a variable
+
+### Why This Matters
+Lazy refactoring leaves "dead" code controls that serve no purpose and confuse future developers. Clean code means removing unnecessary abstractions entirely.
+
 ## Never Add Subjective Commentary
 **NEVER add subjective or editorial comments in code such as:**
 - "(most important)"
