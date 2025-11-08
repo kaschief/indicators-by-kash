@@ -56,6 +56,33 @@ Lazy refactoring leaves "dead" code controls that serve no purpose and confuse f
 - Context about behavior (e.g., "Reverse the array for bearish stacking")
 - Warnings or constraints (e.g., "Must be called before X")
 
+## Never Convert Color Formats Without Permission
+**NEVER convert color constants between formats without explicit permission.**
+
+### The Rule
+- Do NOT convert hex colors to RGB (e.g., `#2962ff` → `color.rgb(41, 98, 255)`)
+- Do NOT convert RGB to hex (e.g., `color.rgb(41, 98, 255)` → `#2962ff`)
+- Do NOT convert named colors to RGB (e.g., `color.purple` → `color.rgb(155, 39, 176)`)
+- Do NOT standardize color format syntax without asking first
+
+### Why This Matters
+Color format choices are intentional decisions:
+- Hex values may come from design systems or brand guidelines
+- RGB values may be programmatically calculated
+- Named colors may be used for readability
+- Converting formats changes the source code unnecessarily
+
+### When User Says "standardize colors" or "make colors consistent"
+**ASK FIRST** what format they want:
+- "Should I convert all colors to `color.new(color.rgb(R, G, B), transparency)` format?"
+- "Do you want hex, RGB, or named color formats?"
+- Show examples of the current formats and proposed changes
+
+### Exceptions
+You may convert colors ONLY when:
+1. User explicitly requests a specific format conversion
+2. User provides explicit permission after seeing the proposed changes
+
 # Git Command Rules
 
 ## Core Rule
