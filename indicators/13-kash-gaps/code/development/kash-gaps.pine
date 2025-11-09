@@ -20,6 +20,8 @@ const int MILLISECONDS_PER_DAY = 86400000
 const string GAP_TYPE_RTH = "RTH"
 const string GAP_TYPE_NWOG = "NWOG"
 const string GAP_TYPE_NDOG = "NDOG"
+const string GAP_TYPE_BPR_BULLISH = "BPR+"
+const string GAP_TYPE_BPR_BEARISH = "BPR-"
 
 const string ENTRY_NONE = "none"
 const string ENTRY_FROM_BELOW = "from_below"
@@ -29,6 +31,7 @@ const string ENTRY_FROM_ABOVE = "from_above"
 const string LABEL_NWOG = "NWOGs"
 const string LABEL_NDOG = "NDOGs"
 const string LABEL_RTH = "RTH Gaps"
+const string LABEL_BPR = "BPRs"
 const string LABEL_UNFILLED = "Unfilled"
 const string LABEL_FILLED = "Filled"
 const string LABEL_EXTEND = "Extend"
@@ -45,6 +48,7 @@ const string LABEL_LABELS = "Labels"
 const string GROUP_NWOG = "NWOG"
 const string GROUP_NDOG = "NDOG"
 const string GROUP_RTH = "RTH Gaps"
+const string GROUP_BPR = "BPR"
 const string GROUP_APPEARANCE = "Appearance"
 
 // NWOG
@@ -83,6 +87,19 @@ muteETHCandles = input.bool(true, LABEL_MUTE_ETH, group=GROUP_RTH, inline="4")
 ethCandleColor = input.color(color.new(color.gray, 70), "", group=GROUP_RTH, inline="4")
 showRTHDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_RTH, inline="5")
 rthBoundaryColor = input.color(color.gray, LABEL_BORDER_LABEL, group=GROUP_RTH, inline="6")
+
+// BPR
+showBPR = input.bool(true, LABEL_BPR, group=GROUP_BPR, inline="1")
+bprToShow = input.int(5, "", minval=1, maxval=20, group=GROUP_BPR, inline="1")
+bprBullishUnfilledColor = input.color(color.new(color.green, 70), "Bullish Unfilled", group=GROUP_BPR, inline="2")
+bprBullishFilledColor = input.color(color.new(color.green, 90), "Filled", group=GROUP_BPR, inline="2")
+bprBearishUnfilledColor = input.color(color.new(color.red, 70), "Bearish Unfilled", group=GROUP_BPR, inline="3")
+bprBearishFilledColor = input.color(color.new(color.red, 90), "Filled", group=GROUP_BPR, inline="3")
+bprLookbackBars = input.int(10, "FVG Lookback Bars", minval=2, maxval=50, group=GROUP_BPR, inline="4", tooltip="Max bars between opposing FVGs to form a BPR")
+extendBPRToPresent = input.bool(false, LABEL_EXTEND, group=GROUP_BPR, inline="5")
+hideFilledBPR = input.bool(false, LABEL_HIDE_FILLED, group=GROUP_BPR, inline="5")
+bprBullishBoundaryColor = input.color(color.green, "Bullish Border", group=GROUP_BPR, inline="6")
+bprBearishBoundaryColor = input.color(color.red, "Bearish Border", group=GROUP_BPR, inline="6")
 
 // Appearance
 showInternalLines = input.bool(true, LABEL_INTERNAL_LINES, group=GROUP_APPEARANCE, inline="1")
@@ -137,18 +154,18 @@ var float prevDayClosePrice = na
 var float newDayOpenPrice = na
 var int lastNDOGDay = na
 
-createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false) =>
+createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false, int customLeftBar = na) =>
     gapRange = topPrice - bottomPrice
     gapMid = bottomPrice + gapRange * CE_LEVEL
     gapQ1 = bottomPrice + gapRange * Q1_LEVEL
     gapQ3 = bottomPrice + gapRange * Q3_LEVEL
 
-    unfilled = gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : rthUnfilledColor
-    filled = gapType == GAP_TYPE_NWOG ? nwogFilledColor : gapType == GAP_TYPE_NDOG ? ndogFilledColor : rthFilledColor
+    unfilled = gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : gapType == GAP_TYPE_BPR_BULLISH ? bprBullishUnfilledColor : gapType == GAP_TYPE_BPR_BEARISH ? bprBearishUnfilledColor : rthUnfilledColor
+    filled = gapType == GAP_TYPE_NWOG ? nwogFilledColor : gapType == GAP_TYPE_NDOG ? ndogFilledColor : gapType == GAP_TYPE_BPR_BULLISH ? bprBullishFilledColor : gapType == GAP_TYPE_BPR_BEARISH ? bprBearishFilledColor : rthFilledColor
     boxColor = isPreview ? previewColor : unfilled
 
     isCompact = isPreview and previewMode == "Compact"
-    leftBar = isPreview ? (isCompact ? bar_index + COMPACT_OFFSET : previewStartBar) : bar_index
+    leftBar = not na(customLeftBar) ? customLeftBar : (isPreview ? (isCompact ? bar_index + COMPACT_OFFSET : previewStartBar) : bar_index)
     rightBar = isPreview ? (isCompact ? leftBar + COMPACT_WIDTH : bar_index) : bar_index
 
     topUnfilledBox = box.new(leftBar, topPrice, rightBar, bottomPrice, bgcolor=boxColor, border_color=na)
@@ -161,11 +178,11 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
     q3Line = (showInternalLines and not isPreview) ? line.new(leftBar, gapQ3, rightBar, gapQ3, color=internalLinesColor, style=line.style_dotted, width=1) : na
 
     // Outer boundary lines (top and bottom edges) - solid, width 1
-    boundaryColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : gapType == GAP_TYPE_RTH ? rthBoundaryColor : na
+    boundaryColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : gapType == GAP_TYPE_RTH ? rthBoundaryColor : gapType == GAP_TYPE_BPR_BULLISH ? bprBullishBoundaryColor : gapType == GAP_TYPE_BPR_BEARISH ? bprBearishBoundaryColor : na
     topBoundaryLine = not isPreview ? line.new(leftBar, topPrice, rightBar, topPrice, color=boundaryColor, style=line.style_solid, width=1) : na
     bottomBoundaryLine = not isPreview ? line.new(leftBar, bottomPrice, rightBar, bottomPrice, color=boundaryColor, style=line.style_solid, width=1) : na
 
-    showLabel = (gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG) and not isPreview
+    showLabel = (gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG or gapType == GAP_TYPE_BPR_BULLISH or gapType == GAP_TYPE_BPR_BEARISH) and not isPreview
     gapLabel = showLabel ? label.new(leftBar, gapMid, gapType, color=color.new(color.white, 100), textcolor=labelColor, style=label.style_none, size=size.tiny) : na
 
     // Create date label for NWOG, NDOG, and RTH gaps (when enabled)
@@ -363,6 +380,8 @@ if array.size(gapsArray) > 0
             continue
         if gap.gapType == GAP_TYPE_NDOG and not showNDOG
             continue
+        if (gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and not showBPR
+            continue
 
         // Skip filled gaps that passed next session UNLESS "Extend" is ON
         skipGap = false
@@ -372,6 +391,8 @@ if array.size(gapsArray) > 0
             else if gap.gapType == GAP_TYPE_NWOG and not extendNWOGToPresent
                 skipGap := true
             else if gap.gapType == GAP_TYPE_NDOG and not extendNDOGToPresent
+                skipGap := true
+            else if (gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and not extendBPRToPresent
                 skipGap := true
 
         if skipGap
@@ -390,6 +411,21 @@ if array.size(gapsArray) > 0
                 if high >= gap.top
                     gap.penetrationLevel := gap.top
                     gap.filled := true
+                    // For BPRs, stop extending at mitigation point
+                    if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                        box.set_right(gap.topUnfilledBox, bar_index)
+                        box.set_right(gap.filledBox, bar_index)
+                        box.set_right(gap.bottomUnfilledBox, bar_index)
+                        if not na(gap.ceLine)
+                            line.set_x2(gap.ceLine, bar_index)
+                        if not na(gap.q1Line)
+                            line.set_x2(gap.q1Line, bar_index)
+                        if not na(gap.q3Line)
+                            line.set_x2(gap.q3Line, bar_index)
+                        if not na(gap.topBoundaryLine)
+                            line.set_x2(gap.topBoundaryLine, bar_index)
+                        if not na(gap.bottomBoundaryLine)
+                            line.set_x2(gap.bottomBoundaryLine, bar_index)
 
             else if gap.entryDirection == ENTRY_FROM_ABOVE
                 if low <= gap.top and low >= gap.bottom
@@ -397,23 +433,68 @@ if array.size(gapsArray) > 0
                 if low <= gap.bottom
                     gap.penetrationLevel := gap.bottom
                     gap.filled := true
+                    // For BPRs, stop extending at mitigation point
+                    if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                        box.set_right(gap.topUnfilledBox, bar_index)
+                        box.set_right(gap.filledBox, bar_index)
+                        box.set_right(gap.bottomUnfilledBox, bar_index)
+                        if not na(gap.ceLine)
+                            line.set_x2(gap.ceLine, bar_index)
+                        if not na(gap.q1Line)
+                            line.set_x2(gap.q1Line, bar_index)
+                        if not na(gap.q3Line)
+                            line.set_x2(gap.q3Line, bar_index)
+                        if not na(gap.topBoundaryLine)
+                            line.set_x2(gap.topBoundaryLine, bar_index)
+                        if not na(gap.bottomBoundaryLine)
+                            line.set_x2(gap.bottomBoundaryLine, bar_index)
 
             if not gap.filled and not na(gap.penetrationLevel)
                 if gap.entryDirection == ENTRY_FROM_BELOW
                     if gap.penetrationLevel >= gap.top
                         gap.filled := true
+                        // For BPRs, stop extending at mitigation point
+                        if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                            box.set_right(gap.topUnfilledBox, bar_index)
+                            box.set_right(gap.filledBox, bar_index)
+                            box.set_right(gap.bottomUnfilledBox, bar_index)
+                            if not na(gap.ceLine)
+                                line.set_x2(gap.ceLine, bar_index)
+                            if not na(gap.q1Line)
+                                line.set_x2(gap.q1Line, bar_index)
+                            if not na(gap.q3Line)
+                                line.set_x2(gap.q3Line, bar_index)
+                            if not na(gap.topBoundaryLine)
+                                line.set_x2(gap.topBoundaryLine, bar_index)
+                            if not na(gap.bottomBoundaryLine)
+                                line.set_x2(gap.bottomBoundaryLine, bar_index)
                 else if gap.entryDirection == ENTRY_FROM_ABOVE
                     if gap.penetrationLevel <= gap.bottom
                         gap.filled := true
+                        // For BPRs, stop extending at mitigation point
+                        if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                            box.set_right(gap.topUnfilledBox, bar_index)
+                            box.set_right(gap.filledBox, bar_index)
+                            box.set_right(gap.bottomUnfilledBox, bar_index)
+                            if not na(gap.ceLine)
+                                line.set_x2(gap.ceLine, bar_index)
+                            if not na(gap.q1Line)
+                                line.set_x2(gap.q1Line, bar_index)
+                            if not na(gap.q3Line)
+                                line.set_x2(gap.q3Line, bar_index)
+                            if not na(gap.topBoundaryLine)
+                                line.set_x2(gap.topBoundaryLine, bar_index)
+                            if not na(gap.bottomBoundaryLine)
+                                line.set_x2(gap.bottomBoundaryLine, bar_index)
 
         if gap.filled
-            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG)
+            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG) or ((gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and hideFilledBPR)
                 deleteGap(gap)
                 array.remove(gapsArray, i)
                 continue
 
-        gapUnfilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : rthUnfilledColor
-        gapFilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogFilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogFilledColor : rthFilledColor
+        gapUnfilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogUnfilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogUnfilledColor : gap.gapType == GAP_TYPE_BPR_BULLISH ? bprBullishUnfilledColor : gap.gapType == GAP_TYPE_BPR_BEARISH ? bprBearishUnfilledColor : rthUnfilledColor
+        gapFilledColor = gap.gapType == GAP_TYPE_NWOG ? nwogFilledColor : gap.gapType == GAP_TYPE_NDOG ? ndogFilledColor : gap.gapType == GAP_TYPE_BPR_BULLISH ? bprBullishFilledColor : gap.gapType == GAP_TYPE_BPR_BEARISH ? bprBearishFilledColor : rthFilledColor
 
         if not na(gap.penetrationLevel)
             if gap.entryDirection == ENTRY_FROM_BELOW
@@ -457,6 +538,9 @@ if array.size(gapsArray) > 0
         else if gap.gapType == GAP_TYPE_NDOG
             // Toggle ON: extend all | Toggle OFF: unfilled extends, filled extends until next session
             shouldExtend := extendNDOGToPresent or not gap.filled or not gap.passedNextSession
+        else if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled stops immediately
+            shouldExtend := extendBPRToPresent or not gap.filled
 
         if shouldExtend
             rightEdge = bar_index + RIGHT_EDGE_CUSHION
@@ -629,6 +713,66 @@ if showNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
                     // 20 hours = 72000000 ms (handles daily ~24h and Friday→Sunday ~50h gaps)
                     if gap.gapType == GAP_TYPE_NDOG and (barTime - gap.creationTime) >= 72000000
                         gap.passedNextSession := true
+
+// BPR Detection
+if showBPR
+    fvgBearish = low[2] - high > 0
+    fvgBullish = low - high[2] > 0
+
+    var float bullBprTopDetected = na
+    var float bullBprBottomDetected = na
+    var int bullBprLeftBarDetected = na
+    var float bearBprTopDetected = na
+    var float bearBprBottomDetected = na
+    var int bearBprLeftBarDetected = na
+
+    // Detect bullish BPR (bearish FVG → bullish FVG)
+    bullBprBarsSince = ta.barssince(fvgBearish)
+    if fvgBullish and bullBprBarsSince <= bprLookbackBars
+        sumOfPoints = high[bullBprBarsSince] + low[bullBprBarsSince + 2] + high[2] + low
+        rangeDiff = math.max(low[bullBprBarsSince + 2], low) - math.min(high[bullBprBarsSince], high[2])
+        if sumOfPoints > rangeDiff
+            bullBprTopDetected := math.min(low[bullBprBarsSince + 2], low)
+            bullBprBottomDetected := math.max(high[bullBprBarsSince], high[2])
+            bullBprLeftBarDetected := bar_index - bullBprBarsSince - 1
+
+    // Detect bearish BPR (bullish FVG → bearish FVG)
+    bearBprBarsSince = ta.barssince(fvgBullish)
+    if fvgBearish and bearBprBarsSince <= bprLookbackBars
+        sumOfPoints = high[bearBprBarsSince] + low[bearBprBarsSince + 2] + high[2] + low
+        rangeDiff = math.max(low[bearBprBarsSince + 2], low) - math.min(high[bearBprBarsSince], high[2])
+        if sumOfPoints > rangeDiff
+            bearBprTopDetected := math.min(low[bearBprBarsSince], low[2])
+            bearBprBottomDetected := math.max(high[bearBprBarsSince + 2], high)
+            bearBprLeftBarDetected := bar_index - bearBprBarsSince - 1
+
+    // Create bullish BPR
+    if not na(bullBprTopDetected[1]) and bullBprTopDetected[1] > bullBprBottomDetected[1]
+        array.push(gapsArray, createGap(bullBprTopDetected[1], bullBprBottomDetected[1], GAP_TYPE_BPR_BULLISH, false, bullBprLeftBarDetected[1]))
+        if countGapsByType(GAP_TYPE_BPR_BULLISH) + countGapsByType(GAP_TYPE_BPR_BEARISH) > bprToShow
+            for i = 0 to array.size(gapsArray) - 1
+                gap = array.get(gapsArray, i)
+                if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                    deleteGap(gap)
+                    array.remove(gapsArray, i)
+                    break
+        bullBprTopDetected := na
+        bullBprBottomDetected := na
+        bullBprLeftBarDetected := na
+
+    // Create bearish BPR
+    if not na(bearBprTopDetected[1]) and bearBprTopDetected[1] > bearBprBottomDetected[1]
+        array.push(gapsArray, createGap(bearBprTopDetected[1], bearBprBottomDetected[1], GAP_TYPE_BPR_BEARISH, false, bearBprLeftBarDetected[1]))
+        if countGapsByType(GAP_TYPE_BPR_BULLISH) + countGapsByType(GAP_TYPE_BPR_BEARISH) > bprToShow
+            for i = 0 to array.size(gapsArray) - 1
+                gap = array.get(gapsArray, i)
+                if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
+                    deleteGap(gap)
+                    array.remove(gapsArray, i)
+                    break
+        bearBprTopDetected := na
+        bearBprBottomDetected := na
+        bearBprLeftBarDetected := na
 
 // Clear old divider lines
 if array.size(dividerLines) > 0
