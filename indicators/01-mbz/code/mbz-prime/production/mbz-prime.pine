@@ -71,6 +71,10 @@ const color DEFAULT_MBZ_BEARISH_COLOR = color.new(color.rgb(103, 58, 183), 0)
 const color DEFAULT_EXTENDED_BOX_BULLISH_COLOR = color.new(color.rgb(144, 191, 249), 85)
 const color DEFAULT_EXTENDED_BOX_BEARISH_COLOR = color.new(color.rgb(179, 157, 219), 85)
 const color DEFAULT_EXTENDED_BOX_TEXT_COLOR = color.new(color.rgb(41, 98, 255), 0)
+const color DEFAULT_BORDER_COLOR_IMMEDIATE = color.new(color.rgb(236, 64, 122), 0)
+const color DEFAULT_BORDER_COLOR_STANDARD = color.new(color.rgb(126, 87, 194), 0)
+const color DEFAULT_BORDER_COLOR_DELAYED = color.new(color.rgb(255, 193, 7), 0)
+DEFAULT_BORDER_WIDTH = 2
 
 // Liquidity pool limits (simple fixed values)
 LIQUIDITY_POOL_MAX_ENTRIES = 360      // Max sessions stored per pool (~18 months for daily)
@@ -514,9 +518,18 @@ actual_enable_lunch = nine_times_mode == NINE_MODE_NINE_ONLY ? false : enable_lu
 enable_nine_variants = nine_times_mode == NINE_MODE_BOTH
 
 // === 🎭 MBZ FORMATION VARIANTS ===
-enable_liquidity_immediate = input.bool(true, INPUT_LABEL_IMMEDIATE, group=GROUP_LIQUIDITY_RULES, inline='liq_rules')
-enable_liquidity_standard = input.bool(true, INPUT_LABEL_STANDARD, group=GROUP_LIQUIDITY_RULES, inline='liq_rules')
-enable_liquidity_delayed = input.bool(true, INPUT_LABEL_DELAYED, group=GROUP_LIQUIDITY_RULES, inline='liq_rules', tooltip='LIQUIDITY FORMATION VARIANTS:\n\n• Immediate: First touch of pool produces same-bar rejection (current bar sweep)\n• Standard: Previous bar swept pool, current bar respects original extreme (no new high/low)\n• Delayed: Sweep closes beyond pool, next bar re-enters (delayed confirmation)')
+enable_liquidity_immediate = input.bool(true, INPUT_LABEL_IMMEDIATE, group=GROUP_LIQUIDITY_RULES, inline='liq_imm', tooltip='Immediate: First touch of pool produces same-bar rejection (current bar sweep)')
+show_immediate_border = input.bool(true, 'Border', group=GROUP_LIQUIDITY_RULES, inline='liq_imm')
+border_color_immediate = input.color(DEFAULT_BORDER_COLOR_IMMEDIATE, '', group=GROUP_LIQUIDITY_RULES, inline='liq_imm')
+border_width_immediate = input.int(DEFAULT_BORDER_WIDTH, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_LIQUIDITY_RULES, inline='liq_imm')
+enable_liquidity_standard = input.bool(true, INPUT_LABEL_STANDARD, group=GROUP_LIQUIDITY_RULES, inline='liq_std', tooltip='Standard: Previous bar swept pool, current bar respects original extreme (no new high/low)')
+show_standard_border = input.bool(true, 'Border', group=GROUP_LIQUIDITY_RULES, inline='liq_std')
+border_color_standard = input.color(DEFAULT_BORDER_COLOR_STANDARD, '', group=GROUP_LIQUIDITY_RULES, inline='liq_std')
+border_width_standard = input.int(DEFAULT_BORDER_WIDTH, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_LIQUIDITY_RULES, inline='liq_std')
+enable_liquidity_delayed = input.bool(true, INPUT_LABEL_DELAYED, group=GROUP_LIQUIDITY_RULES, inline='liq_del', tooltip='Delayed: Sweep closes beyond pool, next bar re-enters (delayed confirmation)')
+show_delayed_border = input.bool(false, 'Border', group=GROUP_LIQUIDITY_RULES, inline='liq_del')
+border_color_delayed = input.color(DEFAULT_BORDER_COLOR_DELAYED, '', group=GROUP_LIQUIDITY_RULES, inline='liq_del')
+border_width_delayed = input.int(DEFAULT_BORDER_WIDTH, 'Width', minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_LIQUIDITY_RULES, inline='liq_del')
 
 liquidity_detection_enabled = enable_liquidity_immediate or enable_liquidity_standard or enable_liquidity_delayed
 
@@ -3225,7 +3238,21 @@ manage_consolidated_mbz_display() =>
             if should_highlight_consolidated_zone
                 consolidated_box_color = current_consolidated_mbz.is_bullish ? extended_box_bullish_color : extended_box_bearish_color
 
-                // Highlight box (consolidated zone)
+                priority_formation_rule = get_consolidated_formation_rule(current_consolidated_mbz.mbz_group)
+
+                border_color_to_use = consolidated_box_color
+                border_width_to_use = DEFAULT_BORDER_WIDTH
+
+                if priority_formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE and show_immediate_border
+                    border_color_to_use := border_color_immediate
+                    border_width_to_use := border_width_immediate
+                else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD and show_standard_border
+                    border_color_to_use := border_color_standard
+                    border_width_to_use := border_width_standard
+                else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED and show_delayed_border
+                    border_color_to_use := border_color_delayed
+                    border_width_to_use := border_width_delayed
+
                 consolidated_highlight_box = box.new(
                      left=current_consolidated_mbz.formation_time,
                      right=current_consolidated_mbz.formation_time + bar_duration_ms,
@@ -3237,7 +3264,6 @@ manage_consolidated_mbz_display() =>
                  )
                 array.push(mbz_body_highlights, consolidated_highlight_box)
 
-                // Extension box with consolidated label
                 extension_right_time = switch extension_mode
                     EXTENSION_FIXED => current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
                     EXTENSION_TO_CURRENT => math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms))
@@ -3251,8 +3277,8 @@ manage_consolidated_mbz_display() =>
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
                      xloc=xloc.bar_time,
                      bgcolor=consolidated_box_color,
-                     border_color=consolidated_box_color,
-                     border_width=1,
+                     border_color=border_color_to_use,
+                     border_width=border_width_to_use,
                      text=current_consolidated_mbz.consolidated_extension_label,
                      text_halign=get_extension_label_halign(),
                      text_valign=text.align_center,
@@ -4676,7 +4702,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 13, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 4, 16, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -4755,5 +4781,23 @@ if show_color_table and barstate.islast
     table.cell(color_table, 1, 12, "561", text_size=size.small)
     table.cell(color_table, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(external_marker_bearish_color)), int(color.g(external_marker_bearish_color)), int(color.b(external_marker_bearish_color))), text_size=size.small)
     table.cell(color_table, 3, 12, str.tostring(int(color.t(external_marker_bearish_color))), text_size=size.small)
+
+    // Border Color Immediate
+    table.cell(color_table, 0, 13, "Border Imm", text_size=size.small)
+    table.cell(color_table, 1, 13, "522", text_size=size.small)
+    table.cell(color_table, 2, 13, str.format("R:{0} G:{1} B:{2}", int(color.r(border_color_immediate)), int(color.g(border_color_immediate)), int(color.b(border_color_immediate))), text_size=size.small)
+    table.cell(color_table, 3, 13, str.tostring(int(color.t(border_color_immediate))), text_size=size.small)
+
+    // Border Color Standard
+    table.cell(color_table, 0, 14, "Border Std", text_size=size.small)
+    table.cell(color_table, 1, 14, "526", text_size=size.small)
+    table.cell(color_table, 2, 14, str.format("R:{0} G:{1} B:{2}", int(color.r(border_color_standard)), int(color.g(border_color_standard)), int(color.b(border_color_standard))), text_size=size.small)
+    table.cell(color_table, 3, 14, str.tostring(int(color.t(border_color_standard))), text_size=size.small)
+
+    // Border Color Delayed
+    table.cell(color_table, 0, 15, "Border Del", text_size=size.small)
+    table.cell(color_table, 1, 15, "530", text_size=size.small)
+    table.cell(color_table, 2, 15, str.format("R:{0} G:{1} B:{2}", int(color.r(border_color_delayed)), int(color.g(border_color_delayed)), int(color.b(border_color_delayed))), text_size=size.small)
+    table.cell(color_table, 3, 15, str.tostring(int(color.t(border_color_delayed))), text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
