@@ -34,6 +34,7 @@ POOL_TYPE_LUNCH = "lunch"
 POOL_TYPE_NYPM = "nypm"
 POOL_TYPE_PREMARKET = "premarket"
 POOL_TYPE_OVERNIGHT = "overnight"
+POOL_TYPE_1400 = "1400"
 POOL_TYPE_1600 = "1600"
 POOL_TYPE_RANGE_BOX = "range_box"
 
@@ -59,8 +60,10 @@ FILTER_HTF = "HTF"
 FILTER_INTRADAY = "Intraday"
 FILTER_OVERNIGHT = "Overnight"
 FILTER_PREMARKET = "Premarket"
+FILTER_1400 = "14:00"
 FILTER_1600 = "16:00"
 FILTER_RANGE_BOX = "Range Box"
+FILTER_1400_RANGE_BOX = "Range Box + 1400"
 FILTER_1600_RANGE_BOX = "Range Box + 1600"
 
 // UI group names
@@ -74,6 +77,7 @@ GROUP_INTRADAY_LIQUIDITY_DEPTH = "Intraday Liquidity Depth"
 GROUP_POISZN = "PoiSzn Sessions"
 GROUP_RANGE_BOX = "Range Box"
 GROUP_TIME_DIVIDERS = "Time Dividers"
+GROUP_1400_OPEN = "14:00 Open"
 GROUP_1600_OPEN = "16:00 Open"
 GROUP_LABELS = "Labels"
 GROUP_COLOR_TABLE = "Color Reference"
@@ -116,6 +120,7 @@ const color DEFAULT_PREMARKET_COLOR = color.new(color.rgb(21, 101, 192), 0)
 const color DEFAULT_PREMARKET_BG_COLOR = color.new(color.rgb(21, 101, 192), 95)
 const color DEFAULT_RANGE_BOX_COLOR = color.new(color.rgb(187, 217, 251), 20)
 const color DEFAULT_RANGE_MIDDLE_COLOR = color.new(color.rgb(184, 184, 184), 40)
+const color DEFAULT_1400_OPEN_COLOR = color.new(color.rgb(255, 152, 0), 50)
 const color DEFAULT_1600_OPEN_COLOR = color.new(color.rgb(247, 82, 95), 50)
 const color DEFAULT_TIME_DIVIDER_COLOR = color.new(color.rgb(184, 184, 184), 40)
 const color DEFAULT_DAY_LABEL_COLOR = color.new(color.rgb(184, 184, 184), 40)
@@ -134,10 +139,10 @@ NYPM_SCAN_CAP = 50
 PREMARKET_SCAN_CAP = 50
 OVERNIGHT_SCAN_CAP = 50
 RANGE_BOX_SCAN_CAP = 20
-SIXTEEN_HUNDRED_OPEN_SCAN_CAP = 30
+INTRADAY_OPENING_PRICE_SCAN_CAP = 30
 
 // Time offsets (in milliseconds)
-THIRTEEN_HOURS_MS = 13 * 60 * 60 * 1000  // 16:00 to 05:00 next day
+INTRADAY_OPENING_PRICE_MITIGATION_DELAY_MS = 13 * 60 * 60 * 1000  // Minimum delay before price open can be mitigated (13 hours)
 
 // Range box timeframe limits (in seconds)
 RANGE_BOX_MIN_TIMEFRAME = 60    // 1 minute
@@ -149,9 +154,9 @@ HTF_MIN_TIMEFRAME = 60  // 1 minute
 // Intraday session timeframe limit (in seconds) - only useful on sub-30min charts
 INTRADAY_SESSION_MAX_TIMEFRAME = 1800  // 30 minutes
 
-// 16:00 open timeframe limits (in seconds) - needs intraday precision, min 1m to avoid duplicates
-SIXTEEN_HUNDRED_OPEN_MIN_TIMEFRAME = 60    // 1 minute (prevents duplicate captures on sub-1m)
-SIXTEEN_HUNDRED_OPEN_MAX_TIMEFRAME = 3600  // 1 hour
+// Price open timeframe limits (in seconds) - needs intraday precision, min 1m to avoid duplicates
+INTRADAY_OPENING_PRICE_MIN_TIMEFRAME = 60    // 1 minute (prevents duplicate captures on sub-1m)
+INTRADAY_OPENING_PRICE_MAX_TIMEFRAME = 3600  // 1 hour
 
 // Time divider timeframe limit (in seconds) - midnight candles exist up to 1H
 TIME_DIVIDER_MAX_TIMEFRAME = 3600  // 1 hour
@@ -231,17 +236,17 @@ type TimeDivider
     array<int> midpoint_times
     array<string> midpoint_days
 
-type SixteenHundredOpen
+type IntradayOpeningPriceTracker
     array<float> opens
     array<int> times
     array<bool> mitigated
     array<int> mitigation_times
-    array<int> capture_hours        // Track if level was from 16:00 or 18:00
+    array<int> capture_hours        // Track capture hour (e.g., 14, 16, 18)
     float current_open
     int current_time
     bool current_mitigated
     int current_mitigation_time
-    int current_capture_hour        // 16 or 18
+    int current_capture_hour        // Capture hour (e.g., 14, 16, 18)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET CONFIGURATION REGISTRY (PERFORMANCE: Cached lookup, runs once)
@@ -334,7 +339,7 @@ get_intraday_liquidity_depth_percent_3() =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Pulse Mode (Global Override) ───
-pulseModeFilter = input.string(FILTER_ALL, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_RANGE_BOX, FILTER_1600, FILTER_1600_RANGE_BOX, FILTER_PREMARKET, FILTER_OVERNIGHT, FILTER_INTRADAY, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_HTF], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Range Box/16:00: Show ONLY that type\n• Range Box + 1600: Show both together\n• Premarket/Overnight: Show ONLY that session\n• Intraday: Show Asia + London + NYAM + Lunch + NYPM\n• Daily/Weekly/Monthly: Show ONLY that type\n• HTF: Show Daily + Weekly + Monthly")
+pulseModeFilter = input.string(FILTER_ALL, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_RANGE_BOX, FILTER_1400, FILTER_1400_RANGE_BOX, FILTER_1600, FILTER_1600_RANGE_BOX, FILTER_PREMARKET, FILTER_OVERNIGHT, FILTER_INTRADAY, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_HTF], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Range Box/14:00/16:00: Show ONLY that type\n• Range Box + 1400/1600: Show both together\n• Premarket/Overnight: Show ONLY that session\n• Intraday: Show Asia + London + NYAM + Lunch + NYPM\n• Daily/Weekly/Monthly: Show ONLY that type\n• HTF: Show Daily + Weekly + Monthly")
 
 showDaily = input.bool(true, GROUP_DAILY, group=GROUP_DAILY)
 dailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_DAILY, inline='daily')
@@ -418,11 +423,19 @@ showRangeMiddleLine = input.bool(true, UI_MIDDLE_LINE, group=GROUP_RANGE_BOX, in
 rangeBoxShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_RANGE_BOX, inline='range_options')
 rangeBoxWidth = input.int(2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_RANGE_BOX, inline='range_options')
 
+show1400Open = input.bool(false, GROUP_1400_OPEN, group=GROUP_1400_OPEN, tooltip="Track and project the 14:00 1-minute candle open price until mitigated. Only available on 1m to 1H timeframes.")
+open1400ShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_1400_OPEN, inline='1400_options')
+open1400Color = input.color(DEFAULT_1400_OPEN_COLOR, UI_COLOR, group=GROUP_1400_OPEN, inline='1400_options')
+open1400LineWidth = input.int(2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1400_OPEN, inline='1400_options')
+open1400MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_1400_OPEN, inline='1400_options', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
+open1400UntappedWidth = input.int(4, "Untapped Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1400_OPEN, inline='1400_options')
+
 show1600Open = input.bool(false, GROUP_1600_OPEN, group=GROUP_1600_OPEN, tooltip="Track and project the 16:00 1-minute candle open price until mitigated. Automatically captures 18:00 reopen on early-close days (e.g., holidays when market closes at 13:00). Only available on 1m to 1H timeframes.")
 open1600ShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_1600_OPEN, inline='1600_options')
 open1600Color = input.color(DEFAULT_1600_OPEN_COLOR, UI_COLOR, group=GROUP_1600_OPEN, inline='1600_options')
 open1600LineWidth = input.int(2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1600_OPEN, inline='1600_options')
-open1600MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_1600_OPEN, inline='1600_mitigation', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
+open1600MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_1600_OPEN, inline='1600_options', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
+open1600UntappedWidth = input.int(4, "Untapped Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1600_OPEN, inline='1600_options')
 
 showTimeDividers = input.bool(false, "Midnight Dividers", group=GROUP_TIME_DIVIDERS, inline='dividers')
 timeDividerShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_TIME_DIVIDERS, inline='dividers')
@@ -465,10 +478,14 @@ applyPulseModeFilter(poolType, individualToggle) =>
         result := poolType == POOL_TYPE_OVERNIGHT
     else if pulseModeFilter == FILTER_PREMARKET
         result := poolType == POOL_TYPE_PREMARKET
+    else if pulseModeFilter == FILTER_1400
+        result := poolType == POOL_TYPE_1400
     else if pulseModeFilter == FILTER_1600
         result := poolType == POOL_TYPE_1600
     else if pulseModeFilter == FILTER_RANGE_BOX
         result := poolType == POOL_TYPE_RANGE_BOX
+    else if pulseModeFilter == FILTER_1400_RANGE_BOX
+        result := poolType == POOL_TYPE_1400 or poolType == POOL_TYPE_RANGE_BOX
     else if pulseModeFilter == FILTER_1600_RANGE_BOX
         result := poolType == POOL_TYPE_1600 or poolType == POOL_TYPE_RANGE_BOX
     // else FILTER_ALL - use individual toggle
@@ -487,6 +504,7 @@ showLunchFiltered = applyPulseModeFilter(POOL_TYPE_LUNCH, showLunch)
 showNypmFiltered = applyPulseModeFilter(POOL_TYPE_NYPM, showNypm)
 showPremarketFiltered = applyPulseModeFilter(POOL_TYPE_PREMARKET, showPremarket)
 showOvernightFiltered = applyPulseModeFilter(POOL_TYPE_OVERNIGHT, showOvernight)
+show1400OpenFiltered = applyPulseModeFilter(POOL_TYPE_1400, show1400Open)
 show1600OpenFiltered = applyPulseModeFilter(POOL_TYPE_1600, show1600Open)
 showRangeBoxFiltered = applyPulseModeFilter(POOL_TYPE_RANGE_BOX, showRangeBox)
 
@@ -561,8 +579,11 @@ create_range_box() =>
 create_time_divider() =>
     TimeDivider.new(array.new_int(), array.new_int(), array.new_string())
 
+create_1400_open() =>
+    IntradayOpeningPriceTracker.new(array.new_float(), array.new_int(), array.new_bool(), array.new_int(), array.new_int(), na, na, false, na, na)
+
 create_1600_open() =>
-    SixteenHundredOpen.new(array.new_float(), array.new_int(), array.new_bool(), array.new_int(), array.new_int(), na, na, false, na, na)
+    IntradayOpeningPriceTracker.new(array.new_float(), array.new_int(), array.new_bool(), array.new_int(), array.new_int(), na, na, false, na, na)
 
 pool_get_high_end_time(pool, index, fallback_time) =>
     high_breached = array.get(pool.high_breached, index)
@@ -818,7 +839,8 @@ var LiquidityPool premarket_pool = create_pool()
 var LiquidityPool overnight_pool = create_pool()
 var RangeBox range_box = create_range_box()
 var TimeDivider time_divider = create_time_divider()
-var SixteenHundredOpen sixteen_hundred_open = create_1600_open()
+var IntradayOpeningPriceTracker fourteen_hundred_open = create_1400_open()
+var IntradayOpeningPriceTracker sixteen_hundred_open = create_1600_open()
 var array<line> all_lines = array.new<line>()
 var array<label> all_labels = array.new<label>()
 var array<box> all_boxes = array.new<box>()
@@ -1029,12 +1051,36 @@ if not skip_sunday_liquidity
     if showTimeDividers and timeframe.in_seconds() <= TIME_DIVIDER_MAX_TIMEFRAME
         detect_time_divider(time_divider)
 
+// 14:00 Open tracking - detect and store
+// Requires intraday timeframe (1m to 1H) to capture 1-minute candle precisely
+if show1400OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME and not skip_sunday_liquidity
+    currentHour_1400 = hour(time, NY_TIMEZONE)
+    currentMinute_1400 = minute(time, NY_TIMEZONE)
+
+    is1400Bar = currentHour_1400 == 14 and currentMinute_1400 == 0
+
+    if is1400Bar
+        // Push previous day's level to storage if it exists
+        if not na(fourteen_hundred_open.current_open)
+            array.push(fourteen_hundred_open.opens, fourteen_hundred_open.current_open)
+            array.push(fourteen_hundred_open.times, fourteen_hundred_open.current_time)
+            array.push(fourteen_hundred_open.mitigated, fourteen_hundred_open.current_mitigated)
+            array.push(fourteen_hundred_open.mitigation_times, fourteen_hundred_open.current_mitigation_time)
+            array.push(fourteen_hundred_open.capture_hours, fourteen_hundred_open.current_capture_hour)
+
+        // Capture new 14:00 open and reset mitigation status
+        fourteen_hundred_open.current_open := open
+        fourteen_hundred_open.current_time := time
+        fourteen_hundred_open.current_mitigated := false
+        fourteen_hundred_open.current_mitigation_time := na
+        fourteen_hundred_open.current_capture_hour := 14
+
 // 16:00/18:00 Open tracking - detect and store
 // Automatically captures 16:00 on normal days, 18:00 on early-close days (consistent with overnight session behavior)
 // NOTE: Not affected by Sunday skip because 16:00 doesn't occur during Sunday evening (market opens at 18:00)
 // and mitigation detection must still run to check stored levels
 // Requires intraday timeframe (1m to 1H) to capture 1-minute candle precisely
-if show1600OpenFiltered and timeframe.in_seconds() >= SIXTEEN_HUNDRED_OPEN_MIN_TIMEFRAME and timeframe.in_seconds() <= SIXTEEN_HUNDRED_OPEN_MAX_TIMEFRAME
+if show1600OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME
     currentHour_1600 = hour(time, NY_TIMEZONE)
     currentMinute_1600 = minute(time, NY_TIMEZONE)
 
@@ -1154,6 +1200,48 @@ if not skip_sunday_liquidity
         if showOvernightFiltered
             pool_detect_intraday_breaches(overnight_pool, OVERNIGHT_SCAN_CAP, intraday_liquidity_depth_pct1, intraday_liquidity_depth_pct2, intraday_liquidity_depth_pct3)
 
+// Detect 14:00 open mitigation (ONLY after 05:00 next day)
+// NOTE: Mitigation detection skips Sunday evening for traditional assets (14:00 is traditional market concept)
+if show1400OpenFiltered and not skip_sunday_liquidity
+    currentHour_mitigation_1400 = hour(time, NY_TIMEZONE)
+
+    // Determine if we're in the mitigation window based on mode
+    isInMitigationWindow_1400 = false
+    if open1400MitigationWindow == MITIGATION_WINDOW_ANYTIME
+        // Anytime: Any time from 05:00 onwards (includes overnight/Asian session)
+        isInMitigationWindow_1400 := currentHour_mitigation_1400 >= MITIGATION_START_HOUR
+    else
+        // Market-Hours: Only between 05:00-16:00 (excludes overnight 16:00-05:00)
+        isInMitigationWindow_1400 := currentHour_mitigation_1400 >= MITIGATION_START_HOUR and currentHour_mitigation_1400 < MARKET_CLOSE_HOUR
+
+    // Check CURRENT level (today's 14:00 that hasn't been pushed to array yet)
+    if not na(fourteen_hundred_open.current_open) and not fourteen_hundred_open.current_mitigated
+        // Require BOTH: 13+ hours elapsed AND in mitigation window
+        // This protects intraday (Tue 14:00 → Wed 05:00) AND handles weekends (Fri 14:00 → Mon 05:00)
+        if (time >= fourteen_hundred_open.current_time + INTRADAY_OPENING_PRICE_MITIGATION_DELAY_MS) and isInMitigationWindow_1400
+            // Price touched or crossed the level
+            if (high >= fourteen_hundred_open.current_open and low <= fourteen_hundred_open.current_open) or close == fourteen_hundred_open.current_open
+                fourteen_hundred_open.current_mitigated := true
+                fourteen_hundred_open.current_mitigation_time := time
+
+    // Check stored levels (previous days in array)
+    if array.size(fourteen_hundred_open.opens) > 0
+        scan_size_1400 = math.min(array.size(fourteen_hundred_open.opens), INTRADAY_OPENING_PRICE_SCAN_CAP)
+        start_index_1400 = math.max(0, array.size(fourteen_hundred_open.opens) - scan_size_1400)
+
+        for i = start_index_1400 to array.size(fourteen_hundred_open.opens) - 1
+            if not array.get(fourteen_hundred_open.mitigated, i)
+                open_level_1400 = array.get(fourteen_hundred_open.opens, i)
+                open_time_stored_1400 = array.get(fourteen_hundred_open.times, i)
+
+                // Require BOTH: 13+ hours elapsed AND in mitigation window
+                // This protects intraday (Tue 14:00 → Wed 05:00) AND handles weekends (Fri 14:00 → Mon 05:00)
+                if (time >= open_time_stored_1400 + INTRADAY_OPENING_PRICE_MITIGATION_DELAY_MS) and isInMitigationWindow_1400
+                    // Price touched or crossed the level
+                    if (high >= open_level_1400 and low <= open_level_1400) or close == open_level_1400
+                        array.set(fourteen_hundred_open.mitigated, i, true)
+                        array.set(fourteen_hundred_open.mitigation_times, i, time)
+
 // Detect 16:00 open mitigation (ONLY after 05:00 next day)
 // NOTE: Mitigation detection skips Sunday evening for traditional assets (16:00 is traditional market concept)
 if show1600OpenFiltered and not skip_sunday_liquidity
@@ -1172,7 +1260,7 @@ if show1600OpenFiltered and not skip_sunday_liquidity
     if not na(sixteen_hundred_open.current_open) and not sixteen_hundred_open.current_mitigated
         // Require BOTH: 13+ hours elapsed AND in mitigation window
         // This protects intraday (Tue 16:00 → Wed 05:00) AND handles weekends (Fri 16:00 → Mon 05:00)
-        if (time >= sixteen_hundred_open.current_time + THIRTEEN_HOURS_MS) and isInMitigationWindow
+        if (time >= sixteen_hundred_open.current_time + INTRADAY_OPENING_PRICE_MITIGATION_DELAY_MS) and isInMitigationWindow
             // Price touched or crossed the level
             if (high >= sixteen_hundred_open.current_open and low <= sixteen_hundred_open.current_open) or close == sixteen_hundred_open.current_open
                 sixteen_hundred_open.current_mitigated := true
@@ -1180,7 +1268,7 @@ if show1600OpenFiltered and not skip_sunday_liquidity
 
     // Check stored levels (previous days in array)
     if array.size(sixteen_hundred_open.opens) > 0
-        scan_size = math.min(array.size(sixteen_hundred_open.opens), SIXTEEN_HUNDRED_OPEN_SCAN_CAP)
+        scan_size = math.min(array.size(sixteen_hundred_open.opens), INTRADAY_OPENING_PRICE_SCAN_CAP)
         start_index = math.max(0, array.size(sixteen_hundred_open.opens) - scan_size)
 
         for i = start_index to array.size(sixteen_hundred_open.opens) - 1
@@ -1190,7 +1278,7 @@ if show1600OpenFiltered and not skip_sunday_liquidity
 
                 // Require BOTH: 13+ hours elapsed AND in mitigation window
                 // This protects intraday (Tue 16:00 → Wed 05:00) AND handles weekends (Fri 16:00 → Mon 05:00)
-                if (time >= open_time_stored + THIRTEEN_HOURS_MS) and isInMitigationWindow
+                if (time >= open_time_stored + INTRADAY_OPENING_PRICE_MITIGATION_DELAY_MS) and isInMitigationWindow
                     // Price touched or crossed the level
                     if (high >= open_level and low <= open_level) or close == open_level
                         array.set(sixteen_hundred_open.mitigated, i, true)
@@ -1860,7 +1948,7 @@ if barstate.islast
     // Draw 16:00 Opens - current level + stored levels
     // IMPORTANT: Draw current level FIRST (most recent) then fill with array levels
     // Only display on intraday timeframes (1m to 1H) where 1-minute precision is available
-    if show1600OpenFiltered and timeframe.in_seconds() >= SIXTEEN_HUNDRED_OPEN_MIN_TIMEFRAME and timeframe.in_seconds() <= SIXTEEN_HUNDRED_OPEN_MAX_TIMEFRAME
+    if show1600OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME
         levels_drawn = 0
 
         // Draw current level FIRST (today's/most recent 16:00)
@@ -1873,8 +1961,9 @@ if barstate.islast
             // Determine end time: if mitigated use mitigation time, otherwise current time
             current_end_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? current_mitigation_time_val : time
 
-            // Draw current level line
-            current_line = line.new(current_open_time, current_open_price, current_end_time, current_open_price, xloc=xloc.bar_time, color=open1600Color, width=open1600LineWidth, style=line.style_solid)
+            // Draw current level line - use special width if untapped (not mitigated)
+            current_line_width = current_is_mitigated ? open1600LineWidth : open1600UntappedWidth
+            current_line = line.new(current_open_time, current_open_price, current_end_time, current_open_price, xloc=xloc.bar_time, color=open1600Color, width=current_line_width, style=line.style_solid)
             array.push(all_lines, current_line)
 
             // Label: at midpoint if mitigated, at end if active
@@ -1916,6 +2005,67 @@ if barstate.islast
                     array.push(all_labels, open_label)
 
                 levels_drawn += 1
+
+    // Draw 14:00 Opens - current level + stored levels
+    // IMPORTANT: Draw current level FIRST (most recent) then fill with array levels
+    // Only display on intraday timeframes (1m to 1H) where 1-minute precision is available
+    if show1400OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME
+        levels_drawn_1400 = 0
+
+        // Draw current level FIRST (today's/most recent 14:00)
+        if not na(fourteen_hundred_open.current_open)
+            current_open_price_1400 = fourteen_hundred_open.current_open
+            current_open_time_1400 = fourteen_hundred_open.current_time
+            current_is_mitigated_1400 = fourteen_hundred_open.current_mitigated
+            current_mitigation_time_val_1400 = fourteen_hundred_open.current_mitigation_time
+
+            // Determine end time: if mitigated use mitigation time, otherwise current time
+            current_end_time_1400 = (current_is_mitigated_1400 and not na(current_mitigation_time_val_1400)) ? current_mitigation_time_val_1400 : time
+
+            // Draw current level line - use special width if untapped (not mitigated)
+            current_line_width_1400 = current_is_mitigated_1400 ? open1400LineWidth : open1400UntappedWidth
+            current_line_1400 = line.new(current_open_time_1400, current_open_price_1400, current_end_time_1400, current_open_price_1400, xloc=xloc.bar_time, color=open1400Color, width=current_line_width_1400, style=line.style_solid)
+            array.push(all_lines, current_line_1400)
+
+            // Label: at midpoint if mitigated, at end if active
+            if showLabels
+                current_label_time_1400 = (current_is_mitigated_1400 and not na(current_mitigation_time_val_1400)) ? int((current_open_time_1400 + current_mitigation_time_val_1400) / 2) : current_end_time_1400
+                current_label_text_1400 = str.tostring(fourteen_hundred_open.current_capture_hour) + ":00"
+                current_label_1400 = label.new(current_label_time_1400, current_open_price_1400, current_label_text_1400, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                array.push(all_labels, current_label_1400)
+
+            levels_drawn_1400 += 1
+
+        // Draw stored levels (from array) - most recent first, up to remaining limit
+        if array.size(fourteen_hundred_open.opens) > 0
+            for i = array.size(fourteen_hundred_open.opens) - 1 to 0
+                if levels_drawn_1400 >= open1400ShowLast
+                    break
+
+                open_price_1400 = array.get(fourteen_hundred_open.opens, i)
+                open_time_1400 = array.get(fourteen_hundred_open.times, i)
+                is_mitigated_1400 = array.get(fourteen_hundred_open.mitigated, i)
+                mitigation_time_1400 = array.get(fourteen_hundred_open.mitigation_times, i)
+
+                // Determine end time
+                // If mitigated: use mitigation time (line stops at breach point)
+                // If not mitigated: extend to current time (line is still active)
+                end_time_1400 = (is_mitigated_1400 and not na(mitigation_time_1400)) ? mitigation_time_1400 : time
+
+                // Draw horizontal line
+                open_line_1400 = line.new(open_time_1400, open_price_1400, end_time_1400, open_price_1400, xloc=xloc.bar_time, color=open1400Color, width=open1400LineWidth, style=line.style_solid)
+                array.push(all_lines, open_line_1400)
+
+                // Draw label at midpoint if mitigated, at end if active
+                if showLabels
+                    label_time_1400 = (is_mitigated_1400 and not na(mitigation_time_1400)) ? int((open_time_1400 + mitigation_time_1400) / 2) : end_time_1400
+                    // Safely get capture hour with fallback for legacy data
+                    capture_hour_1400 = (i < array.size(fourteen_hundred_open.capture_hours)) ? array.get(fourteen_hundred_open.capture_hours, i) : 14
+                    label_text_1400 = str.tostring(capture_hour_1400) + ":00"
+                    open_label_1400 = label.new(label_time_1400, open_price_1400, label_text_1400, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+                    array.push(all_labels, open_label_1400)
+
+                levels_drawn_1400 += 1
 
     // Draw Asset Levels Table (optimized: only update when values change)
     var string prev_asset_table = ""
