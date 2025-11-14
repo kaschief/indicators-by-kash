@@ -56,15 +56,18 @@ const color DEFAULT_NWOG_UNFILLED_COLOR = color.new(color.rgb(41, 98, 255), 70)
 const color DEFAULT_NWOG_FILLED_COLOR = color.new(color.rgb(99, 99, 99), 90)
 const color DEFAULT_NWOG_DIVIDER_COLOR = color.new(color.rgb(41, 98, 255), 50)
 const color DEFAULT_NWOG_BOUNDARY_COLOR = color.rgb(91, 156, 246)
+const color DEFAULT_NWOG_PROJECTION_COLOR = color.rgb(156, 156, 156)
 const color DEFAULT_NDOG_UNFILLED_COLOR = color.new(color.rgb(240, 98, 146), 75)
 const color DEFAULT_NDOG_FILLED_COLOR = color.new(color.rgb(99, 99, 99), 90)
 const color DEFAULT_NDOG_DIVIDER_COLOR = color.new(color.rgb(233, 30, 99), 50)
 const color DEFAULT_NDOG_BOUNDARY_COLOR = color.rgb(240, 98, 146, 0)
+const color DEFAULT_NDOG_PROJECTION_COLOR = color.rgb(156, 156, 156)
 const color DEFAULT_RTH_UNFILLED_COLOR = color.new(color.rgb(138, 138, 138), 75)
 const color DEFAULT_RTH_FILLED_COLOR = color.new(color.rgb(99, 99, 99), 90)
 const color DEFAULT_RTH_PREVIEW_COLOR = color.new(color.rgb(255, 152, 0), 85)
 const color DEFAULT_RTH_ETH_CANDLE_COLOR = color.new(color.rgb(120, 123, 134), 70)
 const color DEFAULT_RTH_BOUNDARY_COLOR = color.rgb(128, 128, 128)
+const color DEFAULT_RTH_PROJECTION_COLOR = color.rgb(156, 156, 156)
 const color DEFAULT_BPR_BULLISH_UNFILLED_COLOR = color.new(color.rgb(76, 175, 80), 70)
 const color DEFAULT_BPR_BULLISH_FILLED_COLOR = color.new(color.rgb(76, 175, 80), 90)
 const color DEFAULT_BPR_BEARISH_UNFILLED_COLOR = color.new(color.rgb(242, 54, 69), 70)
@@ -85,6 +88,8 @@ showNWOGDividers = input.bool(false, LABEL_DIVIDERS, group=GROUP_NWOG, inline="4
 nwogDividerColor = input.color(DEFAULT_NWOG_DIVIDER_COLOR, "", group=GROUP_NWOG, inline="4")
 showNWOGDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_NWOG, inline="5")
 nwogBoundaryColor = input.color(DEFAULT_NWOG_BOUNDARY_COLOR, LABEL_BORDER_LABEL, group=GROUP_NWOG, inline="6")
+showNWOGProjections = input.bool(false, "Projections", group=GROUP_NWOG, inline="7", tooltip="Show projection levels (-1, -2, -2.5, -4, -4.5) extending from open NWOG gaps")
+nwogProjectionColor = input.color(DEFAULT_NWOG_PROJECTION_COLOR, "", group=GROUP_NWOG, inline="7")
 
 // NDOG
 showNDOG = input.bool(true, LABEL_NDOG, group=GROUP_NDOG, inline="1")
@@ -97,6 +102,8 @@ showNDOGDividers = input.bool(false, LABEL_DIVIDERS, group=GROUP_NDOG, inline="4
 ndogDividerColor = input.color(DEFAULT_NDOG_DIVIDER_COLOR, "", group=GROUP_NDOG, inline="4")
 showNDOGDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_NDOG, inline="5")
 ndogBoundaryColor = input.color(DEFAULT_NDOG_BOUNDARY_COLOR, LABEL_BORDER_LABEL, group=GROUP_NDOG, inline="6")
+showNDOGProjections = input.bool(false, "Projections", group=GROUP_NDOG, inline="7", tooltip="Show projection levels (-1, -2, -2.5, -4, -4.5) extending from open NDOG gaps")
+ndogProjectionColor = input.color(DEFAULT_NDOG_PROJECTION_COLOR, "", group=GROUP_NDOG, inline="7")
 
 // RTH
 showRTHGaps = input.bool(false, LABEL_RTH, group=GROUP_RTH, inline="1")
@@ -111,6 +118,8 @@ muteETHCandles = input.bool(true, LABEL_MUTE_ETH, group=GROUP_RTH, inline="5")
 ethCandleColor = input.color(DEFAULT_RTH_ETH_CANDLE_COLOR, "", group=GROUP_RTH, inline="5")
 showRTHDateLabel = input.bool(true, LABEL_DATE_LABEL, group=GROUP_RTH, inline="6")
 rthBoundaryColor = input.color(DEFAULT_RTH_BOUNDARY_COLOR, LABEL_BORDER_LABEL, group=GROUP_RTH, inline="7")
+showRTHProjections = input.bool(false, "Projections", group=GROUP_RTH, inline="8", tooltip="Show projection levels (-1, -2, -2.5, -4, -4.5) extending from open RTH gaps")
+rthProjectionColor = input.color(DEFAULT_RTH_PROJECTION_COLOR, "", group=GROUP_RTH, inline="8")
 
 // BPR
 showBPR = input.bool(true, LABEL_BPR, group=GROUP_BPR, inline="1")
@@ -152,6 +161,9 @@ type GapData
     line bottomBoundaryLine
     label gapLabel
     label dateLabel
+    array<line> projectionLines
+    array<label> projectionLabels
+    bool isBullish
     float top
     float bottom
     float penetrationLevel
@@ -182,7 +194,7 @@ var float prevDayClosePrice = na
 var float newDayOpenPrice = na
 var int lastNDOGDay = na
 
-createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false, int customLeftBar = na) =>
+createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false, int customLeftBar = na, bool isBullish = false) =>
     gapRange = topPrice - bottomPrice
     gapMid = bottomPrice + gapRange * CE_LEVEL
     gapQ1 = bottomPrice + gapRange * Q1_LEVEL
@@ -253,6 +265,9 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          bottomBoundaryLine=bottomBoundaryLine,
          gapLabel=gapLabel,
          dateLabel=dateLabel,
+         projectionLines=array.new<line>(),
+         projectionLabels=array.new<label>(),
+         isBullish=isBullish,
          top=topPrice,
          bottom=bottomPrice,
          penetrationLevel=na,
@@ -265,6 +280,45 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          creationTime=time,
          leftBar=leftBar
      )
+
+draw_gap_projections(GapData gap, int rightEdgeTime) =>
+    // Determine if projections should be drawn based on gap type and toggle
+    shouldDraw = false
+    projColor = color(na)
+
+    if gap.gapType == GAP_TYPE_NWOG and not gap.filled and showNWOGProjections
+        shouldDraw := true
+        projColor := nwogProjectionColor
+    else if gap.gapType == GAP_TYPE_NDOG and not gap.filled and showNDOGProjections
+        shouldDraw := true
+        projColor := ndogProjectionColor
+    else if gap.gapType == GAP_TYPE_RTH and not gap.filled and showRTHProjections
+        shouldDraw := true
+        projColor := rthProjectionColor
+
+    if shouldDraw
+        gapSize = gap.top - gap.bottom
+
+        // Projection multipliers: 1, 2, 2.5, 4, 4.5
+        multipliers = array.from(1.0, 2.0, 2.5, 4.0, 4.5)
+
+        // For bullish gaps (gapped up), projections go ABOVE the gap top
+        // For bearish gaps (gapped down), projections go BELOW the gap bottom
+
+        for i = 0 to array.size(multipliers) - 1
+            mult = array.get(multipliers, i)
+
+            // Calculate projection price based on gap direction
+            projPrice = gap.isBullish ? gap.top + (gapSize * mult) : gap.bottom - (gapSize * mult)
+
+            // Draw projection line using xloc.bar_time to avoid historical buffer issues
+            projLine = line.new(gap.creationTime, projPrice, rightEdgeTime, projPrice, xloc=xloc.bar_time, color=projColor, width=1, style=line.style_dotted)
+            array.push(gap.projectionLines, projLine)
+
+            // Create label text
+            labelText = "-" + str.tostring(mult)
+            projLabel = label.new(rightEdgeTime, projPrice, labelText, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(chart.bg_color, 0), textcolor=projColor, size=size.tiny)
+            array.push(gap.projectionLabels, projLabel)
 
 deleteGap(GapData gap) =>
     box.delete(gap.topUnfilledBox)
@@ -284,6 +338,13 @@ deleteGap(GapData gap) =>
         label.delete(gap.gapLabel)
     if not na(gap.dateLabel)
         label.delete(gap.dateLabel)
+    // Delete projection lines and labels
+    if not na(gap.projectionLines)
+        for projLine in gap.projectionLines
+            line.delete(projLine)
+    if not na(gap.projectionLabels)
+        for projLabel in gap.projectionLabels
+            label.delete(projLabel)
 
 countGapsByType(string gapType) =>
     count = 0
@@ -382,8 +443,9 @@ if rthStart and not na(rthClosePrice) and showRTHGaps
     if rthOpenPrice != rthClosePrice
         gapTop = math.max(rthClosePrice, rthOpenPrice)
         gapBottom = math.min(rthClosePrice, rthOpenPrice)
+        rthIsBullish = rthOpenPrice > rthClosePrice  // Bullish if gapped up
 
-        rthGap = createGap(gapTop, gapBottom, GAP_TYPE_RTH, false)
+        rthGap = createGap(gapTop, gapBottom, GAP_TYPE_RTH, false, na, rthIsBullish)
         array.push(gapsArray, rthGap)
 
         if countGapsByType(GAP_TYPE_RTH) > rthGapsToShow
@@ -440,6 +502,15 @@ if array.size(gapsArray) > 0
                 if high >= gap.top
                     gap.penetrationLevel := gap.top
                     gap.filled := true
+                    // Delete projections when gap becomes filled
+                    if not na(gap.projectionLines)
+                        for projLine in gap.projectionLines
+                            line.delete(projLine)
+                        array.clear(gap.projectionLines)
+                    if not na(gap.projectionLabels)
+                        for projLabel in gap.projectionLabels
+                            label.delete(projLabel)
+                        array.clear(gap.projectionLabels)
                     // For BPRs, stop extending at mitigation point
                     if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
                         box.set_right(gap.topUnfilledBox, bar_index)
@@ -462,6 +533,15 @@ if array.size(gapsArray) > 0
                 if low <= gap.bottom
                     gap.penetrationLevel := gap.bottom
                     gap.filled := true
+                    // Delete projections when gap becomes filled
+                    if not na(gap.projectionLines)
+                        for projLine in gap.projectionLines
+                            line.delete(projLine)
+                        array.clear(gap.projectionLines)
+                    if not na(gap.projectionLabels)
+                        for projLabel in gap.projectionLabels
+                            label.delete(projLabel)
+                        array.clear(gap.projectionLabels)
                     // For BPRs, stop extending at mitigation point
                     if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
                         box.set_right(gap.topUnfilledBox, bar_index)
@@ -482,6 +562,15 @@ if array.size(gapsArray) > 0
                 if gap.entryDirection == ENTRY_FROM_BELOW
                     if gap.penetrationLevel >= gap.top
                         gap.filled := true
+                        // Delete projections when gap becomes filled
+                        if not na(gap.projectionLines)
+                            for projLine in gap.projectionLines
+                                line.delete(projLine)
+                            array.clear(gap.projectionLines)
+                        if not na(gap.projectionLabels)
+                            for projLabel in gap.projectionLabels
+                                label.delete(projLabel)
+                            array.clear(gap.projectionLabels)
                         // For BPRs, stop extending at mitigation point
                         if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
                             box.set_right(gap.topUnfilledBox, bar_index)
@@ -500,6 +589,15 @@ if array.size(gapsArray) > 0
                 else if gap.entryDirection == ENTRY_FROM_ABOVE
                     if gap.penetrationLevel <= gap.bottom
                         gap.filled := true
+                        // Delete projections when gap becomes filled
+                        if not na(gap.projectionLines)
+                            for projLine in gap.projectionLines
+                                line.delete(projLine)
+                            array.clear(gap.projectionLines)
+                        if not na(gap.projectionLabels)
+                            for projLabel in gap.projectionLabels
+                                label.delete(projLabel)
+                            array.clear(gap.projectionLabels)
                         // For BPRs, stop extending at mitigation point
                         if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
                             box.set_right(gap.topUnfilledBox, bar_index)
@@ -586,6 +684,15 @@ if array.size(gapsArray) > 0
                 line.set_x2(gap.topBoundaryLine, rightEdge)
             if not na(gap.bottomBoundaryLine)
                 line.set_x2(gap.bottomBoundaryLine, rightEdge)
+            // Extend projection lines and update labels (use time-based coordinates)
+            if not na(gap.projectionLines) and array.size(gap.projectionLines) > 0
+                // Calculate right edge time for projections
+                rightEdgeTime = time + (timeframe.in_seconds(timeframe.period) * 1000 * RIGHT_EDGE_CUSHION)
+                for projLine in gap.projectionLines
+                    line.set_x2(projLine, rightEdgeTime)
+                if not na(gap.projectionLabels) and array.size(gap.projectionLabels) > 0
+                    for projLabel in gap.projectionLabels
+                        label.set_x(projLabel, rightEdgeTime)
 
         if not na(gap.gapLabel)
             isMostRecentUnfilled = not gap.filled and ((gap.gapType == GAP_TYPE_NWOG and gap.creationBar == mostRecentUnfilledNWOGBar) or (gap.gapType == GAP_TYPE_NDOG and gap.creationBar == mostRecentUnfilledNDOGBar))
@@ -626,14 +733,105 @@ if showNWOG and isValidNWOGTimeframe
                 if sundayOpenPrice != fridayClosePrice
                     nwogTop = math.max(fridayClosePrice, sundayOpenPrice)
                     nwogBottom = math.min(fridayClosePrice, sundayOpenPrice)
+                    nwogIsBullish = sundayOpenPrice > fridayClosePrice  // Bullish if gapped up
 
-                    nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false)
+                    nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false, na, nwogIsBullish)
                     array.push(gapsArray, nwogGap)
 
                     if countGapsByType(GAP_TYPE_NWOG) > nwogGapsToShow
                         removeOldestGap(GAP_TYPE_NWOG)
 
                 fridayClosePrice := na
+
+// Manage projections: ensure only the most recent unfilled NWOG has projections
+if showNWOG and array.size(gapsArray) > 0
+    int mostRecentUnfilledNWOGCreationBar = -1
+
+    // First pass: Find the most recent unfilled NWOG
+    for gap in gapsArray
+        if gap.gapType == GAP_TYPE_NWOG and not gap.filled
+            if mostRecentUnfilledNWOGCreationBar == -1 or gap.creationBar > mostRecentUnfilledNWOGCreationBar
+                mostRecentUnfilledNWOGCreationBar := gap.creationBar
+
+    // Second pass: Apply projections only to the most recent, remove from others
+    if showNWOGProjections
+        for gap in gapsArray
+            if gap.gapType == GAP_TYPE_NWOG
+                isMostRecentUnfilled = not gap.filled and gap.creationBar == mostRecentUnfilledNWOGCreationBar
+                hasProjections = not na(gap.projectionLines) and array.size(gap.projectionLines) > 0
+
+                if isMostRecentUnfilled and not hasProjections
+                    // This is the most recent unfilled and doesn't have projections - draw them
+                    rightEdgeTime = time + (timeframe.in_seconds(timeframe.period) * 1000 * RIGHT_EDGE_CUSHION)
+                    draw_gap_projections(gap, rightEdgeTime)
+                else if not isMostRecentUnfilled and hasProjections
+                    // This is NOT the most recent unfilled but HAS projections - delete them
+                    for projLine in gap.projectionLines
+                        line.delete(projLine)
+                    array.clear(gap.projectionLines)
+                    for projLabel in gap.projectionLabels
+                        label.delete(projLabel)
+                    array.clear(gap.projectionLabels)
+
+// Manage projections: ensure only the most recent unfilled NDOG has projections
+if showNDOG and array.size(gapsArray) > 0
+    int mostRecentUnfilledNDOGCreationBar = -1
+
+    // First pass: Find the most recent unfilled NDOG
+    for gap in gapsArray
+        if gap.gapType == GAP_TYPE_NDOG and not gap.filled
+            if mostRecentUnfilledNDOGCreationBar == -1 or gap.creationBar > mostRecentUnfilledNDOGCreationBar
+                mostRecentUnfilledNDOGCreationBar := gap.creationBar
+
+    // Second pass: Apply projections only to the most recent, remove from others
+    if showNDOGProjections
+        for gap in gapsArray
+            if gap.gapType == GAP_TYPE_NDOG
+                isMostRecentUnfilled = not gap.filled and gap.creationBar == mostRecentUnfilledNDOGCreationBar
+                hasProjections = not na(gap.projectionLines) and array.size(gap.projectionLines) > 0
+
+                if isMostRecentUnfilled and not hasProjections
+                    // This is the most recent unfilled and doesn't have projections - draw them
+                    rightEdgeTime = time + (timeframe.in_seconds(timeframe.period) * 1000 * RIGHT_EDGE_CUSHION)
+                    draw_gap_projections(gap, rightEdgeTime)
+                else if not isMostRecentUnfilled and hasProjections
+                    // This is NOT the most recent unfilled but HAS projections - delete them
+                    for projLine in gap.projectionLines
+                        line.delete(projLine)
+                    array.clear(gap.projectionLines)
+                    for projLabel in gap.projectionLabels
+                        label.delete(projLabel)
+                    array.clear(gap.projectionLabels)
+
+// Manage projections: ensure only the most recent unfilled RTH has projections
+if showRTHGaps and array.size(gapsArray) > 0
+    int mostRecentUnfilledRTHCreationBar = -1
+
+    // First pass: Find the most recent unfilled RTH
+    for gap in gapsArray
+        if gap.gapType == GAP_TYPE_RTH and not gap.filled
+            if mostRecentUnfilledRTHCreationBar == -1 or gap.creationBar > mostRecentUnfilledRTHCreationBar
+                mostRecentUnfilledRTHCreationBar := gap.creationBar
+
+    // Second pass: Apply projections only to the most recent, remove from others
+    if showRTHProjections
+        for gap in gapsArray
+            if gap.gapType == GAP_TYPE_RTH
+                isMostRecentUnfilled = not gap.filled and gap.creationBar == mostRecentUnfilledRTHCreationBar
+                hasProjections = not na(gap.projectionLines) and array.size(gap.projectionLines) > 0
+
+                if isMostRecentUnfilled and not hasProjections
+                    // This is the most recent unfilled and doesn't have projections - draw them
+                    rightEdgeTime = time + (timeframe.in_seconds(timeframe.period) * 1000 * RIGHT_EDGE_CUSHION)
+                    draw_gap_projections(gap, rightEdgeTime)
+                else if not isMostRecentUnfilled and hasProjections
+                    // This is NOT the most recent unfilled but HAS projections - delete them
+                    for projLine in gap.projectionLines
+                        line.delete(projLine)
+                    array.clear(gap.projectionLines)
+                    for projLabel in gap.projectionLabels
+                        label.delete(projLabel)
+                    array.clear(gap.projectionLabels)
 
 // Divider detection (independent of gap display toggles)
 if (showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
@@ -697,8 +895,9 @@ if showNDOG and isValidNWOGTimeframe
                     if newDayOpenPrice != prevDayClosePrice
                         ndogTop = math.max(prevDayClosePrice, newDayOpenPrice)
                         ndogBottom = math.min(prevDayClosePrice, newDayOpenPrice)
+                        ndogIsBullish = newDayOpenPrice > prevDayClosePrice  // Bullish if gapped up
 
-                        ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false)
+                        ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false, na, ndogIsBullish)
                         array.push(gapsArray, ndogGap)
 
                         if countGapsByType(GAP_TYPE_NDOG) > ndogGapsToShow
