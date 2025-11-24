@@ -215,6 +215,7 @@ ARROW_DOWN_INC_RISKY = "↓inc*"
 ARROW_UP_INC_RISKY = "↑inc*"
 ARROW_UP_REF_RISKY = "↑ref*"
 ARROW_DOWN_REF_RISKY = "↓ref*"
+SUBTYPE_EXT_DISPLAY = "(ext)"
 
 // Gap label text constants for source gap markers
 GAP_LABEL_FVG_BULLISH = "FVG⁺ for "
@@ -332,6 +333,7 @@ general_label_offset_multiplier = input.float(DEFAULT_GENERAL_LABEL_OFFSET_MULTI
 extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, INPUT_LABEL_MBZ_PLUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁺ highlights and extensions')
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INPUT_LABEL_MBZ_MINUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁻ highlights and extensions')
 show_extended_boxes = input.bool(true, INPUT_LABEL_ENABLE_EXTENSION, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Show highlights and extensions for valid MBZs')
+extend_to_reference_wick = input.bool(false, 'Include Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Include reference candle wick in zone boundary:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high\n• Only applies to Standard MBZ subtype\n• Creates larger zones that are harder to invalidate')
 extension_mode = input.string(EXTENSION_FIXED, INPUT_LABEL_EXTENSION_MODE, options=[EXTENSION_FIXED, EXTENSION_TO_CURRENT, EXTENSION_BEYOND_CURRENT], group=GROUP_MBZ_EXTENSION, inline='ext_mode', tooltip='Extension behavior:\n• Fixed Length: extend N bars from formation\n• To Current Price: extend at least to current bar (prevents shrinking)\n• Beyond Current Price: extend N bars beyond current bar (real-time)')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext2', tooltip='Text color for extension boxes')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_RIGHT, 'Horizontal', options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Horizontal alignment for extension box text')
@@ -400,6 +402,8 @@ type MBZRecord
     int formation_time        // NEW: Bar time when MBZ formed (for xloc.bar_time positioning)
     float high_price
     float low_price
+    float ref_candle_high     // Reference candle (prior bar) high
+    float ref_candle_low      // Reference candle (prior bar) low
     float mbz_open
     float mbz_close
     bool is_bullish
@@ -1210,7 +1214,17 @@ get_mbz_subtype_zone(mbz_record) =>
         // Standard MBZ uses BODY zone [open, close], NOT [high, low]!
         body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
         body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
-        [body_top, body_bottom]
+
+        // Optionally extend to reference candle wick
+        if extend_to_reference_wick
+            if mbz_record.is_bullish
+                // Bullish: extend lower boundary to reference candle low
+                [body_top, mbz_record.ref_candle_low]
+            else
+                // Bearish: extend upper boundary to reference candle high
+                [mbz_record.ref_candle_high, body_bottom]
+        else
+            [body_top, body_bottom]
 
 get_mbz_invalidation_boundaries(mbz_record) =>
     is_inclusion = str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
@@ -1218,7 +1232,18 @@ get_mbz_invalidation_boundaries(mbz_record) =>
     is_standard = not is_inclusion and not is_reflection
 
     if is_standard and invalidation_boundary == INVALIDATION_BOUNDARY_EXTREMES
-        [mbz_record.high_price, mbz_record.low_price]
+        // Adapt extremes when reference wick extension is enabled
+        if extend_to_reference_wick
+            body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
+            body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
+            if mbz_record.is_bullish
+                // Bullish: body top, reference candle low
+                [body_top, mbz_record.ref_candle_low]
+            else
+                // Bearish: reference candle high, body bottom
+                [mbz_record.ref_candle_high, body_bottom]
+        else
+            [mbz_record.high_price, mbz_record.low_price]
     else
         get_mbz_subtype_zone(mbz_record)
 
@@ -1374,6 +1399,9 @@ build_mbz_label_text(mbz_record, wick_tier) =>
         subtype_is_risky = wick_tier == WICK_TIER_RISKY
         risky_subtype = get_risky_subtype_display(mbz_record.mbz_subtype, mbz_record.is_bullish, subtype_is_risky)
         array.push(label_parts, risky_subtype)
+    else if extend_to_reference_wick
+        // Standard MBZ with reference wick extension
+        array.push(label_parts, SUBTYPE_EXT_DISPLAY)
 
     if mbz_record.is_invalidated
         array.push(label_parts, "[X]")
@@ -1452,6 +1480,8 @@ cache_mbz_data(mbz_record) =>
          mbz_record.formation_time,
          mbz_record.high_price,
          mbz_record.low_price,
+         mbz_record.ref_candle_high,
+         mbz_record.ref_candle_low,
          mbz_record.mbz_open,
          mbz_record.mbz_close,
          mbz_record.is_bullish,
@@ -1891,11 +1921,17 @@ create_consolidated_candle_label(consolidated_mbz) =>
             single_is_risky = wick_tier == WICK_TIER_RISKY
             risky_subtype = get_risky_subtype_display(single_mbz.mbz_subtype, single_mbz.is_bullish, single_is_risky)
             array.push(label_parts, risky_subtype)
+        else if extend_to_reference_wick
+            // Standard MBZ with reference wick extension
+            array.push(label_parts, SUBTYPE_EXT_DISPLAY)
 
     if mbz_count > 1
         [unified_subtype, is_risky] = get_unified_subtype(consolidated_mbz.mbz_group)
         if unified_subtype != ""
             array.push(label_parts, unified_subtype)
+        else if extend_to_reference_wick
+            // Multi-source standard MBZs with reference wick extension
+            array.push(label_parts, SUBTYPE_EXT_DISPLAY)
 
     has_deeper_wick_icon = false
     if enable_deeper_wick_detection
@@ -2004,6 +2040,9 @@ create_consolidated_extension_label(consolidated_mbz) =>
             single_is_risky = risky_prefix != ""
             risky_subtype = get_risky_subtype_display(single_mbz.mbz_subtype, single_mbz.is_bullish, single_is_risky)
             extension_result := extension_result + " " + risky_subtype
+        else if extend_to_reference_wick
+            // Standard MBZ with reference wick extension
+            extension_result := extension_result + " " + SUBTYPE_EXT_DISPLAY
     else
         source_breakdown = build_source_breakdown_extension_from_stats(source_stats)
 
@@ -2012,6 +2051,9 @@ create_consolidated_extension_label(consolidated_mbz) =>
         [unified_subtype, unified_is_risky] = get_unified_subtype(consolidated_mbz.mbz_group)
         if unified_subtype != ""
             extension_result := extension_result + " " + unified_subtype
+        else if extend_to_reference_wick
+            // Multi-source standard MBZs with reference wick extension
+            extension_result := extension_result + " " + SUBTYPE_EXT_DISPLAY
 
     // Check if any MBZ in group wicked into source gap
     has_deeper_wick_border = false
@@ -2852,7 +2894,7 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                                     quality_penetration_pct := (penetration_distance / gap_half_size) * 100
 
                         mbz_record = MBZRecord.new(
-                             bar_index, time, high, low, open, close,
+                             bar_index, time, high, low, high[1], low[1], open, close,
                              gap.is_bullish, false, 0.0,
                              has_dom_wick, is_exactly_50_percent, mbz_subtype,
                              "", "", 0.0, 0.0, false,
