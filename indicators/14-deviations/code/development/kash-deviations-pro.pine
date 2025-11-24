@@ -2,6 +2,13 @@
 indicator("Kash Deviations° [Pro+]", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TIMEFRAME RESTRICTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Only allow 1-5 minute timeframes
+validTimeframe = timeframe.period == "1" or timeframe.period == "2" or timeframe.period == "3" or timeframe.period == "4" or timeframe.period == "5"
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TYPE DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -28,7 +35,8 @@ type SessionData
     bool useOffset
     bool showBody
     bool showWick
-    bool showDeviationLabels
+    string showDeviationLabels
+    string labelPosition
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI STRING CONSTANTS
@@ -37,34 +45,37 @@ type SessionData
 // Group names
 GROUP_GENERAL = "General"
 GROUP_15MIN = "Intraday 15-Minute Sessions"
-GROUP_1600 = "Overnight Session"
-GROUP_0500 = "Premarket Session"
-GROUP_0600 = "06:00 - 09:00"
+GROUP_1600_0500 = "Extended Opening: Overnight (16:00–05:00)"
+GROUP_0500_0915 = "Extended Opening: Premarket (05:00–09:15)"
+GROUP_0600_0900 = "Extended Opening: NY Early Hours (06:00–09:00)"
+GROUP_0930_0945 = "Extended Opening: NY Open 15m (09:30–09:45)"
+GROUP_0930_1000 = "Extended Opening: NY Open 30m (09:30–10:00)"
+GROUP_COLOR_TABLE = "Color Reference Table"
 
 // Common input labels
 LABEL_SESSIONS = "No. Of Sessions"
-LABEL_DEVIATION_LEVELS = "Deviation Levels"
 LABEL_SHOW_SESSION_NAMES = "Show Session Names"
+LABEL_SESSION_NAME_POSITION = "Session Name"
 LABEL_LABEL_COLOR = "Label Color"
 LABEL_BODY_DEVIATIONS = "Body Deviations"
 LABEL_WICK_DEVIATIONS = "Wick Deviations"
 LABEL_CORE = "Core"
 LABEL_DEVIATIONS = "Deviations"
-LABEL_DEVIATION_LABELS = "Deviation Labels"
+LABEL_DEVIATION_LABELS = "Dev. Label"
 LABEL_OFFSET = "Offset"
 
 // Session time labels
-SESSION_2015 = "20:15"
-SESSION_0215 = "02:15"
-SESSION_0915 = "09:15"
-SESSION_1315 = "13:15"
-SESSION_1600 = "16:00"
-SESSION_0500 = "05:00"
-SESSION_0600 = "06:00"
+SESSION_INTRADAY_2015 = "20:15"
+SESSION_INTRADAY_0215 = "02:15"
+SESSION_INTRADAY_0915 = "09:15"
+SESSION_EXTENDED_1600_0500 = "Overnight"
+SESSION_EXTENDED_0500_0915 = "Premarket"
+SESSION_EXTENDED_0600_0900 = "NY Early Hours"
+SESSION_EXTENDED_0930_0945 = "NY Open 15m"
+SESSION_EXTENDED_0930_1000 = "NY Open 30m"
 
 // Tooltips
 TOOLTIP_MAX_SESSIONS = "Max number of sessions to display per opening type"
-TOOLTIP_DEVIATION_LEVELS = "Comma-separated multiples"
 TOOLTIP_SHOW_SESSION_NAMES = "Show session name labels"
 
 // Option values
@@ -72,85 +83,134 @@ OPT_OFF = "Off"
 OPT_BODY = "Body"
 OPT_WICK = "Wick"
 OPT_BOTH = "Both"
+OPT_ABOVE = "Above"
+OPT_BELOW = "Below"
+
+// Default deviation zone pairs
+DEFAULT_BODY_DEVIATIONS_15MIN = "1, 2:2.5, 4:4.5"
+DEFAULT_WICK_DEVIATIONS_15MIN = "1, 2:2.5, 4:4.5"
+DEFAULT_BODY_DEVIATIONS_1600_0500 = "2:2.5, 4:4.5"
+DEFAULT_WICK_DEVIATIONS_1600_0500 = "0.25:0.5, 1.33:1.66"
+DEFAULT_BODY_DEVIATIONS_0500_0915 = "0.25:0.5, 0.75:1"
+DEFAULT_WICK_DEVIATIONS_0500_0915 = "0.25:0.5, 0.75:1"
+DEFAULT_BODY_DEVIATIONS_0600_0900 = "0.25:0.5, 1.33:1.6"
+DEFAULT_WICK_DEVIATIONS_0600_0900 = "0.25:0.5, 1.33:1.6"
+DEFAULT_BODY_DEVIATIONS_0930_0945 = "1, 2:2.5"
+DEFAULT_WICK_DEVIATIONS_0930_0945 = "1, 2:2.5"
+DEFAULT_BODY_DEVIATIONS_0930_1000 = "0.25:0.5, 1:1.25"
+DEFAULT_WICK_DEVIATIONS_0930_1000 = "0.25:0.5, 1:1.25"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - General Settings
 // ═══════════════════════════════════════════════════════════════════════════
 
 maxSessions = input.int(5, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
-deviations = input.string("1, 2, 2.5, 4, 4.5", LABEL_DEVIATION_LEVELS, group=GROUP_GENERAL, tooltip=TOOLTIP_DEVIATION_LEVELS)
 showLabels = input.bool(true, LABEL_SHOW_SESSION_NAMES, group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
-labelColor = input.color(#787B86, LABEL_LABEL_COLOR, group=GROUP_GENERAL)
+labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, group=GROUP_GENERAL)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 15-Minute Openings
 // ═══════════════════════════════════════════════════════════════════════════
 
-bodyDeviations_15min = input.string("2:2.5, 4:4.5", LABEL_BODY_DEVIATIONS, group=GROUP_15MIN)
-wickDeviations_15min = input.string("2:2.5, 4:4.5", LABEL_WICK_DEVIATIONS, group=GROUP_15MIN)
+bodyDeviations_15min = input.string(DEFAULT_BODY_DEVIATIONS_15MIN, LABEL_BODY_DEVIATIONS, group=GROUP_15MIN)
+wickDeviations_15min = input.string(DEFAULT_WICK_DEVIATIONS_15MIN, LABEL_WICK_DEVIATIONS, group=GROUP_15MIN)
 
-opening_2015 = input.string(OPT_BOTH, SESSION_2015, inline="2015_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
-opening_2015_offset = input.bool(true, LABEL_OFFSET, inline="2015_1", group=GROUP_15MIN)
-opening_2015_coreColor = input.color(color.new(#FFEB3B, 85), LABEL_CORE, inline="2015_2", group=GROUP_15MIN)
-opening_2015_deviationColor = input.color(color.new(#FFEB3B, 50), LABEL_DEVIATIONS, inline="2015_2", group=GROUP_15MIN)
-opening_2015_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="2015_2", group=GROUP_15MIN)
+opening_2015 = input.string(OPT_BOTH, SESSION_INTRADAY_2015, inline="2015_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_2015_offset = input.bool(false, LABEL_OFFSET, inline="2015_1", group=GROUP_15MIN)
+opening_2015_coreColor = input.color(color.new(color.rgb(255, 235, 59), 85), LABEL_CORE, inline="2015_2", group=GROUP_15MIN)
+opening_2015_deviationColor = input.color(color.new(color.rgb(255, 235, 59), 50), LABEL_DEVIATIONS, inline="2015_2", group=GROUP_15MIN)
+opening_2015_showLabels = input.string(OPT_BOTH, LABEL_DEVIATION_LABELS, inline="2015_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_2015_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="2015_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_15MIN)
 
-opening_0215 = input.string(OPT_BOTH, SESSION_0215, inline="0215_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
-opening_0215_offset = input.bool(true, LABEL_OFFSET, inline="0215_1", group=GROUP_15MIN)
-opening_0215_coreColor = input.color(color.new(#2196F3, 85), LABEL_CORE, inline="0215_2", group=GROUP_15MIN)
-opening_0215_deviationColor = input.color(color.new(#2196F3, 50), LABEL_DEVIATIONS, inline="0215_2", group=GROUP_15MIN)
-opening_0215_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="0215_2", group=GROUP_15MIN)
+opening_0215 = input.string(OPT_BOTH, SESSION_INTRADAY_0215, inline="0215_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_0215_offset = input.bool(false, LABEL_OFFSET, inline="0215_1", group=GROUP_15MIN)
+opening_0215_coreColor = input.color(color.new(color.rgb(33, 150, 243), 85), LABEL_CORE, inline="0215_2", group=GROUP_15MIN)
+opening_0215_deviationColor = input.color(color.new(color.rgb(33, 150, 243), 50), LABEL_DEVIATIONS, inline="0215_2", group=GROUP_15MIN)
+opening_0215_showLabels = input.string(OPT_BOTH, LABEL_DEVIATION_LABELS, inline="0215_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_0215_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0215_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_15MIN)
 
-opening_0915 = input.string(OPT_BOTH, SESSION_0915, inline="0915_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
-opening_0915_offset = input.bool(true, LABEL_OFFSET, inline="0915_1", group=GROUP_15MIN)
-opening_0915_coreColor = input.color(color.new(#FF9800, 85), LABEL_CORE, inline="0915_2", group=GROUP_15MIN)
-opening_0915_deviationColor = input.color(color.new(#FF9800, 50), LABEL_DEVIATIONS, inline="0915_2", group=GROUP_15MIN)
-opening_0915_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="0915_2", group=GROUP_15MIN)
-
-opening_1315 = input.string(OPT_BOTH, SESSION_1315, inline="1315_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
-opening_1315_offset = input.bool(true, LABEL_OFFSET, inline="1315_1", group=GROUP_15MIN)
-opening_1315_coreColor = input.color(color.new(#F44336, 85), LABEL_CORE, inline="1315_2", group=GROUP_15MIN)
-opening_1315_deviationColor = input.color(color.new(#F44336, 50), LABEL_DEVIATIONS, inline="1315_2", group=GROUP_15MIN)
-opening_1315_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="1315_2", group=GROUP_15MIN)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 16:00-05:00
-// ═══════════════════════════════════════════════════════════════════════════
-
-bodyDeviations_1600 = input.string("2:2.5, 4:4.5", LABEL_BODY_DEVIATIONS, group=GROUP_1600)
-wickDeviations_1600 = input.string("0.25:0.5, 1.33:1.66", LABEL_WICK_DEVIATIONS, group=GROUP_1600)
-
-opening_1600 = input.string(OPT_OFF, SESSION_1600, inline="1600_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1600)
-opening_1600_offset = input.bool(true, LABEL_OFFSET, inline="1600_1", group=GROUP_1600)
-opening_1600_coreColor = input.color(color.new(#00BCD4, 85), LABEL_CORE, inline="1600_2", group=GROUP_1600)
-opening_1600_deviationColor = input.color(color.new(#00BCD4, 50), LABEL_DEVIATIONS, inline="1600_2", group=GROUP_1600)
-opening_1600_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="1600_2", group=GROUP_1600)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 05:00-09:15
-// ═══════════════════════════════════════════════════════════════════════════
-
-bodyDeviations_0500 = input.string("2:2.5, 4:4.5", LABEL_BODY_DEVIATIONS, group=GROUP_0500)
-wickDeviations_0500 = input.string("0.25:0.5, 1.33:1.66", LABEL_WICK_DEVIATIONS, group=GROUP_0500)
-
-opening_0500 = input.string(OPT_OFF, SESSION_0500, inline="0500_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0500)
-opening_0500_offset = input.bool(true, LABEL_OFFSET, inline="0500_1", group=GROUP_0500)
-opening_0500_coreColor = input.color(color.new(#4CAF50, 85), LABEL_CORE, inline="0500_2", group=GROUP_0500)
-opening_0500_deviationColor = input.color(color.new(#4CAF50, 50), LABEL_DEVIATIONS, inline="0500_2", group=GROUP_0500)
-opening_0500_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="0500_2", group=GROUP_0500)
+opening_0915 = input.string(OPT_WICK, SESSION_INTRADAY_0915, inline="0915_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_0915_offset = input.bool(false, LABEL_OFFSET, inline="0915_1", group=GROUP_15MIN)
+opening_0915_coreColor = input.color(color.new(color.rgb(255, 152, 0), 85), LABEL_CORE, inline="0915_2", group=GROUP_15MIN)
+opening_0915_deviationColor = input.color(color.new(color.rgb(255, 152, 0), 50), LABEL_DEVIATIONS, inline="0915_2", group=GROUP_15MIN)
+opening_0915_showLabels = input.string(OPT_BOTH, LABEL_DEVIATION_LABELS, inline="0915_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_15MIN)
+opening_0915_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0915_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_15MIN)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 06:00-09:00
 // ═══════════════════════════════════════════════════════════════════════════
 
-bodyDeviations_0600 = input.string("2:2.5, 4:4.5", LABEL_BODY_DEVIATIONS, group=GROUP_0600)
-wickDeviations_0600 = input.string("0.25:0.5, 1.33:1.66", LABEL_WICK_DEVIATIONS, group=GROUP_0600)
+bodyDeviations_0600 = input.string(DEFAULT_BODY_DEVIATIONS_0600_0900, LABEL_BODY_DEVIATIONS, group=GROUP_0600_0900)
+wickDeviations_0600 = input.string(DEFAULT_WICK_DEVIATIONS_0600_0900, LABEL_WICK_DEVIATIONS, group=GROUP_0600_0900)
 
-opening_0600 = input.string(OPT_OFF, SESSION_0600, inline="0600_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600)
-opening_0600_offset = input.bool(true, LABEL_OFFSET, inline="0600_1", group=GROUP_0600)
-opening_0600_coreColor = input.color(color.new(#9C27B0, 85), LABEL_CORE, inline="0600_2", group=GROUP_0600)
-opening_0600_deviationColor = input.color(color.new(#9C27B0, 50), LABEL_DEVIATIONS, inline="0600_2", group=GROUP_0600)
-opening_0600_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="0600_2", group=GROUP_0600)
+opening_0600 = input.string(OPT_WICK, SESSION_EXTENDED_0600_0900, inline="0600_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
+opening_0600_offset = input.bool(false, LABEL_OFFSET, inline="0600_1", group=GROUP_0600_0900)
+opening_0600_coreColor = input.color(color.new(color.rgb(128, 222, 234), 85), LABEL_CORE, inline="0600_2", group=GROUP_0600_0900)
+opening_0600_deviationColor = input.color(color.new(color.rgb(178, 235, 242), 50), LABEL_DEVIATIONS, inline="0600_2", group=GROUP_0600_0900)
+opening_0600_showLabels = input.string(OPT_WICK, LABEL_DEVIATION_LABELS, inline="0600_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
+opening_0600_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0600_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0600_0900)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - 16:00-05:00
+// ═══════════════════════════════════════════════════════════════════════════
+
+bodyDeviations_1600 = input.string(DEFAULT_BODY_DEVIATIONS_1600_0500, LABEL_BODY_DEVIATIONS, group=GROUP_1600_0500)
+wickDeviations_1600 = input.string(DEFAULT_WICK_DEVIATIONS_1600_0500, LABEL_WICK_DEVIATIONS, group=GROUP_1600_0500)
+
+opening_1600 = input.string(OPT_WICK, SESSION_EXTENDED_1600_0500, inline="1600_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1600_0500)
+opening_1600_offset = input.bool(false, LABEL_OFFSET, inline="1600_1", group=GROUP_1600_0500)
+opening_1600_coreColor = input.color(color.new(color.rgb(219, 219, 219), 80), LABEL_CORE, inline="1600_2", group=GROUP_1600_0500)
+opening_1600_deviationColor = input.color(color.new(color.rgb(219, 219, 219), 80), LABEL_DEVIATIONS, inline="1600_2", group=GROUP_1600_0500)
+opening_1600_showLabels = input.string(OPT_WICK, LABEL_DEVIATION_LABELS, inline="1600_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1600_0500)
+opening_1600_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="1600_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_1600_0500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - 05:00-09:15
+// ═══════════════════════════════════════════════════════════════════════════
+
+bodyDeviations_0500 = input.string(DEFAULT_BODY_DEVIATIONS_0500_0915, LABEL_BODY_DEVIATIONS, group=GROUP_0500_0915)
+wickDeviations_0500 = input.string(DEFAULT_WICK_DEVIATIONS_0500_0915, LABEL_WICK_DEVIATIONS, group=GROUP_0500_0915)
+
+opening_0500 = input.string(OPT_OFF, SESSION_EXTENDED_0500_0915, inline="0500_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0500_0915)
+opening_0500_offset = input.bool(false, LABEL_OFFSET, inline="0500_1", group=GROUP_0500_0915)
+opening_0500_coreColor = input.color(color.new(color.rgb(76, 175, 80), 90), LABEL_CORE, inline="0500_2", group=GROUP_0500_0915)
+opening_0500_deviationColor = input.color(color.new(color.rgb(200, 230, 201), 90), LABEL_DEVIATIONS, inline="0500_2", group=GROUP_0500_0915)
+opening_0500_showLabels = input.string(OPT_BOTH, LABEL_DEVIATION_LABELS, inline="0500_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0500_0915)
+opening_0500_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0500_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0500_0915)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - 09:30-09:45
+// ═══════════════════════════════════════════════════════════════════════════
+
+bodyDeviations_0930_0945 = input.string(DEFAULT_BODY_DEVIATIONS_0930_0945, LABEL_BODY_DEVIATIONS, group=GROUP_0930_0945)
+wickDeviations_0930_0945 = input.string(DEFAULT_WICK_DEVIATIONS_0930_0945, LABEL_WICK_DEVIATIONS, group=GROUP_0930_0945)
+
+opening_0930_0945 = input.string(OPT_WICK, SESSION_EXTENDED_0930_0945, inline="0930_0945_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_0945)
+opening_0930_0945_offset = input.bool(false, LABEL_OFFSET, inline="0930_0945_1", group=GROUP_0930_0945)
+opening_0930_0945_coreColor = input.color(color.new(color.rgb(159, 39, 176), 90), LABEL_CORE, inline="0930_0945_2", group=GROUP_0930_0945)
+opening_0930_0945_deviationColor = input.color(color.new(color.rgb(149, 117, 205), 65), LABEL_DEVIATIONS, inline="0930_0945_2", group=GROUP_0930_0945)
+opening_0930_0945_showLabels = input.string(OPT_OFF, LABEL_DEVIATION_LABELS, inline="0930_0945_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_0945)
+opening_0930_0945_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0930_0945_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_0945)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - 09:30-10:00
+// ═══════════════════════════════════════════════════════════════════════════
+
+bodyDeviations_0930_1000 = input.string(DEFAULT_BODY_DEVIATIONS_0930_1000, LABEL_BODY_DEVIATIONS, group=GROUP_0930_1000)
+wickDeviations_0930_1000 = input.string(DEFAULT_WICK_DEVIATIONS_0930_1000, LABEL_WICK_DEVIATIONS, group=GROUP_0930_1000)
+
+opening_0930_1000 = input.string(OPT_WICK, SESSION_EXTENDED_0930_1000, inline="0930_1000_1", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_1000)
+opening_0930_1000_offset = input.bool(false, LABEL_OFFSET, inline="0930_1000_1", group=GROUP_0930_1000)
+opening_0930_1000_coreColor = input.color(color.new(color.rgb(250, 161, 164), 85), LABEL_CORE, inline="0930_1000_2", group=GROUP_0930_1000)
+opening_0930_1000_deviationColor = input.color(color.new(color.rgb(252, 203, 205), 50), LABEL_DEVIATIONS, inline="0930_1000_2", group=GROUP_0930_1000)
+opening_0930_1000_showLabels = input.string(OPT_OFF, LABEL_DEVIATION_LABELS, inline="0930_1000_3", options=[OPT_OFF, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_1000)
+opening_0930_1000_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POSITION, inline="0930_1000_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_1000)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - Color Reference Table
+// ═══════════════════════════════════════════════════════════════════════════
+
+showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a reference table showing all session colors and their RGB values")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION VARIABLES
@@ -159,7 +219,6 @@ opening_0600_showLabels = input.bool(true, LABEL_DEVIATION_LABELS, inline="0600_
 var array<SessionData> sessions = array.new<SessionData>()
 var array<SessionData> activeSessions = array.new<SessionData>()
 
-var array<float> cachedDevLevels = na
 var array<ZonePair> cachedBodyDeviations_15min = na
 var array<ZonePair> cachedWickDeviations_15min = na
 var array<ZonePair> cachedBodyDeviations_1600 = na
@@ -168,6 +227,10 @@ var array<ZonePair> cachedBodyDeviations_0500 = na
 var array<ZonePair> cachedWickDeviations_0500 = na
 var array<ZonePair> cachedBodyDeviations_0600 = na
 var array<ZonePair> cachedWickDeviations_0600 = na
+var array<ZonePair> cachedBodyDeviations_0930_0945 = na
+var array<ZonePair> cachedWickDeviations_0930_0945 = na
+var array<ZonePair> cachedBodyDeviations_0930_1000 = na
+var array<ZonePair> cachedWickDeviations_0930_1000 = na
 
 // Constants for performance
 BODY_SUFFIX = "B"
@@ -192,15 +255,6 @@ parseTimeToMinutes(string timeStr) =>
     hour = str.tonumber(str.substring(timeStr, 0, 2))
     minute = str.tonumber(str.substring(timeStr, 3, 5))
     int(hour * 60 + minute)
-
-parseDeviations(string devStr) =>
-    devArray = array.new<float>()
-    parts = str.split(devStr, ",")
-    for part in parts
-        trimmed = str.replace_all(part, " ", "")
-        if trimmed != ""
-            devArray.push(str.tonumber(trimmed))
-    devArray
 
 parseZonePairs(string zoneStr) =>
     pairArray = array.new<ZonePair>()
@@ -229,6 +283,31 @@ toSansSerif(string inputStr) =>
     result := str.replace_all(result, "9", "𝟫")
     result
 
+// Parse deviation string to extract all explicit levels (singles + range endpoints)
+// Example: "1, 2:2.5, 4:4.5" → [1.0, 2.0, 2.5, 4.0, 4.5]
+parseAllLevels(string deviationStr) =>
+    levels = array.new<float>()
+    tokens = str.split(deviationStr, ",")
+    for token in tokens
+        trimmed = str.replace_all(token, " ", "")
+        if trimmed != ""
+            if str.contains(trimmed, ":")
+                // Range like "2:2.5" - extract both endpoints
+                parts = str.split(trimmed, ":")
+                if array.size(parts) == 2
+                    fromVal = str.tonumber(array.get(parts, 0))
+                    toVal = str.tonumber(array.get(parts, 1))
+                    if not array.includes(levels, fromVal)
+                        levels.push(fromVal)
+                    if not array.includes(levels, toVal)
+                        levels.push(toVal)
+            else
+                // Single value like "1"
+                singleVal = str.tonumber(trimmed)
+                if not array.includes(levels, singleVal)
+                    levels.push(singleVal)
+    levels
+
 // Drawing helpers
 drawDeviationZones(SessionData sess, float high, float low, float height, array<ZonePair> zonePairs, color deviationColor, int startBarOffset, int endBarOffset) =>
     if array.size(zonePairs) > 0
@@ -249,10 +328,10 @@ drawDeviationZones(SessionData sess, float high, float low, float height, array<
             belowBox = box.new(sess.startBar + startBarOffset, belowFrom, sess.endBar + endBarOffset, belowTo, bgcolor=deviationColor, border_color=na, extend=extend.none)
             sess.deviationBoxes.push(belowBox)
 
-drawDeviations(SessionData sess, float high, float low, float height, color lineColor, string lineStyle, int lineWidth, bool showLabels, string labelSize, string labelPosition, color labelColor, string suffix, int startBarOffset, int endBarOffset) =>
-    if array.size(cachedDevLevels) > 0
-        for j = 0 to array.size(cachedDevLevels) - 1
-            dev = array.get(cachedDevLevels, j)
+drawDeviations(SessionData sess, float high, float low, float height, color lineColor, string lineStyle, int lineWidth, bool showLabels, string labelSize, string labelPosition, color labelColor, string suffix, int startBarOffset, int endBarOffset, array<float> deviationLevels) =>
+    if array.size(deviationLevels) > 0
+        for j = 0 to array.size(deviationLevels) - 1
+            dev = array.get(deviationLevels, j)
 
             // Draw above deviation
             aboveLevel = high + (height * dev)
@@ -302,24 +381,33 @@ calculateOffsets(SessionData sess, bool isBody) =>
 
     [startOffset, endOffset]
 
-getDeviationConfig(string sessionName, bool isBody) =>
-    if sessionName == SESSION_1600
-        isBody ? cachedBodyDeviations_1600 : cachedWickDeviations_1600
-    else if sessionName == SESSION_0500
-        isBody ? cachedBodyDeviations_0500 : cachedWickDeviations_0500
-    else if sessionName == SESSION_0600
-        isBody ? cachedBodyDeviations_0600 : cachedWickDeviations_0600
+getDeviationString(string sessionName, bool isBody) =>
+    if sessionName == SESSION_EXTENDED_1600_0500
+        isBody ? bodyDeviations_1600 : wickDeviations_1600
+    else if sessionName == SESSION_EXTENDED_0500_0915
+        isBody ? bodyDeviations_0500 : wickDeviations_0500
+    else if sessionName == SESSION_EXTENDED_0600_0900
+        isBody ? bodyDeviations_0600 : wickDeviations_0600
+    else if sessionName == SESSION_EXTENDED_0930_0945
+        isBody ? bodyDeviations_0930_0945 : wickDeviations_0930_0945
+    else if sessionName == SESSION_EXTENDED_0930_1000
+        isBody ? bodyDeviations_0930_1000 : wickDeviations_0930_1000
     else
-        isBody ? cachedBodyDeviations_15min : cachedWickDeviations_15min
+        isBody ? bodyDeviations_15min : wickDeviations_15min
 
 drawCoreWithDeviations(SessionData sess, float highPrice, float lowPrice, float height, bool isBody) =>
     [startOffset, endOffset] = calculateOffsets(sess, isBody)
     labelPosition = (sess.showBody and sess.showWick) ? (isBody ? "Right" : "Left") : "Left"
     suffix = isBody ? BODY_SUFFIX : WICK_SUFFIX
-    deviationsToUse = getDeviationConfig(sess.sessionName, isBody)
+    deviationStr = getDeviationString(sess.sessionName, isBody)
+    zonePairs = parseZonePairs(deviationStr)
+    deviationLevels = parseAllLevels(deviationStr)
 
-    drawDeviations(sess, highPrice, lowPrice, height, color.new(labelColor, DEVIATION_LINE_OPACITY), "Dotted", 1, sess.showDeviationLabels, "Tiny", labelPosition, labelColor, suffix, startOffset, endOffset)
-    drawDeviationZones(sess, highPrice, lowPrice, height, deviationsToUse, sess.deviationColor, startOffset, endOffset)
+    // Determine whether to show labels based on dropdown value and body/wick type
+    showLabels = sess.showDeviationLabels == OPT_BOTH or (sess.showDeviationLabels == OPT_BODY and isBody) or (sess.showDeviationLabels == OPT_WICK and not isBody)
+
+    drawDeviations(sess, highPrice, lowPrice, height, color.new(labelColor, DEVIATION_LINE_OPACITY), "Dotted", 1, showLabels, "Tiny", labelPosition, labelColor, suffix, startOffset, endOffset, deviationLevels)
+    drawDeviationZones(sess, highPrice, lowPrice, height, zonePairs, sess.deviationColor, startOffset, endOffset)
 
 deleteSession(SessionData sess) =>
     if not na(sess.bodyBox)
@@ -337,8 +425,7 @@ deleteSession(SessionData sess) =>
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-if na(cachedDevLevels)
-    cachedDevLevels := parseDeviations(deviations)
+if na(cachedBodyDeviations_15min)
     cachedBodyDeviations_15min := parseZonePairs(bodyDeviations_15min)
     cachedWickDeviations_15min := parseZonePairs(wickDeviations_15min)
     cachedBodyDeviations_1600 := parseZonePairs(bodyDeviations_1600)
@@ -347,81 +434,89 @@ if na(cachedDevLevels)
     cachedWickDeviations_0500 := parseZonePairs(wickDeviations_0500)
     cachedBodyDeviations_0600 := parseZonePairs(bodyDeviations_0600)
     cachedWickDeviations_0600 := parseZonePairs(wickDeviations_0600)
+    cachedBodyDeviations_0930_0945 := parseZonePairs(bodyDeviations_0930_0945)
+    cachedWickDeviations_0930_0945 := parseZonePairs(wickDeviations_0930_0945)
+    cachedBodyDeviations_0930_1000 := parseZonePairs(bodyDeviations_0930_1000)
+    cachedWickDeviations_0930_1000 := parseZonePairs(wickDeviations_0930_1000)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-var array<string> openingSessions_mode = array.from(opening_2015, opening_0215, opening_0915, opening_1315, opening_1600, opening_0500, opening_0600)
-var array<bool> openingSessions_offset = array.from(opening_2015_offset, opening_0215_offset, opening_0915_offset, opening_1315_offset, opening_1600_offset, opening_0500_offset, opening_0600_offset)
-var array<bool> openingSessions_showLabels = array.from(opening_2015_showLabels, opening_0215_showLabels, opening_0915_showLabels, opening_1315_showLabels, opening_1600_showLabels, opening_0500_showLabels, opening_0600_showLabels)
-var array<int> openingSessions_startMin = array.from(1200, 120, 540, 780, 960, 300, 360)
-var array<int> openingSessions_endMin = array.from(1215, 135, 555, 795, 300, 555, 540)
-var array<color> openingSessions_coreColor = array.from(opening_2015_coreColor, opening_0215_coreColor, opening_0915_coreColor, opening_1315_coreColor, opening_1600_coreColor, opening_0500_coreColor, opening_0600_coreColor)
-var array<color> openingSessions_deviationColor = array.from(opening_2015_deviationColor, opening_0215_deviationColor, opening_0915_deviationColor, opening_1315_deviationColor, opening_1600_deviationColor, opening_0500_deviationColor, opening_0600_deviationColor)
-var array<string> openingSessions_name = array.from(SESSION_2015, SESSION_0215, SESSION_0915, SESSION_1315, SESSION_1600, SESSION_0500, SESSION_0600)
+var array<string> openingSessions_mode = array.from(opening_2015, opening_0215, opening_0915, opening_0600, opening_1600, opening_0500, opening_0930_0945, opening_0930_1000)
+var array<bool> openingSessions_offset = array.from(opening_2015_offset, opening_0215_offset, opening_0915_offset, opening_0600_offset, opening_1600_offset, opening_0500_offset, opening_0930_0945_offset, opening_0930_1000_offset)
+var array<string> openingSessions_showLabels = array.from(opening_2015_showLabels, opening_0215_showLabels, opening_0915_showLabels, opening_0600_showLabels, opening_1600_showLabels, opening_0500_showLabels, opening_0930_0945_showLabels, opening_0930_1000_showLabels)
+var array<int> openingSessions_startMin = array.from(1200, 120, 540, 360, 960, 300, 570, 570)
+var array<int> openingSessions_endMin = array.from(1215, 135, 555, 540, 300, 555, 585, 600)
+var array<color> openingSessions_coreColor = array.from(opening_2015_coreColor, opening_0215_coreColor, opening_0915_coreColor, opening_0600_coreColor, opening_1600_coreColor, opening_0500_coreColor, opening_0930_0945_coreColor, opening_0930_1000_coreColor)
+var array<color> openingSessions_deviationColor = array.from(opening_2015_deviationColor, opening_0215_deviationColor, opening_0915_deviationColor, opening_0600_deviationColor, opening_1600_deviationColor, opening_0500_deviationColor, opening_0930_0945_deviationColor, opening_0930_1000_deviationColor)
+var array<string> openingSessions_name = array.from(SESSION_INTRADAY_2015, SESSION_INTRADAY_0215, SESSION_INTRADAY_0915, SESSION_EXTENDED_0600_0900, SESSION_EXTENDED_1600_0500, SESSION_EXTENDED_0500_0915, SESSION_EXTENDED_0930_0945, SESSION_EXTENDED_0930_1000)
+var array<string> openingSessions_labelPosition = array.from(opening_2015_labelPosition, opening_0215_labelPosition, opening_0915_labelPosition, opening_0600_labelPosition, opening_1600_labelPosition, opening_0500_labelPosition, opening_0930_0945_labelPosition, opening_0930_1000_labelPosition)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 1: SESSION DETECTION - Detect new sessions starting
 // ═══════════════════════════════════════════════════════════════════════════
 
-barMinutes = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
-prevBarMinutes = hour(time[1], "America/New_York") * 60 + minute(time[1], "America/New_York")
+barMinutes = validTimeframe ? hour(time, "America/New_York") * 60 + minute(time, "America/New_York") : 0
+prevBarMinutes = validTimeframe ? hour(time[1], "America/New_York") * 60 + minute(time[1], "America/New_York") : 0
 
-for i = 0 to array.size(openingSessions_mode) - 1
-    mode = array.get(openingSessions_mode, i)
+if validTimeframe
+    for i = 0 to array.size(openingSessions_mode) - 1
+        mode = array.get(openingSessions_mode, i)
 
-    if mode != OPT_OFF
-        startMin = array.get(openingSessions_startMin, i)
-        endMin = array.get(openingSessions_endMin, i)
+        if mode != OPT_OFF
+            startMin = array.get(openingSessions_startMin, i)
+            endMin = array.get(openingSessions_endMin, i)
 
-        // Handle midnight-crossing sessions (e.g., 16:00-05:00)
-        crossesMidnight = endMin < startMin
+            // Handle midnight-crossing sessions (e.g., 16:00-05:00)
+            crossesMidnight = endMin < startMin
 
-        // Check if we're entering this session
-        currentlyInSession = crossesMidnight ? (barMinutes >= startMin or barMinutes <= endMin) : (barMinutes >= startMin and barMinutes <= endMin)
-        previouslyInSession = crossesMidnight ? (prevBarMinutes >= startMin or prevBarMinutes <= endMin) : (prevBarMinutes >= startMin and prevBarMinutes <= endMin)
-        sessionStarted = currentlyInSession and not previouslyInSession
+            // Check if we're entering this session
+            currentlyInSession = crossesMidnight ? (barMinutes >= startMin or barMinutes <= endMin) : (barMinutes >= startMin and barMinutes <= endMin)
+            previouslyInSession = crossesMidnight ? (prevBarMinutes >= startMin or prevBarMinutes <= endMin) : (prevBarMinutes >= startMin and prevBarMinutes <= endMin)
+            sessionStarted = currentlyInSession and not previouslyInSession
 
-        if sessionStarted
-            // Create new session and add to active sessions
-            coreColor = array.get(openingSessions_coreColor, i)
-            deviationColor = array.get(openingSessions_deviationColor, i)
-            sessionName = array.get(openingSessions_name, i)
-            useOffset = array.get(openingSessions_offset, i)
-            showDeviationLabels = array.get(openingSessions_showLabels, i)
-            showBody = mode == OPT_BODY or mode == OPT_BOTH
-            showWick = mode == OPT_WICK or mode == OPT_BOTH
+            if sessionStarted
+                // Create new session and add to active sessions
+                coreColor = array.get(openingSessions_coreColor, i)
+                deviationColor = array.get(openingSessions_deviationColor, i)
+                sessionName = array.get(openingSessions_name, i)
+                useOffset = array.get(openingSessions_offset, i)
+                showDeviationLabels = array.get(openingSessions_showLabels, i)
+                labelPosition = array.get(openingSessions_labelPosition, i)
+                showBody = mode == OPT_BODY or mode == OPT_BOTH
+                showWick = mode == OPT_WICK or mode == OPT_BOTH
 
-            newSession = SessionData.new(
-                 sessionIndex=i,
-                 startBar=bar_index,
-                 endBar=na,
-                 bodyHigh=math.max(open, close),
-                 bodyLow=math.min(open, close),
-                 wickHigh=high,
-                 wickLow=low,
-                 bodyBox=na,
-                 wickBox=na,
-                 lines=array.new<line>(),
-                 labels=array.new<label>(),
-                 deviationBoxes=array.new<box>(),
-                 coreColor=coreColor,
-                 deviationColor=deviationColor,
-                 sessionName=sessionName,
-                 useOffset=useOffset,
-                 showBody=showBody,
-                 showWick=showWick,
-                 showDeviationLabels=showDeviationLabels
-             )
+                newSession = SessionData.new(
+                     sessionIndex=i,
+                     startBar=bar_index,
+                     endBar=na,
+                     bodyHigh=math.max(open, close),
+                     bodyLow=math.min(open, close),
+                     wickHigh=high,
+                     wickLow=low,
+                     bodyBox=na,
+                     wickBox=na,
+                     lines=array.new<line>(),
+                     labels=array.new<label>(),
+                     deviationBoxes=array.new<box>(),
+                     coreColor=coreColor,
+                     deviationColor=deviationColor,
+                     sessionName=sessionName,
+                     useOffset=useOffset,
+                     showBody=showBody,
+                     showWick=showWick,
+                     showDeviationLabels=showDeviationLabels,
+                     labelPosition=labelPosition
+                 )
 
-            array.push(activeSessions, newSession)
+                array.push(activeSessions, newSession)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2: SESSION TRACKING - Update all active sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
-if array.size(activeSessions) > 0
+if validTimeframe and array.size(activeSessions) > 0
     for sess in activeSessions
         idx = sess.sessionIndex
         startMin = array.get(openingSessions_startMin, idx)
@@ -444,7 +539,7 @@ if array.size(activeSessions) > 0
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
-if array.size(activeSessions) > 0
+if validTimeframe and array.size(activeSessions) > 0
     for i = array.size(activeSessions) - 1 to 0
         sess = array.get(activeSessions, i)
         idx = sess.sessionIndex
@@ -479,7 +574,9 @@ if array.size(activeSessions) > 0
             // Draw session name label
             if showLabels
                 labelX = math.round((sess.startBar + sess.endBar) / 2)
-                sessionLabel = label.new(labelX, sess.wickHigh, sess.sessionName, style=label.style_label_down, textcolor=labelColor, size=size.small, color=color.new(chart.bg_color, 0), textalign=text.align_center)
+                labelY = sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow
+                labelStyle = sess.labelPosition == OPT_ABOVE ? label.style_label_down : label.style_label_up
+                sessionLabel = label.new(labelX, labelY, sess.sessionName, style=labelStyle, textcolor=labelColor, size=size.tiny, color=color.new(chart.bg_color, 0), textalign=text.align_center)
                 sess.labels.push(sessionLabel)
 
             // Add to completed sessions
@@ -502,3 +599,104 @@ if array.size(activeSessions) > 0
 
             // Remove from active sessions
             array.remove(activeSessions, i)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+if validTimeframe and showColorTable and barstate.islast
+    var table colorTable = table.new(position.top_right, 4, 17, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+    // Header row
+    table.cell(colorTable, 0, 0, "Session", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "Type", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 3, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+    // 20:15 Session
+    table.cell(colorTable, 0, 1, "20:15", text_size=size.small)
+    table.cell(colorTable, 1, 1, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 1, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_2015_coreColor)), int(color.g(opening_2015_coreColor)), int(color.b(opening_2015_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 1, str.tostring(int(color.t(opening_2015_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 2, "20:15", text_size=size.small)
+    table.cell(colorTable, 1, 2, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 2, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_2015_deviationColor)), int(color.g(opening_2015_deviationColor)), int(color.b(opening_2015_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 2, str.tostring(int(color.t(opening_2015_deviationColor))), text_size=size.small)
+
+    // 02:15 Session
+    table.cell(colorTable, 0, 3, "02:15", text_size=size.small)
+    table.cell(colorTable, 1, 3, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 3, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0215_coreColor)), int(color.g(opening_0215_coreColor)), int(color.b(opening_0215_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 3, str.tostring(int(color.t(opening_0215_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 4, "02:15", text_size=size.small)
+    table.cell(colorTable, 1, 4, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 4, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0215_deviationColor)), int(color.g(opening_0215_deviationColor)), int(color.b(opening_0215_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 4, str.tostring(int(color.t(opening_0215_deviationColor))), text_size=size.small)
+
+    // 09:15 Session
+    table.cell(colorTable, 0, 5, "09:15", text_size=size.small)
+    table.cell(colorTable, 1, 5, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 5, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0915_coreColor)), int(color.g(opening_0915_coreColor)), int(color.b(opening_0915_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 5, str.tostring(int(color.t(opening_0915_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 6, "09:15", text_size=size.small)
+    table.cell(colorTable, 1, 6, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 6, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0915_deviationColor)), int(color.g(opening_0915_deviationColor)), int(color.b(opening_0915_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 6, str.tostring(int(color.t(opening_0915_deviationColor))), text_size=size.small)
+
+    // Overnight Session
+    table.cell(colorTable, 0, 7, "Overnight", text_size=size.small)
+    table.cell(colorTable, 1, 7, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 7, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_1600_coreColor)), int(color.g(opening_1600_coreColor)), int(color.b(opening_1600_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 7, str.tostring(int(color.t(opening_1600_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 8, "Overnight", text_size=size.small)
+    table.cell(colorTable, 1, 8, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 8, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_1600_deviationColor)), int(color.g(opening_1600_deviationColor)), int(color.b(opening_1600_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 8, str.tostring(int(color.t(opening_1600_deviationColor))), text_size=size.small)
+
+    // Premarket Session
+    table.cell(colorTable, 0, 9, "Premarket", text_size=size.small)
+    table.cell(colorTable, 1, 9, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 9, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0500_coreColor)), int(color.g(opening_0500_coreColor)), int(color.b(opening_0500_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 9, str.tostring(int(color.t(opening_0500_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 10, "Premarket", text_size=size.small)
+    table.cell(colorTable, 1, 10, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 10, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0500_deviationColor)), int(color.g(opening_0500_deviationColor)), int(color.b(opening_0500_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 10, str.tostring(int(color.t(opening_0500_deviationColor))), text_size=size.small)
+
+    // NY Early Hours Session
+    table.cell(colorTable, 0, 11, "NY Early Hours", text_size=size.small)
+    table.cell(colorTable, 1, 11, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0600_coreColor)), int(color.g(opening_0600_coreColor)), int(color.b(opening_0600_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 11, str.tostring(int(color.t(opening_0600_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 12, "NY Early Hours", text_size=size.small)
+    table.cell(colorTable, 1, 12, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0600_deviationColor)), int(color.g(opening_0600_deviationColor)), int(color.b(opening_0600_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 12, str.tostring(int(color.t(opening_0600_deviationColor))), text_size=size.small)
+
+    // NY Open 15m Session
+    table.cell(colorTable, 0, 13, "NY Open 15m", text_size=size.small)
+    table.cell(colorTable, 1, 13, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 13, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0930_0945_coreColor)), int(color.g(opening_0930_0945_coreColor)), int(color.b(opening_0930_0945_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 13, str.tostring(int(color.t(opening_0930_0945_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 14, "NY Open 15m", text_size=size.small)
+    table.cell(colorTable, 1, 14, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 14, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0930_0945_deviationColor)), int(color.g(opening_0930_0945_deviationColor)), int(color.b(opening_0930_0945_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 14, str.tostring(int(color.t(opening_0930_0945_deviationColor))), text_size=size.small)
+
+    // NY Open 30m Session
+    table.cell(colorTable, 0, 15, "NY Open 30m", text_size=size.small)
+    table.cell(colorTable, 1, 15, "Core", text_size=size.small)
+    table.cell(colorTable, 2, 15, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0930_1000_coreColor)), int(color.g(opening_0930_1000_coreColor)), int(color.b(opening_0930_1000_coreColor))), text_size=size.small)
+    table.cell(colorTable, 3, 15, str.tostring(int(color.t(opening_0930_1000_coreColor))), text_size=size.small)
+
+    table.cell(colorTable, 0, 16, "NY Open 30m", text_size=size.small)
+    table.cell(colorTable, 1, 16, "Deviation", text_size=size.small)
+    table.cell(colorTable, 2, 16, str.format("R:{0} G:{1} B:{2}", int(color.r(opening_0930_1000_deviationColor)), int(color.g(opening_0930_1000_deviationColor)), int(color.b(opening_0930_1000_deviationColor))), text_size=size.small)
+    table.cell(colorTable, 3, 16, str.tostring(int(color.t(opening_0930_1000_deviationColor))), text_size=size.small)

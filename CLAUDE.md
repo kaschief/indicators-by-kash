@@ -1,5 +1,24 @@
 # Code Quality Rules
 
+## Development Naming Rule
+
+**During Development**
+- Append "-dev" to every indicator title
+- This signals the indicator is in active development
+
+**During Final Commit**
+- Automatically remove "-dev" from the title before build or publish
+- The production version should never contain the "-dev" suffix
+
+### Example
+```pine
+// During development
+indicator("Kash Deviations° [Pro+]-dev", overlay=true, ...)
+
+// Before final commit/publish
+indicator("Kash Deviations° [Pro+]", overlay=true, ...)
+```
+
 ## Never Take Shortcuts - Always Refactor Properly
 
 **CORE PRINCIPLE: Be an expert developer who values clean code. NEVER take shortcuts.**
