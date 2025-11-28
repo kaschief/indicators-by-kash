@@ -36,6 +36,11 @@ POOL_TYPE_PREMARKET = "premarket"
 POOL_TYPE_OVERNIGHT = "overnight"
 POOL_TYPE_1400 = "1400"
 POOL_TYPE_1600 = "1600"
+POOL_TYPE_4H_OPEN = "4h_open"
+POOL_TYPE_1H_OPEN = "1h_open"
+POOL_TYPE_DAILY_OPEN = "daily_open"
+POOL_TYPE_WEEKLY_OPEN = "weekly_open"
+POOL_TYPE_MONTHLY_OPEN = "monthly_open"
 POOL_TYPE_RANGE_BOX = "range_box"
 
 // Day names
@@ -64,6 +69,7 @@ FILTER_PREMARKET_OVERNIGHT = "Premarket + Overnight"
 FILTER_INTRADAY_PREMARKET_OVERNIGHT = "Intraday + Premarket + Overnight"
 FILTER_1400 = "14:00"
 FILTER_1600 = "16:00"
+FILTER_OPENS = "Opens"
 FILTER_RANGE_BOX = "Range Box"
 FILTER_1400_1600_RANGE_BOX = "Range Box + 1400 + 1600"
 FILTER_1600_RANGE_BOX = "Range Box + 1600"
@@ -81,6 +87,11 @@ GROUP_RANGE_BOX = "Range Box"
 GROUP_TIME_DIVIDERS = "Time Dividers"
 GROUP_1400_OPEN = "14:00 Open"
 GROUP_1600_OPEN = "16:00 Open"
+GROUP_4H_OPEN = "4H Open"
+GROUP_1H_OPEN = "1H Open"
+GROUP_DAILY_OPEN = "Daily Open"
+GROUP_WEEKLY_OPEN = "Weekly Open"
+GROUP_MONTHLY_OPEN = "Monthly Open"
 GROUP_LABELS = "Labels"
 GROUP_COLOR_TABLE = "Color Reference"
 
@@ -124,6 +135,11 @@ const color DEFAULT_RANGE_BOX_COLOR = color.new(color.rgb(187, 217, 251), 20)
 const color DEFAULT_RANGE_MIDDLE_COLOR = color.new(color.rgb(184, 184, 184), 40)
 const color DEFAULT_1400_OPEN_COLOR = color.new(color.rgb(247, 82, 95), 50)
 const color DEFAULT_1600_OPEN_COLOR = color.new(color.rgb(247, 82, 95), 50)
+const color DEFAULT_4H_OPEN_COLOR = color.new(color.rgb(255, 193, 7), 30)
+const color DEFAULT_1H_OPEN_COLOR = color.new(color.rgb(139, 195, 74), 30)
+const color DEFAULT_DAILY_OPEN_COLOR = color.new(color.rgb(156, 39, 176), 30)
+const color DEFAULT_WEEKLY_OPEN_COLOR = color.new(color.rgb(236, 64, 122), 30)
+const color DEFAULT_MONTHLY_OPEN_COLOR = color.new(color.rgb(255, 152, 0), 30)
 const color DEFAULT_TIME_DIVIDER_COLOR = color.new(color.rgb(184, 184, 184), 40)
 const color DEFAULT_DAY_LABEL_COLOR = color.new(color.rgb(184, 184, 184), 40)
 const color DEFAULT_MONDAY_LABEL_COLOR = color.new(color.rgb(248, 187, 208), 60)
@@ -250,6 +266,15 @@ type IntradayOpeningPriceTracker
     int current_mitigation_time
     int current_capture_hour        // Capture hour (e.g., 14, 16, 18)
 
+// Simplified tracker for timeframe opens (no mitigation tracking)
+type TimeframeOpenTracker
+    array<float> opens          // Open prices
+    array<int> times            // Open times
+    array<int> hours            // Hour of open (for label: 0600, 1000, etc.)
+    float current_open
+    int current_time
+    int current_hour
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET CONFIGURATION REGISTRY (PERFORMANCE: Cached lookup, runs once)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -341,7 +366,7 @@ get_intraday_liquidity_depth_percent_3() =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Pulse Mode (Global Override) ───
-pulseModeFilter = input.string(FILTER_ALL, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_RANGE_BOX, FILTER_1400, FILTER_1600, FILTER_1400_1600_RANGE_BOX, FILTER_1600_RANGE_BOX, FILTER_PREMARKET, FILTER_OVERNIGHT, FILTER_PREMARKET_OVERNIGHT, FILTER_INTRADAY, FILTER_INTRADAY_PREMARKET_OVERNIGHT, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_HTF], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Range Box/14:00/16:00/Premarket/Overnight: Show ONLY that type\n• Intraday: Show Asia + London + NYAM + Lunch + NYPM\n• Daily/Weekly/Monthly: Show ONLY that type\n• HTF: Show Daily + Weekly + Monthly")
+pulseModeFilter = input.string(FILTER_ALL, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_OPENS, FILTER_RANGE_BOX, FILTER_1400, FILTER_1600, FILTER_1400_1600_RANGE_BOX, FILTER_1600_RANGE_BOX, FILTER_PREMARKET, FILTER_OVERNIGHT, FILTER_PREMARKET_OVERNIGHT, FILTER_INTRADAY, FILTER_INTRADAY_PREMARKET_OVERNIGHT, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_HTF], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Opens: Show ONLY timeframe opens (M + W + D + 4H + 1H)\n• Range Box/14:00/16:00/Premarket/Overnight: Show ONLY that type\n• Intraday: Show Asia + London + NYAM + Lunch + NYPM\n• Daily/Weekly/Monthly: Show ONLY that type\n• HTF: Show Daily + Weekly + Monthly")
 
 showDaily = input.bool(true, GROUP_DAILY, group=GROUP_DAILY)
 dailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_DAILY, inline='daily')
@@ -439,6 +464,32 @@ open1600LineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WI
 open1600MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_1600_OPEN, inline='1600_options', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
 open1600UntappedWidth = input.int(4, "Untapped Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1600_OPEN, inline='1600_options')
 
+show4HOpen = input.bool(false, GROUP_4H_OPEN, group=GROUP_4H_OPEN, tooltip="Track 4-hour candle open prices. Labels show the opening hour (e.g., 4H 0600, 4H 1000). Available on 1m to 4H timeframes.")
+open4HShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_4H_OPEN, inline='4h_options')
+open4HColor = input.color(DEFAULT_4H_OPEN_COLOR, UI_COLOR, group=GROUP_4H_OPEN, inline='4h_options')
+open4HLineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_4H_OPEN, inline='4h_options')
+
+show1HOpen = input.bool(false, GROUP_1H_OPEN, group=GROUP_1H_OPEN, tooltip="Track 1-hour candle open prices. Labels show the opening hour (e.g., 1H 0900, 1H 1400). Available on 1m to 1H timeframes.")
+open1HShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_1H_OPEN, inline='1h_options')
+open1HColor = input.color(DEFAULT_1H_OPEN_COLOR, UI_COLOR, group=GROUP_1H_OPEN, inline='1h_options')
+open1HLineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_1H_OPEN, inline='1h_options')
+
+showDailyOpen = input.bool(false, GROUP_DAILY_OPEN, group=GROUP_DAILY_OPEN,  inline='daily_1', tooltip="Track daily candle open prices. Available on 1m to 12H timeframes.")
+useDailyDigitalOpen = input.bool(false, "Use 18:00 Open", group=GROUP_DAILY_OPEN,  inline='daily_1', tooltip="Use 18:00 NY time (futures session start) instead of midnight.")
+openDailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_DAILY_OPEN, inline='daily_open_options')
+openDailyColor = input.color(DEFAULT_DAILY_OPEN_COLOR, UI_COLOR, group=GROUP_DAILY_OPEN, inline='daily_open_options')
+openDailyLineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_DAILY_OPEN, inline='daily_open_options')
+
+showWeeklyOpen = input.bool(false, GROUP_WEEKLY_OPEN, group=GROUP_WEEKLY_OPEN, tooltip="Track weekly candle open prices. Available on 1m to 4D timeframes.")
+openWeeklyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_WEEKLY_OPEN, inline='weekly_open_options')
+openWeeklyColor = input.color(DEFAULT_WEEKLY_OPEN_COLOR, UI_COLOR, group=GROUP_WEEKLY_OPEN, inline='weekly_open_options')
+openWeeklyLineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY_OPEN, inline='weekly_open_options')
+
+showMonthlyOpen = input.bool(false, GROUP_MONTHLY_OPEN, group=GROUP_MONTHLY_OPEN, tooltip="Track monthly candle open prices. Available on 1m to 2W timeframes.")
+openMonthlyShowLast = input.int(3, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_MONTHLY_OPEN, inline='monthly_open_options')
+openMonthlyColor = input.color(DEFAULT_MONTHLY_OPEN_COLOR, UI_COLOR, group=GROUP_MONTHLY_OPEN, inline='monthly_open_options')
+openMonthlyLineWidth = input.int(1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY_OPEN, inline='monthly_open_options')
+
 showTimeDividers = input.bool(false, "Midnight Dividers", group=GROUP_TIME_DIVIDERS, inline='dividers')
 timeDividerShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX, group=GROUP_TIME_DIVIDERS, inline='dividers')
 timeDividerColor = input.color(DEFAULT_TIME_DIVIDER_COLOR, UI_COLOR, group=GROUP_TIME_DIVIDERS, inline='dividers')
@@ -494,6 +545,8 @@ applyPulseModeFilter(poolType, individualToggle) =>
         result := poolType == POOL_TYPE_1400 or poolType == POOL_TYPE_1600 or poolType == POOL_TYPE_RANGE_BOX
     else if pulseModeFilter == FILTER_1600_RANGE_BOX
         result := poolType == POOL_TYPE_1600 or poolType == POOL_TYPE_RANGE_BOX
+    else if pulseModeFilter == FILTER_OPENS
+        result := poolType == POOL_TYPE_4H_OPEN or poolType == POOL_TYPE_1H_OPEN or poolType == POOL_TYPE_DAILY_OPEN or poolType == POOL_TYPE_WEEKLY_OPEN or poolType == POOL_TYPE_MONTHLY_OPEN
     // else FILTER_ALL - use individual toggle
 
     result
@@ -512,6 +565,11 @@ showPremarketFiltered = applyPulseModeFilter(POOL_TYPE_PREMARKET, showPremarket)
 showOvernightFiltered = applyPulseModeFilter(POOL_TYPE_OVERNIGHT, showOvernight)
 show1400OpenFiltered = applyPulseModeFilter(POOL_TYPE_1400, show1400Open)
 show1600OpenFiltered = applyPulseModeFilter(POOL_TYPE_1600, show1600Open)
+show4HOpenFiltered = applyPulseModeFilter(POOL_TYPE_4H_OPEN, show4HOpen)
+show1HOpenFiltered = applyPulseModeFilter(POOL_TYPE_1H_OPEN, show1HOpen)
+showDailyOpenFiltered = applyPulseModeFilter(POOL_TYPE_DAILY_OPEN, showDailyOpen)
+showWeeklyOpenFiltered = applyPulseModeFilter(POOL_TYPE_WEEKLY_OPEN, showWeeklyOpen)
+showMonthlyOpenFiltered = applyPulseModeFilter(POOL_TYPE_MONTHLY_OPEN, showMonthlyOpen)
 showRangeBoxFiltered = applyPulseModeFilter(POOL_TYPE_RANGE_BOX, showRangeBox)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -590,6 +648,80 @@ create_1400_open() =>
 
 create_1600_open() =>
     IntradayOpeningPriceTracker.new(array.new_float(), array.new_int(), array.new_bool(), array.new_int(), array.new_int(), na, na, false, na, na)
+
+create_tf_open() =>
+    TimeframeOpenTracker.new(array.new_float(), array.new_int(), array.new_int(), na, na, na)
+
+// Unified drawing for timeframe opens
+// use_hour_format: true for intraday (shows "4H 0600"), false for HTF (shows "D Open")
+draw_timeframe_opens(TimeframeOpenTracker tracker, int showLast, color lineColor, int lineWidth, string prefix, bool use_hour_format, bool showLabels, color labelTextColor, array<line> all_lines, array<label> all_labels) =>
+    levels_drawn = 0
+
+    if not na(tracker.current_open)
+        current_line = line.new(tracker.current_time, tracker.current_open, time, tracker.current_open, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid)
+        array.push(all_lines, current_line)
+
+        if showLabels
+            label_text = use_hour_format ? prefix + " " + (tracker.current_hour < 10 ? "0" : "") + str.tostring(tracker.current_hour) + "00" : prefix + " Open"
+            array.push(all_labels, label.new(time, tracker.current_open, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
+
+        levels_drawn += 1
+
+    if array.size(tracker.opens) > 0
+        for i = array.size(tracker.opens) - 1 to 0
+            if levels_drawn >= showLast
+                break
+
+            open_price = array.get(tracker.opens, i)
+            open_time = array.get(tracker.times, i)
+            open_hour = array.get(tracker.hours, i)
+            end_time = i < array.size(tracker.opens) - 1 ? array.get(tracker.times, i + 1) : (not na(tracker.current_time) ? tracker.current_time : time)
+
+            array.push(all_lines, line.new(open_time, open_price, end_time, open_price, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid))
+
+            if showLabels
+                label_text = use_hour_format ? prefix + " " + (open_hour < 10 ? "0" : "") + str.tostring(open_hour) + "00" : prefix + " Open"
+                array.push(all_labels, label.new(end_time, open_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
+
+            levels_drawn += 1
+
+// Unified drawing for intraday opens (14:00/16:00) with mitigation tracking
+draw_intraday_opens(IntradayOpeningPriceTracker tracker, int showLast, color lineColor, int lineWidth, int untappedWidth, int fallbackHour, bool showLabels, color labelTextColor, array<line> all_lines, array<label> all_labels) =>
+    levels_drawn = 0
+    untapped_width_assigned = false
+
+    if not na(tracker.current_open)
+        current_is_mitigated = tracker.current_mitigated
+        current_mitigation_time_val = tracker.current_mitigation_time
+        current_end_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? current_mitigation_time_val : time
+        current_line_width = current_is_mitigated ? lineWidth : untappedWidth
+        if not current_is_mitigated
+            untapped_width_assigned := true
+        array.push(all_lines, line.new(tracker.current_time, tracker.current_open, current_end_time, tracker.current_open, xloc=xloc.bar_time, color=lineColor, width=current_line_width, style=line.style_solid))
+        if showLabels
+            label_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? int((tracker.current_time + current_mitigation_time_val) / 2) : current_end_time
+            array.push(all_labels, label.new(label_time, tracker.current_open, str.tostring(tracker.current_capture_hour) + ":00", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
+        levels_drawn += 1
+
+    if array.size(tracker.opens) > 0
+        for i = array.size(tracker.opens) - 1 to 0
+            if levels_drawn >= showLast
+                break
+            open_price = array.get(tracker.opens, i)
+            open_time = array.get(tracker.times, i)
+            is_mitigated = array.get(tracker.mitigated, i)
+            mitigation_time = array.get(tracker.mitigation_times, i)
+            end_time = (is_mitigated and not na(mitigation_time)) ? mitigation_time : time
+            lw = lineWidth
+            if not is_mitigated and not untapped_width_assigned
+                lw := untappedWidth
+                untapped_width_assigned := true
+            array.push(all_lines, line.new(open_time, open_price, end_time, open_price, xloc=xloc.bar_time, color=lineColor, width=lw, style=line.style_solid))
+            if showLabels
+                label_time = (is_mitigated and not na(mitigation_time)) ? int((open_time + mitigation_time) / 2) : end_time
+                capture_hour = (i < array.size(tracker.capture_hours)) ? array.get(tracker.capture_hours, i) : fallbackHour
+                array.push(all_labels, label.new(label_time, open_price, str.tostring(capture_hour) + ":00", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
+            levels_drawn += 1
 
 pool_get_high_end_time(pool, index, fallback_time) =>
     high_breached = array.get(pool.high_breached, index)
@@ -847,6 +979,11 @@ var RangeBox range_box = create_range_box()
 var TimeDivider time_divider = create_time_divider()
 var IntradayOpeningPriceTracker fourteen_hundred_open = create_1400_open()
 var IntradayOpeningPriceTracker sixteen_hundred_open = create_1600_open()
+var TimeframeOpenTracker four_hour_open = create_tf_open()
+var TimeframeOpenTracker one_hour_open = create_tf_open()
+var TimeframeOpenTracker daily_open = create_tf_open()
+var TimeframeOpenTracker weekly_open = create_tf_open()
+var TimeframeOpenTracker monthly_open = create_tf_open()
 var array<line> all_lines = array.new<line>()
 var array<label> all_labels = array.new<label>()
 var array<box> all_boxes = array.new<box>()
@@ -1134,6 +1271,67 @@ if show1600OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN
             sixteen_hundred_open.current_mitigated := false
             sixteen_hundred_open.current_mitigation_time := na
             sixteen_hundred_open.current_capture_hour := 18
+
+// 4H Open: 02, 06, 10, 14, 18, 22 NY time (1m-4H charts)
+if show4HOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() <= 14400
+    currentHour_4h = hour(time, NY_TIMEZONE)
+    is_new_4h = (currentHour_4h - 2) % 4 == 0 and minute(time, NY_TIMEZONE) == 0 and ta.change(time) != 0
+    if is_new_4h
+        if not na(four_hour_open.current_open)
+            array.push(four_hour_open.opens, four_hour_open.current_open)
+            array.push(four_hour_open.times, four_hour_open.current_time)
+            array.push(four_hour_open.hours, four_hour_open.current_hour)
+        four_hour_open.current_open := open
+        four_hour_open.current_time := time
+        four_hour_open.current_hour := currentHour_4h
+
+// 1H Open: every hour on the hour (1m-1H charts)
+if show1HOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() <= 3600
+    currentHour_1h = hour(time, NY_TIMEZONE)
+    is_new_1h = minute(time, NY_TIMEZONE) == 0 and ta.change(time) != 0
+    if is_new_1h
+        if not na(one_hour_open.current_open)
+            array.push(one_hour_open.opens, one_hour_open.current_open)
+            array.push(one_hour_open.times, one_hour_open.current_time)
+            array.push(one_hour_open.hours, one_hour_open.current_hour)
+        one_hour_open.current_open := open
+        one_hour_open.current_time := time
+        one_hour_open.current_hour := currentHour_1h
+
+// Daily Open: midnight or 18:00 (digital) based on toggle (1m-12H charts)
+if showDailyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 86400
+    daily_open_hour = useDailyDigitalOpen ? 18 : 0
+    is_new_daily = hour(time, NY_TIMEZONE) == daily_open_hour and minute(time, NY_TIMEZONE) == 0 and ta.change(time) != 0
+    if is_new_daily
+        if not na(daily_open.current_open)
+            array.push(daily_open.opens, daily_open.current_open)
+            array.push(daily_open.times, daily_open.current_time)
+            array.push(daily_open.hours, daily_open.current_hour)
+        daily_open.current_open := open
+        daily_open.current_time := time
+        daily_open.current_hour := daily_open_hour
+
+// Weekly Open (1m-4D charts)
+if showWeeklyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 604800
+    if ta.change(time("W")) != 0
+        if not na(weekly_open.current_open)
+            array.push(weekly_open.opens, weekly_open.current_open)
+            array.push(weekly_open.times, weekly_open.current_time)
+            array.push(weekly_open.hours, weekly_open.current_hour)
+        weekly_open.current_open := open
+        weekly_open.current_time := time
+        weekly_open.current_hour := 0
+
+// Monthly Open (1m-2W charts)
+if showMonthlyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 2592000
+    if ta.change(time("M")) != 0
+        if not na(monthly_open.current_open)
+            array.push(monthly_open.opens, monthly_open.current_open)
+            array.push(monthly_open.times, monthly_open.current_time)
+            array.push(monthly_open.hours, monthly_open.current_hour)
+        monthly_open.current_open := open
+        monthly_open.current_time := time
+        monthly_open.current_hour := 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DAY LABELS - Simple recurring time check (like date.pine)
@@ -1951,145 +2149,23 @@ if barstate.islast
                 divider_line = line.new(divider_time, high, divider_time, low, xloc=xloc.bar_time, color=timeDividerColor, width=1, style=line.style_dashed, extend=extend.both)
                 array.push(all_lines, divider_line)
 
-    // Draw 16:00 Opens - current level + stored levels
-    // IMPORTANT: Draw current level FIRST (most recent) then fill with array levels
-    // Only display on intraday timeframes (1m to 1H) where 1-minute precision is available
+    // Intraday Opens (14:00/16:00)
     if show1600OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME
-        levels_drawn = 0
-        untapped_width_assigned = false  // Track if we've already assigned the special width
-
-        // Draw current level FIRST (today's/most recent 16:00)
-        if not na(sixteen_hundred_open.current_open)
-            current_open_price = sixteen_hundred_open.current_open
-            current_open_time = sixteen_hundred_open.current_time
-            current_is_mitigated = sixteen_hundred_open.current_mitigated
-            current_mitigation_time_val = sixteen_hundred_open.current_mitigation_time
-
-            // Determine end time: if mitigated use mitigation time, otherwise current time
-            current_end_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? current_mitigation_time_val : time
-
-            // Draw current level line - use special width if untapped (not mitigated)
-            current_line_width = current_is_mitigated ? open1600LineWidth : open1600UntappedWidth
-            if not current_is_mitigated
-                untapped_width_assigned := true  // Mark that we've assigned the special width
-            current_line = line.new(current_open_time, current_open_price, current_end_time, current_open_price, xloc=xloc.bar_time, color=open1600Color, width=current_line_width, style=line.style_solid)
-            array.push(all_lines, current_line)
-
-            // Label: at midpoint if mitigated, at end if active
-            if showLabels
-                current_label_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? int((current_open_time + current_mitigation_time_val) / 2) : current_end_time
-                current_label_text = str.tostring(sixteen_hundred_open.current_capture_hour) + ":00"
-                current_label = label.new(current_label_time, current_open_price, current_label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                array.push(all_labels, current_label)
-
-            levels_drawn += 1
-
-        // Draw stored levels (from array) - most recent first, up to remaining limit
-        if array.size(sixteen_hundred_open.opens) > 0
-            for i = array.size(sixteen_hundred_open.opens) - 1 to 0
-                if levels_drawn >= open1600ShowLast
-                    break
-
-                open_price = array.get(sixteen_hundred_open.opens, i)
-                open_time = array.get(sixteen_hundred_open.times, i)
-                is_mitigated = array.get(sixteen_hundred_open.mitigated, i)
-                mitigation_time = array.get(sixteen_hundred_open.mitigation_times, i)
-
-                // Determine end time
-                // If mitigated: use mitigation time (line stops at breach point)
-                // If not mitigated: extend to current time (line is still active)
-                end_time = (is_mitigated and not na(mitigation_time)) ? mitigation_time : time
-
-                // Determine width: only assign untapped width if we haven't already assigned it (to current or previous stored level)
-                line_width = open1600LineWidth
-                if not is_mitigated and not untapped_width_assigned
-                    line_width := open1600UntappedWidth
-                    untapped_width_assigned := true
-
-                // Draw horizontal line
-                open_line = line.new(open_time, open_price, end_time, open_price, xloc=xloc.bar_time, color=open1600Color, width=line_width, style=line.style_solid)
-                array.push(all_lines, open_line)
-
-                // Draw label at midpoint if mitigated, at end if active
-                if showLabels
-                    label_time = (is_mitigated and not na(mitigation_time)) ? int((open_time + mitigation_time) / 2) : end_time
-                    // Safely get capture hour with fallback for legacy data
-                    capture_hour = (i < array.size(sixteen_hundred_open.capture_hours)) ? array.get(sixteen_hundred_open.capture_hours, i) : 16
-                    label_text = str.tostring(capture_hour) + ":00"
-                    open_label = label.new(label_time, open_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                    array.push(all_labels, open_label)
-
-                levels_drawn += 1
-
-    // Draw 14:00 Opens - current level + stored levels
-    // IMPORTANT: Draw current level FIRST (most recent) then fill with array levels
-    // Only display on intraday timeframes (1m to 1H) where 1-minute precision is available
+        draw_intraday_opens(sixteen_hundred_open, open1600ShowLast, open1600Color, open1600LineWidth, open1600UntappedWidth, 16, showLabels, labelTextColor, all_lines, all_labels)
     if show1400OpenFiltered and timeframe.in_seconds() >= INTRADAY_OPENING_PRICE_MIN_TIMEFRAME and timeframe.in_seconds() <= INTRADAY_OPENING_PRICE_MAX_TIMEFRAME
-        levels_drawn_1400 = 0
-        untapped_width_assigned_1400 = false  // Track if we've already assigned the special width
+        draw_intraday_opens(fourteen_hundred_open, open1400ShowLast, open1400Color, open1400LineWidth, open1400UntappedWidth, 14, showLabels, labelTextColor, all_lines, all_labels)
 
-        // Draw current level FIRST (today's/most recent 14:00)
-        if not na(fourteen_hundred_open.current_open)
-            current_open_price_1400 = fourteen_hundred_open.current_open
-            current_open_time_1400 = fourteen_hundred_open.current_time
-            current_is_mitigated_1400 = fourteen_hundred_open.current_mitigated
-            current_mitigation_time_val_1400 = fourteen_hundred_open.current_mitigation_time
-
-            // Determine end time: if mitigated use mitigation time, otherwise current time
-            current_end_time_1400 = (current_is_mitigated_1400 and not na(current_mitigation_time_val_1400)) ? current_mitigation_time_val_1400 : time
-
-            // Draw current level line - use special width if untapped (not mitigated)
-            current_line_width_1400 = current_is_mitigated_1400 ? open1400LineWidth : open1400UntappedWidth
-            if not current_is_mitigated_1400
-                untapped_width_assigned_1400 := true  // Mark that we've assigned the special width
-            current_line_1400 = line.new(current_open_time_1400, current_open_price_1400, current_end_time_1400, current_open_price_1400, xloc=xloc.bar_time, color=open1400Color, width=current_line_width_1400, style=line.style_solid)
-            array.push(all_lines, current_line_1400)
-
-            // Label: at midpoint if mitigated, at end if active
-            if showLabels
-                current_label_time_1400 = (current_is_mitigated_1400 and not na(current_mitigation_time_val_1400)) ? int((current_open_time_1400 + current_mitigation_time_val_1400) / 2) : current_end_time_1400
-                current_label_text_1400 = str.tostring(fourteen_hundred_open.current_capture_hour) + ":00"
-                current_label_1400 = label.new(current_label_time_1400, current_open_price_1400, current_label_text_1400, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                array.push(all_labels, current_label_1400)
-
-            levels_drawn_1400 += 1
-
-        // Draw stored levels (from array) - most recent first, up to remaining limit
-        if array.size(fourteen_hundred_open.opens) > 0
-            for i = array.size(fourteen_hundred_open.opens) - 1 to 0
-                if levels_drawn_1400 >= open1400ShowLast
-                    break
-
-                open_price_1400 = array.get(fourteen_hundred_open.opens, i)
-                open_time_1400 = array.get(fourteen_hundred_open.times, i)
-                is_mitigated_1400 = array.get(fourteen_hundred_open.mitigated, i)
-                mitigation_time_1400 = array.get(fourteen_hundred_open.mitigation_times, i)
-
-                // Determine end time
-                // If mitigated: use mitigation time (line stops at breach point)
-                // If not mitigated: extend to current time (line is still active)
-                end_time_1400 = (is_mitigated_1400 and not na(mitigation_time_1400)) ? mitigation_time_1400 : time
-
-                // Determine width: only assign untapped width if we haven't already assigned it (to current or previous stored level)
-                line_width_1400 = open1400LineWidth
-                if not is_mitigated_1400 and not untapped_width_assigned_1400
-                    line_width_1400 := open1400UntappedWidth
-                    untapped_width_assigned_1400 := true
-
-                // Draw horizontal line
-                open_line_1400 = line.new(open_time_1400, open_price_1400, end_time_1400, open_price_1400, xloc=xloc.bar_time, color=open1400Color, width=line_width_1400, style=line.style_solid)
-                array.push(all_lines, open_line_1400)
-
-                // Draw label at midpoint if mitigated, at end if active
-                if showLabels
-                    label_time_1400 = (is_mitigated_1400 and not na(mitigation_time_1400)) ? int((open_time_1400 + mitigation_time_1400) / 2) : end_time_1400
-                    // Safely get capture hour with fallback for legacy data
-                    capture_hour_1400 = (i < array.size(fourteen_hundred_open.capture_hours)) ? array.get(fourteen_hundred_open.capture_hours, i) : 14
-                    label_text_1400 = str.tostring(capture_hour_1400) + ":00"
-                    open_label_1400 = label.new(label_time_1400, open_price_1400, label_text_1400, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-                    array.push(all_labels, open_label_1400)
-
-                levels_drawn_1400 += 1
+    // Timeframe Opens
+    if show4HOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() <= 14400
+        draw_timeframe_opens(four_hour_open, open4HShowLast, open4HColor, open4HLineWidth, "4H", true, showLabels, labelTextColor, all_lines, all_labels)
+    if show1HOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() <= 3600
+        draw_timeframe_opens(one_hour_open, open1HShowLast, open1HColor, open1HLineWidth, "1H", true, showLabels, labelTextColor, all_lines, all_labels)
+    if showDailyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 86400
+        draw_timeframe_opens(daily_open, openDailyShowLast, openDailyColor, openDailyLineWidth, "D", false, showLabels, labelTextColor, all_lines, all_labels)
+    if showWeeklyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 604800
+        draw_timeframe_opens(weekly_open, openWeeklyShowLast, openWeeklyColor, openWeeklyLineWidth, "W", false, showLabels, labelTextColor, all_lines, all_labels)
+    if showMonthlyOpenFiltered and timeframe.in_seconds() >= 60 and timeframe.in_seconds() < 2592000
+        draw_timeframe_opens(monthly_open, openMonthlyShowLast, openMonthlyColor, openMonthlyLineWidth, "M", false, showLabels, labelTextColor, all_lines, all_labels)
 
     // Draw Asset Levels Table (optimized: only update when values change)
     var string prev_asset_table = ""
