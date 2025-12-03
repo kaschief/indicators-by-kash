@@ -158,12 +158,12 @@ IMMEDIATE_SIF_STAR = "☆"
 // ═══════════════════════════════════════════════════════════════════════════════
 // UI GROUP NAME CONSTANTS (SIF)
 // ═══════════════════════════════════════════════════════════════════════════════
+GROUP_LIVE_WORKSPACE = '🎤 Workspace Tools'
 GROUP_DETECTION = '🎯 Detection'
 GROUP_INVALIDATION = '✋ Invalidation'
 GROUP_VISIBILITY_FILTERS = '👁️ Visibility Filters'
 GROUP_SIF_LABELLING = '🎨 SIF Labelling'
 GROUP_SIF_EXTENSION = '✨ SIF Extension'
-GROUP_SIF_LIVE_EXTENSION = '🎤 Live Extension'
 GROUP_GAP_SOURCES = '🎯 Gap Sources'
 GROUP_SIF_BEHAVIORS = '🎭 SIF Wick Behaviors'
 GROUP_SIF_DETECTION_MARKERS = '🏷️ SIF Detection Markers'
@@ -171,6 +171,10 @@ GROUP_MULTI_SOURCE_PROPERTIES = '📦 Multi-Source Properties'
 GROUP_BREAKAWAY_PROPERTIES = '🔥 Breakaway Properties'
 GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 GROUP_MOMENTUM_SIFS = '⚡ Momentum SIFs'
+
+// Workspace Mode Constants (hardcoded values for live workspace)
+WORKSPACE_EXTENSION_OFFSET = 2
+WORKSPACE_ATR_MULTIPLIER = 3.5
 
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
 GAP_SOURCE_IMPLIED_DISPLAY = "imp"
@@ -287,10 +291,14 @@ const color DEFAULT_BREAKAWAY_BULLISH_COLOR = color.new(color.rgb(91, 156, 246),
 const color DEFAULT_BREAKAWAY_BEARISH_COLOR = color.new(color.rgb(247, 11, 241), 80)
 const color DEFAULT_BREAKAWAY_BULLISH_BORDER_COLOR = color.new(color.rgb(77, 208, 225), 50)
 const color DEFAULT_BREAKAWAY_BEARISH_BORDER_COLOR = color.new(color.rgb(249, 121, 246), 50)
+const color DEFAULT_WORKSPACE_ATR_BAND_COLOR = color.new(color.rgb(74, 74, 74), 98)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUT SETTINGS - OPTIMIZED LAYOUT
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// === 🎤 WORKSPACE TOOLS ===
+workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance\n• Shows ATR threshold band')
 
 // === 🎯 DETECTION ===
 max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, INPUT_LABEL_MAX_VALID_SIFS, minval=0, maxval=MAX_VALID_SIFS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid SIFs to display on chart. Max: 55\n\n• 0 = Show no valid SIFs\n• Higher values show more valid SIFs\n• Independent of invalidated SIF limit')
@@ -340,8 +348,6 @@ extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, 'SI
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, 'SIF⁻', group=GROUP_SIF_EXTENSION, inline='ext_colors')
 show_extended_boxes = input.bool(true, INPUT_LABEL_ENABLE_EXTENSION, group=GROUP_SIF_EXTENSION, inline='ext_colors')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_EXTENSION_BARS, minval=1, maxval=MAX_EXTENSION_BARS, group=GROUP_SIF_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
-extend_to_current = input.bool(false, 'Extend to Current', group=GROUP_SIF_LIVE_EXTENSION, inline='live', tooltip='ON: Zones extend to current price (live tracking)\nOFF: Zones extend only the fixed number of bars above')
-extension_offset = input.int(DEFAULT_EXTENSION_OFFSET, 'Offset', minval=0, maxval=10, group=GROUP_SIF_LIVE_EXTENSION, inline='live', tooltip='Spreads zone endpoints apart so overlapping zones are distinguishable\n\n0 = all zones end at same bar\n1+ = zones end at different bars based on unique offset')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_SIF_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_CENTER, 'Horizontal', options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_SIF_EXTENSION, inline='ext_align', tooltip='Horizontal alignment for extension box text')
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_SIF_EXTENSION, inline='ext_align', tooltip='Vertical alignment for extension box text')
@@ -544,6 +550,12 @@ var array<int> displayed_sif_indices = array.new<int>()
 var bool needs_visual_update = true
 var int last_update_bar = na
 var bool needs_full_update = true
+
+// ATR Distance Filter calculation (fixed 14-period ATR)
+atr_value = ta.atr(14)
+atr_max_distance = atr_value * WORKSPACE_ATR_MULTIPLIER
+atr_upper = close + atr_max_distance
+atr_lower = close - atr_max_distance
 
 // Pre-calculated padding strings (performance optimization)
 horizontal_padding_str = ""
@@ -1963,6 +1975,15 @@ should_display_consolidated_sif(consolidated_sif) =>
 
     should_display
 
+// ATR distance filter helper - checks if zone is within ATR range from current price
+passes_atr_distance_filter(zone_top, zone_bottom) =>
+    if not workspace_mode_enabled
+        true
+    else
+        // Distance to nearest edge: 0 if price inside zone, otherwise distance to closest edge
+        distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
+        distance_to_zone <= atr_max_distance
+
 // Calculate price distance from SIF zone as percentage of current price
 // @param zone_top float - Top of the SIF zone
 // @param zone_bottom float - Bottom of the SIF zone
@@ -2437,6 +2458,10 @@ manage_consolidated_sif_display() =>
             current_consolidated_sif.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_sif.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
+            // ATR distance filter - skip zones too far from current price
+            if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
+                continue
+
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_sif)
             current_consolidated_sif.is_consolidated_invalidated := is_currently_invalidated
@@ -2538,8 +2563,8 @@ manage_consolidated_sif_display() =>
 
                 // Extension box with consolidated label
                 // Live extension: calculate offset and extension right position
-                calculated_offset = extend_to_current ? get_extension_offset(current_consolidated_sif.bar_index, current_consolidated_sif.consolidated_zone_top, extension_offset) : 0
-                extension_right = extend_to_current ? math.max(bar_index, current_consolidated_sif.bar_index + extended_box_length) + calculated_offset : current_consolidated_sif.bar_index + extended_box_length
+                calculated_offset = workspace_mode_enabled ? get_extension_offset(current_consolidated_sif.bar_index, current_consolidated_sif.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET) : 0
+                extension_right = workspace_mode_enabled ? math.max(bar_index, current_consolidated_sif.bar_index + extended_box_length) + calculated_offset : current_consolidated_sif.bar_index + extended_box_length
 
                 // Live extension: cycling border opacity for visual distinction
                 border_transparency = get_border_transparency(current_consolidated_sif.bar_index)
@@ -2646,7 +2671,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 12, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 4, 13, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -2719,6 +2744,19 @@ if show_color_table and barstate.islast
     table.cell(color_table, 1, 11, "444", text_size=size.small)
     table.cell(color_table, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(breakaway_bearish_border_color)), int(color.g(breakaway_bearish_border_color)), int(color.b(breakaway_bearish_border_color))), text_size=size.small)
     table.cell(color_table, 3, 11, str.tostring(int(color.t(breakaway_bearish_border_color))), text_size=size.small)
+
+    // ATR Band
+    table.cell(color_table, 0, 12, "ATR Band", text_size=size.small)
+    table.cell(color_table, 1, 12, "294", text_size=size.small)
+    table.cell(color_table, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.g(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.b(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small)
+    table.cell(color_table, 3, 12, str.tostring(int(color.t(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ATR BAND VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+plot(workspace_mode_enabled ? atr_upper : na, "ATR Upper", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
+plot(workspace_mode_enabled ? atr_lower : na, "ATR Lower", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 

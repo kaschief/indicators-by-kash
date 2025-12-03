@@ -76,6 +76,7 @@ const color DEFAULT_EXTENDED_BOX_TEXT_COLOR = color.new(color.rgb(41, 98, 255), 
 const color DEFAULT_BORDER_COLOR_IMMEDIATE = color.new(color.rgb(236, 64, 122), 0)
 const color DEFAULT_BORDER_COLOR_STANDARD = color.new(color.rgb(126, 87, 194), 0)
 const color DEFAULT_BORDER_COLOR_DELAYED = color.new(color.rgb(255, 193, 7), 0)
+const color DEFAULT_WORKSPACE_ATR_BAND_COLOR = color.new(color.rgb(74, 74, 74), 98)
 DEFAULT_BORDER_WIDTH = 2
 
 // Liquidity pool limits (simple fixed values)
@@ -332,12 +333,12 @@ LABEL_VERTICAL_CENTER = 'Center'
 LABEL_VERTICAL_BOTTOM = 'Bottom'
 
 // UI Group constants
+GROUP_LIVE_WORKSPACE = '🎤 Workspace Tools'
 GROUP_DETECTION = '🎯 Detection'
 GROUP_INVALIDATION = '✋ Invalidation'
 GROUP_VISIBILITY_FILTERS = '👁️ Visibility Filters'
 GROUP_MBZ_LABELLING = '🎨 MBZ Labelling'
 GROUP_MBZ_EXTENSION = '✨ MBZ Extension'
-GROUP_MBZ_LIVE_EXTENSION = '🎤 Live Extension'
 GROUP_MBZ_BEHAVIORS = '🎭 MBZ Wick Behaviors'
 GROUP_MBZ_SPECIAL_PROPERTIES = '🏷️ MBZ Special Properties'
 GROUP_MULTI_SOURCE_MBZ = '🎨 Multi-Source MBZ'
@@ -347,6 +348,10 @@ GROUP_LIQUIDITY_INTRADAY = '💧 Intraday Liquidity Pools'
 GROUP_LIQUIDITY_DTT = '💧 DTT Liquidity Pools'
 GROUP_TIME_BEHAVIOR = '⏰ Time Behavior'
 GROUP_LIQUIDITY_RULES = '🎭 MBZ Formation Variants'
+
+// Workspace Mode Constants (hardcoded values for live workspace)
+WORKSPACE_EXTENSION_OFFSET = 2
+WORKSPACE_ATR_MULTIPLIER = 3.5
 
 // Display text & abbreviation constants
 ARROW_DOWN_INC = "↓inc"
@@ -427,6 +432,9 @@ NINE_MODE_BOTH = "Both"
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUT SETTINGS - ULTRA-COMPACT ALIGNED LAYOUT
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// === 🎤 WORKSPACE TOOLS ===
+workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance\n• Shows ATR threshold band')
 
 // === 🎯 DETECTION ===
 max_liquidity_mbzs = input.int(DEFAULT_MAX_LIQUIDITY_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_LIQUIDITY_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum liquidity MBZs on chart (0-60)')
@@ -590,8 +598,6 @@ extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, INP
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INPUT_LABEL_MBZ_MINUS, group=GROUP_MBZ_EXTENSION, inline='ext_colors', tooltip='Color for MBZ⁻ highlights and extensions')
 show_extended_boxes = input.bool(true, INPUT_LABEL_ENABLE_EXTENSION, group=GROUP_MBZ_EXTENSION, inline='ext_colors', tooltip='Show highlights and extensions for valid MBZs')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
-extend_to_current = input.bool(false, 'Extend to Current', group=GROUP_MBZ_LIVE_EXTENSION, inline='live', tooltip='ON: Zones extend to current price (live tracking)\nOFF: Zones extend only the fixed number of bars above')
-extension_offset = input.int(DEFAULT_EXTENSION_OFFSET, 'Offset', minval=0, maxval=10, group=GROUP_MBZ_LIVE_EXTENSION, inline='live', tooltip='Spreads zone endpoints apart so overlapping zones are distinguishable\n\n0 = all zones end at same bar\n1+ = zones end at different bars based on unique offset')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_CENTER, INPUT_LABEL_HORIZONTAL, options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Horizontal text alignment')
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Vertical text alignment')
@@ -824,6 +830,12 @@ var array<label> premarket_liquidity_labels = array.new<label>()
 
 // Performance optimization flags
 var bool needs_visual_update = true
+
+// ATR Distance Filter calculation (fixed 14-period ATR)
+atr_value = ta.atr(14)
+atr_max_distance = atr_value * WORKSPACE_ATR_MULTIPLIER
+atr_upper = close + atr_max_distance
+atr_lower = close - atr_max_distance
 
 // Pre-calculated padding strings (performance optimization)
 horizontal_padding_str = ""
@@ -3029,6 +3041,14 @@ should_display_consolidated_mbz(consolidated_mbz) =>
             break
     should_display
 
+// ATR Distance Filter - checks if zone is within ATR threshold from current price
+passes_atr_distance_filter(zone_top, zone_bottom) =>
+    if not workspace_mode_enabled
+        true
+    else
+        distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
+        distance_to_zone <= atr_max_distance
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROJECTION SYSTEM FUNCTIONS (Removed to reduce external elements)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3211,6 +3231,10 @@ manage_consolidated_mbz_display() =>
             current_consolidated_mbz.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_mbz.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
+            // ATR Distance Filter - skip zones beyond ATR threshold
+            if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
+                continue
+
             // Determine consolidated status
             [is_currently_invalidated, updated_last_checked] = determine_consolidated_status(current_consolidated_mbz)
             current_consolidated_mbz.is_consolidated_invalidated := is_currently_invalidated
@@ -3330,8 +3354,8 @@ manage_consolidated_mbz_display() =>
                 array.push(mbz_body_highlights, consolidated_highlight_box)
 
                 // Live extension: calculate offset and extension right time
-                calculated_offset_bars = extend_to_current ? get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, extension_offset) : 0
-                extension_right_time = extend_to_current ? math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)) + (calculated_offset_bars * bar_duration_ms) : current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
+                calculated_offset_bars = workspace_mode_enabled ? get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET) : 0
+                extension_right_time = workspace_mode_enabled ? math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)) + (calculated_offset_bars * bar_duration_ms) : current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
 
                 // Live extension: cycling border opacity for visual distinction
                 border_transparency = get_border_transparency(current_consolidated_mbz.bar_index)
@@ -4853,7 +4877,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 16, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 4, 17, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -4950,6 +4974,12 @@ if show_color_table and barstate.islast
     table.cell(color_table, 1, 15, "530", text_size=size.small)
     table.cell(color_table, 2, 15, str.format("R:{0} G:{1} B:{2}", int(color.r(border_color_delayed)), int(color.g(border_color_delayed)), int(color.b(border_color_delayed))), text_size=size.small)
     table.cell(color_table, 3, 15, str.tostring(int(color.t(border_color_delayed))), text_size=size.small)
+
+    // ATR Band
+    table.cell(color_table, 0, 16, "ATR Band", text_size=size.small)
+    table.cell(color_table, 1, 16, "79", text_size=size.small)
+    table.cell(color_table, 2, 16, str.format("R:{0} G:{1} B:{2}", int(color.r(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.g(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.b(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small)
+    table.cell(color_table, 3, 16, str.tostring(int(color.t(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSION TIMES TABLE
@@ -5060,5 +5090,12 @@ if show_session_times_table and barstate.islast
 
             table.cell(session_times_table, 0, 7, "Premarket", bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.tiny)
             table.cell(session_times_table, 1, 7, STANDARD_PREMARKET_TIME, bgcolor=color.new(color.black, 0), text_color=color.white, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ATR BAND VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+plot(workspace_mode_enabled ? atr_upper : na, "ATR Upper", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
+plot(workspace_mode_enabled ? atr_lower : na, "ATR Lower", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
 
 // ═══════════════════════════════════════════════════════════════════════════════

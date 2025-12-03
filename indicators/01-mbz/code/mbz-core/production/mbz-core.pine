@@ -191,12 +191,12 @@ ULTRA_BOOST_MULTIPLIER = 8.0
 ULTRA_PRO_BOOST_MULTIPLIER = 12.0
 
 // UI Group constants
+GROUP_LIVE_WORKSPACE = '🎤 Workspace Tools'
 GROUP_DETECTION = '🎯 Detection'
 GROUP_INVALIDATION = '✋ Invalidation'
 GROUP_VISIBILITY_FILTERS = '👁️ Visibility Filters'
 GROUP_MBZ_LABELLING = '🎨 MBZ Labelling'
 GROUP_MBZ_EXTENSION = '✨ MBZ Extension'
-GROUP_MBZ_LIVE_EXTENSION = '🎤 Live Extension'
 GROUP_GAP_SOURCES = '🎯 Gap Sources'
 GROUP_MBZ_BEHAVIORS = '🎭 MBZ Wick Behaviors'
 GROUP_MBZ_DETECTION_MARKERS = '🏷️ MBZ Detection Markers'
@@ -204,6 +204,10 @@ GROUP_MULTI_SOURCE_PROPERTIES = '📦 Multi-Source Properties'
 GROUP_BREAKAWAY_PROPERTIES = '🔥 Breakaway Properties'
 GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 GROUP_MOMENTUM_MBZS = '⚡ Momentum MBZs'
+
+// Workspace Mode Constants (hardcoded values for live workspace)
+WORKSPACE_EXTENSION_OFFSET = 2
+WORKSPACE_ATR_MULTIPLIER = 3.5
 
 // Display text & abbreviation constants
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
@@ -284,10 +288,14 @@ const color DEFAULT_BREAKAWAY_BULLISH_COLOR = color.new(color.rgb(91, 156, 246),
 const color DEFAULT_BREAKAWAY_BEARISH_COLOR = color.new(color.rgb(247, 11, 241), 80)
 const color DEFAULT_BREAKAWAY_BULLISH_BORDER_COLOR = color.new(color.rgb(77, 208, 225), 50)
 const color DEFAULT_BREAKAWAY_BEARISH_BORDER_COLOR = color.new(color.rgb(249, 121, 246), 50)
+const color DEFAULT_WORKSPACE_ATR_BAND_COLOR = color.new(color.rgb(74, 74, 74), 98)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUT SETTINGS - ULTRA-COMPACT ALIGNED LAYOUT
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// === 🎤 WORKSPACE TOOLS ===
+workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance\n• Shows ATR threshold band')
 
 // === 🎯 DETECTION ===
 max_valid_mbzs = input.int(DEFAULT_MAX_VALID_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_VALID_MBZS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid MBZs visible on chart (0-55 limit)')
@@ -339,8 +347,6 @@ extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INP
 show_extended_boxes = input.bool(true, INPUT_LABEL_ENABLE_EXTENSION, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Show highlights and extensions for valid MBZs')
 extend_to_reference_wick = input.bool(false, 'Include Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Include reference candle wick in zone boundary:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high\n• Only applies to Standard MBZ subtype\n• Creates larger zones that are harder to invalidate')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
-extend_to_current = input.bool(false, 'Extend to Current', group=GROUP_MBZ_LIVE_EXTENSION, inline='live', tooltip='ON: Zones extend to current price (live tracking)\nOFF: Zones extend only the fixed number of bars above')
-extension_offset = input.int(DEFAULT_EXTENSION_OFFSET, 'Offset', minval=0, maxval=10, group=GROUP_MBZ_LIVE_EXTENSION, inline='live', tooltip='Spreads zone endpoints apart so overlapping zones are distinguishable\n\n0 = all zones end at same bar\n1+ = zones end at different bars based on unique offset')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
 extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_RIGHT, 'Horizontal', options=[LABEL_ALIGNMENT_LEFT, LABEL_ALIGNMENT_CENTER, LABEL_ALIGNMENT_RIGHT], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Horizontal alignment for extension box text')
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Vertical alignment for extension box text')
@@ -501,6 +507,12 @@ var array<ConsolidatedMBZ> last_consolidated_mbzs = array.new<ConsolidatedMBZ>()
 
 // Performance optimization flags
 var bool needs_visual_update = true
+
+// ATR Distance Filter calculation (fixed 14-period ATR)
+atr_value = ta.atr(14)
+atr_max_distance = atr_value * WORKSPACE_ATR_MULTIPLIER
+atr_upper = close + atr_max_distance
+atr_lower = close - atr_max_distance
 
 // Pre-calculated padding strings (performance optimization)
 horizontal_padding_str = ""
@@ -2375,6 +2387,15 @@ should_display_consolidated_mbz(consolidated_mbz) =>
 
         should_display
 
+// ATR distance filter helper - checks if zone is within ATR range from current price
+passes_atr_distance_filter(zone_top, zone_bottom) =>
+    if not workspace_mode_enabled
+        true
+    else
+        // Distance to nearest edge: 0 if price inside zone, otherwise distance to closest edge
+        distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
+        distance_to_zone <= atr_max_distance
+
 
 // Box creation
 create_box(left_bar, top_price, bottom_price, box_color, label_text) =>
@@ -2512,6 +2533,10 @@ manage_consolidated_mbz_display() =>
             current_consolidated_mbz.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_mbz.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
+            // ATR distance filter - skip zones too far from current price
+            if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
+                continue
+
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_mbz)
             current_consolidated_mbz.is_consolidated_invalidated := is_currently_invalidated
@@ -2608,8 +2633,8 @@ manage_consolidated_mbz_display() =>
                 array.push(mbz_body_highlights, consolidated_highlight_box)
 
                 // Live extension: calculate offset and extension right time
-                calculated_offset_bars = extend_to_current ? get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, extension_offset) : 0
-                extension_right_time = extend_to_current ? math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)) + (calculated_offset_bars * bar_duration_ms) : current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
+                calculated_offset_bars = workspace_mode_enabled ? get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET) : 0
+                extension_right_time = workspace_mode_enabled ? math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)) + (calculated_offset_bars * bar_duration_ms) : current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
 
                 // Get cached source count for performance
                 mbz_source_count = array.size(current_consolidated_mbz.mbz_group)
@@ -3000,7 +3025,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 12, bgcolor=color.new(color.black, 20), frame_width=2, frame_color=color.gray, border_width=1, border_color=color.new(color.gray, 70))
+    var table color_table = table.new(position.top_right, 4, 13, bgcolor=color.new(color.black, 20), frame_width=2, frame_color=color.gray, border_width=1, border_color=color.new(color.gray, 70))
 
     // Header
     table.cell(color_table, 0, 0, "Setting", text_color=color.white, bgcolor=color.new(color.gray, 30), text_size=size.small)
@@ -3066,5 +3091,18 @@ if show_color_table and barstate.islast
     table.cell(color_table, 1, 11, "434", text_size=size.small, text_color=color.yellow)
     table.cell(color_table, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(breakaway_bearish_border_color)), int(color.g(breakaway_bearish_border_color)), int(color.b(breakaway_bearish_border_color))), text_size=size.small, text_color=color.white)
     table.cell(color_table, 3, 11, str.tostring(int(color.t(breakaway_bearish_border_color))), text_size=size.small, text_color=color.white)
+
+    // ATR Band
+    table.cell(color_table, 0, 12, "ATR Band", text_size=size.small, text_color=color.white)
+    table.cell(color_table, 1, 12, "291", text_size=size.small, text_color=color.yellow)
+    table.cell(color_table, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.g(DEFAULT_WORKSPACE_ATR_BAND_COLOR)), int(color.b(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small, text_color=color.white)
+    table.cell(color_table, 3, 12, str.tostring(int(color.t(DEFAULT_WORKSPACE_ATR_BAND_COLOR))), text_size=size.small, text_color=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ATR DISTANCE FILTER VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+plot(workspace_mode_enabled ? atr_upper : na, "ATR Upper", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
+plot(workspace_mode_enabled ? atr_lower : na, "ATR Lower", color=DEFAULT_WORKSPACE_ATR_BAND_COLOR, linewidth=1)
 
 // MBZ Core° [Pro+] Optimised (now Core)
