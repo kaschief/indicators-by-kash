@@ -1,5 +1,5 @@
 //@version=6
-indicator('Kash DTT Intraday° [Pro+]-dev', overlay=true, max_lines_count=500, max_labels_count=500)
+indicator('Kash DTT Intraday° [Pro+]', overlay=true, max_lines_count=500, max_labels_count=500)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -27,7 +27,6 @@ const int MAX_SESSION_HISTORY = 10
 // Fibonacci History Settings
 const int DEFAULT_FIB_HISTORY = 1
 const int MIN_FIB_HISTORY = 1
-const int MAX_FIB_HISTORY = 10
 
 // Fibonacci Settings
 const int DEFAULT_FIB_WIDTH = 2
@@ -91,6 +90,7 @@ const string POSITION_MIDDLE = "Middle"
 const string POSITION_BOTTOM = "Bottom"
 
 // Input Group Names (for maintainability)
+const string GROUP_DISPLAY_MODE = "Display Mode"
 const string GROUP_AMRP_ZONES = "AMRP Zones"
 const string GROUP_AMRP_EQ = "AMRP EQ Lines"
 const string GROUP_AMRP_PROJECTIONS = "AMRP Projections"
@@ -105,7 +105,8 @@ const string GROUP_COLOR_REFERENCE = "Color Reference Table"
 
 // Input Label Strings (for consistency)
 const string LABEL_ON_OFF = "ON/OFF"
-const string LABEL_HISTORY = "History"
+const string LABEL_NO_OF_CYCLES = "No. of Cycles"
+const string LABEL_FIB_HISTORY = "History"
 
 // Session Names
 const string SESSION_DAMASU = "Damasu"
@@ -243,6 +244,9 @@ const int TIME_MODEL111_INTERVAL3 = 1545
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ─── Display Mode ───
+show_only_most_recent = input.bool(true, "Most Recent Only", group=GROUP_DISPLAY_MODE, tooltip="Override days setting to show only the most recent session")
+
 // AMRP (Average Model Range Projection)
 // ══════════════════════════════════════════════════════════════════════════════
 // Uses IQR (Interquartile Range) method: Q1 (25th percentile) and Q3 (75th percentile)
@@ -265,9 +269,9 @@ projection_color = input.color(DEFAULT_PROJECTION_COLOR, "", group=GROUP_AMRP_PR
 
 // ─── Dynamic Fibonacci Range ───
 show_fib = input.bool(true, LABEL_ON_OFF, group=GROUP_FIB, inline="fib_toggle", tooltip="Show dynamic Fibonacci levels anchored to AMRP boundaries, trailing with price extremes")
-fib_history = input.int(DEFAULT_FIB_HISTORY, "History", minval=MIN_FIB_HISTORY, maxval=MAX_FIB_HISTORY, group=GROUP_FIB, inline="fib_toggle", tooltip="Number of sessions to display Fibonacci levels for")
+fib_history = input.int(DEFAULT_FIB_HISTORY, LABEL_FIB_HISTORY, minval=MIN_FIB_HISTORY, maxval=SESSIONS_PER_CYCLE, group=GROUP_FIB, inline="fib_toggle", tooltip="Number of sessions to display Fibonacci levels for (max 15 = full cycle)")
 show_fib_labels = input.bool(true, "Show Labels", group=GROUP_FIB, inline="fib_labels")
-fib_style = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_FIB, inline="fib_labels")
+fib_style = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], group=GROUP_FIB, inline="fib_labels")
 
 show_fib_100 = input.bool(true, "1", group=GROUP_FIB_LEVELS, inline="fibrow_100")
 fib_color_100 = input.color(DEFAULT_FIB_100_COLOR, "", group=GROUP_FIB_LEVELS, inline="fibrow_100")
@@ -298,8 +302,7 @@ fib_color_0 = input.color(DEFAULT_FIB_0_COLOR, "", group=GROUP_FIB_LEVELS, inlin
 fib_width_0 = input.int(DEFAULT_FIB_WIDTH, "", minval=MIN_FIB_WIDTH, maxval=MAX_FIB_WIDTH, group=GROUP_FIB_LEVELS, inline="fibrow_0")
 
 // ─── SESSIONS ───
-show_only_most_recent = input.bool(true, "Most Recent Only", group=GROUP_SESSIONS, tooltip="Override days setting to show only the most recent session")
-show_last_n_days = input.int(DEFAULT_SESSION_HISTORY, LABEL_HISTORY, minval=MIN_SESSION_HISTORY, maxval=MAX_SESSION_HISTORY, group=GROUP_SESSIONS, tooltip="Number of 24-hour DTT cycles to display")
+show_last_n_days = input.int(DEFAULT_SESSION_HISTORY, LABEL_NO_OF_CYCLES, minval=MIN_SESSION_HISTORY, maxval=MAX_SESSION_HISTORY, group=GROUP_SESSIONS, tooltip="Number of 24-hour DTT cycles to display")
 
 show_boundaries = input.bool(true, "Boundaries?", group=GROUP_SESSIONS, inline="boundary", tooltip="Show session start and end boundary lines")
 boundary_color = input.color(DEFAULT_BOUNDARY_COLOR, "", group=GROUP_SESSIONS, inline="boundary")
@@ -469,6 +472,81 @@ type SessionTemplate
     string name
     string prev_session_name
     int root_time
+
+// Draw Fibonacci levels for a session (method to avoid code duplication)
+method draw_fibonacci(DttIntradaySession sess) =>
+    if not na(sess.fib_high_anchor) and not na(sess.fib_low_anchor) and not na(sess.start_timestamp) and not na(sess.end_timestamp)
+        start_ts = sess.start_timestamp
+        end_ts = sess.end_timestamp
+        fib_range = sess.fib_high_anchor - sess.fib_low_anchor
+        fib_line_style = fib_style_converted
+
+        // Calculate Fibonacci price levels using constants
+        fib_0 = sess.fib_low_anchor + fib_range * FIB_LEVEL_0
+        fib_214 = sess.fib_low_anchor + fib_range * FIB_LEVEL_214
+        fib_295 = sess.fib_low_anchor + fib_range * FIB_LEVEL_295
+        fib_382 = sess.fib_low_anchor + fib_range * FIB_LEVEL_382
+        fib_50 = sess.fib_low_anchor + fib_range * FIB_LEVEL_50
+        fib_618 = sess.fib_low_anchor + fib_range * FIB_LEVEL_618
+        fib_705 = sess.fib_low_anchor + fib_range * FIB_LEVEL_705
+        fib_786 = sess.fib_low_anchor + fib_range * FIB_LEVEL_786
+        fib_100 = sess.fib_low_anchor + fib_range * FIB_LEVEL_100
+
+        // Draw horizontal Fibonacci lines (only if checkbox enabled)
+        if show_fib_0
+            sess.fib_line_0 := line.new(start_ts, fib_0, end_ts, fib_0, xloc=xloc.bar_time, color=fib_color_0, width=fib_width_0, style=fib_line_style)
+        if show_fib_214
+            sess.fib_line_214 := line.new(start_ts, fib_214, end_ts, fib_214, xloc=xloc.bar_time, color=fib_color_214, width=fib_width_214, style=fib_line_style)
+        if show_fib_295
+            sess.fib_line_295 := line.new(start_ts, fib_295, end_ts, fib_295, xloc=xloc.bar_time, color=fib_color_295, width=fib_width_295, style=fib_line_style)
+        if show_fib_382
+            sess.fib_line_382 := line.new(start_ts, fib_382, end_ts, fib_382, xloc=xloc.bar_time, color=fib_color_382, width=fib_width_382, style=fib_line_style)
+        if show_fib_50
+            sess.fib_line_50 := line.new(start_ts, fib_50, end_ts, fib_50, xloc=xloc.bar_time, color=fib_color_50, width=fib_width_50, style=fib_line_style)
+        if show_fib_618
+            sess.fib_line_618 := line.new(start_ts, fib_618, end_ts, fib_618, xloc=xloc.bar_time, color=fib_color_618, width=fib_width_618, style=fib_line_style)
+        if show_fib_705
+            sess.fib_line_705 := line.new(start_ts, fib_705, end_ts, fib_705, xloc=xloc.bar_time, color=fib_color_705, width=fib_width_705, style=fib_line_style)
+        if show_fib_786
+            sess.fib_line_786 := line.new(start_ts, fib_786, end_ts, fib_786, xloc=xloc.bar_time, color=fib_color_786, width=fib_width_786, style=fib_line_style)
+        if show_fib_100
+            sess.fib_line_100 := line.new(start_ts, fib_100, end_ts, fib_100, xloc=xloc.bar_time, color=fib_color_100, width=fib_width_100, style=fib_line_style)
+
+        // Draw decimal labels centered in session if enabled
+        if show_fib_labels
+            int mid_ts = int(math.round((start_ts + end_ts) / 2))
+
+            fib_texts = array.from("0", "0.214", "0.295", "0.382", "0.5", "0.618", "0.705", "0.786", "1")
+            fib_prices = array.from(fib_0, fib_214, fib_295, fib_382, fib_50, fib_618, fib_705, fib_786, fib_100)
+            fib_colors = array.from(fib_color_0, fib_color_214, fib_color_295, fib_color_382, fib_color_50, fib_color_618, fib_color_705, fib_color_786, fib_color_100)
+            fib_shows = array.from(show_fib_0, show_fib_214, show_fib_295, show_fib_382, show_fib_50, show_fib_618, show_fib_705, show_fib_786, show_fib_100)
+
+            for idx = 0 to 8
+                if array.get(fib_shows, idx)
+                    fib_text = array.get(fib_texts, idx)
+                    lbl = label.new(mid_ts, array.get(fib_prices, idx), text=fib_text, xloc=xloc.bar_time, style=label.style_none, textcolor=array.get(fib_colors, idx), size=size.tiny, textalign=text.align_center)
+
+                    if idx == 0
+                        sess.fib_label_0 := lbl
+                    else if idx == 1
+                        sess.fib_label_214 := lbl
+                    else if idx == 2
+                        sess.fib_label_295 := lbl
+                    else if idx == 3
+                        sess.fib_label_382 := lbl
+                    else if idx == 4
+                        sess.fib_label_50 := lbl
+                    else if idx == 5
+                        sess.fib_label_618 := lbl
+                    else if idx == 6
+                        sess.fib_label_705 := lbl
+                    else if idx == 7
+                        sess.fib_label_786 := lbl
+                    else if idx == 8
+                        sess.fib_label_100 := lbl
+
+        sess.fib_drawn := true
+    sess
 
 // Convert session name to lowercase for labels
 get_session_name_lower(session_name) =>
@@ -2325,82 +2403,11 @@ if show_amrp and array.size(session_instances) > 0
                             sess.fib_low_anchor := sess.amrp_dn_outer
                             sess.fib_drawn := false
 
-                            // Draw Fibonacci levels if enabled and session is within last N sessions
+                            // Draw Fibonacci levels if enabled and session is within fib_history window
                             total_sessions = array.size(session_instances)
-                            sessions_from_end = total_sessions - i  // How many sessions from the end (1 = most recent)
-                            show_fib_for_this_session = show_fib and sessions_from_end <= fib_history
-
-                            if show_fib_for_this_session
-                                fib_range = sess.fib_high_anchor - sess.fib_low_anchor
-                                fib_line_style = fib_style_converted
-
-                                // Calculate Fibonacci price levels using constants
-                                fib_0 = sess.fib_low_anchor + fib_range * FIB_LEVEL_0
-                                fib_214 = sess.fib_low_anchor + fib_range * FIB_LEVEL_214
-                                fib_295 = sess.fib_low_anchor + fib_range * FIB_LEVEL_295
-                                fib_382 = sess.fib_low_anchor + fib_range * FIB_LEVEL_382
-                                fib_50 = sess.fib_low_anchor + fib_range * FIB_LEVEL_50
-                                fib_618 = sess.fib_low_anchor + fib_range * FIB_LEVEL_618
-                                fib_705 = sess.fib_low_anchor + fib_range * FIB_LEVEL_705
-                                fib_786 = sess.fib_low_anchor + fib_range * FIB_LEVEL_786
-                                fib_100 = sess.fib_low_anchor + fib_range * FIB_LEVEL_100
-
-                                // Draw horizontal Fibonacci lines spanning session duration (only if checkbox enabled)
-                                // Using individual widths and colors per level
-                                if show_fib_0
-                                    sess.fib_line_0 := line.new(start_ts, fib_0, end_ts, fib_0, xloc=xloc.bar_time, color=fib_color_0, width=fib_width_0, style=fib_line_style)
-                                if show_fib_214
-                                    sess.fib_line_214 := line.new(start_ts, fib_214, end_ts, fib_214, xloc=xloc.bar_time, color=fib_color_214, width=fib_width_214, style=fib_line_style)
-                                if show_fib_295
-                                    sess.fib_line_295 := line.new(start_ts, fib_295, end_ts, fib_295, xloc=xloc.bar_time, color=fib_color_295, width=fib_width_295, style=fib_line_style)
-                                if show_fib_382
-                                    sess.fib_line_382 := line.new(start_ts, fib_382, end_ts, fib_382, xloc=xloc.bar_time, color=fib_color_382, width=fib_width_382, style=fib_line_style)
-                                if show_fib_50
-                                    sess.fib_line_50 := line.new(start_ts, fib_50, end_ts, fib_50, xloc=xloc.bar_time, color=fib_color_50, width=fib_width_50, style=fib_line_style)
-                                if show_fib_618
-                                    sess.fib_line_618 := line.new(start_ts, fib_618, end_ts, fib_618, xloc=xloc.bar_time, color=fib_color_618, width=fib_width_618, style=fib_line_style)
-                                if show_fib_705
-                                    sess.fib_line_705 := line.new(start_ts, fib_705, end_ts, fib_705, xloc=xloc.bar_time, color=fib_color_705, width=fib_width_705, style=fib_line_style)
-                                if show_fib_786
-                                    sess.fib_line_786 := line.new(start_ts, fib_786, end_ts, fib_786, xloc=xloc.bar_time, color=fib_color_786, width=fib_width_786, style=fib_line_style)
-                                if show_fib_100
-                                    sess.fib_line_100 := line.new(start_ts, fib_100, end_ts, fib_100, xloc=xloc.bar_time, color=fib_color_100, width=fib_width_100, style=fib_line_style)
-
-                                // Draw decimal labels centered in session if enabled
-                                if show_fib_labels
-                                    int mid_ts = int(math.round((start_ts + end_ts) / 2))
-
-                                    fib_texts = array.from("0", "0.214", "0.295", "0.382", "0.5", "0.618", "0.705", "0.786", "1")
-                                    fib_prices = array.from(fib_0, fib_214, fib_295, fib_382, fib_50, fib_618, fib_705, fib_786, fib_100)
-                                    fib_colors = array.from(fib_color_0, fib_color_214, fib_color_295, fib_color_382, fib_color_50, fib_color_618, fib_color_705, fib_color_786, fib_color_100)
-                                    fib_shows = array.from(show_fib_0, show_fib_214, show_fib_295, show_fib_382, show_fib_50, show_fib_618, show_fib_705, show_fib_786, show_fib_100)
-
-                                    for idx = 0 to 8
-                                        if array.get(fib_shows, idx)
-                                            fib_text = array.get(fib_texts, idx)
-                                            lbl = label.new(mid_ts, array.get(fib_prices, idx), text=fib_text, xloc=xloc.bar_time, style=label.style_none, textcolor=array.get(fib_colors, idx), size=size.tiny, textalign=text.align_center)
-
-                                            // Assign to appropriate session field
-                                            if idx == 0
-                                                sess.fib_label_0 := lbl
-                                            else if idx == 1
-                                                sess.fib_label_214 := lbl
-                                            else if idx == 2
-                                                sess.fib_label_295 := lbl
-                                            else if idx == 3
-                                                sess.fib_label_382 := lbl
-                                            else if idx == 4
-                                                sess.fib_label_50 := lbl
-                                            else if idx == 5
-                                                sess.fib_label_618 := lbl
-                                            else if idx == 6
-                                                sess.fib_label_705 := lbl
-                                            else if idx == 7
-                                                sess.fib_label_786 := lbl
-                                            else if idx == 8
-                                                sess.fib_label_100 := lbl
-
-                                sess.fib_drawn := true
+                            sessions_from_end = total_sessions - i
+                            if show_fib and sessions_from_end <= fib_history
+                                sess := sess.draw_fibonacci()
 
                     else
                         // Manual mode - single lookback
@@ -2453,83 +2460,12 @@ if show_amrp and array.size(session_instances) > 0
                             sess.fib_low_anchor := amrp_dn_outer_price
                             sess.fib_drawn := false
 
-                            // Draw Fibonacci levels if enabled and session is within last N sessions
-                            if show_fib and not na(sess.fib_high_anchor) and not na(sess.fib_low_anchor)
+                            // Draw Fibonacci levels if enabled and session is within fib_history window
+                            if show_fib
                                 total_sessions = array.size(session_instances)
-                                sessions_from_end = total_sessions - i  // How many sessions from the end (1 = most recent)
-                                show_fib_for_this_session = sessions_from_end <= fib_history
-
-                                if show_fib_for_this_session
-                                    fib_range = sess.fib_high_anchor - sess.fib_low_anchor
-                                    fib_line_style = fib_style_converted
-
-                                    // Calculate Fibonacci price levels using constants
-                                    fib_0 = sess.fib_low_anchor + fib_range * FIB_LEVEL_0
-                                    fib_214 = sess.fib_low_anchor + fib_range * FIB_LEVEL_214
-                                    fib_295 = sess.fib_low_anchor + fib_range * FIB_LEVEL_295
-                                    fib_382 = sess.fib_low_anchor + fib_range * FIB_LEVEL_382
-                                    fib_50 = sess.fib_low_anchor + fib_range * FIB_LEVEL_50
-                                    fib_618 = sess.fib_low_anchor + fib_range * FIB_LEVEL_618
-                                    fib_705 = sess.fib_low_anchor + fib_range * FIB_LEVEL_705
-                                    fib_786 = sess.fib_low_anchor + fib_range * FIB_LEVEL_786
-                                    fib_100 = sess.fib_low_anchor + fib_range * FIB_LEVEL_100
-
-                                    // Draw horizontal Fibonacci lines spanning session duration (only if checkbox enabled)
-                                    // Using individual widths and colors per level
-                                    if show_fib_0
-                                        sess.fib_line_0 := line.new(start_ts, fib_0, end_ts, fib_0, xloc=xloc.bar_time, color=fib_color_0, width=fib_width_0, style=fib_line_style)
-                                    if show_fib_214
-                                        sess.fib_line_214 := line.new(start_ts, fib_214, end_ts, fib_214, xloc=xloc.bar_time, color=fib_color_214, width=fib_width_214, style=fib_line_style)
-                                    if show_fib_295
-                                        sess.fib_line_295 := line.new(start_ts, fib_295, end_ts, fib_295, xloc=xloc.bar_time, color=fib_color_295, width=fib_width_295, style=fib_line_style)
-                                    if show_fib_382
-                                        sess.fib_line_382 := line.new(start_ts, fib_382, end_ts, fib_382, xloc=xloc.bar_time, color=fib_color_382, width=fib_width_382, style=fib_line_style)
-                                    if show_fib_50
-                                        sess.fib_line_50 := line.new(start_ts, fib_50, end_ts, fib_50, xloc=xloc.bar_time, color=fib_color_50, width=fib_width_50, style=fib_line_style)
-                                    if show_fib_618
-                                        sess.fib_line_618 := line.new(start_ts, fib_618, end_ts, fib_618, xloc=xloc.bar_time, color=fib_color_618, width=fib_width_618, style=fib_line_style)
-                                    if show_fib_705
-                                        sess.fib_line_705 := line.new(start_ts, fib_705, end_ts, fib_705, xloc=xloc.bar_time, color=fib_color_705, width=fib_width_705, style=fib_line_style)
-                                    if show_fib_786
-                                        sess.fib_line_786 := line.new(start_ts, fib_786, end_ts, fib_786, xloc=xloc.bar_time, color=fib_color_786, width=fib_width_786, style=fib_line_style)
-                                    if show_fib_100
-                                        sess.fib_line_100 := line.new(start_ts, fib_100, end_ts, fib_100, xloc=xloc.bar_time, color=fib_color_100, width=fib_width_100, style=fib_line_style)
-
-                                    // Draw decimal labels centered in session if enabled
-                                    if show_fib_labels
-                                        int mid_ts = int(math.round((start_ts + end_ts) / 2))
-
-                                        fib_texts = array.from("0", "0.214", "0.295", "0.382", "0.5", "0.618", "0.705", "0.786", "1")
-                                        fib_prices = array.from(fib_0, fib_214, fib_295, fib_382, fib_50, fib_618, fib_705, fib_786, fib_100)
-                                        fib_colors = array.from(fib_color_0, fib_color_214, fib_color_295, fib_color_382, fib_color_50, fib_color_618, fib_color_705, fib_color_786, fib_color_100)
-                                        fib_shows = array.from(show_fib_0, show_fib_214, show_fib_295, show_fib_382, show_fib_50, show_fib_618, show_fib_705, show_fib_786, show_fib_100)
-
-                                        for idx = 0 to 8
-                                            if array.get(fib_shows, idx)
-                                                fib_text = array.get(fib_texts, idx)
-                                                lbl = label.new(mid_ts, array.get(fib_prices, idx), text=fib_text, xloc=xloc.bar_time, style=label.style_none, textcolor=array.get(fib_colors, idx), size=size.tiny, textalign=text.align_center)
-
-                                                // Assign to appropriate session field
-                                                if idx == 0
-                                                    sess.fib_label_0 := lbl
-                                                else if idx == 1
-                                                    sess.fib_label_214 := lbl
-                                                else if idx == 2
-                                                    sess.fib_label_295 := lbl
-                                                else if idx == 3
-                                                    sess.fib_label_382 := lbl
-                                                else if idx == 4
-                                                    sess.fib_label_50 := lbl
-                                                else if idx == 5
-                                                    sess.fib_label_618 := lbl
-                                                else if idx == 6
-                                                    sess.fib_label_705 := lbl
-                                                else if idx == 7
-                                                    sess.fib_label_786 := lbl
-                                                else if idx == 8
-                                                    sess.fib_label_100 := lbl
-
-                                    sess.fib_drawn := true
+                                sessions_from_end = total_sessions - i
+                                if sessions_from_end <= fib_history
+                                    sess := sess.draw_fibonacci()
 
                     array.set(session_instances, i, sess)
 
@@ -2537,9 +2473,9 @@ if show_amrp and array.size(session_instances) > 0
 // PERFORMANCE: Only check sessions that might be outside the window (skip recent sessions)
 if show_fib and array.size(session_instances) > 0
     total_sessions = array.size(session_instances)
-    cutoff_index = math.max(0, total_sessions - 1)
+    cutoff_index = math.max(0, total_sessions - fib_history)
 
-    // Only iterate through older sessions that might need cleanup
+    // Only iterate through older sessions that might need cleanup (outside fib_history window)
     if cutoff_index > 0
         for i = 0 to cutoff_index - 1
             sess = array.get(session_instances, i)
@@ -2608,6 +2544,16 @@ if show_fib and array.size(session_instances) > 0
                 sess.fib_drawn := false
 
                 array.set(session_instances, i, sess)
+
+    // Draw Fib for sessions within the fib_history window that don't have Fib yet
+    // This handles cases where fib_history was increased or sessions came back into view
+    for i = cutoff_index to total_sessions - 1
+        sess = array.get(session_instances, i)
+
+        // Only draw if AMRP is drawn and Fib not drawn
+        if sess.amrp_drawn and not sess.fib_drawn
+            sess := sess.draw_fibonacci()
+            array.set(session_instances, i, sess)
 
 // Track AMRP accuracy (how often price stays within zones)
 if show_amrp and array.size(session_instances) > 0
