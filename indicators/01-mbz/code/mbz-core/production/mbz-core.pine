@@ -70,14 +70,18 @@ INVALIDATION_CUSTOM = "Custom"
 INVALIDATION_BOUNDARY_BODY = "Body Zone"
 INVALIDATION_BOUNDARY_EXTREMES = "Candle Extremes"
 
-// Same-FVG MBZ Filter Constants
-SAME_FVG_FILTER_ALL_TOUCHES = "All"
-SAME_FVG_FILTER_FIRST_TOUCH = "First Touch"
-SAME_FVG_FILTER_LATEST_TOUCH = "Latest Touch"
+// Same-Source MBZ Filter Constants
+SAME_SOURCE_FILTER_ALL_TOUCHES = "All"
+SAME_SOURCE_FILTER_FIRST_TOUCH = "First Touch"
+SAME_SOURCE_FILTER_LATEST_TOUCH = "Latest Touch"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PERFORMANCE & THRESHOLD CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Suppression temporal window - only suppress gaps formed within this many bars
+// Prevents historical gaps from incorrectly suppressing new formations
+SUPPRESSION_TEMPORAL_WINDOW = 2
 
 // Array Size Limits (Optimized through performance testing)
 MAX_ACTIVE_GAPS = 100
@@ -143,7 +147,7 @@ DEFAULT_BORDER_OPACITY_2 = 15
 DEFAULT_BORDER_OPACITY_3 = 80
 DEFAULT_BORDER_OPACITY_4 = 30
 DEFAULT_BORDER_OPACITY_5 = 65
-DEFAULT_EXTENSION_FILL_OPACITY = 80
+DEFAULT_EXTENSION_FILL_OPACITY = 97
 MAX_PADDING_HORIZONTAL = 10
 MAX_PADDING_VERTICAL = 5
 DEFAULT_SOURCE_GAP_BOXES = 10
@@ -282,7 +286,7 @@ invalidation_boundary = input.string(INVALIDATION_BOUNDARY_BODY, INPUT_LABEL_INV
 
 // === 👁️ VISIBILITY FILTERS ===
 mbz_direction_filter = input.string(MBZ_DIRECTION_BOTH, 'Direction', options=[MBZ_DIRECTION_BOTH, MBZ_DIRECTION_BULLISH, MBZ_DIRECTION_BEARISH], group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Filter MBZ display by direction:\n• Both: Show all MBZs\n• MBZ⁺ Only: Show only bullish MBZs\n• MBZ⁻ Only: Show only bearish MBZs')
-same_fvg_mbz_filter = input.string(SAME_FVG_FILTER_LATEST_TOUCH, 'Same-FVG MBZs', options=[SAME_FVG_FILTER_ALL_TOUCHES, SAME_FVG_FILTER_FIRST_TOUCH, SAME_FVG_FILTER_LATEST_TOUCH], group=GROUP_VISIBILITY_FILTERS, inline="filter1", tooltip='Control display when multiple MBZs form from the same FVG:\n• All Touches: Show all MBZs\n• First Touch: Show only the first non-invalidated MBZ from each FVG\n• Latest Touch: Show only the most recent MBZ from each FVG (default)')
+same_source_mbz_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, 'Same-Source MBZs', options=[SAME_SOURCE_FILTER_ALL_TOUCHES, SAME_SOURCE_FILTER_FIRST_TOUCH, SAME_SOURCE_FILTER_LATEST_TOUCH], group=GROUP_VISIBILITY_FILTERS, inline="filter1", tooltip='Control display when multiple MBZs form from the same source gap:\n• All Touches: Show all MBZs\n• First Touch: Show only the first non-invalidated MBZ from each gap\n• Latest Touch: Show only the most recent MBZ from each gap (default)')
 
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of MBZ detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
@@ -760,11 +764,12 @@ get_vi_coordinates(is_bullish_gap) =>
 // @returns bool - true if VI should be suppressed, false if allowed
 // @details GAP HIERARCHY SUPPRESSION ALGORITHM:
 //   • Suppression conditions (ALL must be true):
-//     1. Gap type: FVG, Implied FVG, or True Gap (higher priority than VI)
+//     1. Gap type: FVG, Implied FVG, RDRB, or True Gap (higher priority than VI)
 //     2. Direction match: gap.is_bullish == is_vi_bullish (same direction only)
 //     3. Active status: not gap.is_closed_through (unfilled gaps only)
-//     4. Spatial overlap: vi_bottom < gap.top AND vi_top >= gap.bottom
-//   • Uses >= for edge case where VI exactly touches gap boundary
+//     4. Temporal proximity: gap created within SUPPRESSION_TEMPORAL_WINDOW bars (same formation context)
+//     5. Spatial overlap: vi_bottom < gap.top AND vi_top >= gap.bottom
+//   • Temporal constraint prevents historical gaps from suppressing new formations
 //   • Early exit: breaks loop immediately when overlap found (performance optimization)
 is_vi_suppressed_by_gaps(vi_top, vi_bottom, is_vi_bullish) =>
     if array.size(active_gaps) == 0
@@ -774,8 +779,12 @@ is_vi_suppressed_by_gaps(vi_top, vi_bottom, is_vi_bullish) =>
         for i = 0 to array.size(active_gaps) - 1
             gap = array.get(active_gaps, i)
 
+            // Temporal constraint: only suppress if gap formed within SUPPRESSION_TEMPORAL_WINDOW bars (same formation context)
+            bars_since_gap = bar_index - gap.creation_bar
+
             // Gap hierarchy filter: FVG, Implied FVG, RDRB, and True Gap can suppress VI
-            if (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED or gap.gap_type == GAP_TYPE_RDRB or gap.gap_type == GAP_TYPE_TRUE) and
+            if bars_since_gap <= SUPPRESSION_TEMPORAL_WINDOW and
+               (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED or gap.gap_type == GAP_TYPE_RDRB or gap.gap_type == GAP_TYPE_TRUE) and
                gap.is_bullish == is_vi_bullish and  // Same direction only
                not gap.is_closed_through            // Active (unfilled) gaps only
 
@@ -797,8 +806,9 @@ is_vi_suppressed_by_gaps(vi_top, vi_bottom, is_vi_bullish) =>
 //   • Suppression conditions (ALL must be true):
 //     1. Direction match: gap.is_bullish == is_tg_bullish (same direction only)
 //     2. Active status: not gap.is_closed_through (unfilled gaps only)
-//     3. Spatial overlap: tg_bottom < gap.top AND tg_top > gap.bottom
-//   • Unlike VI suppression: ANY gap type can suppress True Gaps (broadest suppression)
+//     3. Temporal proximity: gap created within SUPPRESSION_TEMPORAL_WINDOW bars (same formation context)
+//     4. Spatial overlap: tg_bottom < gap.top AND tg_top > gap.bottom
+//   • Temporal constraint prevents historical gaps from suppressing new formations
 //   • Uses strict > rule (no boundary edge case handling needed)
 is_true_gap_suppressed_by_gaps(tg_top, tg_bottom, is_tg_bullish) =>
     if array.size(active_gaps) == 0
@@ -808,8 +818,12 @@ is_true_gap_suppressed_by_gaps(tg_top, tg_bottom, is_tg_bullish) =>
         for i = 0 to array.size(active_gaps) - 1
             gap = array.get(active_gaps, i)
 
+            // Temporal constraint: only suppress if gap formed within SUPPRESSION_TEMPORAL_WINDOW bars (same formation context)
+            bars_since_gap = bar_index - gap.creation_bar
+
             // Broadest suppression: ANY gap type can suppress True Gap (lowest hierarchy priority)
-            if gap.is_bullish == is_tg_bullish and  // Same direction only
+            if bars_since_gap <= SUPPRESSION_TEMPORAL_WINDOW and
+               gap.is_bullish == is_tg_bullish and  // Same direction only
                not gap.is_closed_through             // Active (unfilled) gaps only
 
                 // Spatial overlap detection: Mathematical overlap formula
@@ -2115,12 +2129,12 @@ manage_consolidated_mbz_display() =>
         valid_mbz_count = 0           // Counter for valid MBZs
         invalidated_mbz_count = 0     // Counter for invalidated MBZs
 
-        // Same-FVG MBZ filter tracking
+        // Same-Source MBZ filter tracking
         seen_gap_ids = map.new<int, bool>()  // For LATEST TOUCH mode
         first_touch_index_per_gap = map.new<int, int>()  // For FIRST TOUCH mode: gap_id -> bar_index of first non-invalidated MBZ
 
         // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ per gap_id
-        if same_fvg_mbz_filter == SAME_FVG_FILTER_FIRST_TOUCH
+        if same_source_mbz_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
             for record_index = total_mbz_records - 1 to 0
                 current_mbz = array.get(all_mbz_records, record_index)
                 if should_display_mbz_direction(current_mbz) and not current_mbz.is_invalidated
@@ -2132,35 +2146,35 @@ manage_consolidated_mbz_display() =>
             current_mbz_record = array.get(all_mbz_records, record_index)
 
             if should_display_mbz_direction(current_mbz_record)
-                // Same-FVG MBZ filter logic (inline for efficiency)
-                should_add_based_on_shared_fvg = true
+                // Same-Source MBZ filter logic (inline for efficiency)
+                should_add_based_on_shared_source = true
 
-                if same_fvg_mbz_filter == SAME_FVG_FILTER_LATEST_TOUCH
+                if same_source_mbz_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
                     // LATEST TOUCH: Show most recent displayable MBZ per gap_id
                     // If latest is invalidated and hidden, fall back to next newest valid one
                     gap_id = current_mbz_record.source_gap_id
                     if map.contains(seen_gap_ids, gap_id)
-                        should_add_based_on_shared_fvg := false  // Already added latest for this gap
+                        should_add_based_on_shared_source := false  // Already added latest for this gap
                     else
                         can_display = not current_mbz_record.is_invalidated or show_invalidated_mbzs
                         if can_display
                             map.put(seen_gap_ids, gap_id, true)  // Mark as seen
                         else
-                            should_add_based_on_shared_fvg := false  // Skip, try next latest
-                else if same_fvg_mbz_filter == SAME_FVG_FILTER_FIRST_TOUCH
+                            should_add_based_on_shared_source := false  // Skip, try next latest
+                else if same_source_mbz_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
                     // FIRST TOUCH: Only add FIRST (oldest) non-invalidated MBZ per gap_id
                     gap_id = current_mbz_record.source_gap_id
                     if map.contains(first_touch_index_per_gap, gap_id)
                         first_touch_idx = map.get(first_touch_index_per_gap, gap_id)
                         // Only add if this IS the first touch for this gap_id
                         if record_index != first_touch_idx
-                            should_add_based_on_shared_fvg := false
+                            should_add_based_on_shared_source := false
                     else
                         // No non-invalidated MBZ exists for this gap_id, skip it
-                        should_add_based_on_shared_fvg := false
+                        should_add_based_on_shared_source := false
 
                 // Apply all filters together
-                if should_add_based_on_shared_fvg
+                if should_add_based_on_shared_source
                     // SEPARATE LIMITS SYSTEM: Process valid and invalidated MBZs with independent counters
                     if not current_mbz_record.is_invalidated and valid_mbz_count < max_valid_mbzs_effective
                         // Add valid MBZs up to configured limit
