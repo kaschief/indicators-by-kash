@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='SIF Core° [Pro+]'
-SHORT_TITLE="SIF Core° [Pro+]"
+SHORT_TITLE="SIF Core° [Pro+]-dev"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -31,6 +31,7 @@ GAP_TYPE_RDRB = "rdrb"
 FVG_FILTER_ALL = "All"
 FVG_FILTER_BREAKAWAY_ONLY = "Breakaway-Only"
 FVG_FILTER_STANDARD_ONLY = "Standard-Only"
+LABEL_PREFIX_IMMEDIATE = "IMM-"
 LABEL_PREFIX_BREAKAWAY = "BRK-"
 BREAKAWAY_SOURCE_PREFIX = "Breakaway "
 BREAKAWAY_LENGTH = 20
@@ -143,7 +144,6 @@ MULTI_SOURCE_STRONG_DISPLAY_LABEL = "Label"
 MULTI_SOURCE_STRONG_DISPLAY_EXTENSION = "Extension"
 MULTI_SOURCE_STRONG_DISPLAY_BOTH = "Label + Extension"
 
-IMMEDIATE_SIF_STAR = "☆"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UI GROUP NAME CONSTANTS (SIF)
@@ -155,7 +155,6 @@ GROUP_VISIBILITY_FILTERS = '👁️ Visibility Filters'
 GROUP_SIF_LABELLING = '🎨 SIF Labelling'
 GROUP_SIF_EXTENSION = '✨ SIF Extension'
 GROUP_GAP_SOURCES = '🎯 Gap Sources'
-GROUP_SIF_DETECTION_MARKERS = '🏷️ SIF Detection Markers'
 GROUP_MULTI_SOURCE_PROPERTIES = '📦 Multi-Source Properties'
 GROUP_BREAKAWAY_PROPERTIES = '🔥 Breakaway Properties'
 GROUP_SOURCE_ORIGINS = '📦 Source Origins'
@@ -326,9 +325,6 @@ extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_CENTER, 'Hor
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_SIF_EXTENSION, inline='ext_align', tooltip='Vertical alignment for extension box text')
 extension_label_horizontal_padding = input.int(1, 'Horizontal Padding', minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of spaces for left/right padding (0-10)')
 extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_SIF_EXTENSION, inline='ext_padding', tooltip='Number of newlines for top/bottom padding (0-5)')
-
-// === 🏷️ SIF DETECTION MARKERS ===
-enable_immediate_sif_star = input.bool(true, "Mark Immediate SIF Inversion", group=GROUP_SIF_DETECTION_MARKERS, tooltip='Add ☆ star icon to SIFs where the same candle that enters the gap also completely closes it - the strongest institutional rejection signal')
 
 // === 📦 MULTI-SOURCE PROPERTIES ===
 enable_multi_source_highlighting = input.bool(true, "Mark Multi-Source SIFs", group=GROUP_MULTI_SOURCE_PROPERTIES, inline="multi_strong1", tooltip='Display [STRONG] marker on SIFs formed from multiple gap sources for visual distinction')
@@ -1481,15 +1477,9 @@ create_consolidated_candle_label(consolidated_sif) =>
     source_stats = get_source_type_stats(consolidated_sif.sif_group)
     strong_flag_active = is_multi_source_strong(source_stats)
     show_strong_label = strong_flag_active and should_show_strong_on_labels()
-    immediate_icon = IMMEDIATE_SIF_STAR
 
-    // Check for same-candle closure in group
-    has_immediate_sif_inversion = false
-    for i = 0 to array.size(consolidated_sif.sif_group) - 1
-        sif_record = array.get(consolidated_sif.sif_group, i)
-        if sif_record.is_immediate_sif_inversion
-            has_immediate_sif_inversion := true
-            break
+    // Check for immediate inversion in group
+    has_immediate_inversion = has_immediate_sif_inversion(consolidated_sif)
 
     // Determine base direction for candle label
     direction = consolidated_sif.is_bullish ? SIF_PLUS : SIF_MINUS
@@ -1503,8 +1493,9 @@ create_consolidated_candle_label(consolidated_sif) =>
                 has_breakaway := true
                 break
 
-    // Add BREAKAWAY prefix if applicable
+    // Add prefixes in order: IMM- then BRK-
     direction := has_breakaway ? LABEL_PREFIX_BREAKAWAY + direction : direction
+    direction := has_immediate_inversion ? LABEL_PREFIX_IMMEDIATE + direction : direction
 
     // Build candle label parts
     label_parts = array.new<string>()
@@ -1604,21 +1595,12 @@ create_consolidated_candle_label(consolidated_sif) =>
         if unified_subtype != ""
             array.push(label_parts, unified_subtype)
 
-    // Add special properties (immediate SIF inversion, etc.)
-    has_immediate_inversion = has_immediate_sif_inversion(consolidated_sif)
-    if has_immediate_inversion and enable_immediate_sif_star
-        array.push(label_parts, immediate_icon)
-
     // Capture status indicators separately so they can remain last in bullish order before mirroring
     if consolidated_sif.is_consolidated_invalidated
         array.push(label_parts, "[X]")
 
     if show_strong_label
-        star_index = array.indexof(label_parts, immediate_icon)
-        if star_index != -1
-            array.insert(label_parts, star_index + 1, MULTI_SOURCE_STRENGTH_LABEL)
-        else
-            array.push(label_parts, MULTI_SOURCE_STRENGTH_LABEL)
+        array.push(label_parts, MULTI_SOURCE_STRENGTH_LABEL)
 
     // Bearish Order - reverse the fully assembled parts so content flows outward from the candle
     if not consolidated_sif.is_bullish and array.size(label_parts) > 0
@@ -1636,16 +1618,14 @@ create_consolidated_candle_label(consolidated_sif) =>
 // Create consolidated extension label with source type on new line
 // EXTENSION LABEL ORDER:
 // 0. STRONG tag (renders above the main line when enabled)
-// 1. Base direction: SIF+ / SIF-
-// 2. Subtypes with risk: ↓inc*, ↑ref* (risk asterisk AFTER behavior)
-// 3. Special properties: ☆/[IMM] (immediate SIF inversion) - BEFORE status
-// 4. Status indicators: [X] (ALWAYS LAST)
-// 5. Gap sources on new line: imp, vol, rdrb, (fvg,imp), etc.
+// 1. Prefixes: IMM- (immediate), BRK- (breakaway)
+// 2. Base direction: SIF+ / SIF-
+// 3. Status indicators: [X] (ALWAYS LAST)
+// 4. Gap sources on new line: imp, vol, rdrb, (fvg,imp), etc.
 create_consolidated_extension_label(consolidated_sif) =>
     source_stats = get_source_type_stats(consolidated_sif.sif_group)
     sif_count = source_stats.group_size
     strong_flag_active = is_multi_source_strong(source_stats)
-    immediate_icon = IMMEDIATE_SIF_STAR
 
     // Standard direction for extension label (no prefix)
     direction = consolidated_sif.is_bullish ? SIF_PLUS : SIF_MINUS
@@ -1659,8 +1639,12 @@ create_consolidated_extension_label(consolidated_sif) =>
                 has_breakaway := true
                 break
 
-    // Add BREAKAWAY prefix if applicable
+    // Check for immediate inversion
+    has_immediate_inversion = has_immediate_sif_inversion(consolidated_sif)
+
+    // Add prefixes in order: IMM- then BRK-
     direction := has_breakaway ? LABEL_PREFIX_BREAKAWAY + direction : direction
+    direction := has_immediate_inversion ? LABEL_PREFIX_IMMEDIATE + direction : direction
 
     extension_result = ""
     source_type_text = ""
@@ -1694,12 +1678,7 @@ create_consolidated_extension_label(consolidated_sif) =>
         if unified_subtype != ""
             extension_result := extension_result + " " + unified_subtype
 
-    // Add special properties (immediate SIF inversion, etc.)
-    has_immediate_inversion = has_immediate_sif_inversion(consolidated_sif)
-    if has_immediate_inversion and enable_immediate_sif_star
-        extension_result := extension_result + " " + immediate_icon
-
-    // Add status indicators (always last - after special properties)
+    // Add status indicators (always last)
     if consolidated_sif.is_consolidated_invalidated
         extension_result := extension_result + " [X]"
 
