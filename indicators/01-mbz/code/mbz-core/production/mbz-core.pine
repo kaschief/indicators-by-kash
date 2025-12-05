@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='MBZ Core° [Pro+]'
-SHORT_TITLE="MBZ Core° [Pro+]"
+SHORT_TITLE="MBZ Core° [Pro+]-dev"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -183,8 +183,13 @@ GAP_SOURCE_TRUE_DISPLAY = "gap"
 GAP_SOURCE_RDRB_DISPLAY = "rdrb"
 STATUS_DISPLAY_ALL = "all"
 STATUS_DISPLAY_WS = "WS"
-DEFAULT_STATUS_TABLE_OFFSET = 0
-SUBTYPE_EXT_DISPLAY = "(ext)"
+STATUS_DISPLAY_REF_WICK = "+w"
+STATUS_DISPLAY_CAP_1X = "1x"
+STATUS_DISPLAY_CAP_4X = "4x"
+STATUS_DISPLAY_CAP_8X = "8x"
+STATUS_DISPLAY_CAP_12X = "12x"
+SUBTYPE_EXT_DISPLAY = "+w"
+
 
 // Gap label text constants for source gap markers
 GAP_LABEL_FVG_BULLISH = "FVG⁺ for "
@@ -239,6 +244,8 @@ const color DEFAULT_BREAKAWAY_BEARISH_COLOR = color.new(color.rgb(247, 11, 241),
 const color DEFAULT_BREAKAWAY_BULLISH_BORDER_COLOR = color.new(color.rgb(77, 208, 225), 50)
 const color DEFAULT_BREAKAWAY_BEARISH_BORDER_COLOR = color.new(color.rgb(249, 121, 246), 50)
 
+DEFAULT_STATUS_TABLE_OFFSET = 0
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUT SETTINGS - ULTRA-COMPACT ALIGNED LAYOUT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -264,10 +271,10 @@ same_source_mbz_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, 'Same-Sou
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of MBZ detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
 fvg_type_filter = input.string(FVG_FILTER_ALL, "", options=[FVG_FILTER_ALL, FVG_FILTER_BREAKAWAY_ONLY, FVG_FILTER_STANDARD_ONLY], group=GROUP_GAP_SOURCES, inline='sources1', tooltip='FVG Detection Filter:\n• All: Detect all FVGs (both breakaway and standard)\n• Breakaway-Only: Only detect breakaway FVGs\n• Standard-Only: Only detect standard FVGs')
-enable_implied = input.bool(false, INPUT_LABEL_IMPLIED_FVGS, group=GROUP_GAP_SOURCES, inline='sources2')
-enable_volume_imbalance = input.bool(false, INPUT_LABEL_VOLUME_IMBALANCES, group=GROUP_GAP_SOURCES, inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
-enable_true_gaps = input.bool(false, INPUT_LABEL_TRUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources3')
-enable_rdrb = input.bool(false, 'Rebalanced Redistributed Gaps', group=GROUP_GAP_SOURCES, inline='sources3', tooltip='Rebalanced Redistributed (RDRB):\n• Middle candle\'s body stays fully inside the previous candle\'s wick\n• The next candle takes (breaks) that middle candle\'s high/low\n• The remaining portion inside that wick becomes the tradable zone')
+enable_implied = input.bool(true, INPUT_LABEL_IMPLIED_FVGS, group=GROUP_GAP_SOURCES, inline='sources2')
+enable_volume_imbalance = input.bool(true, INPUT_LABEL_VOLUME_IMBALANCES, group=GROUP_GAP_SOURCES, inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
+enable_true_gaps = input.bool(true, INPUT_LABEL_TRUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources3')
+enable_rdrb = input.bool(true, 'Rebalanced Redistributed Gaps', group=GROUP_GAP_SOURCES, inline='sources3', tooltip='Rebalanced Redistributed (RDRB):\n• Middle candle\'s body stays fully inside the previous candle\'s wick\n• The next candle takes (breaks) that middle candle\'s high/low\n• The remaining portion inside that wick becomes the tradable zone')
 
 // === 📦 SOURCE ORIGINS ===
 gap_color = input.color(DEFAULT_GAP_COLOR, INPUT_LABEL_BOX, group=GROUP_SOURCE_ORIGINS, inline='gap1', tooltip='Source gap settings\nBox: color for gap boxes\nMax Boxes: maximum boxes to keep visible\nEnable Gaps: show boxes for gaps (FVG/Implied/VI) that created each MBZ')
@@ -372,6 +379,8 @@ type MBZRecord
     string source_gap_type
     // Breakaway MBZ detection
     bool is_breakaway_mbz        // true if source gap was a breakaway gap
+    // Reference wick extension
+    bool is_extended             // true if zone was extended by ref wick
 
 // Cached counts for multi-source evaluation
 type SourceTypeStats
@@ -1023,40 +1032,51 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_gap_type) =>
                 [base_classification, false]
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MBZ ZONE CALCULATION - FIXED REFLECTION BUG
+// MBZ ZONE CALCULATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Calculate zone boundaries for MBZ subtypes with corrected reflection logic
 get_mbz_subtype_zone(mbz_record) =>
     if str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
         if mbz_record.is_bullish
-            // Bullish inclusion: close down to low (body + lower wick zone)
-            [mbz_record.mbz_close, mbz_record.low_price]
+            if extend_to_reference_wick and mbz_record.ref_candle_low < mbz_record.low_price
+                [mbz_record.mbz_close, mbz_record.ref_candle_low]
+            else
+                [mbz_record.mbz_close, mbz_record.low_price]
         else
-            // Bearish inclusion: high down to close (body + upper wick zone)
-            [mbz_record.high_price, mbz_record.mbz_close]
+            if extend_to_reference_wick and mbz_record.ref_candle_high > mbz_record.high_price
+                [mbz_record.ref_candle_high, mbz_record.mbz_close]
+            else
+                [mbz_record.high_price, mbz_record.mbz_close]
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
         if mbz_record.is_bullish
-            // Bullish reflection uses OPEN as reference (not close)
             wick_range = math.abs(mbz_record.high_price - mbz_record.mbz_open)
-            [mbz_record.mbz_close, mbz_record.mbz_close - wick_range]
+            zone_bottom = mbz_record.mbz_close - wick_range
+            if extend_to_reference_wick and mbz_record.ref_candle_low < mbz_record.low_price
+                [mbz_record.mbz_close, mbz_record.ref_candle_low]
+            else
+                [mbz_record.mbz_close, zone_bottom]
         else
-            // Bearish reflection uses OPEN as reference (not close)
             wick_range = math.abs(mbz_record.low_price - mbz_record.mbz_open)
-            [mbz_record.mbz_close + wick_range, mbz_record.mbz_close]
+            zone_top = mbz_record.mbz_close + wick_range
+            if extend_to_reference_wick and mbz_record.ref_candle_high > mbz_record.high_price
+                [mbz_record.ref_candle_high, mbz_record.mbz_close]
+            else
+                [zone_top, mbz_record.mbz_close]
     else
-        // Standard MBZ uses BODY zone [open, close], NOT [high, low]!
         body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
         body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
 
-        // Optionally extend to reference candle wick
         if extend_to_reference_wick
             if mbz_record.is_bullish
-                // Bullish: extend lower boundary to reference candle low
-                [body_top, mbz_record.ref_candle_low]
+                if mbz_record.ref_candle_low < mbz_record.low_price
+                    [body_top, mbz_record.ref_candle_low]
+                else
+                    [body_top, body_bottom]
             else
-                // Bearish: extend upper boundary to reference candle high
-                [mbz_record.ref_candle_high, body_bottom]
+                if mbz_record.ref_candle_high > mbz_record.high_price
+                    [mbz_record.ref_candle_high, body_bottom]
+                else
+                    [body_top, body_bottom]
         else
             [body_top, body_bottom]
 
@@ -1066,16 +1086,19 @@ get_mbz_invalidation_boundaries(mbz_record) =>
     is_standard = not is_inclusion and not is_reflection
 
     if is_standard and invalidation_boundary == INVALIDATION_BOUNDARY_EXTREMES
-        // Adapt extremes when reference wick extension is enabled
         if extend_to_reference_wick
             body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
             body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
             if mbz_record.is_bullish
-                // Bullish: body top, reference candle low
-                [body_top, mbz_record.ref_candle_low]
+                if mbz_record.ref_candle_low < mbz_record.low_price
+                    [body_top, mbz_record.ref_candle_low]
+                else
+                    [body_top, body_bottom]
             else
-                // Bearish: reference candle high, body bottom
-                [mbz_record.ref_candle_high, body_bottom]
+                if mbz_record.ref_candle_high > mbz_record.high_price
+                    [mbz_record.ref_candle_high, body_bottom]
+                else
+                    [body_top, body_bottom]
         else
             [mbz_record.high_price, mbz_record.low_price]
     else
@@ -1199,10 +1222,10 @@ should_mbz_be_invalidated(mbz_record, confirmed_close_price) =>
 // CACHING FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Performance optimization: Cache frequently computed MBZ data using corrected zone logic
 cache_mbz_data(mbz_record) =>
-    // Calculate zone coordinates using the SAME get_mbz_subtype_zone() function that invalidation uses
     [cached_zone_top, cached_zone_bottom] = get_mbz_subtype_zone(mbz_record)
+
+    was_extended = extend_to_reference_wick and (mbz_record.is_bullish ? mbz_record.ref_candle_low < mbz_record.low_price : mbz_record.ref_candle_high > mbz_record.high_price)
 
     MBZRecord.new(
          mbz_record.bar_index,
@@ -1228,7 +1251,8 @@ cache_mbz_data(mbz_record) =>
          mbz_record.source_gap_top,
          mbz_record.source_gap_bottom,
          mbz_record.source_gap_type,
-         mbz_record.is_breakaway_mbz
+         mbz_record.is_breakaway_mbz,
+         was_extended
      )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
@@ -1516,9 +1540,9 @@ create_consolidated_extension_label(consolidated_mbz) =>
         mbz_text := mbz_text + " [½]"
 
     base_label = mbz_text
+    is_extended_flag = false
 
     if mbz_count == 1
-        // Single MBZ - only show gap source if NOT standard FVG (fvg is implied)
         single_mbz = array.get(consolidated_mbz.mbz_group, 0)
         if str.contains(single_mbz.mbz_subtype, SUBTYPE_IMPLIED)
             source_type_text := GAP_SOURCE_IMPLIED_DISPLAY
@@ -1528,9 +1552,7 @@ create_consolidated_extension_label(consolidated_mbz) =>
             source_type_text := GAP_SOURCE_RDRB_DISPLAY
 
         extension_result := base_label
-
-        if extend_to_reference_wick
-            extension_result := extension_result + " " + SUBTYPE_EXT_DISPLAY
+        is_extended_flag := single_mbz.is_extended
     else
         source_stats = get_source_type_stats(consolidated_mbz.mbz_group)
         source_breakdown = build_source_breakdown_extension_from_stats(source_stats)
@@ -1538,12 +1560,17 @@ create_consolidated_extension_label(consolidated_mbz) =>
 
         extension_result := base_label
 
-        if extend_to_reference_wick
-            extension_result := extension_result + " " + SUBTYPE_EXT_DISPLAY
+        for i = 0 to mbz_count - 1
+            mbz = array.get(consolidated_mbz.mbz_group, i)
+            if mbz.is_extended
+                is_extended_flag := true
+                break
 
-    // Add source type on new line (if exists)
     if str.length(source_type_text) > 0
         extension_result := extension_result + "\n" + source_type_text
+
+    if is_extended_flag
+        extension_result := extension_result + "\n" + SUBTYPE_EXT_DISPLAY
 
     // Add status indicators AFTER special markers
     if consolidated_mbz.is_consolidated_invalidated
@@ -2151,7 +2178,8 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              0.0, 0.0, false,
                              label(na),
                              gap.gap_id, gap.bar_index, gap.top, gap.bottom, gap.gap_type,
-                             gap.is_breakaway_gap
+                             gap.is_breakaway_gap,
+                             false
                          )
 
                         // Cache data immediately for performance (with corrected zones)
@@ -2292,8 +2320,15 @@ if show_status_table and barstate.islast
 
     gaps_text = all_gaps_enabled ? STATUS_DISPLAY_ALL : array.join(gap_parts, "·")
 
+    // Build capacity mode display
+    capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : STATUS_DISPLAY_CAP_1X
+
     // Build status text (WS only shown if enabled)
     status_text = workspace_mode_enabled ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
+    // Add ref wick symbol if enabled
+    status_text := extend_to_reference_wick ? status_text + "  " + STATUS_DISPLAY_REF_WICK : status_text
+    // Add capacity mode
+    status_text := status_text + "  " + capacity_text
 
     // Create table with offset padding
     // Offset adds space characters to shift content left (negative) or right (positive)
