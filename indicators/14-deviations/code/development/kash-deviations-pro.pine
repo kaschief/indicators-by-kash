@@ -54,6 +54,9 @@ type SessionData
     float midLevel
     bool midMitigated
     line midMitigationLine
+    // Proximity tracking (ATR-based)
+    line highProximityLine
+    line lowProximityLine
     // Alerts
     bool enableAlert
 
@@ -105,6 +108,12 @@ ALERT_MID_MITIGATED_FROM_BELOW = " 50% Mitigated from Below"
 // Style constants
 MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 2
+PROXIMITY_LINE_WIDTH = 1
+
+// Proximity detection constants
+PROXIMITY_ATR_PERIOD = 15
+PROXIMITY_ATR_MULTIPLIER = 3.5
+PROXIMITY_LOOKBACK = 3
 
 // Tooltips
 TOOLTIP_MAX_SESSIONS = "Max number of sessions to display per opening type"
@@ -142,6 +151,7 @@ maxSessions = input.int(5, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_
 showLabels = input.bool(true, LABEL_SHOW_SESSION_NAMES, group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
 labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, group=GROUP_GENERAL)
 labelBgColor = input.color(color.new(color.rgb(245, 245, 245), 20), "Deviation Labels Background", group=GROUP_GENERAL, tooltip="Background color for deviation labels. Set transparency to 100 for no background.")
+showProximity = input.bool(false, "Show Proximity Levels", group=GROUP_GENERAL, tooltip="Show dashed lines for unmitigated highs/lows within ATR range of current price")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 15-Minute Openings
@@ -287,16 +297,16 @@ opening_1800_2100_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POS
 // ═══════════════════════════════════════════════════════════════════════════
 
 GROUP_ALERTS = "Alerts"
-opening_2000_2015_alert = input.bool(false, SESSION_INTRADAY_2015, inline="alerts_1", group=GROUP_ALERTS)
-opening_0200_0215_alert = input.bool(false, SESSION_INTRADAY_0215, inline="alerts_1", group=GROUP_ALERTS)
-opening_0900_0915_alert = input.bool(false, SESSION_INTRADAY_0915, inline="alerts_1", group=GROUP_ALERTS)
-opening_1400_1415_alert = input.bool(false, SESSION_INTRADAY_1415, inline="alerts_1", group=GROUP_ALERTS)
-opening_0600_0900_alert = input.bool(false, SESSION_EXTENDED_0600_0900, inline="alerts_2", group=GROUP_ALERTS)
-opening_1600_0500_alert = input.bool(false, SESSION_EXTENDED_1600_0500, inline="alerts_2", group=GROUP_ALERTS)
-opening_0500_0915_alert = input.bool(false, SESSION_EXTENDED_0500_0915, inline="alerts_2", group=GROUP_ALERTS)
-opening_0930_0945_alert = input.bool(false, SESSION_EXTENDED_0930_0945, inline="alerts_3", group=GROUP_ALERTS)
-opening_0930_1000_alert = input.bool(false, SESSION_EXTENDED_0930_1000, inline="alerts_3", group=GROUP_ALERTS)
-opening_1800_2100_alert = input.bool(false, SESSION_EXTENDED_1800_2100, inline="alerts_3", group=GROUP_ALERTS)
+opening_2000_2015_alert = input.bool(true, SESSION_INTRADAY_2015, inline="alerts_1", group=GROUP_ALERTS)
+opening_0200_0215_alert = input.bool(true, SESSION_INTRADAY_0215, inline="alerts_1", group=GROUP_ALERTS)
+opening_0900_0915_alert = input.bool(true, SESSION_INTRADAY_0915, inline="alerts_1", group=GROUP_ALERTS)
+opening_1400_1415_alert = input.bool(true, SESSION_INTRADAY_1415, inline="alerts_1", group=GROUP_ALERTS)
+opening_0600_0900_alert = input.bool(true, SESSION_EXTENDED_0600_0900, inline="alerts_2", group=GROUP_ALERTS)
+opening_1600_0500_alert = input.bool(true, SESSION_EXTENDED_1600_0500, inline="alerts_2", group=GROUP_ALERTS)
+opening_0500_0915_alert = input.bool(true, SESSION_EXTENDED_0500_0915, inline="alerts_2", group=GROUP_ALERTS)
+opening_0930_0945_alert = input.bool(true, SESSION_EXTENDED_0930_0945, inline="alerts_3", group=GROUP_ALERTS)
+opening_0930_1000_alert = input.bool(true, SESSION_EXTENDED_0930_1000, inline="alerts_3", group=GROUP_ALERTS)
+opening_1800_2100_alert = input.bool(true, SESSION_EXTENDED_1800_2100, inline="alerts_3", group=GROUP_ALERTS)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Color Reference Table
@@ -523,6 +533,11 @@ deleteSession(SessionData sess) =>
         line.delete(sess.lowMitigationLine)
     if not na(sess.midMitigationLine)
         line.delete(sess.midMitigationLine)
+    // Delete proximity lines
+    if not na(sess.highProximityLine)
+        line.delete(sess.highProximityLine)
+    if not na(sess.lowProximityLine)
+        line.delete(sess.lowProximityLine)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
@@ -634,6 +649,8 @@ if validTimeframe
                      midLevel=na,
                      midMitigated=false,
                      midMitigationLine=na,
+                     highProximityLine=na,
+                     lowProximityLine=na,
                      enableAlert=enableAlert
                  )
 
@@ -763,6 +780,10 @@ if validTimeframe and array.size(activeSessions) > 0
 // PHASE 4: MITIGATION DETECTION - Check for breaches on completed sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Calculate ATR for proximity detection
+atrValue = ta.atr(PROXIMITY_ATR_PERIOD)
+atrRange = atrValue * PROXIMITY_ATR_MULTIPLIER
+
 if validTimeframe and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
@@ -792,6 +813,48 @@ if validTimeframe and array.size(sessions) > 0
                     if sess.enableAlert
                         alertMsg = close[1] > sess.midLevel ? sess.sessionName + ALERT_MID_MITIGATED_FROM_ABOVE : sess.sessionName + ALERT_MID_MITIGATED_FROM_BELOW
                         alert(alertMsg, alert.freq_once_per_bar)
+
+            // Proximity detection for unmitigated levels
+            if showProximity and not na(atrRange)
+                // High proximity: show dashed line if unmitigated high is within ATR range AND price is approaching
+                if not sess.highMitigated
+                    highDistance = sess.dominantHigh - close
+                    highDistancePrev = sess.dominantHigh - close[PROXIMITY_LOOKBACK]
+                    isApproachingHigh = highDistance < highDistancePrev
+                    if highDistance > 0 and highDistance <= atrRange and isApproachingHigh
+                        if na(sess.highProximityLine)
+                            sess.highProximityLine := line.new(sess.highBar, sess.dominantHigh, bar_index, sess.dominantHigh, color=sess.mitigationColor, style=line.style_dashed, width=PROXIMITY_LINE_WIDTH)
+                        else
+                            line.set_x2(sess.highProximityLine, bar_index)
+                    else
+                        if not na(sess.highProximityLine)
+                            line.delete(sess.highProximityLine)
+                            sess.highProximityLine := na
+                else
+                    // High was mitigated, delete proximity line if exists
+                    if not na(sess.highProximityLine)
+                        line.delete(sess.highProximityLine)
+                        sess.highProximityLine := na
+
+                // Low proximity: show dashed line if unmitigated low is within ATR range AND price is approaching
+                if not sess.lowMitigated
+                    lowDistance = close - sess.dominantLow
+                    lowDistancePrev = close[PROXIMITY_LOOKBACK] - sess.dominantLow
+                    isApproachingLow = lowDistance < lowDistancePrev
+                    if lowDistance > 0 and lowDistance <= atrRange and isApproachingLow
+                        if na(sess.lowProximityLine)
+                            sess.lowProximityLine := line.new(sess.lowBar, sess.dominantLow, bar_index, sess.dominantLow, color=sess.mitigationColor, style=line.style_dashed, width=PROXIMITY_LINE_WIDTH)
+                        else
+                            line.set_x2(sess.lowProximityLine, bar_index)
+                    else
+                        if not na(sess.lowProximityLine)
+                            line.delete(sess.lowProximityLine)
+                            sess.lowProximityLine := na
+                else
+                    // Low was mitigated, delete proximity line if exists
+                    if not na(sess.lowProximityLine)
+                        line.delete(sess.lowProximityLine)
+                        sess.lowProximityLine := na
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
