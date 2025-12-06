@@ -423,6 +423,7 @@ mbz_variant_mode = VARIANT_LIQUIDITY
 
 // === 👁️ VISIBILITY FILTERS ===
 mbz_direction_filter = input.string(MBZ_DIRECTION_BOTH, 'Direction', options=[MBZ_DIRECTION_BOTH, MBZ_DIRECTION_BULLISH, MBZ_DIRECTION_BEARISH], group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Filter MBZ display by direction:\n• Both: Show all MBZs\n• MBZ⁺ Only: Show only bullish MBZs\n• MBZ⁻ Only: Show only bearish MBZs')
+filter_duplicate_formations = input.bool(true, 'Show Best Formation Only', group=GROUP_VISIBILITY_FILTERS, inline='form1', tooltip='When multiple formations exist at the same liquidity level, show only the highest priority:\n• IMM (Immediate) > STD (Standard) > DEL (Delayed)\n\nDisable to show all formations')
 
 // === 💧 LIQUIDITY: HIGHER TIMEFRAMES ===
 enable_daily_liquidity = input.bool(true, INPUT_LABEL_DAILY, group=GROUP_LIQUIDITY_HTF, inline='liq_htf', tooltip='Detect MBZs from daily high/low breaches')
@@ -2513,6 +2514,17 @@ build_source_breakdown_extension_from_stats(stats, mbz_group) =>
 build_source_breakdown_extension(mbz_group) =>
     build_source_breakdown_extension_from_stats(get_source_type_stats(mbz_group), mbz_group)
 
+// Get formation priority as number (higher = better): IMM=3, STD=2, DEL=1
+get_formation_priority(formation_rule) =>
+    if formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
+        3
+    else if formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
+        2
+    else if formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
+        1
+    else
+        0
+
 // Get priority formation rule for consolidated group (liquidity takes priority over imbalance)
 get_consolidated_formation_rule(mbz_group) =>
     // Priority order: Liquidity Immediate > Liquidity Standard > Liquidity Delayed > Imbalance Standard
@@ -2787,9 +2799,23 @@ manage_consolidated_mbz_display() =>
     liquidity_record_count = 0
     invalidated_record_count = 0
 
+    // Formation priority tracking: IMM > STD > DEL (optional filter)
+    // Key: "source_bar_index_source_origin_token_is_bullish" -> best formation priority
+    best_formation_priorities = map.new<string, int>()
+
     // Add bounds checking to prevent array out of bounds error
     total_mbz_records = array.size(all_mbz_records)
     if total_mbz_records > 0  // Only proceed if we have records
+        // PRE-SCAN: Find best formation priority for each source key (only if filter enabled)
+        if filter_duplicate_formations
+            for record_index = 0 to total_mbz_records - 1
+                prescan_record = array.get(all_mbz_records, record_index)
+                if not prescan_record.is_invalidated
+                    prescan_key = str.tostring(prescan_record.source_bar_index) + "_" + prescan_record.source_origin_token + "_" + str.tostring(prescan_record.is_bullish)
+                    prescan_priority = get_formation_priority(prescan_record.formation_rule)
+                    if not map.contains(best_formation_priorities, prescan_key) or prescan_priority > map.get(best_formation_priorities, prescan_key)
+                        map.put(best_formation_priorities, prescan_key, prescan_priority)
+
         // EARLY FILTERING (like v9.23): Filter records BEFORE consolidation
         for record_index = total_mbz_records - 1 to 0
             current_mbz_record = array.get(all_mbz_records, record_index)
@@ -2819,8 +2845,17 @@ manage_consolidated_mbz_display() =>
                             liquidity_source_enabled := enable_asia_liquidity
 
                         if passes_display_check and liquidity_source_enabled
-                            can_add := true
-                            liquidity_record_count += 1
+                            // Formation priority filter: IMM > STD > DEL (when enabled)
+                            passes_formation_filter = true
+                            if filter_duplicate_formations
+                                source_key = str.tostring(current_mbz_record.source_bar_index) + "_" + current_mbz_record.source_origin_token + "_" + str.tostring(current_mbz_record.is_bullish)
+                                current_priority = get_formation_priority(current_mbz_record.formation_rule)
+                                best_priority = map.contains(best_formation_priorities, source_key) ? map.get(best_formation_priorities, source_key) : 0
+                                passes_formation_filter := current_priority >= best_priority
+
+                            if passes_formation_filter
+                                can_add := true
+                                liquidity_record_count += 1
 
                     if can_add
                         array.push(displayable_mbzs, current_mbz_record)
@@ -4243,11 +4278,12 @@ else if not initialized
 // PERF: Update all_records_index in active_mbz_records after removal from all_mbz_records
 // When a record is removed, all indices > removed_idx shift down by 1
 update_indices_after_removal(int removed_idx) =>
-    for i = 0 to array.size(active_mbz_records) - 1
-        rec = array.get(active_mbz_records, i)
-        if rec.all_records_index > removed_idx
-            rec.all_records_index := rec.all_records_index - 1
-            array.set(active_mbz_records, i, rec)
+    if array.size(active_mbz_records) > 0
+        for i = 0 to array.size(active_mbz_records) - 1
+            rec = array.get(active_mbz_records, i)
+            if rec.all_records_index > removed_idx
+                rec.all_records_index := rec.all_records_index - 1
+                array.set(active_mbz_records, i, rec)
 
 // PERFORMANCE: Aggressive garbage collection of invalidated MBZs
 // Philosophy: Invalidated MBZs are for display/analysis only (use replay mode for deep inspection)
