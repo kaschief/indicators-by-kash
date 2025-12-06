@@ -623,6 +623,7 @@ type MBZRecord
     float ref_candle_high
     float ref_candle_low
     bool is_extended
+    int all_records_index    // PERF: Direct index in all_mbz_records for O(1) sync
 
 type LiquidityPoolCollection
     array<float> highs
@@ -2337,6 +2338,9 @@ get_source_type_stats(mbz_group) =>
 register_new_mbz_record(mbz_record) =>
     // Cache derived data for performant reuse
     cached_mbz = cache_mbz_data(mbz_record)
+
+    // PERF: Set index before pushing for O(1) sync lookups
+    cached_mbz.all_records_index := array.size(all_mbz_records)
 
     array.push(all_mbz_records, cached_mbz)
     array.push(active_mbz_records, cached_mbz)
@@ -4235,6 +4239,15 @@ else if not initialized
     // Skip historical processing - start fresh for instant loading
     initialized := true
 
+// PERF: Update all_records_index in active_mbz_records after removal from all_mbz_records
+// When a record is removed, all indices > removed_idx shift down by 1
+update_indices_after_removal(int removed_idx) =>
+    for i = 0 to array.size(active_mbz_records) - 1
+        rec = array.get(active_mbz_records, i)
+        if rec.all_records_index > removed_idx
+            rec.all_records_index := rec.all_records_index - 1
+            array.set(active_mbz_records, i, rec)
+
 // PERFORMANCE: Aggressive garbage collection of invalidated MBZs
 // Philosophy: Invalidated MBZs are for display/analysis only (use replay mode for deep inspection)
 // Keep ONLY what user wants to display, delete everything else immediately (free capacity for active MBZs)
@@ -4266,12 +4279,7 @@ if should_run_garbage_collection and array.size(all_mbz_records) > 0
             invalidated_idx = array.get(invalidated_indices, idx)
             adjusted_idx = invalidated_idx - removed  // Adjust for previous removals
             array.remove(all_mbz_records, adjusted_idx)
-
-            // Also remove from active array if somehow still there
-            if adjusted_idx < array.size(active_mbz_records)
-                mbz_in_active = array.get(active_mbz_records, adjusted_idx)
-                if mbz_in_active.is_invalidated
-                    array.remove(active_mbz_records, adjusted_idx)
+            update_indices_after_removal(adjusted_idx)  // PERF: Keep indices in sync
 
             removed += 1
 
@@ -4279,6 +4287,7 @@ if should_run_garbage_collection and array.size(all_mbz_records) > 0
 while array.size(all_mbz_records) > max_mbz_records_effective
     oldest_record = array.get(all_mbz_records, 0)  // Get before removing
     array.shift(all_mbz_records)
+    update_indices_after_removal(0)  // PERF: Keep indices in sync after shift
 
     // PERFORMANCE: Also remove from active array if it's still there (not invalidated yet)
     if not oldest_record.is_invalidated
@@ -4320,16 +4329,9 @@ if array.size(active_mbz_records) > 0
             // Update in active array
             array.set(active_mbz_records, i, updated_mbz)
 
-            // ALWAYS sync invalidations to all_mbz_records (required for correct display)
-            // Find and update in all_mbz_records
-            for all_idx = 0 to array.size(all_mbz_records) - 1
-                all_rec = array.get(all_mbz_records, all_idx)
-                if all_rec.bar_index == updated_mbz.bar_index and
-                   all_rec.source_type == updated_mbz.source_type and
-                   all_rec.is_bullish == updated_mbz.is_bullish and
-                   not all_rec.is_invalidated
-                    array.set(all_mbz_records, all_idx, updated_mbz)
-                    break
+            // PERF: Direct O(1) sync to all_mbz_records using index mapping
+            if updated_mbz.all_records_index >= 0 and updated_mbz.all_records_index < array.size(all_mbz_records)
+                array.set(all_mbz_records, updated_mbz.all_records_index, updated_mbz)
 
             // Remove from active array (no longer needs invalidation checks)
             array.remove(active_mbz_records, i)
@@ -4337,17 +4339,11 @@ if array.size(active_mbz_records) > 0
             // Still active, just update confirmation status in active array
             array.set(active_mbz_records, i, updated_mbz)
 
-            // PERFORMANCE: Only sync confirmation status during display (not every bar during history)
-            // This saves millions of comparisons without affecting display accuracy
+            // PERF: Only sync confirmation status during display (not every bar during history)
+            // Direct O(1) sync using index mapping instead of O(n) loop
             if should_sync_confirmation_status
-                // Update in all_mbz_records as well
-                for all_idx = 0 to array.size(all_mbz_records) - 1
-                    all_rec = array.get(all_mbz_records, all_idx)
-                    if all_rec.bar_index == updated_mbz.bar_index and
-                       all_rec.source_type == updated_mbz.source_type and
-                       all_rec.is_bullish == updated_mbz.is_bullish
-                        array.set(all_mbz_records, all_idx, updated_mbz)
-                        break
+                if updated_mbz.all_records_index >= 0 and updated_mbz.all_records_index < array.size(all_mbz_records)
+                    array.set(all_mbz_records, updated_mbz.all_records_index, updated_mbz)
 
 if not na(liquidity_variant_placeholder_label)
     label.delete(liquidity_variant_placeholder_label)
