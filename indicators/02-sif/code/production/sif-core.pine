@@ -15,9 +15,6 @@ indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes
 var bool sif_grouped_alert_active = false
 var array<string> sif_alert_parts = array.new<string>()
 
-// Cache of consolidated groups from last visual render (for stars reuse)
-// Moved declaration below type ConsolidatedSIF to satisfy Pine type ordering
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENUMS & CONSTANTS - CLEAN STRUCTURE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -93,12 +90,16 @@ DEFAULT_TRANSPARENCY = 80
 DEFAULT_CUSTOM_THRESHOLD = 50.0
 
 DEFAULT_MAX_VALID_SIFS = 30
-DEFAULT_MAX_INVALIDATED_SIFS = 5
+DEFAULT_MAX_INVALIDATED_SIFS = 50
 MAX_VALID_SIFS_LIMIT = 55
-MAX_INVALIDATED_SIFS_LIMIT = 22
+MAX_INVALIDATED_SIFS_LIMIT = 50
 
 STRICT_INVALIDATION_PERCENT = 55.0
 LENIENT_INVALIDATION_PERCENT = 85.0
+
+// Invalidation threshold display
+STATUS_DISPLAY_INV_85 = "[len 85]"
+STATUS_DISPLAY_INV_55 = "[str 55]"
 MIN_THRESHOLD_PERCENT = 1.0
 MAX_THRESHOLD_PERCENT = 99.0
 
@@ -248,10 +249,10 @@ sif_inversion_type_filter = input.string(SIF_INVERSION_TYPE_IMMEDIATE, 'Inversio
 // === 🎯 GAP SOURCES ===
 enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources1', tooltip='GAP SOURCES:\n• Fair Value Gaps: Standard 3-candle FVGs - the foundation of SIF detection\n• Implied FVGs: 3-candle institutional gaps with displacement validation')
 fvg_type_filter = input.string(FVG_FILTER_ALL, "", options=[FVG_FILTER_ALL, FVG_FILTER_BREAKAWAY_ONLY, FVG_FILTER_STANDARD_ONLY], group=GROUP_GAP_SOURCES, inline='sources1', tooltip='FVG Detection Filter:\n• All: Detect all FVGs (both breakaway and standard)\n• Breakaway-Only: Only detect breakaway FVGs\n• Standard-Only: Only detect standard FVGs')
-enable_implied = input.bool(false, INPUT_LABEL_IMPLIED_FVGS, group=GROUP_GAP_SOURCES, inline='sources2')
-enable_volume_imbalance = input.bool(false, INPUT_LABEL_VOLUME_IMBALANCES, group=GROUP_GAP_SOURCES, inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
-enable_true_gaps = input.bool(false, INPUT_LABEL_TRUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources3')
-enable_rdrb = input.bool(false, 'Rebalanced Redistributed Gaps', group=GROUP_GAP_SOURCES, inline='sources3', tooltip='Rebalanced Redistributed (RDRB):\n• Middle candle body sits fully inside the previous candle\'s wick\n• The next candle takes (breaks) that middle candle\'s high/low\n• The leftover portion inside the prior wick becomes the zone')
+enable_implied = input.bool(true, INPUT_LABEL_IMPLIED_FVGS, group=GROUP_GAP_SOURCES, inline='sources2')
+enable_volume_imbalance = input.bool(true, INPUT_LABEL_VOLUME_IMBALANCES, group=GROUP_GAP_SOURCES, inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
+enable_true_gaps = input.bool(true, INPUT_LABEL_TRUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources3')
+enable_rdrb = input.bool(true, 'Rebalanced Redistributed Gaps', group=GROUP_GAP_SOURCES, inline='sources3', tooltip='Rebalanced Redistributed (RDRB):\n• Middle candle body sits fully inside the previous candle\'s wick\n• The next candle takes (breaks) that middle candle\'s high/low\n• The leftover portion inside the prior wick becomes the zone')
 
 // === 📦 SOURCE ORIGINS ===
 gap_color = input.color(DEFAULT_GAP_COLOR, 'Box', group=GROUP_SOURCE_ORIGINS, inline='gap1', tooltip='Source gap settings\nBox: color for gap boxes\nMax Boxes: maximum boxes to keep visible\nEnable Gaps: show boxes for gaps (FVG/Implied/VI) that created each SIF')
@@ -2086,8 +2087,15 @@ if show_status_table and barstate.islast
 
     gaps_text = all_gaps_enabled ? STATUS_DISPLAY_ALL : array.join(gap_parts, "·")
 
+    // Get invalidation threshold display
+    inv_display = switch sif_invalidation_mode
+        INVALIDATION_STRICT => STATUS_DISPLAY_INV_55
+        INVALIDATION_LENIENT => STATUS_DISPLAY_INV_85
+        => "[" + str.tostring(int(custom_threshold_percent)) + "]"
+
     // Build status text (WS only shown if enabled)
     status_text = workspace_mode_enabled ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
+    status_text := status_text + "  " + inv_display
 
     // Create table with offset padding
     // Offset adds space characters to shift content left (negative) or right (positive)
