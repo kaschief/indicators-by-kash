@@ -412,11 +412,16 @@ workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_
 max_liquidity_mbzs = input.int(DEFAULT_MAX_LIQUIDITY_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_LIQUIDITY_MBZS_LIMIT, group=GROUP_DETECTION, inline='quotas', tooltip='Maximum liquidity MBZs on chart (0-60)')
 
 // === ✋ INVALIDATION ===
-show_invalidated_mbzs = input.bool(false, INPUT_LABEL_SHOW_INVALIDATED_MBZS, group=GROUP_INVALIDATION, inline='inv1', tooltip='Show invalidated MBZs with labels and zones')
-max_invalidated_mbzs = input.int(DEFAULT_MAX_INVALIDATED_MBZS, INPUT_LABEL_MAX_INVALIDATED_MBZS, minval=0, maxval=MAX_INVALIDATED_MBZS_LIMIT, group=GROUP_INVALIDATION, inline='inv1', tooltip='Maximum number of invalidated MBZs to show (0-15 limit)')
-mbz_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_THRESHOLD, options=[INVALIDATION_STANDARD, INVALIDATION_CONSERVATIVE, INVALIDATION_STRICT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv2', tooltip='Zone fill threshold for invalidation (requires candle close)\n• Standard: 100% fill\n• Conservative: 85% fill\n• Strict: 55% fill\n• Custom: set your own percentage')
-custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=DEFAULT_STEP_SIZE, group=GROUP_INVALIDATION, inline='inv2', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
-invalidation_boundary = input.string(INVALIDATION_BOUNDARY_BODY, INPUT_LABEL_INVALIDATION_BOUNDARY, options=[INVALIDATION_BOUNDARY_BODY, INVALIDATION_BOUNDARY_EXTREMES], group=GROUP_INVALIDATION, inline='inv3', tooltip='Invalidation boundary:\n• Body Zone: Uses MBZ zone (body) boundaries\n• Candle Extremes: Uses candle high/low (default, more forgiving)\n\nNote: Only applies to Standard MBZs. Inclusion and Reflection always use their zone boundaries.')
+mbz_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_THRESHOLD, options=[INVALIDATION_STANDARD, INVALIDATION_CONSERVATIVE, INVALIDATION_STRICT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv1', tooltip='Zone fill threshold for invalidation (requires candle close)\n• Standard: 100% fill\n• Conservative: 85% fill\n• Strict: 55% fill\n• Custom: set your own percentage')
+custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=DEFAULT_STEP_SIZE, group=GROUP_INVALIDATION, inline='inv1', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
+invalidation_boundary = input.string(INVALIDATION_BOUNDARY_BODY, INPUT_LABEL_INVALIDATION_BOUNDARY, options=[INVALIDATION_BOUNDARY_BODY, INVALIDATION_BOUNDARY_EXTREMES], group=GROUP_INVALIDATION, inline='inv1', tooltip='Invalidation boundary:\n• Body Zone: Uses MBZ zone (body) boundaries\n• Candle Extremes: Uses candle high/low (default, more forgiving)\n\nNote: Only applies to Standard MBZs. Inclusion and Reflection always use their zone boundaries.')
+show_invalidated_mbzs_input = input.bool(false, INPUT_LABEL_SHOW_INVALIDATED_MBZS, group=GROUP_INVALIDATION, inline='inv2', tooltip='Show invalidated MBZs alongside active ones')
+max_invalidated_mbzs = input.int(DEFAULT_MAX_INVALIDATED_MBZS, INPUT_LABEL_MAX_INVALIDATED_MBZS, minval=0, maxval=MAX_INVALIDATED_MBZS_LIMIT, group=GROUP_INVALIDATION, inline='inv2', tooltip='Maximum number of invalidated MBZs to show (0-15 limit)')
+backtesting_mode = input.bool(false, "Enable Backtesting Mode", group=GROUP_INVALIDATION, inline='inv3', tooltip='Show ONLY invalidated MBZs for backtesting analysis.\nOverrides "Show Invalidated MBZs" toggle.')
+
+// Derived display flags
+show_active_mbzs = not backtesting_mode
+show_invalidated_mbzs = show_invalidated_mbzs_input or backtesting_mode
 
 // Set variant mode (liquidity only)
 mbz_variant_mode = VARIANT_LIQUIDITY
@@ -2666,6 +2671,8 @@ build_alert_message_from_consolidated(consolidated_mbz) =>
 should_display_mbz(mbz_record) =>
     if mbz_record.is_invalidated and not show_invalidated_mbzs
         false
+    else if not mbz_record.is_invalidated and not show_active_mbzs
+        false
     else
         true
 
@@ -2827,7 +2834,7 @@ manage_consolidated_mbz_display() =>
 
             // Apply direction filter (liquidity-only mode: no variant filter needed)
             if should_display_mbz_direction(current_mbz_record)
-                if not current_mbz_record.is_invalidated
+                if not current_mbz_record.is_invalidated and show_active_mbzs
                     // Apply quota limits (liquidity-only mode: all sources are liquidity)
                     can_add = false
                     passes_display_check = should_display_mbz(current_mbz_record)
@@ -2861,7 +2868,7 @@ manage_consolidated_mbz_display() =>
                         array.push(displayable_mbzs, current_mbz_record)
 
                     // Early exit when quotas full (liquidity-only mode)
-                    liquidity_quota_full = liquidity_record_count >= max_liquidity_mbzs_effective
+                    liquidity_quota_full = liquidity_record_count >= max_liquidity_mbzs_effective or not show_active_mbzs
                     invalidated_quota_full = invalidated_record_count >= max_invalidated_mbzs_effective or not show_invalidated_mbzs
                     if liquidity_quota_full and invalidated_quota_full
                         break

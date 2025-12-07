@@ -199,7 +199,6 @@ EMPTY_DISPLAY = ""
 // Detection labels
 INPUT_LABEL_MAX_VALID_SIFS = 'Max Valid SIFs'
 INPUT_LABEL_MAX_INVALIDATED_SIFS = 'Max'
-INPUT_LABEL_SHOW_INVALIDATED_SIFS = 'Show Invalidated SIFs'
 INPUT_LABEL_INVALIDATION_THRESHOLD = 'Threshold'
 INPUT_LABEL_CUSTOM_PERCENT = 'Custom %'
 
@@ -241,10 +240,15 @@ max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, INPUT_LABEL_MAX_VALID_SIFS, m
 capacity_mode = input.string(CAPACITY_MODE_OPTIMIZED, "Capacity Mode", options=[CAPACITY_MODE_OPTIMIZED, CAPACITY_MODE_BOOST, CAPACITY_MODE_ULTRA_BOOST, CAPACITY_MODE_ULTRA_PRO_BOOST], group=GROUP_DETECTION, inline='det1', tooltip='Optimized: base limits and performance\nBoost: roughly 4× the base limits (clamped to indicator caps)\nUltra Boost: roughly 8× the base limits for deeper scans\nUltra Pro Boost: roughly 12× the base limits for the heaviest history loads')
 
 // === ✋ INVALIDATION ===
-show_invalidated_sifs = input.bool(false, INPUT_LABEL_SHOW_INVALIDATED_SIFS, group=GROUP_INVALIDATION, inline='inv1', tooltip='Show invalidated SIFs with [X] marker\n\n[X] appears after candle closes at invalidation threshold')
-max_invalidated_sifs = input.int(DEFAULT_MAX_INVALIDATED_SIFS, INPUT_LABEL_MAX_INVALIDATED_SIFS, minval=0, maxval=MAX_INVALIDATED_SIFS_LIMIT, group=GROUP_INVALIDATION, inline='inv1', tooltip='Maximum number of invalidated SIFs to display when enabled. Max: 22\n\n• 0 = Show no invalidated SIFs\n• Independent of valid SIF limit')
-sif_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_INVALIDATION_THRESHOLD, options=[INVALIDATION_STRICT, INVALIDATION_LENIENT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv2', tooltip='Zone fill threshold for invalidation\nStrict: 55% fill (more sensitive, earlier invalidation)\nLenient: 85% fill (less sensitive, later invalidation)\nCustom: set your own percentage (1-99%)\n\n[X] shows after candle closes at threshold')
-custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=1.0, group=GROUP_INVALIDATION, inline='inv2', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
+sif_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_INVALIDATION_THRESHOLD, options=[INVALIDATION_STRICT, INVALIDATION_LENIENT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv1', tooltip='Zone fill threshold for invalidation\nStrict: 55% fill (more sensitive, earlier invalidation)\nLenient: 85% fill (less sensitive, later invalidation)\nCustom: set your own percentage (1-99%)\n\n[X] shows after candle closes at threshold')
+custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=1.0, group=GROUP_INVALIDATION, inline='inv1', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
+show_invalidated_sifs_input = input.bool(false, "Show Invalidated", group=GROUP_INVALIDATION, inline='inv2', tooltip='Show invalidated SIFs alongside active ones')
+max_invalidated_sifs = input.int(DEFAULT_MAX_INVALIDATED_SIFS, INPUT_LABEL_MAX_INVALIDATED_SIFS, minval=0, maxval=MAX_INVALIDATED_SIFS_LIMIT, group=GROUP_INVALIDATION, inline='inv2', tooltip='Maximum number of invalidated SIFs to display. Max: 22')
+backtesting_mode = input.bool(false, "Enable Backtesting Mode", group=GROUP_INVALIDATION, inline='inv3', tooltip='Show ONLY invalidated SIFs for backtesting analysis.\nOverrides "Show Invalidated" toggle.')
+
+// Derived display flags
+show_active_sifs = not backtesting_mode
+show_invalidated_sifs = show_invalidated_sifs_input or backtesting_mode
 
 // === 👁️ VISIBILITY FILTERS ===
 sif_direction_filter = input.string(SIF_DIRECTION_BOTH, 'Direction', options=[SIF_DIRECTION_BOTH, SIF_DIRECTION_BULLISH, SIF_DIRECTION_BEARISH], group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Filter SIF display by direction:\n• Both: Show all SIFs\n• SIF⁺ Only: Show only bullish SIFs\n• SIF⁻ Only: Show only bearish SIFs')
@@ -1434,6 +1438,8 @@ build_alert_message_from_consolidated(consolidated_sif) =>
 should_display_sif(sif_record) =>
     if sif_record.is_invalidated and not show_invalidated_sifs
         false
+    else if not sif_record.is_invalidated and not show_active_sifs
+        false
     else if sif_inversion_type_filter == SIF_INVERSION_TYPE_IMMEDIATE and not sif_record.is_immediate_sif_inversion
         false
     else if sif_inversion_type_filter == SIF_INVERSION_TYPE_REGULAR and sif_record.is_immediate_sif_inversion
@@ -1828,8 +1834,8 @@ manage_consolidated_sif_display() =>
             // Apply source type and directional filters first
             if should_display_sif(current_sif_record) and should_display_sif_direction(current_sif_record)
 
-                // VALID SIF PROCESSING: Add valid SIFs up to configured limit
-                if not current_sif_record.is_invalidated and valid_sif_count < max_valid_sifs_effective
+                // VALID SIF PROCESSING: Add valid SIFs up to configured limit (when display mode includes active)
+                if not current_sif_record.is_invalidated and valid_sif_count < max_valid_sifs_effective and show_active_sifs
                     array.push(displayable_sifs, current_sif_record)
                     valid_sif_count += 1
 
@@ -1840,7 +1846,7 @@ manage_consolidated_sif_display() =>
 
             // PERFORMANCE OPTIMIZATION: Early termination when both limits reached
             // Reduces unnecessary array iterations on charts with many SIFs
-            if valid_sif_count >= max_valid_sifs_effective and (invalidated_sif_count >= max_invalidated_sifs_effective or not show_invalidated_sifs)
+            if (valid_sif_count >= max_valid_sifs_effective or not show_active_sifs) and (invalidated_sif_count >= max_invalidated_sifs_effective or not show_invalidated_sifs)
                 break
 
     // Group displayable SIFs by candle (will return empty array if no displayable SIFs)

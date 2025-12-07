@@ -262,11 +262,16 @@ max_valid_mbzs = input.int(DEFAULT_MAX_VALID_MBZS, INPUT_LABEL_MAX_VALID_MBZS, m
 capacity_mode = input.string(CAPACITY_MODE_OPTIMIZED, "Capacity Mode", options=[CAPACITY_MODE_OPTIMIZED, CAPACITY_MODE_BOOST, CAPACITY_MODE_ULTRA_BOOST, CAPACITY_MODE_ULTRA_PRO_BOOST], group=GROUP_DETECTION, inline='det1', tooltip='DETECTION GROUP SUMMARY:\n• Max Valid MBZs: Control display count for active MBZs\n• Capacity Mode: Adjust internal limits for deeper history scans\n\nOptimized: base limits and performance\nBoost: roughly 4× the base limits (clamped to indicator caps)\nUltra Boost: roughly 8× the base limits for deeper scans\nUltra Pro Boost: roughly 12× the base limits for the heaviest history loads')
 
 // === ✋ INVALIDATION ===
-show_invalidated_mbzs = input.bool(false, INPUT_LABEL_SHOW_INVALIDATED_MBZS, group=GROUP_INVALIDATION, inline='inv1', tooltip='Show invalidated MBZs with [X] marker when candle closes at invalidation threshold')
-max_invalidated_mbzs = input.int(DEFAULT_MAX_INVALIDATED_MBZS, INPUT_LABEL_MAX_INVALIDATED_MBZS, minval=0, maxval=MAX_INVALIDATED_MBZS_LIMIT, group=GROUP_INVALIDATION, inline='inv1', tooltip='Maximum number of invalidated MBZs to show when enabled (0-15 limit)')
-mbz_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_INVALIDATION_THRESHOLD, options=[INVALIDATION_STANDARD, INVALIDATION_CONSERVATIVE, INVALIDATION_STRICT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv2', tooltip='Zone fill threshold for invalidation (requires candle close)\nStandard: 100% fill (less sensitive, later invalidation - traditional MBZ)\nConservative: 85% fill (more sensitive, earlier invalidation)\nStrict: 55% fill (most sensitive, earliest invalidation)\nCustom: set your own percentage (1-99%)\n\n[X] shows after candle closes at invalidation threshold')
-custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=DEFAULT_STEP_SIZE, group=GROUP_INVALIDATION, inline='inv2', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
-invalidation_boundary = input.string(INVALIDATION_BOUNDARY_BODY, INPUT_LABEL_INVALIDATION_BOUNDARY, options=[INVALIDATION_BOUNDARY_BODY, INVALIDATION_BOUNDARY_EXTREMES], group=GROUP_INVALIDATION, inline='inv3', tooltip='INVALIDATION GROUP SUMMARY:\n• Show Invalidated MBZs: Toggle display of invalidated MBZs\n• Max: Maximum invalidated MBZs to show (0-15 limit)\n• Threshold: Set sensitivity - Standard (100%), Conservative (85%), Strict (55%), or Custom percentage\n• Custom %: Used only when Custom mode is selected (1-99% range)\n• Boundary: Body Zone uses MBZ zone, Candle Extremes uses candle high/low (default, more forgiving)\n\nNote: Boundary only applies to Standard MBZs. Inclusion and Reflection always use their zone boundaries.')
+mbz_invalidation_mode = input.string(INVALIDATION_STRICT, INPUT_LABEL_INVALIDATION_THRESHOLD, options=[INVALIDATION_STANDARD, INVALIDATION_CONSERVATIVE, INVALIDATION_STRICT, INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline='inv1', tooltip='Zone fill threshold for invalidation (requires candle close)\nStandard: 100% fill (less sensitive, later invalidation - traditional MBZ)\nConservative: 85% fill (more sensitive, earlier invalidation)\nStrict: 55% fill (most sensitive, earliest invalidation)\nCustom: set your own percentage (1-99%)\n\n[X] shows after candle closes at invalidation threshold')
+custom_threshold_percent = input.float(DEFAULT_CUSTOM_THRESHOLD, INPUT_LABEL_CUSTOM_PERCENT, minval=MIN_THRESHOLD_PERCENT, maxval=MAX_THRESHOLD_PERCENT, step=DEFAULT_STEP_SIZE, group=GROUP_INVALIDATION, inline='inv1', tooltip='Custom invalidation threshold (1-99%). Used only when Custom mode is selected.')
+invalidation_boundary = input.string(INVALIDATION_BOUNDARY_BODY, INPUT_LABEL_INVALIDATION_BOUNDARY, options=[INVALIDATION_BOUNDARY_BODY, INVALIDATION_BOUNDARY_EXTREMES], group=GROUP_INVALIDATION, inline='inv1', tooltip='Invalidation boundary:\n• Body Zone: Uses MBZ zone (body) boundaries\n• Candle Extremes: Uses candle high/low (default, more forgiving)\n\nNote: Only applies to Standard MBZs. Inclusion and Reflection always use their zone boundaries.')
+show_invalidated_mbzs_input = input.bool(false, INPUT_LABEL_SHOW_INVALIDATED_MBZS, group=GROUP_INVALIDATION, inline='inv2', tooltip='Show invalidated MBZs alongside active ones')
+max_invalidated_mbzs = input.int(DEFAULT_MAX_INVALIDATED_MBZS, INPUT_LABEL_MAX_INVALIDATED_MBZS, minval=0, maxval=MAX_INVALIDATED_MBZS_LIMIT, group=GROUP_INVALIDATION, inline='inv2', tooltip='Maximum number of invalidated MBZs to show (0-15 limit)')
+backtesting_mode = input.bool(false, "Enable Backtesting Mode", group=GROUP_INVALIDATION, inline='inv3', tooltip='Show ONLY invalidated MBZs for backtesting analysis.\nOverrides "Show Invalidated MBZs" toggle.')
+
+// Derived display flags
+show_active_mbzs = not backtesting_mode
+show_invalidated_mbzs = show_invalidated_mbzs_input or backtesting_mode
 
 // === 👁️ VISIBILITY FILTERS ===
 mbz_direction_filter = input.string(MBZ_DIRECTION_BOTH, 'Direction', options=[MBZ_DIRECTION_BOTH, MBZ_DIRECTION_BULLISH, MBZ_DIRECTION_BEARISH], group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Filter MBZ display by direction:\n• Both: Show all MBZs\n• MBZ⁺ Only: Show only bullish MBZs\n• MBZ⁻ Only: Show only bearish MBZs')
@@ -1682,6 +1687,8 @@ get_consolidated_mbz_colors(consolidated_mbz) =>
 should_display_mbz(mbz_record) =>
     if mbz_record.is_invalidated and not show_invalidated_mbzs
         false
+    else if not mbz_record.is_invalidated and not show_active_mbzs
+        false
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_TRUE) and not enable_true_gaps
         false  // Hide True Gap MBZs when source disabled
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_IMPLIED) and not enable_implied
@@ -1847,7 +1854,7 @@ manage_consolidated_mbz_display() =>
                 // Apply all filters together
                 if should_add_based_on_shared_source
                     // SEPARATE LIMITS SYSTEM: Process valid and invalidated MBZs with independent counters
-                    if not current_mbz_record.is_invalidated and valid_mbz_count < max_valid_mbzs_effective
+                    if not current_mbz_record.is_invalidated and valid_mbz_count < max_valid_mbzs_effective and show_active_mbzs
                         // Add valid MBZs up to configured limit
                         if should_display_mbz(current_mbz_record)
                             array.push(displayable_mbzs, current_mbz_record)
@@ -1859,7 +1866,7 @@ manage_consolidated_mbz_display() =>
                             invalidated_mbz_count += 1
 
                 // PERFORMANCE OPTIMIZATION: Early termination when limits reached
-                if valid_mbz_count >= max_valid_mbzs_effective and
+                if (valid_mbz_count >= max_valid_mbzs_effective or not show_active_mbzs) and
                    (invalidated_mbz_count >= max_invalidated_mbzs or not show_invalidated_mbzs)
                     break  // Stop processing when display limits are reached
 
