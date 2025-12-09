@@ -234,6 +234,7 @@ const color DEFAULT_BREAKAWAY_BEARISH_BORDER_COLOR = color.new(color.rgb(249, 12
 
 // === 🎤 WORKSPACE TOOLS ===
 workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance')
+adaptive_boost_enabled = input.bool(false, 'Enable Adaptive Boost', group=GROUP_LIVE_WORKSPACE, tooltip='When no SIFs are within ATR range, automatically boosts to 12× capacity to scan deeper history.\n\nRequires:\n• Workspace Mode enabled\n• 1-15 minute timeframe\n\nStatus table shows "BOOST" when active.')
 
 // === 🎯 DETECTION ===
 max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, INPUT_LABEL_MAX_VALID_SIFS, minval=0, maxval=MAX_VALID_SIFS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid SIFs to display on chart. Max: 55\n\n• 0 = Show no valid SIFs\n• Higher values show more valid SIFs\n• Independent of invalidated SIF limit')
@@ -301,9 +302,19 @@ status_table_offset = input.int(DEFAULT_STATUS_TABLE_OFFSET, 'Offset', minval=-5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Effective capacity settings (Boost mode temporarily raises limits)
-is_capacity_boost = capacity_mode == CAPACITY_MODE_BOOST
-is_capacity_ultra_boost = capacity_mode == CAPACITY_MODE_ULTRA_BOOST
-is_capacity_ultra_pro_boost = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST
+user_capacity_level = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST ? 3 : capacity_mode == CAPACITY_MODE_ULTRA_BOOST ? 2 : capacity_mode == CAPACITY_MODE_BOOST ? 1 : 0
+
+tf_seconds = timeframe.in_seconds()
+is_adaptive_boost_timeframe = tf_seconds >= 60 and tf_seconds <= 900
+
+// Adaptive boost: only boost when previous bar had no zones in ATR range
+var bool adaptive_boost_needed = true
+adaptive_boost_active = workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe and adaptive_boost_needed
+effective_capacity_level = adaptive_boost_active ? 3 : user_capacity_level
+
+is_capacity_boost = effective_capacity_level == 1
+is_capacity_ultra_boost = effective_capacity_level == 2
+is_capacity_ultra_pro_boost = effective_capacity_level >= 3
 
 // Base (Optimized)
 base_valid_sifs = max_valid_sifs
@@ -1852,7 +1863,9 @@ manage_consolidated_sif_display() =>
     // Group displayable SIFs by candle (will return empty array if no displayable SIFs)
     consolidated_sifs = group_sifs_by_candle(displayable_sifs)
 
-    // Only process if we have consolidated SIFs
+    bullish_atr_count = 0
+    bearish_atr_count = 0
+
     if array.size(consolidated_sifs) > 0
         // Process each consolidated group
         gap_boxes_already_created = array.new<int>()
@@ -1868,9 +1881,14 @@ manage_consolidated_sif_display() =>
             current_consolidated_sif.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_sif.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
-            // ATR distance filter - skip zones too far from current price
             if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
                 continue
+
+            if adaptive_boost_active
+                if current_consolidated_sif.is_bullish
+                    bullish_atr_count += 1
+                else
+                    bearish_atr_count += 1
 
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_sif)
@@ -1972,11 +1990,15 @@ manage_consolidated_sif_display() =>
         for cache_i = 0 to array.size(consolidated_sifs) - 1
             array.push(last_consolidated_sifs, array.get(consolidated_sifs, cache_i))
 
+    [bullish_atr_count, bearish_atr_count]
+
 // OPTIMIZED: Smart visual update system - only when necessary (match MBZ gating)
 should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
-    manage_consolidated_sif_display()
+    [bullish_count, bearish_count] = manage_consolidated_sif_display()
+    if barstate.islast and workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe
+        adaptive_boost_needed := bullish_count == 0 or bearish_count == 0
     last_update_bar := bar_index
     needs_full_update := false
     needs_visual_update := false
@@ -2103,9 +2125,8 @@ if show_status_table and barstate.islast
         INVALIDATION_LENIENT => STATUS_DISPLAY_INV_85
         => "[" + str.tostring(int(custom_threshold_percent)) + "]"
 
-    // Get capacity mode display (only show if boosted)
-    capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : ""
-    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost
+    capacity_text = adaptive_boost_active ? "BOOST" : (is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : "")
+    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost or adaptive_boost_active
 
     // Build status text (WS only shown if enabled, capacity only if boosted)
     status_text = workspace_mode_enabled ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text

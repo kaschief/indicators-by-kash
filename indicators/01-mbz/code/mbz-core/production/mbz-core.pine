@@ -192,6 +192,7 @@ STATUS_DISPLAY_CAP_1X = "1x"
 STATUS_DISPLAY_CAP_4X = "4x"
 STATUS_DISPLAY_CAP_8X = "8x"
 STATUS_DISPLAY_CAP_12X = "12x"
+STATUS_DISPLAY_AUTO_PREFIX = "BOOST"
 SUBTYPE_EXT_DISPLAY = "⁺ʷ"
 
 
@@ -256,6 +257,7 @@ DEFAULT_STATUS_TABLE_OFFSET = 0
 
 // === 🎤 WORKSPACE TOOLS ===
 workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance')
+adaptive_boost_enabled = input.bool(false, 'Enable Adaptive Boost', group=GROUP_LIVE_WORKSPACE, tooltip='When no MBZs are within ATR range, automatically boosts to 12× capacity to scan deeper history.\n\nRequires:\n• Workspace Mode enabled\n• 1-15 minute timeframe\n\nStatus table shows "BOOST" when active.')
 
 // === 🎯 DETECTION ===
 max_valid_mbzs = input.int(DEFAULT_MAX_VALID_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_VALID_MBZS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid MBZs visible on chart (0-55 limit)')
@@ -294,7 +296,7 @@ source_gap_text_color = input.color(DEFAULT_SOURCE_GAP_TEXT_COLOR, INPUT_LABEL_L
 // === ✨ MBZ EXTENSION ===
 extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, INPUT_LABEL_MBZ_PLUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁺ highlights and extensions')
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INPUT_LABEL_MBZ_MINUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁻ highlights and extensions')
-extend_to_reference_wick = input.bool(false, 'Include Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Include reference candle wick in zone boundary:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high\n• Only applies to Standard MBZ subtype\n• Creates larger zones that are harder to invalidate')
+extend_to_reference_wick = input.bool(true, 'Include Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Include reference candle wick in zone boundary:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high\n• Only applies to Standard MBZ subtype\n• Creates larger zones that are harder to invalidate')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
 extension_fill_opacity = input.int(DEFAULT_EXTENSION_FILL_OPACITY, 'Fill Opacity', minval=0, maxval=100, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Base opacity for extension box fill (0=solid, 100=invisible)\n\nThis is the base transparency before distance-based fading is applied')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
@@ -445,9 +447,21 @@ for i = 0 to extension_label_vertical_padding - 1
     vertical_padding_str := vertical_padding_str + "\n"
 
 // Effective capacity settings (Boost mode temporarily raises limits)
-is_capacity_boost = capacity_mode == CAPACITY_MODE_BOOST
-is_capacity_ultra_boost = capacity_mode == CAPACITY_MODE_ULTRA_BOOST
-is_capacity_ultra_pro_boost = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST
+// Convert user's capacity_mode to numeric level (0=Optimized, 1=Boost, 2=Ultra, 3=Ultra Pro)
+user_capacity_level = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST ? 3 : capacity_mode == CAPACITY_MODE_ULTRA_BOOST ? 2 : capacity_mode == CAPACITY_MODE_BOOST ? 1 : 0
+
+// Adaptive boost only works on 1-15 minute timeframes
+tf_seconds = timeframe.in_seconds()
+is_adaptive_boost_timeframe = tf_seconds >= 60 and tf_seconds <= 900
+
+// Adaptive boost: only boost when previous bar had no zones in ATR range
+var bool adaptive_boost_needed = true
+adaptive_boost_active = workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe and adaptive_boost_needed
+effective_capacity_level = adaptive_boost_active ? 3 : user_capacity_level
+
+is_capacity_boost = effective_capacity_level == 1
+is_capacity_ultra_boost = effective_capacity_level == 2
+is_capacity_ultra_pro_boost = effective_capacity_level >= 3
 
 // Base (Optimized)
 base_valid_mbzs = max_valid_mbzs
@@ -1874,6 +1888,10 @@ manage_consolidated_mbz_display() =>
     consolidated_mbzs = group_mbzs_by_candle(displayable_mbzs)
 
     // Only process if we have consolidated MBZs
+    // Auto-boost counter: track how many MBZs pass ATR filter (split by direction)
+    bullish_atr_count = 0
+    bearish_atr_count = 0
+
     if array.size(consolidated_mbzs) > 0
         gap_boxes_already_created = array.new<int>()
         created_gap_ids_overall = array.new_int()
@@ -1890,9 +1908,14 @@ manage_consolidated_mbz_display() =>
             current_consolidated_mbz.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_mbz.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
-            // ATR distance filter - skip zones too far from current price
             if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
                 continue
+
+            if adaptive_boost_active
+                if current_consolidated_mbz.is_bullish
+                    bullish_atr_count += 1
+                else
+                    bearish_atr_count += 1
 
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_mbz)
@@ -1996,6 +2019,9 @@ manage_consolidated_mbz_display() =>
     if array.size(consolidated_mbzs) > 0
         for cache_i = 0 to array.size(consolidated_mbzs) - 1
             array.push(last_consolidated_mbzs, array.get(consolidated_mbzs, cache_i))
+
+    // Return ATR pass counts for auto-boost logic (bullish, bearish)
+    [bullish_atr_count, bearish_atr_count]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN DETECTION LOGIC - ENHANCED WITH VOLUME IMBALANCE SUPPORT // ═══════════════════════════════════════════════════════════════════════════════
@@ -2214,8 +2240,9 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
 should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
-    manage_consolidated_mbz_display()
-
+    [bullish_count, bearish_count] = manage_consolidated_mbz_display()
+    if barstate.islast and workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe
+        adaptive_boost_needed := bullish_count == 0 or bearish_count == 0
     last_update_bar := bar_index
     needs_full_update := false
     needs_visual_update := false
@@ -2331,9 +2358,8 @@ if show_status_table and barstate.islast
 
     gaps_text = all_gaps_enabled ? STATUS_DISPLAY_ALL : array.join(gap_parts, "·")
 
-    // Build capacity mode display (only show if boosted)
-    capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : ""
-    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost
+    capacity_text = adaptive_boost_active ? "BOOST" : (is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : "")
+    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost or adaptive_boost_active
 
     // Get invalidation threshold display
     inv_display = switch mbz_invalidation_mode
