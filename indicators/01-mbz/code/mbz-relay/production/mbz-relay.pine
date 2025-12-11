@@ -30,11 +30,13 @@ const int DRAW_BUFFER = 20  // Reserve for test zones, warnings, etc.
 // Gap type constants (from MBZ-Core)
 const string GAP_TYPE_FVG     = "fvg"
 const string GAP_TYPE_IMPLIED = "implied"
+const string GAP_TYPE_VOLUME  = "volume"
 
 // Status display constants (from MBZ-Core)
 const string STATUS_DISPLAY_ALL = "all"
 const string STATUS_DISPLAY_FVG = "fvg"
 const string STATUS_DISPLAY_IMP = "imp"
+const string STATUS_DISPLAY_VOL = "vol"
 const string STATUS_DISPLAY_REF_WICK = "⁺ʷ"
 
 // MBZ subtype constants (from MBZ-Core)
@@ -48,7 +50,14 @@ const string MBZ_BULLISH_SUFFIX = "⁺"
 const string MBZ_BEARISH_SUFFIX = "⁻"
 
 // Gap source display text for labels (from MBZ-Core)
+const string GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
 const string GAP_SOURCE_IMPLIED_DISPLAY = "imp"
+const string GAP_SOURCE_VOLUME_DISPLAY  = "vol"
+
+// Consolidated label formatting (from MBZ-Core)
+const string MULTIPLIER_SYMBOL = "×"
+const string COUNT_SEPARATOR = ": "
+const string BREAKDOWN_SEPARATOR = ", "
 
 // Wick dominance threshold (from MBZ-Core: wick must be >= 80% of body)
 const float WICK_DOMINANCE_THRESHOLD = 0.80
@@ -68,8 +77,8 @@ const float INVALIDATION_STRICT_PERCENT       = 55.0
 const float  IMPLIED_DISPLACEMENT_MULTIPLIER = 1.25
 const int    IMPLIED_DISPLACEMENT_LOOKBACK   = 4
 
-// Workspace Mode ATR filter default (from MBZ-Core)
-const float DEFAULT_ATR_MULTIPLIER = 3.5
+// VI suppression temporal window (from MBZ-Core)
+const int SUPPRESSION_TEMPORAL_WINDOW = 2
 
 // MBZ label text color default
 const color DEFAULT_MBZ_LABEL_COLOR = color.new(color.rgb(219, 219, 219), 20)
@@ -114,12 +123,6 @@ const string DIR_BOTH    = "Both"
 const string DIR_BULLISH = "MBZ⁺ Only"
 const string DIR_BEARISH = "MBZ⁻ Only"
 
-// Gap source options
-const string GAP_DROPDOWN_ALL     = "All"
-const string GAP_DROPDOWN_FVG     = "Fair Value Gap (FVG)"
-const string GAP_DROPDOWN_IMPLIED = "Implied FVG"
-
-
 // Gap color (matches MBZ-Core exactly)
 const color GAP_COLOR = color.new(color.rgb(187, 217, 251), 90)
 
@@ -127,10 +130,17 @@ const color GAP_COLOR = color.new(color.rgb(187, 217, 251), 90)
 GROUP_DETECTION  = "🔍 Detection"
 max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_DETECTION,
                    tooltip="Max 200. Recommended by pairing:\n• 1m→15m: 50 (~12 hours)\n• 5m→1H: 75 (~3 days)\n• 15m→4H: 50 (~8 days)\n• 1H→D: 20 (~4 weeks)")
-gap_source_filter = input.string(GAP_DROPDOWN_ALL, "Gap Source", options=[GAP_DROPDOWN_ALL, GAP_DROPDOWN_FVG, GAP_DROPDOWN_IMPLIED], group=GROUP_DETECTION,
-                   tooltip="All: Detect both gap types\nFVG: Standard 3-candle gap\nImplied FVG: Bodies separate, wicks overlap")
 mbz_direction_filter = input.string(DIR_BOTH, "Direction Filter", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_DETECTION,
                    tooltip="Filter MBZ display by direction")
+
+// ─── 📊 Gap Sources ───
+GROUP_GAP_SOURCES = "📊 Gap Sources"
+enable_fvg      = input.bool(true, "Fair Value Gaps", group=GROUP_GAP_SOURCES, inline="src1",
+                  tooltip="Standard 3-candle gap where wicks don't overlap")
+enable_implied  = input.bool(true, "Implied FVG", group=GROUP_GAP_SOURCES, inline="src2",
+                  tooltip="3-candle pattern: bodies separate, wicks overlap")
+enable_volume   = input.bool(true, "Volume Imbalance", group=GROUP_GAP_SOURCES, inline="src3",
+                  tooltip="2-candle body gap with wick connection")
 
 // ─── ✋ Invalidation ───
 GROUP_INVALIDATION = "✋ Invalidation"
@@ -143,15 +153,13 @@ custom_threshold_percent = input.float(50.0, "Custom %", minval=1.0, maxval=99.0
 
 // ─── ✨ MBZ Visualization ───
 GROUP_MBZ        = "✨ MBZ Visualization"
-workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_MBZ,
-                         tooltip="Extends active MBZ zones to current price for live trading.\n• Only zones within 3.5× LTF ATR(14) are shown/extended\n• Zones beyond ATR range are hidden\nWhen disabled, zones extend only by the fixed HTF candle count.")
 extend_to_reference_wick = input.bool(true, "Extend to Reference Wick", group=GROUP_MBZ,
                    tooltip="Extend zone boundary to reference candle wick:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high")
-mbz_extension_bars = input.int(3, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_MBZ,
-                     tooltip="Number of HTF candles the MBZ zone extends from formation.\nIn Workspace Mode, zones extend to current time if longer.")
+mbz_extension_bars = input.int(5, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_MBZ,
+                     tooltip="Number of HTF candles the MBZ zone extends from formation.")
 mbz_label_color  = input.color(DEFAULT_MBZ_LABEL_COLOR, "Label Color", group=GROUP_MBZ, inline="lbl",
                    tooltip="Text color for MBZ zone labels")
-mbz_label_size   = input.string("Huge", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_MBZ, inline="lbl",
+mbz_label_size   = input.string("Large", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_MBZ, inline="lbl",
                    tooltip="Font size for MBZ zone labels")
 
 // ─── 📦 Source Origins ───
@@ -208,10 +216,6 @@ float INVALIDATION_THRESHOLD = switch invalidation_mode
 int CANDLE_BOX_USAGE = show_htf_candles ? max_htf_candles * 2 : 0
 int MAX_FVGS = DRAW_LIMIT - CANDLE_BOX_USAGE - DRAW_BUFFER
 
-// LTF ATR Distance Filter (from MBZ-Core, using chart's native ATR)
-float ltf_atr_value = ta.atr(14)
-float atr_max_distance = ltf_atr_value * DEFAULT_ATR_MULTIPLIER
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +261,13 @@ type MBZRecord
     string source_gap_type      // "fvg" or "implied"
     box    mbz_box              // Visual box for the MBZ zone
 
+// MBZ Formation Match (for multi-source consolidated candles support)
+type MBZFormationMatch
+    bool   is_bullish
+    string subtype
+    int    source_gap_id
+    string source_gap_type
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATE VARIABLES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -298,20 +309,6 @@ bool new_htf = IS_VALID ? ta.change(time(HTF_STRING)) != 0 : false
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ATR DISTANCE FILTER (from MBZ-Core)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ATR distance filter helper - checks if zone is within ATR range from current price
-// Uses LTF ATR since that's the chart we're viewing
-passes_atr_distance_filter(float zone_top, float zone_bottom) =>
-    if not workspace_mode_enabled
-        true
-    else
-        // Distance to nearest edge: 0 if price inside zone, otherwise distance to closest edge
-        float distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
-        distance_to_zone <= atr_max_distance
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // MBZ LABEL TEXT
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -325,15 +322,72 @@ get_bold_htf_label() =>
         "W"   => "𝗪"
         => HTF_LABEL
 
-// Build MBZ box label text: MBZ⁺·{𝗧𝗙} with optional ⁱᵐᵖ on new line
-build_mbz_box_label(bool is_bullish, string source_gap_type) =>
+// Build MBZ box label text: MBZ⁺·{𝗧𝗙} with optional source type on new line
+// Mirrors MBZ-Core's build_source_breakdown_extension_from_stats logic exactly
+build_mbz_box_label(bool is_bullish, array<string> source_gap_types) =>
     string direction_suffix = is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX
     // Regular MBZ + Bold TF: MBZ⁺·𝟰𝗛
     string result = "MBZ" + direction_suffix + "·" + get_bold_htf_label()
-    // Add source type on new line (if implied) - superscript style
-    if source_gap_type == GAP_TYPE_IMPLIED
-        result := result + "\n" + "ⁱᵐᵖ"
-    result
+
+    int num_sources = array.size(source_gap_types)
+    if num_sources == 0
+        result
+    else
+        // Count each type (mirrors MBZ-Core SourceTypeStats)
+        int fvg_count = 0
+        int imp_count = 0
+        int vol_count = 0
+
+        for i = 0 to num_sources - 1
+            string src = array.get(source_gap_types, i)
+            if src == GAP_TYPE_FVG
+                fvg_count += 1
+            else if src == GAP_TYPE_IMPLIED
+                imp_count += 1
+            else if src == GAP_TYPE_VOLUME
+                vol_count += 1
+
+        // Count distinct types
+        int distinct_types = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
+
+        string source_type_text = ""
+
+        if distinct_types == 1
+            // Single type: show type with multiplier if count > 1 (FVG shows nothing if count == 1)
+            if fvg_count > 0
+                if fvg_count == 1
+                    source_type_text := ""
+                else
+                    source_type_text := GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count)
+            else if imp_count > 0
+                if imp_count == 1
+                    source_type_text := "ⁱᵐᵖ"  // Superscript for single implied
+                else
+                    source_type_text := GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count)
+            else if vol_count > 0
+                if vol_count == 1
+                    source_type_text := "ᵛᵒˡ"  // Superscript for single volume
+                else
+                    source_type_text := GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count)
+        else
+            // Multiple distinct types: show "count: type1, type2" format (mirrors MBZ-Core)
+            array<string> parts = array.new<string>()
+
+            if fvg_count > 0
+                array.push(parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+            if imp_count > 0
+                array.push(parts, imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count))
+            if vol_count > 0
+                array.push(parts, vol_count == 1 ? GAP_SOURCE_VOLUME_DISPLAY : GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count))
+
+            string breakdown = array.join(parts, BREAKDOWN_SEPARATOR)
+            source_type_text := str.tostring(num_sources) + COUNT_SEPARATOR + breakdown
+
+        // Add source type on new line if not empty
+        if str.length(source_type_text) > 0
+            result := result + "\n" + source_type_text
+
+        result
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MBZ SUBTYPE DETECTION (from MBZ-Core)
@@ -525,6 +579,67 @@ detect_htf_implied_fvg() =>
             else
                 [false, float(na), float(na), false]
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HTF VOLUME IMBALANCE DETECTION (from MBZ-Core)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Detects 2-candle bullish Volume Imbalance with body separation and wick overlap
+// Uses htf_*1 (newest) and htf_*2 (previous) candles
+// Condition: htf_*1 body completely above htf_*2 body, but wicks still connect
+is_htf_bullish_vi() =>
+    float curr_body_bot = htf_body_bot(htf_o1, htf_c1)  // Current body bottom
+    float prev_body_top = htf_body_top(htf_o2, htf_c2)  // Previous body top
+    bool bodies_separated = curr_body_bot > prev_body_top
+    bool wicks_still_connect = htf_l1 <= htf_h2  // Current low reaches previous high
+    bodies_separated and wicks_still_connect
+
+// Detects 2-candle bearish Volume Imbalance with body separation and wick overlap
+// Uses htf_*1 (newest) and htf_*2 (previous) candles
+// Condition: htf_*1 body completely below htf_*2 body, but wicks still connect
+is_htf_bearish_vi() =>
+    float curr_body_top = htf_body_top(htf_o1, htf_c1)  // Current body top
+    float prev_body_bot = htf_body_bot(htf_o2, htf_c2)  // Previous body bottom
+    bool bodies_separated = curr_body_top < prev_body_bot
+    bool wicks_still_connect = htf_h1 >= htf_l2  // Current high reaches previous low
+    bodies_separated and wicks_still_connect
+
+// Calculates Volume Imbalance gap coordinates using 2-candle body separation
+// Returns [gap_top, gap_bottom]
+get_htf_vi_coordinates(bool is_bullish_gap) =>
+    if is_bullish_gap
+        // Bullish VI: gap between htf_*2 body top and htf_*1 body bottom
+        float gap_bottom = htf_body_top(htf_o2, htf_c2)  // Previous body top
+        float gap_top = htf_body_bot(htf_o1, htf_c1)     // Current body bottom
+        [gap_top, gap_bottom]
+    else
+        // Bearish VI: gap between htf_*2 body bottom and htf_*1 body top
+        float gap_top = htf_body_bot(htf_o2, htf_c2)     // Previous body bottom
+        float gap_bottom = htf_body_top(htf_o1, htf_c1)  // Current body top
+        [gap_top, gap_bottom]
+
+// Checks if Volume Imbalance should be suppressed by higher-priority gaps
+// VI is suppressed if there's an overlapping FVG or Implied FVG of the same direction
+// within the temporal window
+is_htf_vi_suppressed_by_gaps(float vi_top, float vi_bottom, bool is_vi_bullish) =>
+    if array.size(fvg_array) == 0
+        false  // No existing gaps = no suppression
+    else
+        bool has_overlap = false
+        for i = 0 to array.size(fvg_array) - 1
+            FVGData gap = array.get(fvg_array, i)
+
+            // Gap hierarchy filter: FVG and Implied FVG can suppress VI
+            bool is_higher_priority = gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED
+            bool same_direction = gap.is_bullish == is_vi_bullish
+            bool is_active = not gap.mitigated
+
+            if is_higher_priority and same_direction and is_active
+                // Spatial overlap detection: overlap exists if vi_bottom < gap.top AND vi_top >= gap.bottom
+                if vi_bottom < gap.top and vi_top >= gap.bottom
+                    has_overlap := true
+                    break  // Early exit: Found overlap, VI will be suppressed
+        has_overlap
+
 // Check FVG closed through (mirrors MBZ-Core is_closed_through logic)
 // Must be called BEFORE MBZ detection - ALWAYS runs (independent of gap display mode)
 check_fvg_closed_through(float htf_open, float htf_close) =>
@@ -552,14 +667,9 @@ check_fvg_closed_through(float htf_open, float htf_close) =>
 // prev_* = reference candle (htf_*2 = candle before the one that just completed)
 // curr_* = MBZ candle (htf_*1 = candle that just completed)
 // ref_time = reference candle's start time (htf_t2) - must be AFTER gap formation
-// Returns [any_formed, bullish_formed, bearish_formed, subtype, source_gap_id, source_gap_type] for MBZRecord creation
+// Returns array of MBZFormationMatch for ALL gaps that form MBZs on this candle
 check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int ref_time, float curr_o, float curr_h, float curr_l, float curr_c) =>
-    bool any_mbz_formed = false
-    bool bullish_mbz_formed = false
-    bool bearish_mbz_formed = false
-    string mbz_subtype = SUBTYPE_STANDARD
-    int source_gap_id = 0
-    string source_gap_type = ""
+    array<MBZFormationMatch> matches = array.new<MBZFormationMatch>()
 
     // Previous candle (reference) direction
     bool prev_is_bullish = prev_c > prev_o
@@ -601,34 +711,38 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                     // Bullish MBZ: gap bullish, ref bearish, current bullish, close >= 50%
                     if fvg.is_bullish and prev_is_bearish and curr_is_bullish
                         if curr_c >= prev_50_percent
-                            any_mbz_formed := true
-                            bullish_mbz_formed := true
-                            source_gap_id := fvg.gap_id
-                            source_gap_type := fvg.gap_type
                             // Mark source FVG - freeze box at reference candle + track MBZ direction
                             fvg.mbz_ref_time := ref_time
                             fvg.mbz_is_bullish := true
                             array.set(fvg_array, i, fvg)
                             // Detect subtype from MBZ candle (always on)
                             [detected_subtype, _has_dominant] = detect_mbz_subtype(curr_o, curr_c, curr_h, curr_l)
-                            mbz_subtype := detected_subtype
+                            // Create match record
+                            MBZFormationMatch match = MBZFormationMatch.new()
+                            match.is_bullish := true
+                            match.subtype := detected_subtype
+                            match.source_gap_id := fvg.gap_id
+                            match.source_gap_type := fvg.gap_type
+                            array.push(matches, match)
 
                     // Bearish MBZ: gap bearish, ref bullish, current bearish, close <= 50%
                     else if not fvg.is_bullish and prev_is_bullish and curr_is_bearish
                         if curr_c <= prev_50_percent
-                            any_mbz_formed := true
-                            bearish_mbz_formed := true
-                            source_gap_id := fvg.gap_id
-                            source_gap_type := fvg.gap_type
                             // Mark source FVG - freeze box at reference candle + track MBZ direction
                             fvg.mbz_ref_time := ref_time
                             fvg.mbz_is_bullish := false
                             array.set(fvg_array, i, fvg)
                             // Detect subtype from MBZ candle (always on)
                             [detected_subtype, _has_dominant] = detect_mbz_subtype(curr_o, curr_c, curr_h, curr_l)
-                            mbz_subtype := detected_subtype
+                            // Create match record
+                            MBZFormationMatch match = MBZFormationMatch.new()
+                            match.is_bullish := false
+                            match.subtype := detected_subtype
+                            match.source_gap_id := fvg.gap_id
+                            match.source_gap_type := fvg.gap_type
+                            array.push(matches, match)
 
-    [any_mbz_formed, bullish_mbz_formed, bearish_mbz_formed, mbz_subtype, source_gap_id, source_gap_type]
+    matches
 
 // Update FVG box positions and visibility based on display mode + direction filter
 // Priority: mbz_ref_time (freeze at reference candle) > mitigated_time > current time
@@ -643,7 +757,7 @@ update_fvg_positions() =>
             label.set_x(fvg.tf_label, right_edge)
 
             // Check if this gap led to an MBZ and passes filters
-            bool type_ok = gap_source_filter == GAP_DROPDOWN_ALL or (gap_source_filter == GAP_DROPDOWN_FVG and fvg.gap_type == GAP_TYPE_FVG) or (gap_source_filter == GAP_DROPDOWN_IMPLIED and fvg.gap_type == GAP_TYPE_IMPLIED)
+            bool type_ok = (enable_fvg and fvg.gap_type == GAP_TYPE_FVG) or (enable_implied and fvg.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and fvg.gap_type == GAP_TYPE_VOLUME)
             bool dir_ok = mbz_direction_filter == DIR_BOTH or (fvg.mbz_is_bullish and mbz_direction_filter == DIR_BULLISH) or (not fvg.mbz_is_bullish and mbz_direction_filter == DIR_BEARISH)
             bool is_mbz_source = fvg.mbz_ref_time > 0 and dir_ok and type_ok
 
@@ -822,72 +936,123 @@ if IS_VALID
         // ─── Track Window (independent of candle display) ───
         update_htf_times(htf_t1)
 
-        // ─── Gap Detection (ALWAYS runs for MBZ, visuals controlled by gap display mode) ───
+        // ─── Gap Detection (ALL enabled types detected independently - mirrors MBZ Core) ───
+        // Each gap type is detected and stored separately to support multi-source MBZs
         if htf_h3 > 0  // Ensure we have 3 candles of history
             bool gap_in_window = htf_t3 >= window_start or window_start == 0
-            bool gap_detected = false
-            float gap_top = 0.0
-            float gap_bot = 0.0
-            bool gap_is_bull = false
-            string gap_type_detected = ""
 
-            // ─── Standard FVG Detection ───
-            bool check_fvg = gap_source_filter == GAP_DROPDOWN_ALL or gap_source_filter == GAP_DROPDOWN_FVG
-            if check_fvg
-                // Bullish: C1 low > C3 high (gap up)
-                // Bearish: C1 high < C3 low (gap down)
+            // ─── Standard FVG Detection (Bullish) ───
+            if enable_fvg and gap_in_window
                 bool is_bull_fvg = htf_l1 > htf_h3
-                bool is_bear_fvg = htf_h1 < htf_l3
-
                 if is_bull_fvg
-                    gap_detected := true
-                    gap_top := htf_l1
-                    gap_bot := htf_h3
-                    gap_is_bull := true
-                    gap_type_detected := GAP_TYPE_FVG
-                else if is_bear_fvg
-                    gap_detected := true
-                    gap_top := htf_l3
-                    gap_bot := htf_h1
-                    gap_is_bull := false
-                    gap_type_detected := GAP_TYPE_FVG
+                    float gap_top = htf_l1
+                    float gap_bot = htf_h3
+                    float gap_ce = (gap_top + gap_bot) / 2
+                    int this_gap_id = next_gap_id
+                    next_gap_id := next_gap_id + 1
+                    FVGData new_fvg = FVGData.new()
+                    new_fvg.top := gap_top
+                    new_fvg.bottom := gap_bot
+                    new_fvg.ce := gap_ce
+                    new_fvg.start_time := htf_t3
+                    new_fvg.formation_end_time := htf_t1
+                    new_fvg.is_bullish := true
+                    new_fvg.gap_type := GAP_TYPE_FVG
+                    new_fvg.gap_id := this_gap_id
+                    new_fvg.fvg_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
+                    array.unshift(fvg_array, new_fvg)
 
-            // ─── Implied FVG Detection (only if no standard FVG found) ───
-            bool check_implied = (gap_source_filter == GAP_DROPDOWN_ALL or gap_source_filter == GAP_DROPDOWN_IMPLIED) and not gap_detected
-            if check_implied
+            // ─── Standard FVG Detection (Bearish) ───
+            if enable_fvg and gap_in_window
+                bool is_bear_fvg = htf_h1 < htf_l3
+                if is_bear_fvg
+                    float gap_top = htf_l3
+                    float gap_bot = htf_h1
+                    float gap_ce = (gap_top + gap_bot) / 2
+                    int this_gap_id = next_gap_id
+                    next_gap_id := next_gap_id + 1
+                    FVGData new_fvg = FVGData.new()
+                    new_fvg.top := gap_top
+                    new_fvg.bottom := gap_bot
+                    new_fvg.ce := gap_ce
+                    new_fvg.start_time := htf_t3
+                    new_fvg.formation_end_time := htf_t1
+                    new_fvg.is_bullish := false
+                    new_fvg.gap_type := GAP_TYPE_FVG
+                    new_fvg.gap_id := this_gap_id
+                    new_fvg.fvg_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
+                    array.unshift(fvg_array, new_fvg)
+
+            // ─── Implied FVG Detection (independent of FVG) ───
+            if enable_implied and gap_in_window
                 [impl_found, impl_bot, impl_top, impl_bull] = detect_htf_implied_fvg()
                 if impl_found
-                    gap_detected := true
-                    gap_top := impl_top
-                    gap_bot := impl_bot
-                    gap_is_bull := impl_bull
-                    gap_type_detected := GAP_TYPE_IMPLIED
+                    float gap_ce = (impl_top + impl_bot) / 2
+                    int this_gap_id = next_gap_id
+                    next_gap_id := next_gap_id + 1
+                    FVGData new_fvg = FVGData.new()
+                    new_fvg.top := impl_top
+                    new_fvg.bottom := impl_bot
+                    new_fvg.ce := gap_ce
+                    new_fvg.start_time := htf_t3
+                    new_fvg.formation_end_time := htf_t1
+                    new_fvg.is_bullish := impl_bull
+                    new_fvg.gap_type := GAP_TYPE_IMPLIED
+                    new_fvg.gap_id := this_gap_id
+                    new_fvg.fvg_box := box.new(htf_t3, impl_top, time, impl_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " imp", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
+                    array.unshift(fvg_array, new_fvg)
 
-            // Create gap record if detected and in window (ALWAYS for MBZ detection)
-            if gap_detected and gap_in_window
-                float gap_ce = (gap_top + gap_bot) / 2
+            // ─── Volume Imbalance Detection (Bullish - with suppression check) ───
+            if enable_volume and htf_h2 > 0
+                bool vi_in_window = htf_t2 >= window_start or window_start == 0
+                if vi_in_window and is_htf_bullish_vi()
+                    [vi_top, vi_bot] = get_htf_vi_coordinates(true)
+                    if not is_htf_vi_suppressed_by_gaps(vi_top, vi_bot, true)
+                        float gap_ce = (vi_top + vi_bot) / 2
+                        int this_gap_id = next_gap_id
+                        next_gap_id := next_gap_id + 1
+                        FVGData new_fvg = FVGData.new()
+                        new_fvg.top := vi_top
+                        new_fvg.bottom := vi_bot
+                        new_fvg.ce := gap_ce
+                        new_fvg.start_time := htf_t2
+                        new_fvg.formation_end_time := htf_t1
+                        new_fvg.is_bullish := true
+                        new_fvg.gap_type := GAP_TYPE_VOLUME
+                        new_fvg.gap_id := this_gap_id
+                        new_fvg.fvg_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_fvg.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                        new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
+                        array.unshift(fvg_array, new_fvg)
 
-                // Label text: "D" or "D imp" based on gap type
-                string lbl_text = gap_type_detected == GAP_TYPE_IMPLIED ? HTF_LABEL + " imp" : HTF_LABEL
-
-                // Assign unique gap ID (mirrors MBZ-Core)
-                int this_gap_id = next_gap_id
-                next_gap_id := next_gap_id + 1
-
-                // Start invisible - visibility updated by update_fvg_positions based on display mode
-                FVGData new_fvg = FVGData.new()
-                new_fvg.top := gap_top
-                new_fvg.bottom := gap_bot
-                new_fvg.ce := gap_ce
-                new_fvg.start_time := htf_t3
-                new_fvg.formation_end_time := htf_t1
-                new_fvg.is_bullish := gap_is_bull
-                new_fvg.gap_type := gap_type_detected
-                new_fvg.gap_id := this_gap_id
-                new_fvg.fvg_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
-                new_fvg.tf_label := label.new(time, gap_ce, lbl_text, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                array.unshift(fvg_array, new_fvg)
+            // ─── Volume Imbalance Detection (Bearish - with suppression check) ───
+            if enable_volume and htf_h2 > 0
+                bool vi_in_window = htf_t2 >= window_start or window_start == 0
+                if vi_in_window and is_htf_bearish_vi()
+                    [vi_top, vi_bot] = get_htf_vi_coordinates(false)
+                    if not is_htf_vi_suppressed_by_gaps(vi_top, vi_bot, false)
+                        float gap_ce = (vi_top + vi_bot) / 2
+                        int this_gap_id = next_gap_id
+                        next_gap_id := next_gap_id + 1
+                        FVGData new_fvg = FVGData.new()
+                        new_fvg.top := vi_top
+                        new_fvg.bottom := vi_bot
+                        new_fvg.ce := gap_ce
+                        new_fvg.start_time := htf_t2
+                        new_fvg.formation_end_time := htf_t1
+                        new_fvg.is_bullish := false
+                        new_fvg.gap_type := GAP_TYPE_VOLUME
+                        new_fvg.gap_id := this_gap_id
+                        new_fvg.fvg_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_fvg.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                        new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
+                        array.unshift(fvg_array, new_fvg)
 
         cleanup_fvgs(window_start, MAX_FVGS)
         cleanup_mbz_records(window_start)
@@ -907,21 +1072,45 @@ if IS_VALID
         if enable_invalidation
             check_mbz_invalidation(htf_o1, htf_c1)
 
-        // ─── MBZ Formation Check (like MBZ-Core: single-pass tap + conviction) ───
+        // ─── MBZ Formation Check (supports consolidated candles with multiple sources) ───
         // htf_*2 = reference candle (tapped gap) → prev_prev_wick_box
         // htf_*1 = MBZ candle (conviction candle) → prev_wick_box
         // htf_t2 = reference candle time (must be > FVG formation_end_time)
-        [mbz_formed, mbz_bull, mbz_bear, mbz_subtype, src_gap_id, src_gap_type] = check_mbz_formation(htf_o2, htf_h2, htf_l2, htf_c2, htf_t2, htf_o1, htf_h1, htf_l1, htf_c1)
-        if mbz_formed
+        array<MBZFormationMatch> mbz_matches = check_mbz_formation(htf_o2, htf_h2, htf_l2, htf_c2, htf_t2, htf_o1, htf_h1, htf_l1, htf_c1)
+        int num_matches = array.size(mbz_matches)
+
+        if num_matches > 0
+            // All matches on same candle have same direction (determined by MBZ candle)
+            MBZFormationMatch first_match = array.get(mbz_matches, 0)
+            bool mbz_bull = first_match.is_bullish
+
             // Apply direction filter (detection always runs, filter controls display)
-            bool show_this_mbz = mbz_direction_filter == DIR_BOTH or (mbz_bull and mbz_direction_filter == DIR_BULLISH) or (mbz_bear and mbz_direction_filter == DIR_BEARISH)
+            bool show_this_mbz = mbz_direction_filter == DIR_BOTH or (mbz_bull and mbz_direction_filter == DIR_BULLISH) or (not mbz_bull and mbz_direction_filter == DIR_BEARISH)
 
             if show_this_mbz
-                // Calculate zone boundaries (subtype always active, includes ref wick if enabled)
-                [zone_top, zone_bot] = get_mbz_zone(htf_o1, htf_h1, htf_l1, htf_c1, mbz_bull, mbz_subtype, htf_h2, htf_l2)
+                // ─── Calculate consolidated zone boundaries (outermost limits across all matches) ───
+                float consolidated_zone_top = 0.0
+                float consolidated_zone_bottom = 0.0
 
-                // Create MBZRecord (mirrors MBZ-Core structure)
-                // Note: MBZ visualization is now handled by mbz_box in MBZRecord (supports invalidation)
+                for i = 0 to num_matches - 1
+                    MBZFormationMatch match = array.get(mbz_matches, i)
+                    [match_zone_top, match_zone_bot] = get_mbz_zone(htf_o1, htf_h1, htf_l1, htf_c1, match.is_bullish, match.subtype, htf_h2, htf_l2)
+                    if i == 0
+                        consolidated_zone_top := match_zone_top
+                        consolidated_zone_bottom := match_zone_bot
+                    else
+                        // Take outermost boundaries
+                        consolidated_zone_top := math.max(consolidated_zone_top, match_zone_top)
+                        consolidated_zone_bottom := math.min(consolidated_zone_bottom, match_zone_bot)
+
+                // ─── Collect all source types for consolidated label ───
+                array<string> source_types = array.new<string>()
+                for i = 0 to num_matches - 1
+                    MBZFormationMatch match = array.get(mbz_matches, i)
+                    array.push(source_types, match.source_gap_type)
+
+                // Create consolidated MBZRecord
+                // Note: Uses first match's subtype and gap_id for record tracking, but zone is consolidated
                 color mbz_color = mbz_bull ? MBZ_BULLISH_COLOR : MBZ_BEARISH_COLOR
                 MBZRecord new_mbz = MBZRecord.new()
                 new_mbz.bar_index := bar_index
@@ -934,19 +1123,18 @@ if IS_VALID
                 new_mbz.mbz_close := htf_c1
                 new_mbz.is_bullish := mbz_bull
                 new_mbz.is_invalidated := false
-                new_mbz.mbz_subtype := mbz_subtype
-                new_mbz.cached_zone_top := zone_top
-                new_mbz.cached_zone_bottom := zone_bot
-                new_mbz.source_gap_id := src_gap_id
-                new_mbz.source_gap_type := src_gap_type
-                // Calculate right edge: workspace mode extends to current time, else fixed extension
-                int min_extension = htf_t1 + (mbz_extension_bars * HTF_MS)
-                int mbz_right_edge = workspace_mode_enabled ? math.max(time, min_extension) : min_extension
+                new_mbz.mbz_subtype := first_match.subtype
+                new_mbz.cached_zone_top := consolidated_zone_top
+                new_mbz.cached_zone_bottom := consolidated_zone_bottom
+                new_mbz.source_gap_id := first_match.source_gap_id
+                new_mbz.source_gap_type := first_match.source_gap_type
+                // Calculate right edge: fixed extension in HTF bars
+                int mbz_right_edge = htf_t1 + (mbz_extension_bars * HTF_MS)
 
-                // Build label text (MBZ⁺/MBZ⁻ with source type on second line if implied)
-                string mbz_label_text = build_mbz_box_label(mbz_bull, src_gap_type)
+                // Build consolidated label text (shows all source types for multi-source candles)
+                string mbz_label_text = build_mbz_box_label(mbz_bull, source_types)
 
-                new_mbz.mbz_box := box.new(htf_t1, zone_top, mbz_right_edge, zone_bot, xloc=xloc.bar_time, bgcolor=color.new(mbz_color, MBZ_FILL_TRANSPARENCY), border_color=mbz_color, border_width=3, text=mbz_label_text, text_color=mbz_label_color, text_size=MBZ_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+                new_mbz.mbz_box := box.new(htf_t1, consolidated_zone_top, mbz_right_edge, consolidated_zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(mbz_color, MBZ_FILL_TRANSPARENCY), border_color=mbz_color, border_width=3, text=mbz_label_text, text_color=mbz_label_color, text_size=MBZ_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
                 array.unshift(mbz_array, new_mbz)
 
         // ─── Create New Candle Boxes (ALWAYS create for MBZ highlighting) ───
@@ -993,29 +1181,6 @@ if IS_VALID
     // ─── FVG Updates (every bar) ───
     update_fvg_positions()
 
-    // ─── Workspace Mode: Extend active MBZ boxes to current time ───
-    // Only shows/extends zones within LTF ATR distance from current price (from MBZ-Core)
-    if workspace_mode_enabled and array.size(mbz_array) > 0
-        for i = 0 to array.size(mbz_array) - 1
-            MBZRecord mbz = array.get(mbz_array, i)
-            if not mbz.is_invalidated and not na(mbz.mbz_box)
-                // ATR filter: only show/extend zones within ATR range
-                if passes_atr_distance_filter(mbz.cached_zone_top, mbz.cached_zone_bottom)
-                    // Zone in range: show and extend
-                    color mbz_color = mbz.is_bullish ? MBZ_BULLISH_COLOR : MBZ_BEARISH_COLOR
-                    box.set_bgcolor(mbz.mbz_box, color.new(mbz_color, MBZ_FILL_TRANSPARENCY))
-                    box.set_border_color(mbz.mbz_box, mbz_color)
-                    box.set_text_color(mbz.mbz_box, mbz_label_color)
-                    // Extend to current time (at minimum, use the fixed extension)
-                    int min_extension = mbz.formation_time + (mbz_extension_bars * HTF_MS)
-                    int new_right = math.max(time, min_extension)
-                    box.set_right(mbz.mbz_box, new_right)
-                else
-                    // Zone outside ATR range: hide it
-                    box.set_bgcolor(mbz.mbz_box, color.new(color.white, 100))
-                    box.set_border_color(mbz.mbz_box, color.new(color.white, 100))
-                    box.set_text_color(mbz.mbz_box, color.new(color.white, 100))
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATUS TABLE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1033,8 +1198,21 @@ if IS_VALID and barstate.islast
     // Title cell: white text on black background
     table.cell(status_table, 1, 0, "mbz relay •", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
 
-    // Build status text: TF mapping + gap type + ref wick indicator
-    string gap_type_display = gap_source_filter == GAP_DROPDOWN_ALL ? STATUS_DISPLAY_ALL : (gap_source_filter == GAP_DROPDOWN_FVG ? STATUS_DISPLAY_FVG : STATUS_DISPLAY_IMP)
+    // Build status text: TF mapping + enabled gap sources + ref wick indicator
+    // Show "all" when all gap sources are enabled (mirrors MBZ-Core)
+    string gap_type_display = ""
+    if enable_fvg and enable_implied and enable_volume
+        gap_type_display := STATUS_DISPLAY_ALL
+    else
+        var array<string> gap_parts = array.new<string>()
+        array.clear(gap_parts)
+        if enable_fvg
+            array.push(gap_parts, STATUS_DISPLAY_FVG)
+        if enable_implied
+            array.push(gap_parts, STATUS_DISPLAY_IMP)
+        if enable_volume
+            array.push(gap_parts, STATUS_DISPLAY_VOL)
+        gap_type_display := array.size(gap_parts) > 0 ? array.join(gap_parts, "·") : "none"
     string ref_wick_display = extend_to_reference_wick ? "  " + STATUS_DISPLAY_REF_WICK : ""
     string status_text = LTF_LABEL + " → " + HTF_LABEL + "  " + gap_type_display + ref_wick_display
     table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
