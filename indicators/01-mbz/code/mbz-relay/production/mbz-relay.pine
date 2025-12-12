@@ -12,7 +12,7 @@
 //   4H  chart → W   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz core relay •", shorttitle="mbz relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz core relay •", shorttitle="mbz relay • development", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -225,20 +225,39 @@ type HTFCandle
     box   body
     int   start_time
 
-type FVGData
+// Candle that interacted with gap (for tap/inversion tracking)
+type TapCandidate
+    int    bar_index
+    int    bar_time
+    float  body_top
+    float  body_bottom
+    bool   is_bullish
+
+// Unified gap data for all gap types (FVG, Implied, VI)
+type GapData
+    // ─── Core geometry ───
     float  top
     float  bottom
-    float  ce
-    int    start_time
-    int    formation_end_time
+    float  ce                    // Consequent encroachment (midpoint)
+    int    bar_index             // Bar index when gap completed
+    int    start_time            // Time of first candle in formation
+    int    formation_end_time    // Time of completion candle
     bool   is_bullish
-    string gap_type             // "fvg" or "implied" (mirrors MBZ-Core)
-    bool   mitigated
+    string gap_type              // "fvg", "implied", "volume"
+    int    gap_id
+    // ─── Gap state ───
+    bool   is_mitigated          // Price touched/entered gap
     int    mitigated_time
-    int    gap_id               // Unique ID for gap tracking (mirrors MBZ-Core)
-    int    mbz_ref_time         // When MBZ formed, freeze box at reference candle time
-    bool   mbz_is_bullish       // Direction of MBZ that formed (for direction filter)
-    box    fvg_box
+    bool   is_inverted           // Price closed through gap (SIF trigger)
+    int    inverted_time
+    bool   is_breakaway          // Gap breaks trend range
+    // ─── Tap tracking (for MBZ/SIF formation) ───
+    TapCandidate first_tapper    // First candle to tap gap
+    // ─── MBZ tracking ───
+    int    mbz_ref_time          // When MBZ formed, freeze box at reference candle time
+    bool   mbz_is_bullish        // Direction of MBZ that formed (for direction filter)
+    // ─── Visual elements ───
+    box    gap_box
     line   ce_line
     label  tf_label
 
@@ -296,7 +315,7 @@ var box prev_prev_wick_box = na
 
 // Storage arrays
 var array<HTFCandle> candle_boxes = array.new<HTFCandle>()
-var array<FVGData>   fvg_array    = array.new<FVGData>()
+var array<GapData>   gap_array    = array.new<GapData>()
 var array<MBZRecord> mbz_array    = array.new<MBZRecord>()  // MBZ records (mirrors MBZ-Core all_mbz_records)
 var array<int>       htf_times    = array.new<int>()  // Track HTF candle times for window (independent of display)
 var int next_gap_id = 1  // Unique ID counter for gap tracking (mirrors MBZ-Core)
@@ -621,17 +640,17 @@ get_htf_vi_coordinates(bool is_bullish_gap) =>
 // VI is suppressed if there's an overlapping FVG or Implied FVG of the same direction
 // within the temporal window
 is_htf_vi_suppressed_by_gaps(float vi_top, float vi_bottom, bool is_vi_bullish) =>
-    if array.size(fvg_array) == 0
+    if array.size(gap_array) == 0
         false  // No existing gaps = no suppression
     else
         bool has_overlap = false
-        for i = 0 to array.size(fvg_array) - 1
-            FVGData gap = array.get(fvg_array, i)
+        for i = 0 to array.size(gap_array) - 1
+            GapData gap = array.get(gap_array, i)
 
             // Gap hierarchy filter: FVG and Implied FVG can suppress VI
             bool is_higher_priority = gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED
             bool same_direction = gap.is_bullish == is_vi_bullish
-            bool is_active = not gap.mitigated
+            bool is_active = not gap.is_mitigated
 
             if is_higher_priority and same_direction and is_active
                 // Spatial overlap detection: overlap exists if vi_bottom < gap.top AND vi_top >= gap.bottom
@@ -643,10 +662,10 @@ is_htf_vi_suppressed_by_gaps(float vi_top, float vi_bottom, bool is_vi_bullish) 
 // Check FVG closed through (mirrors MBZ-Core is_closed_through logic)
 // Must be called BEFORE MBZ detection - ALWAYS runs (independent of gap display mode)
 check_fvg_closed_through(float htf_open, float htf_close) =>
-    if array.size(fvg_array) > 0
-        for i = 0 to array.size(fvg_array) - 1
-            FVGData fvg = array.get(fvg_array, i)
-            if not fvg.mitigated
+    if array.size(gap_array) > 0
+        for i = 0 to array.size(gap_array) - 1
+            GapData fvg = array.get(gap_array, i)
+            if not fvg.is_mitigated
                 // MBZ-Core exact logic (lines 2157-2162):
                 // Bullish gap: open <= gap.bottom OR close <= gap.bottom
                 // Bearish gap: open >= gap.top OR close >= gap.top
@@ -659,9 +678,9 @@ check_fvg_closed_through(float htf_open, float htf_close) =>
                         is_closed := true
 
                 if is_closed
-                    fvg.mitigated := true
+                    fvg.is_mitigated := true
                     fvg.mitigated_time := time
-                    array.set(fvg_array, i, fvg)
+                    array.set(gap_array, i, fvg)
 
 // Check for MBZ formation (like MBZ-Core: check tap + conviction in single pass)
 // prev_* = reference candle (htf_*2 = candle before the one that just completed)
@@ -679,11 +698,11 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
     bool curr_is_bullish = curr_c > curr_o
     bool curr_is_bearish = curr_c < curr_o
 
-    if array.size(fvg_array) > 0
-        for i = 0 to array.size(fvg_array) - 1
-            FVGData fvg = array.get(fvg_array, i)
+    if array.size(gap_array) > 0
+        for i = 0 to array.size(gap_array) - 1
+            GapData fvg = array.get(gap_array, i)
 
-            if not fvg.mitigated
+            if not fvg.is_mitigated
                 // CRITICAL: Reference candle must be AFTER gap formation
                 // Like MBZ-Core: prev_index <= gap.creation_bar → continue
                 // This prevents FVG-forming candles from being detected as MBZ
@@ -714,7 +733,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                             // Mark source FVG - freeze box at reference candle + track MBZ direction
                             fvg.mbz_ref_time := ref_time
                             fvg.mbz_is_bullish := true
-                            array.set(fvg_array, i, fvg)
+                            array.set(gap_array, i, fvg)
                             // Detect subtype from MBZ candle (always on)
                             [detected_subtype, _has_dominant] = detect_mbz_subtype(curr_o, curr_c, curr_h, curr_l)
                             // Create match record
@@ -731,7 +750,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                             // Mark source FVG - freeze box at reference candle + track MBZ direction
                             fvg.mbz_ref_time := ref_time
                             fvg.mbz_is_bullish := false
-                            array.set(fvg_array, i, fvg)
+                            array.set(gap_array, i, fvg)
                             // Detect subtype from MBZ candle (always on)
                             [detected_subtype, _has_dominant] = detect_mbz_subtype(curr_o, curr_c, curr_h, curr_l)
                             // Create match record
@@ -747,12 +766,12 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
 // Update FVG box positions and visibility based on display mode + direction filter
 // Priority: mbz_ref_time (freeze at reference candle) > mitigated_time > current time
 update_fvg_positions() =>
-    if array.size(fvg_array) > 0
-        for i = 0 to array.size(fvg_array) - 1
-            FVGData fvg = array.get(fvg_array, i)
+    if array.size(gap_array) > 0
+        for i = 0 to array.size(gap_array) - 1
+            GapData fvg = array.get(gap_array, i)
             // Freeze at reference candle when MBZ formed, else at mitigation, else extend
-            int right_edge = fvg.mbz_ref_time > 0 ? fvg.mbz_ref_time : (fvg.mitigated ? fvg.mitigated_time : time)
-            box.set_right(fvg.fvg_box, right_edge)
+            int right_edge = fvg.mbz_ref_time > 0 ? fvg.mbz_ref_time : (fvg.is_mitigated ? fvg.mitigated_time : time)
+            box.set_right(fvg.gap_box, right_edge)
             line.set_x2(fvg.ce_line, right_edge)
             label.set_x(fvg.tf_label, right_edge)
 
@@ -768,26 +787,26 @@ update_fvg_positions() =>
                 => false  // GAP_DISPLAY_OFF
 
             int trans = show_gap ? 90 : 100
-            box.set_bgcolor(fvg.fvg_box, color.new(GAP_COLOR, trans))
-            box.set_border_color(fvg.fvg_box, color.new(GAP_COLOR, show_gap ? 70 : 100))
+            box.set_bgcolor(fvg.gap_box, color.new(GAP_COLOR, trans))
+            box.set_border_color(fvg.gap_box, color.new(GAP_COLOR, show_gap ? 70 : 100))
             line.set_color(fvg.ce_line, color.new(GAP_COLOR, show_gap ? 70 : 100))
             label.set_textcolor(fvg.tf_label, color.new(GAP_COLOR, show_gap ? 50 : 100))
 
 // Cleanup FVGs: window-based + enforce max count
 cleanup_fvgs(int window_start, int max_count) =>
     // Remove FVGs outside data window
-    if window_start > 0 and array.size(fvg_array) > 0
-        for i = array.size(fvg_array) - 1 to 0
-            FVGData fvg = array.get(fvg_array, i)
+    if window_start > 0 and array.size(gap_array) > 0
+        for i = array.size(gap_array) - 1 to 0
+            GapData fvg = array.get(gap_array, i)
             if fvg.start_time < window_start
-                box.delete(fvg.fvg_box)
+                box.delete(fvg.gap_box)
                 line.delete(fvg.ce_line)
                 label.delete(fvg.tf_label)
-                array.remove(fvg_array, i)
+                array.remove(gap_array, i)
     // Enforce max count (remove oldest to stay under drawing limit)
-    while array.size(fvg_array) > max_count
-        FVGData old = array.pop(fvg_array)
-        box.delete(old.fvg_box)
+    while array.size(gap_array) > max_count
+        GapData old = array.pop(gap_array)
+        box.delete(old.gap_box)
         line.delete(old.ce_line)
         label.delete(old.tf_label)
 
@@ -950,19 +969,20 @@ if IS_VALID
                     float gap_ce = (gap_top + gap_bot) / 2
                     int this_gap_id = next_gap_id
                     next_gap_id := next_gap_id + 1
-                    FVGData new_fvg = FVGData.new()
+                    GapData new_fvg = GapData.new()
                     new_fvg.top := gap_top
                     new_fvg.bottom := gap_bot
                     new_fvg.ce := gap_ce
+                    new_fvg.bar_index := bar_index
                     new_fvg.start_time := htf_t3
                     new_fvg.formation_end_time := htf_t1
                     new_fvg.is_bullish := true
                     new_fvg.gap_type := GAP_TYPE_FVG
                     new_fvg.gap_id := this_gap_id
-                    new_fvg.fvg_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                     new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(fvg_array, new_fvg)
+                    array.unshift(gap_array, new_fvg)
 
             // ─── Standard FVG Detection (Bearish) ───
             if enable_fvg and gap_in_window
@@ -973,19 +993,20 @@ if IS_VALID
                     float gap_ce = (gap_top + gap_bot) / 2
                     int this_gap_id = next_gap_id
                     next_gap_id := next_gap_id + 1
-                    FVGData new_fvg = FVGData.new()
+                    GapData new_fvg = GapData.new()
                     new_fvg.top := gap_top
                     new_fvg.bottom := gap_bot
                     new_fvg.ce := gap_ce
+                    new_fvg.bar_index := bar_index
                     new_fvg.start_time := htf_t3
                     new_fvg.formation_end_time := htf_t1
                     new_fvg.is_bullish := false
                     new_fvg.gap_type := GAP_TYPE_FVG
                     new_fvg.gap_id := this_gap_id
-                    new_fvg.fvg_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                     new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(fvg_array, new_fvg)
+                    array.unshift(gap_array, new_fvg)
 
             // ─── Implied FVG Detection (independent of FVG) ───
             if enable_implied and gap_in_window
@@ -994,19 +1015,20 @@ if IS_VALID
                     float gap_ce = (impl_top + impl_bot) / 2
                     int this_gap_id = next_gap_id
                     next_gap_id := next_gap_id + 1
-                    FVGData new_fvg = FVGData.new()
+                    GapData new_fvg = GapData.new()
                     new_fvg.top := impl_top
                     new_fvg.bottom := impl_bot
                     new_fvg.ce := gap_ce
+                    new_fvg.bar_index := bar_index
                     new_fvg.start_time := htf_t3
                     new_fvg.formation_end_time := htf_t1
                     new_fvg.is_bullish := impl_bull
                     new_fvg.gap_type := GAP_TYPE_IMPLIED
                     new_fvg.gap_id := this_gap_id
-                    new_fvg.fvg_box := box.new(htf_t3, impl_top, time, impl_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_fvg.gap_box := box.new(htf_t3, impl_top, time, impl_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                     new_fvg.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " imp", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(fvg_array, new_fvg)
+                    array.unshift(gap_array, new_fvg)
 
             // ─── Volume Imbalance Detection (Bullish - with suppression check) ───
             if enable_volume and htf_h2 > 0
@@ -1017,19 +1039,20 @@ if IS_VALID
                         float gap_ce = (vi_top + vi_bot) / 2
                         int this_gap_id = next_gap_id
                         next_gap_id := next_gap_id + 1
-                        FVGData new_fvg = FVGData.new()
+                        GapData new_fvg = GapData.new()
                         new_fvg.top := vi_top
                         new_fvg.bottom := vi_bot
                         new_fvg.ce := gap_ce
+                        new_fvg.bar_index := bar_index
                         new_fvg.start_time := htf_t2
                         new_fvg.formation_end_time := htf_t1
                         new_fvg.is_bullish := true
                         new_fvg.gap_type := GAP_TYPE_VOLUME
                         new_fvg.gap_id := this_gap_id
-                        new_fvg.fvg_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_fvg.gap_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                         new_fvg.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                         new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                        array.unshift(fvg_array, new_fvg)
+                        array.unshift(gap_array, new_fvg)
 
             // ─── Volume Imbalance Detection (Bearish - with suppression check) ───
             if enable_volume and htf_h2 > 0
@@ -1040,19 +1063,20 @@ if IS_VALID
                         float gap_ce = (vi_top + vi_bot) / 2
                         int this_gap_id = next_gap_id
                         next_gap_id := next_gap_id + 1
-                        FVGData new_fvg = FVGData.new()
+                        GapData new_fvg = GapData.new()
                         new_fvg.top := vi_top
                         new_fvg.bottom := vi_bot
                         new_fvg.ce := gap_ce
+                        new_fvg.bar_index := bar_index
                         new_fvg.start_time := htf_t2
                         new_fvg.formation_end_time := htf_t1
                         new_fvg.is_bullish := false
                         new_fvg.gap_type := GAP_TYPE_VOLUME
                         new_fvg.gap_id := this_gap_id
-                        new_fvg.fvg_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_fvg.gap_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                         new_fvg.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                         new_fvg.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                        array.unshift(fvg_array, new_fvg)
+                        array.unshift(gap_array, new_fvg)
 
         cleanup_fvgs(window_start, MAX_FVGS)
         cleanup_mbz_records(window_start)
