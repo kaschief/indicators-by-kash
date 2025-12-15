@@ -18,9 +18,9 @@ indicator("mbz sif relay •", shorttitle="mbz sif relay •", overlay=true, max
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// MBZ Zone Colors (from MBZ-Core production)
-const color MBZ_BULLISH_COLOR = color.rgb(77, 208, 225)   // Cyan/teal
-const color MBZ_BEARISH_COLOR = color.rgb(249, 121, 246) // Pink/magenta
+// Zone color defaults
+const color DEFAULT_ZONE_BULL_COLOR = color.rgb(77, 208, 225)   // Cyan/teal
+const color DEFAULT_ZONE_BEAR_COLOR = color.rgb(249, 121, 246)  // Pink/magenta
 const int   MBZ_FILL_TRANSPARENCY = 97
 
 // Inversion highlight colors (direction-aware by CANDLE that inverts, not gap)
@@ -198,6 +198,10 @@ mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DI
 
 // ─── 🎨 Zone Display ───
 GROUP_ZONE_DISPLAY = "🎨 Zone Display"
+zone_bull_color  = input.color(DEFAULT_ZONE_BULL_COLOR, "+", group=GROUP_ZONE_DISPLAY, inline="zc",
+                   tooltip="Color for bullish zones")
+zone_bear_color  = input.color(DEFAULT_ZONE_BEAR_COLOR, "-", group=GROUP_ZONE_DISPLAY, inline="zc",
+                   tooltip="Color for bearish zones")
 zone_extension_bars = input.int(5, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_ZONE_DISPLAY,
                       tooltip="Number of HTF candles zones extend from formation (applies to both MBZ and SIF).")
 zone_label_color = input.color(DEFAULT_ZONE_LABEL_COLOR, "Label Color", group=GROUP_ZONE_DISPLAY, inline="lbl",
@@ -347,25 +351,6 @@ type GapData
     box    gap_box
     line   ce_line
     label  tf_label
-
-// MBZ tracking (mirrors MBZ-Core MBZRecord structure)
-type MBZRecord
-    int    bar_index
-    int    formation_time       // Bar time when MBZ formed (for xloc.bar_time positioning)
-    float  high_price           // MBZ candle high
-    float  low_price            // MBZ candle low
-    float  ref_candle_high      // Reference candle high
-    float  ref_candle_low       // Reference candle low
-    float  mbz_open             // MBZ candle open
-    float  mbz_close            // MBZ candle close
-    bool   is_bullish
-    bool   is_invalidated
-    string mbz_subtype          // "standard", "inclusion", "reflection"
-    float  cached_zone_top      // Pre-calculated zone boundary
-    float  cached_zone_bottom   // Pre-calculated zone boundary
-    int    source_gap_id        // Reference to source FVG
-    string source_gap_type      // "fvg" or "implied"
-    box    mbz_box              // Visual box for the MBZ zone
 
 // MBZ Formation Match (for multi-source consolidated candles support)
 type MBZFormationMatch
@@ -642,7 +627,6 @@ var box prev_prev_wick_box = na
 // Storage arrays
 var array<HTFCandle> candle_boxes = array.new<HTFCandle>()
 var array<GapData>   gap_array    = array.new<GapData>()
-var array<MBZRecord> mbz_array    = array.new<MBZRecord>()  // MBZ records (mirrors MBZ-Core all_mbz_records)
 var array<int>       htf_times    = array.new<int>()  // Track HTF candle times for window (independent of display)
 var array<box>       inversion_highlights = array.new<box>()  // Visual debug: highlight candles that invert gaps
 var array<box>       tap_highlights = array.new<box>()  // Visual debug: highlight first tapper candles
@@ -1415,45 +1399,6 @@ calculate_mbz_zone_penetration_from_close(float close_price, float zone_top, flo
             else
                 (close_price - zone_bottom) / zone_range * 100.0
 
-// Check if MBZ should be invalidated by a single candle (from MBZ-Core)
-check_single_candle_invalidation(MBZRecord mbz, float candle_open, float candle_close) =>
-    float zone_top = mbz.cached_zone_top
-    float zone_bottom = mbz.cached_zone_bottom
-
-    if mbz.is_bullish
-        // Bullish MBZ: gap-through below zone = instant invalidation
-        if candle_open < zone_bottom
-            true
-        else
-            float penetration = calculate_mbz_zone_penetration_from_close(candle_close, zone_top, zone_bottom, true)
-            penetration >= MBZ_INVALIDATION_THRESHOLD
-    else
-        // Bearish MBZ: gap-through above zone = instant invalidation
-        if candle_open > zone_top
-            true
-        else
-            float penetration = calculate_mbz_zone_penetration_from_close(candle_close, zone_top, zone_bottom, false)
-            penetration >= MBZ_INVALIDATION_THRESHOLD
-
-// Check if MBZ should be invalidated
-// NOTE: Historical lookback removed for relay - close[i]/open[i] is LTF data, not HTF!
-// MBZs invalidate via: (1) completed HTF candles on new_htf, (2) live htf_open/close check
-should_mbz_be_invalidated(MBZRecord mbz, float htf_open_price, float htf_close_price) =>
-    check_single_candle_invalidation(mbz, htf_open_price, htf_close_price)
-
-// Check invalidation for all MBZ records
-check_mbz_invalidation(float htf_open_price, float htf_close_price) =>
-    if array.size(mbz_array) > 0
-        for i = 0 to array.size(mbz_array) - 1
-            MBZRecord mbz = array.get(mbz_array, i)
-            if not mbz.is_invalidated
-                if should_mbz_be_invalidated(mbz, htf_open_price, htf_close_price)
-                    mbz.is_invalidated := true
-                    // Hide the MBZ box
-                    if not na(mbz.mbz_box)
-                        box.delete(mbz.mbz_box)
-                    array.set(mbz_array, i, mbz)
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // UNIFIED ZONE INVALIDATION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1536,26 +1481,8 @@ check_sif_component_opening_gap(CandleZone zone, float candle_open) =>
     else
         check_component_opening_gap_invalidation(zone.zone_top, zone.zone_bottom, zone.is_bullish, candle_open)
 
-// Check MBZRecord for opening gap invalidation (live check)
-check_mbz_record_opening_gap(MBZRecord mbz, float candle_open) =>
-    if mbz.is_invalidated
-        false
-    else
-        check_component_opening_gap_invalidation(mbz.cached_zone_top, mbz.cached_zone_bottom, mbz.is_bullish, candle_open)
-
-// Live invalidation for MBZ records - opening gaps only
-check_mbz_invalidation_live(float htf_open_price) =>
-    if array.size(mbz_array) > 0
-        for i = 0 to array.size(mbz_array) - 1
-            MBZRecord mbz = array.get(mbz_array, i)
-            if not mbz.is_invalidated
-                if check_mbz_record_opening_gap(mbz, htf_open_price)
-                    mbz.is_invalidated := true
-                    if not na(mbz.mbz_box)
-                        box.delete(mbz.mbz_box)
-                    array.set(mbz_array, i, mbz)
-
-// Live invalidation for unified zones - opening gaps only (no close penetration)
+// Live invalidation for unified zones - OPENING GAPS ONLY (permanent)
+// Close-based invalidation is computed in rendering for visual hide/show
 check_zone_invalidation_live(float htf_open_price) =>
     if array.size(zone_array) > 0
         for i = 0 to array.size(zone_array) - 1
@@ -1566,13 +1493,13 @@ check_zone_invalidation_live(float htf_open_price) =>
 
             bool needs_update = false
 
-            // Check MBZ component for opening gap
+            // Check MBZ component for opening gap ONLY (permanent)
             if check_mbz_component_opening_gap(zone, htf_open_price)
                 zone.mbz_invalidated := true
                 zone.has_mbz := false
                 needs_update := true
 
-            // Check SIF component for opening gap
+            // Check SIF component for opening gap ONLY (permanent)
             if check_sif_component_opening_gap(zone, htf_open_price)
                 zone.sif_invalidated := true
                 zone.has_sif := false
@@ -1631,16 +1558,6 @@ check_zone_invalidation(float htf_open_price, float htf_close_price) =>
                     zone.zone_box := na
 
             array.set(zone_array, i, zone)
-
-// Cleanup MBZ records outside window
-cleanup_mbz_records(int window_start) =>
-    if window_start > 0 and array.size(mbz_array) > 0
-        for i = array.size(mbz_array) - 1 to 0
-            MBZRecord mbz = array.get(mbz_array, i)
-            if mbz.formation_time < window_start
-                if not na(mbz.mbz_box)
-                    box.delete(mbz.mbz_box)
-                array.remove(mbz_array, i)
 
 // Cleanup unified zones outside window
 cleanup_zones(int window_start) =>
@@ -1814,7 +1731,6 @@ if IS_VALID
                         array.unshift(gap_array, new_gap)
 
         cleanup_gaps(window_start, MAX_FVGS)
-        cleanup_mbz_records(window_start)
         cleanup_zones(window_start)
 
         // ─── Reset Current Candle ───
@@ -1833,7 +1749,6 @@ if IS_VALID
         // ─── Invalidation Check ───
         // Check if the just-completed HTF candle invalidates any zones
         if enable_invalidation
-            check_mbz_invalidation(htf_o1, htf_c1)
             check_zone_invalidation(htf_o1, htf_c1)
 
         // ─── MBZ Formation Check (supports consolidated candles with multiple sources) ───
@@ -1867,34 +1782,6 @@ if IS_VALID
                             // Take outermost boundaries
                             consolidated_zone_top := math.max(consolidated_zone_top, match_zone_top)
                             consolidated_zone_bottom := math.min(consolidated_zone_bottom, match_zone_bot)
-
-                    // ─── Collect all source types for consolidated label ───
-                    array<string> source_types = array.new<string>()
-                    for i = 0 to num_matches - 1
-                        MBZFormationMatch match = array.get(mbz_matches, i)
-                        array.push(source_types, match.source_gap_type)
-
-                    // Create consolidated MBZRecord (legacy rendering)
-                    // Note: Uses first match's subtype and gap_id for record tracking, but zone is consolidated
-                    color mbz_color = mbz_bull ? MBZ_BULLISH_COLOR : MBZ_BEARISH_COLOR
-                    MBZRecord new_mbz = MBZRecord.new()
-                    new_mbz.bar_index := bar_index
-                    new_mbz.formation_time := htf_t1
-                    new_mbz.high_price := htf_h1
-                    new_mbz.low_price := htf_l1
-                    new_mbz.ref_candle_high := htf_h2
-                    new_mbz.ref_candle_low := htf_l2
-                    new_mbz.mbz_open := htf_o1
-                    new_mbz.mbz_close := htf_c1
-                    new_mbz.is_bullish := mbz_bull
-                    new_mbz.is_invalidated := false
-                    new_mbz.mbz_subtype := first_match.subtype
-                    new_mbz.cached_zone_top := consolidated_zone_top
-                    new_mbz.cached_zone_bottom := consolidated_zone_bottom
-                    new_mbz.source_gap_id := first_match.source_gap_id
-                    new_mbz.source_gap_type := first_match.source_gap_type
-                    // Note: Visual box creation now handled by unified zone_array rendering
-                    array.unshift(mbz_array, new_mbz)
 
                     // ─── Register MBZ in unified zone_array ───
                     // Get or create zone for this candle (MBZ uses reference wick extension)
@@ -1965,19 +1852,17 @@ if IS_VALID
     update_gap_positions()
 
     // ─── Live Invalidation (every bar) ───
-    // Check if forming HTF candle has GAPPED THROUGH any zones (opening gap only)
-    // NOTE: Close penetration is NOT checked here - that requires CONFIRMED HTF close (on new_htf)
-    // This prevents false invalidation from LTF intra-bar price spikes
+    // Check for OPENING GAPS only (permanent invalidation)
+    // Close-based invalidation is computed in rendering loop for visual hide/show
     if enable_invalidation
-        check_mbz_invalidation_live(htf_open)
         check_zone_invalidation_live(htf_open)
 
     // ─── Unified Zone Rendering (every bar) ───
     // Render zones from zone_array - these are agnostic containers that know which engines validated them
     if array.size(zone_array) > 0
         int zone_extension_width = zone_extension_bars * HTF_MS
-        color zone_color_bull = MBZ_BULLISH_COLOR
-        color zone_color_bear = MBZ_BEARISH_COLOR
+        color zone_color_bull = zone_bull_color
+        color zone_color_bear = zone_bear_color
 
         // Same-Source filter tracking (from MBZ-Core)
         var map<int, bool> seen_gap_ids = map.new<int, bool>()  // For LATEST TOUCH mode
@@ -2003,12 +1888,31 @@ if IS_VALID
         for i = 0 to array.size(zone_array) - 1
             CandleZone zone = array.get(zone_array, i)
 
-            // Skip invalidated zones
+            // Skip permanently invalidated zones
             if zone.is_invalidated
                 continue
 
             // Skip if neither engine validated (shouldn't happen, but defensive)
             if not zone.has_mbz and not zone.has_sif
+                continue
+
+            // ─── Live Invalidation Check (computed, not permanent) ───
+            // Compute if zone WOULD be invalidated by forming HTF close
+            // If so, hide visually but don't set permanent flags (zone can "un-invalidate" if price rallies)
+            bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf_open, close)
+            bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf_open, close)
+
+            // Check if all ACTIVE components are live-invalidated
+            bool mbz_active = enable_mbz_engine and zone.has_mbz
+            bool sif_active = enable_sif_engine and zone.has_sif
+            bool all_live_invalidated = (not mbz_active or mbz_live_invalid) and (not sif_active or sif_live_invalid)
+
+            if all_live_invalidated and (mbz_active or sif_active)
+                // Hide zone visually (but don't set permanent flags)
+                if not na(zone.zone_box)
+                    box.delete(zone.zone_box)
+                    zone.zone_box := na
+                    array.set(zone_array, i, zone)
                 continue
 
             // Apply direction filter
@@ -2124,12 +2028,12 @@ if show_color_table and barstate.islast
     table.cell(t, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(t, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
 
-    table.cell(t, 0, 1, "Zone Bull", text_size=size.small)
-    table.cell(t, 1, 1, str.format("R:{0} G:{1} B:{2}", int(color.r(MBZ_BULLISH_COLOR)), int(color.g(MBZ_BULLISH_COLOR)), int(color.b(MBZ_BULLISH_COLOR))), text_size=size.small)
+    table.cell(t, 0, 1, "Zone +", text_size=size.small)
+    table.cell(t, 1, 1, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_bull_color)), int(color.g(zone_bull_color)), int(color.b(zone_bull_color))), text_size=size.small)
     table.cell(t, 2, 1, str.tostring(MBZ_FILL_TRANSPARENCY), text_size=size.small)
 
-    table.cell(t, 0, 2, "Zone Bear", text_size=size.small)
-    table.cell(t, 1, 2, str.format("R:{0} G:{1} B:{2}", int(color.r(MBZ_BEARISH_COLOR)), int(color.g(MBZ_BEARISH_COLOR)), int(color.b(MBZ_BEARISH_COLOR))), text_size=size.small)
+    table.cell(t, 0, 2, "Zone −", text_size=size.small)
+    table.cell(t, 1, 2, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_bear_color)), int(color.g(zone_bear_color)), int(color.b(zone_bear_color))), text_size=size.small)
     table.cell(t, 2, 2, str.tostring(MBZ_FILL_TRANSPARENCY), text_size=size.small)
 
     table.cell(t, 0, 3, "Zone Label", text_size=size.small)
