@@ -199,6 +199,7 @@ showLabels = input.bool(true, LABEL_SHOW_SESSION_NAMES, group=GROUP_GENERAL, too
 labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, group=GROUP_GENERAL)
 labelsBgColor = input.color(color.new(color.rgb(245, 245, 245), 20), "Labels Background", group=GROUP_GENERAL, tooltip="Background color for session and deviation labels. Set transparency to 100 for no background.")
 showProximity = input.bool(false, "Show Proximity Levels", group=GROUP_GENERAL, tooltip="Show dashed lines for unmitigated highs/lows within ATR range of current price")
+showLiveDeviations = input.bool(true, "Show Live Deviations", group=GROUP_GENERAL, tooltip="Draw deviation levels in real-time during active sessions. Levels update as price makes new highs/lows. When disabled, deviations only appear after session ends.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Intraday Sessions
@@ -595,6 +596,46 @@ deleteSession(SessionData sess) =>
     if not na(sess.lowProximityLine)
         line.delete(sess.lowProximityLine)
 
+// Clear live drawings from active session (keeps session data, just removes visuals for redraw)
+clearLiveDrawings(SessionData sess) =>
+    if not na(sess.bodyBox)
+        box.delete(sess.bodyBox)
+        sess.bodyBox := na
+    if not na(sess.wickBox)
+        box.delete(sess.wickBox)
+        sess.wickBox := na
+    for l in sess.lines
+        line.delete(l)
+    array.clear(sess.lines)
+    for lbl in sess.labels
+        label.delete(lbl)
+    array.clear(sess.labels)
+    for db in sess.deviationBoxes
+        box.delete(db)
+    array.clear(sess.deviationBoxes)
+
+// Draw live deviations for active session (uses current bar time as end time)
+drawLiveSessionDeviations(SessionData sess, int currentTime, int currentBarIndex) =>
+    // Set temporary end values for drawing
+    sess.endTime := currentTime
+    sess.endBar := currentBarIndex
+
+    // Calculate heights
+    bodyHeight = sess.bodyHigh - sess.bodyLow
+    wickHeight = sess.wickHigh - sess.wickLow
+
+    // Draw body core with deviations
+    if sess.showBody
+        sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
+        if sess.drawDeviations
+            drawCoreWithDeviations(sess, sess.bodyHigh, sess.bodyLow, bodyHeight, true)
+
+    // Draw wick core with deviations
+    if sess.showWick
+        sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
+        if sess.drawDeviations
+            drawCoreWithDeviations(sess, sess.wickHigh, sess.wickLow, wickHeight, false)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════
@@ -790,6 +831,11 @@ if validTimeframe and array.size(activeSessions) > 0
             sess.wickHigh := math.max(sess.wickHigh, high)
             sess.wickLow := math.min(sess.wickLow, low)
 
+            // Live deviation drawing - clear and redraw each bar
+            if showLiveDeviations
+                clearLiveDrawings(sess)
+                drawLiveSessionDeviations(sess, time, bar_index)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
 // ═══════════════════════════════════════════════════════════════════════════
@@ -813,6 +859,10 @@ if validTimeframe and array.size(activeSessions) > 0
             // Finalize session - calculate heights and draw visualizations
             sess.endBar := bar_index - 1
             sess.endTime := not na(time[1]) ? time[1] : time
+
+            // Clear live drawings before final draw (if live mode was active)
+            if showLiveDeviations
+                clearLiveDrawings(sess)
 
             // Store heights for use in progressive unlock
             sess.bodyHeight := sess.bodyHigh - sess.bodyLow
