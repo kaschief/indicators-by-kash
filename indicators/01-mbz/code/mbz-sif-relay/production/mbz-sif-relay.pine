@@ -12,7 +12,7 @@
 //   4H  chart → W   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="mbz sif relay • development", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="mbz sif relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -418,6 +418,9 @@ var array<CandleZone> zone_array = array.new<CandleZone>()
 
 // Preview zone storage (separate from confirmed zones - rebuilt each bar)
 var array<CandleZone> preview_zone_array = array.new<CandleZone>()
+
+// Track previous close for preview zone optimization (avoid redraw when price unchanged)
+var float prev_preview_close = na
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UNIFIED ZONE FUNCTIONS
@@ -1781,6 +1784,9 @@ if IS_VALID
         // ─── Window Management ───
         int window_start = get_window_start()
 
+        // ─── Reset Preview Tracking (new HTF candle = new preview context) ───
+        prev_preview_close := na
+
         // ─── Shift Wick Box History (for MBZ candle highlighting) ───
         // After this shift: prev_wick_box = htf_*1's box, prev_prev_wick_box = htf_*2's box
         prev_prev_wick_box := prev_wick_box
@@ -2060,11 +2066,14 @@ if IS_VALID
     if enable_invalidation
         check_zone_invalidation_live(htf_open)
 
-    // ─── Preview Zone Detection (realtime only) ───
+    // ─── Preview Zone Detection (realtime only, on price change) ───
     // Check for zones forming during the current HTF candle
     // Uses current LTF close as potential HTF close
     // Only runs on realtime bars to avoid performance overhead on historical data
-    if show_forming_zones and htf_t1 > 0 and barstate.isrealtime
+    // Only updates when close price changes to avoid unnecessary box recreation
+    bool preview_close_changed = close != prev_preview_close
+    if show_forming_zones and htf_t1 > 0 and barstate.isrealtime and preview_close_changed
+        prev_preview_close := close
         // Clear existing preview zones before re-detecting
         cleanup_preview_zones()
 
@@ -2123,9 +2132,11 @@ if IS_VALID
                         // Create new SIF-only preview zone
                         create_preview_zone(htf_time, htf_open, close, htf_high, htf_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
 
-    // ─── Unified Zone Rendering (every bar) ───
-    // Render zones from zone_array - these are agnostic containers that know which engines validated them
-    if array.size(zone_array) > 0
+    // ─── Unified Zone Rendering (on HTF change or current bar) ───
+    // Only render when: HTF candle closes (new_htf) OR current bar updates (barstate.islast)
+    // This avoids redundant iterations on historical bars where zone state cannot change
+    // Live invalidation is preserved via barstate.islast (updates every tick on current bar)
+    if array.size(zone_array) > 0 and (new_htf or barstate.islast)
         int zone_extension_width = zone_extension_bars * HTF_MS
         color zone_color_bull = zone_bull_color
         color zone_color_bear = zone_bear_color
