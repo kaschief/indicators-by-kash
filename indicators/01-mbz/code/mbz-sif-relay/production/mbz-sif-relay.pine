@@ -83,6 +83,10 @@ const string BREAKDOWN_SEPARATOR = ", "
 // Wick dominance threshold (wick must be >= 80% of body)
 const float WICK_DOMINANCE_THRESHOLD = 0.80
 
+// Breakaway detection
+const int    BREAKAWAY_LENGTH = 20
+const string LABEL_PREFIX_BREAKAWAY = "BRK-"
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INVALIDATION THRESHOLDS (Edit these values to adjust invalidation sensitivity)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -362,6 +366,7 @@ type MBZFormationMatch
     string subtype
     int    source_gap_id
     string source_gap_type
+    bool   source_gap_is_breakaway
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UNIFIED CANDLE ZONE TYPE
@@ -406,6 +411,9 @@ type CandleZone
 
     // ─── SIF-specific fields ───
     bool   is_immediate_sif    // True if first tap AND inversion same candle
+
+    // ─── Breakaway state ───
+    bool   is_breakaway        // True if any source FVG was a breakaway gap
 
     // ─── Preview state ───
     bool   is_preview          // True if this is a forming/preview zone (not yet confirmed)
@@ -562,6 +570,7 @@ create_candle_zone(int formation_bar_index, int formation_time, float candle_ope
     zone.ref_candle_low := ref_low
     zone.is_wick_extended := is_extended
     zone.is_immediate_sif := is_immediate_sif
+    zone.is_breakaway := false
     zone.is_preview := false
 
     zone
@@ -599,7 +608,8 @@ get_or_create_zone(int formation_bar_index, int formation_time, float candle_ope
         [new_zone, 0, true]
 
 // Add source gap to zone's source arrays (avoids duplicates)
-add_source_to_zone(CandleZone zone, int gap_id, string gap_type) =>
+// Also propagates breakaway status (zone is breakaway if ANY source gap is breakaway)
+add_source_to_zone(CandleZone zone, int gap_id, string gap_type, bool gap_is_breakaway) =>
     // Check if already present
     bool already_present = false
     if array.size(zone.source_gap_ids) > 0
@@ -611,6 +621,9 @@ add_source_to_zone(CandleZone zone, int gap_id, string gap_type) =>
     if not already_present
         array.push(zone.source_gap_ids, gap_id)
         array.push(zone.source_gap_types, gap_type)
+        // Propagate breakaway: zone is breakaway if ANY source is breakaway
+        if gap_is_breakaway
+            zone.is_breakaway := true
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATE VARIABLES
@@ -628,6 +641,14 @@ var float htf_o2 = 0.0, var float htf_h2 = 0.0, var float htf_l2 = 0.0, var floa
 var float htf_o3 = 0.0, var float htf_h3 = 0.0, var float htf_l3 = 0.0, var float htf_c3 = 0.0, var int htf_t3 = 0
 var float htf_o4 = 0.0, var float htf_h4 = 0.0, var float htf_l4 = 0.0, var float htf_c4 = 0.0  // Extra for displacement lookback
 var float htf_o5 = 0.0, var float htf_h5 = 0.0, var float htf_l5 = 0.0, var float htf_c5 = 0.0  // Extra for displacement lookback
+
+// Breakaway trend range tracking (20-bar HTF high/low)
+var float htf_breakaway_upper_1 = na  // 20-bar highest at htf_*1
+var float htf_breakaway_lower_1 = na  // 20-bar lowest at htf_*1
+var float htf_breakaway_upper_2 = na  // 20-bar highest at htf_*2
+var float htf_breakaway_lower_2 = na  // 20-bar lowest at htf_*2
+var float htf_breakaway_upper_3 = na  // 20-bar highest at htf_*3 (anchor)
+var float htf_breakaway_lower_3 = na  // 20-bar lowest at htf_*3 (anchor)
 
 // Current candle boxes
 var box wick_box = na
@@ -648,6 +669,10 @@ var int next_gap_id = 1  // Unique ID counter for gap tracking
 
 // HTF boundary detection
 bool new_htf = IS_VALID ? ta.change(time(HTF_STRING)) != 0 : false
+
+// Breakaway trend range (HTF 20-bar high/low for breakaway detection)
+float htf_breakaway_upper = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
+float htf_breakaway_lower = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTIONS
@@ -880,7 +905,10 @@ build_zone_label(CandleZone zone) =>
     else if zone.has_sif
         engine_prefix := SIF_LABEL
 
-    string result = engine_prefix + direction_suffix + "·" + get_bold_htf_label()
+    // Prepend breakaway prefix if zone has breakaway source
+    string breakaway_prefix = zone.is_breakaway ? LABEL_PREFIX_BREAKAWAY : ""
+
+    string result = breakaway_prefix + engine_prefix + direction_suffix + "·" + get_bold_htf_label()
 
     // Add source breakdown on new line if not empty
     string source_text = build_source_breakdown(zone.source_gap_types)
@@ -1050,6 +1078,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
     // Track gap sources that contribute to SIF (for zone registration)
     array<int> sif_gap_ids = array.new<int>()
     array<string> sif_gap_types = array.new<string>()
+    array<bool> sif_gap_breakaways = array.new<bool>()
 
     // Body boundaries for tap detection (computed once)
     float body_top = math.max(htf_candle_open, htf_candle_close)
@@ -1122,6 +1151,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
                 // Track this gap as SIF source (inversion = SIF)
                 array.push(sif_gap_ids, gap.gap_id)
                 array.push(sif_gap_types, gap.gap_type)
+                array.push(sif_gap_breakaways, gap.is_breakaway)
 
             // Update gap if anything changed
             if is_first_tap or is_inversion
@@ -1161,7 +1191,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
 
             // Add all SIF source gaps
             for j = 0 to array.size(sif_gap_ids) - 1
-                add_source_to_zone(zone, array.get(sif_gap_ids, j), array.get(sif_gap_types, j))
+                add_source_to_zone(zone, array.get(sif_gap_ids, j), array.get(sif_gap_types, j), array.get(sif_gap_breakaways, j))
 
             // Save updated zone back to array
             array.set(zone_array, zone_idx, zone)
@@ -1245,6 +1275,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                         match.subtype := detected_subtype
                         match.source_gap_id := gap.gap_id
                         match.source_gap_type := gap.gap_type
+                        match.source_gap_is_breakaway := gap.is_breakaway
                         array.push(matches, match)
 
                 // Bearish MBZ: gap bearish, ref bullish, current bearish, close <= 50%
@@ -1262,6 +1293,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                         match.subtype := detected_subtype
                         match.source_gap_id := gap.gap_id
                         match.source_gap_type := gap.gap_type
+                        match.source_gap_is_breakaway := gap.is_breakaway
                         array.push(matches, match)
 
     matches
@@ -1413,6 +1445,7 @@ create_preview_zone(int formation_time, float candle_open, float candle_close, f
     zone.ref_candle_low := ref_low
     zone.is_wick_extended := is_extended
     zone.is_immediate_sif := has_sif
+    zone.is_breakaway := false
     zone.is_preview := true
 
     // Create visual box with preview styling (dashed border)
@@ -1482,6 +1515,7 @@ check_preview_mbz_formation(float ref_o, float ref_h, float ref_l, float ref_c, 
                         match.subtype := detected_subtype
                         match.source_gap_id := gap.gap_id
                         match.source_gap_type := gap.gap_type
+                        match.source_gap_is_breakaway := gap.is_breakaway
                         array.push(matches, match)
 
                 // Bearish MBZ: gap bearish, ref bullish, forming bearish, close <= 50%
@@ -1493,15 +1527,17 @@ check_preview_mbz_formation(float ref_o, float ref_h, float ref_l, float ref_c, 
                         match.subtype := detected_subtype
                         match.source_gap_id := gap.gap_id
                         match.source_gap_type := gap.gap_type
+                        match.source_gap_is_breakaway := gap.is_breakaway
                         array.push(matches, match)
 
     matches
 
 // Check for preview SIF formation using forming candle
-// Returns [has_sif, is_bullish_candle, gap_ids, gap_types]
+// Returns [has_sif, is_bullish_candle, gap_ids, gap_types, gap_breakaways]
 check_preview_sif_formation(float forming_o, float forming_h, float forming_l, float forming_c, int forming_time) =>
     array<int> sif_gap_ids = array.new<int>()
     array<string> sif_gap_types = array.new<string>()
+    array<bool> sif_gap_breakaways = array.new<bool>()
     bool has_immediate_sif = false
 
     // Forming candle direction
@@ -1557,8 +1593,9 @@ check_preview_sif_formation(float forming_o, float forming_h, float forming_l, f
                 has_immediate_sif := true
                 array.push(sif_gap_ids, gap.gap_id)
                 array.push(sif_gap_types, gap.gap_type)
+                array.push(sif_gap_breakaways, gap.is_breakaway)
 
-    [has_immediate_sif, is_candle_bullish, sif_gap_ids, sif_gap_types]
+    [has_immediate_sif, is_candle_bullish, sif_gap_ids, sif_gap_types, sif_gap_breakaways]
 
 // Get window start time from htf_times array (independent of candle display)
 get_window_start() =>
@@ -1804,6 +1841,14 @@ if IS_VALID
         // Shift current → [1]
         htf_o1 := htf_open, htf_h1 := htf_high, htf_l1 := htf_low, htf_c1 := htf_close, htf_t1 := htf_time
 
+        // ─── Shift Breakaway Trend Range ───
+        htf_breakaway_upper_3 := htf_breakaway_upper_2
+        htf_breakaway_lower_3 := htf_breakaway_lower_2
+        htf_breakaway_upper_2 := htf_breakaway_upper_1
+        htf_breakaway_lower_2 := htf_breakaway_lower_1
+        htf_breakaway_upper_1 := htf_breakaway_upper
+        htf_breakaway_lower_1 := htf_breakaway_lower
+
         // ─── Track Window (independent of candle display) ───
         update_htf_times(htf_t1)
 
@@ -1831,6 +1876,7 @@ if IS_VALID
                     new_gap.is_bullish := true
                     new_gap.gap_type := GAP_TYPE_FVG
                     new_gap.gap_id := this_gap_id
+                    new_gap.is_breakaway := not na(htf_breakaway_upper_3) and htf_l1 > htf_breakaway_upper_3
                     new_gap.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                     new_gap.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
@@ -1855,6 +1901,7 @@ if IS_VALID
                     new_gap.is_bullish := false
                     new_gap.gap_type := GAP_TYPE_FVG
                     new_gap.gap_id := this_gap_id
+                    new_gap.is_breakaway := not na(htf_breakaway_lower_3) and htf_h1 < htf_breakaway_lower_3
                     new_gap.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
                     new_gap.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
@@ -2008,7 +2055,7 @@ if IS_VALID
                     // Add all MBZ source gaps
                     for i = 0 to num_matches - 1
                         MBZFormationMatch match = array.get(mbz_matches, i)
-                        add_source_to_zone(zone, match.source_gap_id, match.source_gap_type)
+                        add_source_to_zone(zone, match.source_gap_id, match.source_gap_type, match.source_gap_is_breakaway)
 
                     // Save updated zone back to array
                     array.set(zone_array, zone_idx, zone)
@@ -2104,7 +2151,7 @@ if IS_VALID
 
         // Preview SIF: Check if forming candle would create immediate SIF
         if enable_sif_engine
-            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types] = check_preview_sif_formation(htf_open, htf_high, htf_low, close, htf_time)
+            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types, sif_gap_breakaways] = check_preview_sif_formation(htf_open, htf_high, htf_low, close, htf_time)
 
             if has_preview_sif
                 // Apply direction filter (SIF direction = candle direction)
@@ -2120,7 +2167,7 @@ if IS_VALID
                         existing.is_immediate_sif := true
                         // Add SIF sources
                         for j = 0 to array.size(sif_gap_ids) - 1
-                            add_source_to_zone(existing, array.get(sif_gap_ids, j), array.get(sif_gap_types, j))
+                            add_source_to_zone(existing, array.get(sif_gap_ids, j), array.get(sif_gap_types, j), array.get(sif_gap_breakaways, j))
                         // Update label
                         string updated_label = build_zone_label(existing) + "\n(forming)"
                         box.set_text(existing.zone_box, updated_label)
