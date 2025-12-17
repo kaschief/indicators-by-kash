@@ -1,0 +1,352 @@
+//@version=6
+indicator("adr •", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+type DayData
+    float openPrice
+    float highPrice
+    float lowPrice
+    float dayRange
+    float adr
+    int startBar
+    int endBar
+    bool judasHit
+
+type AdrLevels
+    line adrPlus
+    line adrMinus
+    line thirdPlus
+    line thirdMinus
+    line anchor
+    label lblAdrPlus
+    label lblAdrMinus
+    label lblThirdPlus
+    label lblThirdMinus
+    label lblAnchor
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Calculation type options (only affects ADR calculation, not anchor)
+CALC_NY_MIDNIGHT = "NY Midnight"
+CALC_DAILY_CANDLE = "Daily Candle"
+
+// Judas condition options
+JUDAS_THIRD = "1/3 ADR"
+JUDAS_80PCT = "80% ADR"
+
+// Style options
+STYLE_SOLID = "Solid"
+STYLE_DASHED = "Dashed"
+STYLE_DOTTED = "Dotted"
+
+// Size options
+SIZE_TINY = "Tiny"
+SIZE_SMALL = "Small"
+SIZE_NORMAL = "Normal"
+
+// Input groups
+GROUP_SETTINGS = "Settings"
+GROUP_STYLE = "Styling"
+GROUP_JUDAS = "Judas Detection"
+
+// Label text
+LABEL_THIRD_PLUS = "1/3ADR+"
+LABEL_THIRD_MINUS = "1/3ADR-"
+LABEL_ANCHOR = "MNO"
+
+// Drawing
+LABEL_OFFSET = 5
+MAX_HISTORY = 20
+DEFAULT_LINE_WIDTH = 2
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Settings
+i_days = input.int(5, "ADR Lookback", minval=1, maxval=MAX_HISTORY, group=GROUP_SETTINGS)
+i_calcType = input.string(CALC_NY_MIDNIGHT, "Calculation", options=[CALC_NY_MIDNIGHT, CALC_DAILY_CANDLE], group=GROUP_SETTINGS, tooltip="• NY Midnight: Uses 00:00-00:00 NY Time ranges (ICT method)\n• Daily Candle: Uses standard daily candle high-low")
+i_showHistorical = input.bool(true, "Show Historical", inline="hist", group=GROUP_SETTINGS)
+i_historyDays = input.int(5, "Days", minval=1, maxval=MAX_HISTORY, inline="hist", group=GROUP_SETTINGS)
+i_labelSize = input.string(SIZE_TINY, "Labels", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_SETTINGS)
+
+// Styling
+i_adrColor = input.color(color.rgb(242, 54, 69), "ADR", inline="adr", group=GROUP_STYLE)
+i_adrStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr", group=GROUP_STYLE)
+i_adrWidth = input.int(DEFAULT_LINE_WIDTH, "", minval=1, maxval=4, inline="adr", group=GROUP_STYLE)
+i_adrHide = input.bool(false, "Hide", inline="adr", group=GROUP_STYLE)
+
+i_thirdsColor = input.color(color.rgb(41, 98, 255), "1/3 ADR", inline="thirds", group=GROUP_STYLE)
+i_thirdsStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="thirds", group=GROUP_STYLE)
+i_thirdsWidth = input.int(DEFAULT_LINE_WIDTH, "", minval=1, maxval=4, inline="thirds", group=GROUP_STYLE)
+i_thirdsHide = input.bool(false, "Hide", inline="thirds", group=GROUP_STYLE)
+
+i_anchorColor = input.color(color.rgb(41, 98, 255), "Anchor", inline="anchor", group=GROUP_STYLE)
+i_anchorStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="anchor", group=GROUP_STYLE)
+i_anchorWidth = input.int(1, "", minval=1, maxval=4, inline="anchor", group=GROUP_STYLE)
+i_anchorHide = input.bool(false, "Hide", inline="anchor", group=GROUP_STYLE)
+
+// Judas Detection
+i_judasEnabled = input.bool(false, "Enable", inline="judas", group=GROUP_JUDAS)
+i_judasCondition = input.string(JUDAS_THIRD, "", options=[JUDAS_THIRD, JUDAS_80PCT], inline="judas", group=GROUP_JUDAS)
+i_judasColor = input.color(color.orange, "", inline="judas", group=GROUP_JUDAS)
+i_judasHour = input.int(8, "Cutoff (NY)", minval=0, maxval=23, inline="cutoff", group=GROUP_JUDAS)
+i_judasMinute = input.int(0, ":", minval=0, maxval=59, inline="cutoff", group=GROUP_JUDAS, tooltip="Judas Swing: price exhausts early in session before this cutoff time")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+method toLineStyle(string style) =>
+    switch style
+        STYLE_SOLID => line.style_solid
+        STYLE_DASHED => line.style_dashed
+        STYLE_DOTTED => line.style_dotted
+        => line.style_solid
+
+method toLabelSize(string sizeStr) =>
+    switch sizeStr
+        SIZE_TINY => size.tiny
+        SIZE_SMALL => size.small
+        SIZE_NORMAL => size.normal
+        => size.tiny
+
+calcAdrFromRanges(array<float> ranges, int lookback) =>
+    count = math.min(lookback, array.size(ranges))
+    float result = na
+    if count > 0
+        sum = 0.0
+        for i = 0 to count - 1
+            sum += array.get(ranges, i)
+        result := sum / count
+    result
+
+drawLevels(int x1, int x2, float anchorPrice, float adrValue, color adrCol, color thirdsCol, color anchorCol, bool showLabels, int labelDays) =>
+    AdrLevels levels = AdrLevels.new()
+
+    adrPlusPrice = anchorPrice + adrValue
+    adrMinusPrice = anchorPrice - adrValue
+    thirdPlusPrice = anchorPrice + (adrValue / 3)
+    thirdMinusPrice = anchorPrice - (adrValue / 3)
+
+    labelSz = i_labelSize.toLabelSize()
+
+    if not i_adrHide
+        levels.adrPlus := line.new(x1, adrPlusPrice, x2, adrPlusPrice, color=adrCol, style=i_adrStyle.toLineStyle(), width=i_adrWidth)
+        levels.adrMinus := line.new(x1, adrMinusPrice, x2, adrMinusPrice, color=adrCol, style=i_adrStyle.toLineStyle(), width=i_adrWidth)
+        if showLabels
+            levels.lblAdrPlus := label.new(x2, adrPlusPrice, str.tostring(labelDays) + "ADR+", style=label.style_label_left, textcolor=adrCol, color=color.new(color.white, 100), size=labelSz)
+            levels.lblAdrMinus := label.new(x2, adrMinusPrice, str.tostring(labelDays) + "ADR-", style=label.style_label_left, textcolor=adrCol, color=color.new(color.white, 100), size=labelSz)
+
+    if not i_thirdsHide
+        levels.thirdPlus := line.new(x1, thirdPlusPrice, x2, thirdPlusPrice, color=thirdsCol, style=i_thirdsStyle.toLineStyle(), width=i_thirdsWidth)
+        levels.thirdMinus := line.new(x1, thirdMinusPrice, x2, thirdMinusPrice, color=thirdsCol, style=i_thirdsStyle.toLineStyle(), width=i_thirdsWidth)
+        if showLabels
+            levels.lblThirdPlus := label.new(x2, thirdPlusPrice, LABEL_THIRD_PLUS, style=label.style_label_left, textcolor=thirdsCol, color=color.new(color.white, 100), size=labelSz)
+            levels.lblThirdMinus := label.new(x2, thirdMinusPrice, LABEL_THIRD_MINUS, style=label.style_label_left, textcolor=thirdsCol, color=color.new(color.white, 100), size=labelSz)
+
+    if not i_anchorHide
+        levels.anchor := line.new(x1, anchorPrice, x2, anchorPrice, color=anchorCol, style=i_anchorStyle.toLineStyle(), width=i_anchorWidth)
+        if showLabels
+            levels.lblAnchor := label.new(x2, anchorPrice, LABEL_ANCHOR, style=label.style_label_left, textcolor=anchorCol, color=color.new(color.white, 100), size=labelSz)
+
+    levels
+
+deleteLevels(AdrLevels levels) =>
+    if not na(levels)
+        line.delete(levels.adrPlus)
+        line.delete(levels.adrMinus)
+        line.delete(levels.thirdPlus)
+        line.delete(levels.thirdMinus)
+        line.delete(levels.anchor)
+        label.delete(levels.lblAdrPlus)
+        label.delete(levels.lblAdrMinus)
+        label.delete(levels.lblThirdPlus)
+        label.delete(levels.lblThirdMinus)
+        label.delete(levels.lblAnchor)
+
+extendLevels(AdrLevels levels, int x2) =>
+    if not na(levels)
+        if not na(levels.adrPlus)
+            line.set_x2(levels.adrPlus, x2)
+            line.set_x2(levels.adrMinus, x2)
+        if not na(levels.thirdPlus)
+            line.set_x2(levels.thirdPlus, x2)
+            line.set_x2(levels.thirdMinus, x2)
+        if not na(levels.anchor)
+            line.set_x2(levels.anchor, x2)
+
+updateLabels(AdrLevels levels, int x, int days) =>
+    if not na(levels)
+        if not na(levels.lblAdrPlus)
+            label.set_x(levels.lblAdrPlus, x)
+            label.set_x(levels.lblAdrMinus, x)
+            label.set_text(levels.lblAdrPlus, str.tostring(days) + "ADR+")
+            label.set_text(levels.lblAdrMinus, str.tostring(days) + "ADR-")
+        if not na(levels.lblThirdPlus)
+            label.set_x(levels.lblThirdPlus, x)
+            label.set_x(levels.lblThirdMinus, x)
+        if not na(levels.lblAnchor)
+            label.set_x(levels.lblAnchor, x)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIME DETECTION (anchor at NY midnight)
+// ═══════════════════════════════════════════════════════════════════════════
+
+nyHour = hour(time, "America/New_York")
+prevNyHour = hour(time[1], "America/New_York")
+isNewNyDay = nyHour == 0 and prevNyHour == 23
+isNewDailyCandle = timeframe.change("D")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DATA STORAGE
+// ═══════════════════════════════════════════════════════════════════════════
+
+var array<DayData> completedDays = array.new<DayData>()
+var array<float> nyRanges = array.new_float()
+var array<float> dailyRanges = array.new_float()
+var DayData currentDay = DayData.new(open, high, low, 0.0, na, bar_index)
+
+var float dailyCandleHigh = high
+var float dailyCandleLow = low
+
+// Judas detection tracking
+var bool judasHitToday = false
+var array<box> judasBoxes = array.new<box>()
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NY MIDNIGHT TRACKING (always used for anchor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+if isNewNyDay
+    if not na(currentDay.openPrice) and currentDay.highPrice > 0
+        currentDay.dayRange := currentDay.highPrice - currentDay.lowPrice
+        currentDay.endBar := bar_index
+        currentDay.judasHit := judasHitToday
+        array.unshift(nyRanges, currentDay.dayRange)
+        if array.size(nyRanges) > MAX_HISTORY
+            array.pop(nyRanges)
+
+    float todayAdr = na
+    if i_calcType == CALC_NY_MIDNIGHT
+        todayAdr := calcAdrFromRanges(nyRanges, i_days)
+    else
+        todayAdr := calcAdrFromRanges(dailyRanges, i_days)
+
+    if not na(currentDay.openPrice) and currentDay.highPrice > 0
+        array.unshift(completedDays, currentDay.copy())
+        if array.size(completedDays) > MAX_HISTORY
+            array.pop(completedDays)
+
+    currentDay := DayData.new(open, high, low, 0.0, todayAdr, bar_index, na, false)
+    judasHitToday := false
+else
+    currentDay.highPrice := math.max(currentDay.highPrice, high)
+    currentDay.lowPrice := math.min(currentDay.lowPrice, low)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY CANDLE TRACKING (for daily candle calculation mode)
+// ═══════════════════════════════════════════════════════════════════════════
+
+if isNewDailyCandle
+    if dailyCandleHigh > 0 and dailyCandleLow > 0
+        array.unshift(dailyRanges, dailyCandleHigh - dailyCandleLow)
+        if array.size(dailyRanges) > MAX_HISTORY
+            array.pop(dailyRanges)
+
+    dailyCandleHigh := high
+    dailyCandleLow := low
+else
+    dailyCandleHigh := math.max(dailyCandleHigh, high)
+    dailyCandleLow := math.min(dailyCandleLow, low)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JUDAS DETECTION (1/3 ADR touch before cutoff time)
+// ═══════════════════════════════════════════════════════════════════════════
+
+if i_judasEnabled and not judasHitToday and not na(currentDay.adr)
+    nyMinute = minute(time, "America/New_York")
+    cutoffMinutes = i_judasHour * 60 + i_judasMinute
+    currentMinutes = nyHour * 60 + nyMinute
+
+    if currentMinutes <= cutoffMinutes
+        levelOffset = i_judasCondition == JUDAS_THIRD ? currentDay.adr / 3 : currentDay.adr * 0.8
+        levelPlus = currentDay.openPrice + levelOffset
+        levelMinus = currentDay.openPrice - levelOffset
+
+        if high >= levelPlus or low <= levelMinus
+            judasHitToday := true
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CURRENT VALUES (anchor always from NY midnight)
+// ═══════════════════════════════════════════════════════════════════════════
+
+anchorPrice = currentDay.openPrice
+adr = currentDay.adr
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DRAWING - CURRENT DAY ADR (redraws at NY midnight)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var AdrLevels currentLevels = na
+
+if isNewNyDay and not na(adr)
+    deleteLevels(currentLevels)
+    currentLevels := drawLevels(bar_index, bar_index + 1, anchorPrice, adr, i_adrColor, i_thirdsColor, i_anchorColor, true, i_days)
+
+extendLevels(currentLevels, bar_index + 1)
+updateLabels(currentLevels, bar_index + LABEL_OFFSET, i_days)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DRAWING - HISTORICAL ADR LEVELS
+// ═══════════════════════════════════════════════════════════════════════════
+
+var array<AdrLevels> histLevels = array.new<AdrLevels>()
+
+if isNewNyDay and i_showHistorical and array.size(completedDays) > 0
+    for levels in histLevels
+        deleteLevels(levels)
+    array.clear(histLevels)
+
+    drawCount = math.min(i_historyDays, array.size(completedDays))
+    for i = 0 to drawCount - 1
+        day = array.get(completedDays, i)
+        if not na(day.adr)
+            endBar = i == 0 ? currentDay.startBar : array.get(completedDays, i - 1).startBar
+            levels = drawLevels(day.startBar, endBar, day.openPrice, day.adr, i_adrColor, i_thirdsColor, i_anchorColor, false, i_days)
+            array.push(histLevels, levels)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JUDAS BOXES (highlight days with early 1/3 ADR touches)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var box currentJudasBox = na
+
+if i_judasEnabled and isNewNyDay
+    // Clean up previous boxes
+    for b in judasBoxes
+        box.delete(b)
+    array.clear(judasBoxes)
+    box.delete(currentJudasBox)
+    currentJudasBox := na
+
+    // Draw boxes for historical days with Judas hits
+    for day in completedDays
+        if day.judasHit and not na(day.endBar)
+            b = box.new(day.startBar, day.highPrice, day.endBar, day.lowPrice, border_color=i_judasColor, border_width=1, bgcolor=na)
+            array.push(judasBoxes, b)
+
+// Draw/update box for current day if Judas hit
+if i_judasEnabled and judasHitToday
+    if na(currentJudasBox)
+        currentJudasBox := box.new(currentDay.startBar, currentDay.highPrice, bar_index, currentDay.lowPrice, border_color=i_judasColor, border_width=1, bgcolor=na)
+    else
+        box.set_top(currentJudasBox, currentDay.highPrice)
+        box.set_bottom(currentJudasBox, currentDay.lowPrice)
+        box.set_right(currentJudasBox, bar_index)
