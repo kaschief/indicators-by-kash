@@ -45,11 +45,19 @@ const string LABEL_DATE_LABEL = "Date Label"
 const string LABEL_LABELS = "Labels"
 
 // Group Names
+const string GROUP_GENERAL = "General"
 const string GROUP_NWOG = "NWOG"
 const string GROUP_NDOG = "NDOG"
 const string GROUP_RTH = "RTH Gaps"
 const string GROUP_BPR = "BPR"
 const string GROUP_APPEARANCE = "Appearance"
+
+// Quick Filter options
+const string FILTER_ALL = "All"
+const string FILTER_NWOG = "NWOG Only"
+const string FILTER_NDOG = "NDOG Only"
+const string FILTER_RTH_TODAY = "Today's RTH Gap"
+const string FILTER_RTH_PREV_5 = "Previous 5 RTH Gaps"
 
 // Color Constants
 const color DEFAULT_NWOG_UNFILLED_COLOR = color.new(color.rgb(41, 98, 255), 70)
@@ -76,6 +84,9 @@ const color DEFAULT_BPR_BULLISH_BOUNDARY_COLOR = color.rgb(76, 175, 80)
 const color DEFAULT_BPR_BEARISH_BOUNDARY_COLOR = color.rgb(242, 54, 69)
 const color DEFAULT_INTERNAL_LINES_COLOR = color.new(color.rgb(184, 184, 184), 40)
 const color DEFAULT_LABEL_COLOR = color.rgb(128, 128, 128)
+
+// General Settings
+quickFilter = input.string(FILTER_ALL, "Quick Filter", options=[FILTER_ALL, FILTER_NWOG, FILTER_NDOG, FILTER_RTH_TODAY, FILTER_RTH_PREV_5], group=GROUP_GENERAL, tooltip="Filter presets:\n• All: Show all gap types (respects individual toggles)\n• NWOG Only: New Week Opening Gaps only\n• NDOG Only: New Day Opening Gaps only\n• Today's RTH Gap: Show only today's RTH gap\n• Previous 5 RTH: Show last 5 RTH gaps (ignores Hide Filled)")
 
 // NWOG
 showNWOG = input.bool(true, LABEL_NWOG, group=GROUP_NWOG, inline="1")
@@ -144,6 +155,47 @@ showColorTable = input.bool(false, "Show Color Reference Table", group="📊 Col
 
 isValidRTHTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("15")
 isValidNWOGTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_seconds("1") and timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds("240")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// QUICK FILTER - Exclusive presets that override individual toggles
+// ═══════════════════════════════════════════════════════════════════════════════
+
+isGapTypeInFilter(string gapType) =>
+    switch quickFilter
+        FILTER_ALL => true
+        FILTER_NWOG => gapType == GAP_TYPE_NWOG
+        FILTER_NDOG => gapType == GAP_TYPE_NDOG
+        FILTER_RTH_TODAY => gapType == GAP_TYPE_RTH
+        FILTER_RTH_PREV_5 => gapType == GAP_TYPE_RTH
+        => true
+
+// Effective settings based on Quick Filter
+effectiveShowNWOG = switch quickFilter
+    FILTER_ALL => showNWOG
+    FILTER_NWOG => true
+    => false
+
+effectiveShowNDOG = switch quickFilter
+    FILTER_ALL => showNDOG
+    FILTER_NDOG => true
+    => false
+
+effectiveShowRTHGaps = switch quickFilter
+    FILTER_ALL => showRTHGaps
+    FILTER_RTH_TODAY => true
+    FILTER_RTH_PREV_5 => true
+    => false
+
+effectiveShowBPR = switch quickFilter
+    FILTER_ALL => showBPR
+    => false
+
+effectiveRthGapsToShow = switch quickFilter
+    FILTER_RTH_TODAY => 1
+    FILTER_RTH_PREV_5 => 5
+    => rthGapsToShow
+
+effectiveHideFilledRTH = quickFilter == FILTER_RTH_PREV_5 ? false : hideFilledRTH
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PERFORMANCE: Cache 1-minute intrabar data ONCE per bar
@@ -370,7 +422,7 @@ removeOldestGap(string gapType) =>
                 array.remove(gapsArray, i)
                 break
 
-if rthEnd and showRTHGaps
+if rthEnd and effectiveShowRTHGaps
     rthClosePrice := close[1]
     previewStartBar := bar_index
 
@@ -379,7 +431,7 @@ if rthEnd and showRTHGaps
         previewBottom = math.min(rthClosePrice, close)
         previewGap := createGap(previewTop, previewBottom, GAP_TYPE_RTH, true)
 
-if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview and showRTHGaps
+if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview and effectiveShowRTHGaps
     newTop = math.max(rthClosePrice, close)
     newBottom = math.min(rthClosePrice, close)
 
@@ -405,13 +457,13 @@ if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview an
     previewGap.top := newTop
     previewGap.bottom := newBottom
 
-if rthStart and showRTHGaps and array.size(gapsArray) > 0
+if rthStart and effectiveShowRTHGaps and array.size(gapsArray) > 0
     for i = 0 to array.size(gapsArray) - 1
         gap = array.get(gapsArray, i)
         if gap.gapType == GAP_TYPE_RTH
             gap.passedNextSession := true
 
-if showNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
+if effectiveShowNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     // Use cached 1-minute data (performance optimization)
     arrayTimes = cached_1m_times
     arrayOpens = cached_1m_opens
@@ -440,13 +492,13 @@ if showNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
                     if gap.gapType == GAP_TYPE_NWOG and (barTime - gap.creationTime) >= 518400000
                         gap.passedNextSession := true
 
-if rthStart and showRTHGaps
+if rthStart and effectiveShowRTHGaps
     if not na(previewGap)
         deleteGap(previewGap)
         previewGap := na
         previewStartBar := na
 
-if rthStart and not na(rthClosePrice) and showRTHGaps
+if rthStart and not na(rthClosePrice) and effectiveShowRTHGaps
     rthOpenPrice = open
 
     if rthOpenPrice != rthClosePrice
@@ -457,7 +509,7 @@ if rthStart and not na(rthClosePrice) and showRTHGaps
         rthGap = createGap(gapTop, gapBottom, GAP_TYPE_RTH, false, na, rthIsBullish)
         array.push(gapsArray, rthGap)
 
-        if countGapsByType(GAP_TYPE_RTH) > rthGapsToShow
+        if countGapsByType(GAP_TYPE_RTH) > effectiveRthGapsToShow
             removeOldestGap(GAP_TYPE_RTH)
 
 if array.size(gapsArray) > 0
@@ -474,13 +526,16 @@ if array.size(gapsArray) > 0
     for i = array.size(gapsArray) - 1 to 0
         gap = array.get(gapsArray, i)
 
-        if gap.gapType == GAP_TYPE_RTH and not showRTHGaps
+        // Skip gaps not in current filter
+        if not isGapTypeInFilter(gap.gapType)
             continue
-        if gap.gapType == GAP_TYPE_NWOG and not showNWOG
+        if gap.gapType == GAP_TYPE_RTH and not effectiveShowRTHGaps
             continue
-        if gap.gapType == GAP_TYPE_NDOG and not showNDOG
+        if gap.gapType == GAP_TYPE_NWOG and not effectiveShowNWOG
             continue
-        if (gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and not showBPR
+        if gap.gapType == GAP_TYPE_NDOG and not effectiveShowNDOG
+            continue
+        if (gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and not effectiveShowBPR
             continue
 
         // Skip filled gaps that passed next session UNLESS "Extend" is ON
@@ -624,7 +679,7 @@ if array.size(gapsArray) > 0
                                 line.set_x2(gap.bottomBoundaryLine, bar_index)
 
         if gap.filled
-            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG) or ((gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and hideFilledBPR) or (gap.gapType == GAP_TYPE_RTH and hideFilledRTH)
+            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG) or ((gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and hideFilledBPR) or (gap.gapType == GAP_TYPE_RTH and effectiveHideFilledRTH)
                 deleteGap(gap)
                 array.remove(gapsArray, i)
                 continue
@@ -715,7 +770,7 @@ if array.size(gapsArray) > 0
                 label.set_color(gap.gapLabel, color.new(color.white, 100))
                 label.set_textcolor(gap.gapLabel, color.new(labelColor, 100))
 
-if showNWOG and isValidNWOGTimeframe
+if effectiveShowNWOG and isValidNWOGTimeframe
     // Use cached 1-minute data (performance optimization)
     arrayTimes = cached_1m_times
     arrayOpens = cached_1m_opens
@@ -756,7 +811,7 @@ if showNWOG and isValidNWOGTimeframe
                 fridayClosePrice := na
 
 // Manage projections: ensure only the most recent unfilled NWOG has projections
-if showNWOG and array.size(gapsArray) > 0
+if effectiveShowNWOG and array.size(gapsArray) > 0
     int mostRecentUnfilledNWOGCreationBar = -1
 
     // First pass: Find the most recent unfilled NWOG
@@ -786,7 +841,7 @@ if showNWOG and array.size(gapsArray) > 0
                     array.clear(gap.projectionLabels)
 
 // Manage projections: ensure only the most recent unfilled NDOG has projections
-if showNDOG and array.size(gapsArray) > 0
+if effectiveShowNDOG and array.size(gapsArray) > 0
     int mostRecentUnfilledNDOGCreationBar = -1
 
     // First pass: Find the most recent unfilled NDOG
@@ -816,7 +871,7 @@ if showNDOG and array.size(gapsArray) > 0
                     array.clear(gap.projectionLabels)
 
 // Manage projections: ensure only the most recent unfilled RTH has projections
-if showRTHGaps and array.size(gapsArray) > 0
+if effectiveShowRTHGaps and array.size(gapsArray) > 0
     int mostRecentUnfilledRTHCreationBar = -1
 
     // First pass: Find the most recent unfilled RTH
@@ -879,7 +934,7 @@ if (showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
                 if showNWOGDividers and barDay == 1
                     array.push(nwogDividers.dividerTimes, barTime)
 
-if showNDOG and isValidNWOGTimeframe
+if effectiveShowNDOG and isValidNWOGTimeframe
     // Use cached 1-minute data (performance optimization)
     arrayTimes = cached_1m_times
     arrayOpens = cached_1m_opens
@@ -922,7 +977,7 @@ if showNDOG and isValidNWOGTimeframe
                             removeOldestGap(GAP_TYPE_NDOG)
 
                     prevDayClosePrice := na
-if showNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
+if effectiveShowNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
     // Use cached 1-minute data (performance optimization)
     arrayTimes = cached_1m_times
     arrayOpens = cached_1m_opens
@@ -953,7 +1008,7 @@ if showNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
                         gap.passedNextSession := true
 
 // BPR Detection
-if showBPR
+if effectiveShowBPR
     fvgBearish = low[2] - high > 0
     fvgBullish = low - high[2] > 0
 
@@ -1020,7 +1075,7 @@ if array.size(dividerLines) > 0
 
 // Draw NDOG dividers (18:00 daily)
 // Requires BOTH "Show NDOG" and "NDOG Dividers" to be enabled
-if showNDOG and showNDOGDividers and array.size(ndogDividers.dividerTimes) > 0
+if effectiveShowNDOG and showNDOGDividers and array.size(ndogDividers.dividerTimes) > 0
     // Only show dividers for the number of NDOGs being displayed
     count = math.min(ndogGapsToShow, array.size(ndogDividers.dividerTimes))
 
@@ -1032,7 +1087,7 @@ if showNDOG and showNDOGDividers and array.size(ndogDividers.dividerTimes) > 0
 
 // Draw NWOG dividers (Sunday 18:00 weekly)
 // Requires BOTH "Show NWOG" and "NWOG Dividers" to be enabled
-if showNWOG and showNWOGDividers and array.size(nwogDividers.dividerTimes) > 0
+if effectiveShowNWOG and showNWOGDividers and array.size(nwogDividers.dividerTimes) > 0
     // Only show dividers for the number of NWOGs being displayed
     count = math.min(nwogGapsToShow, array.size(nwogDividers.dividerTimes))
 
@@ -1042,124 +1097,106 @@ if showNWOG and showNWOGDividers and array.size(nwogDividers.dividerTimes) > 0
         dividerLine = line.new(dividerTime, high, dividerTime, low, xloc=xloc.bar_time, color=nwogDividerColor, width=1, style=line.style_dashed, extend=extend.both)
         array.push(dividerLines, dividerLine)
 
-plotcandle(showRTHGaps and muteETHCandles and not inRTH ? open : na, high, low, close, color=ethCandleColor, bordercolor=ethCandleColor, wickcolor=ethCandleColor, editable=false, display=display.pane, force_overlay=true)
+plotcandle(effectiveShowRTHGaps and muteETHCandles and not inRTH ? open : na, high, low, close, color=ethCandleColor, bordercolor=ethCandleColor, wickcolor=ethCandleColor, editable=false, display=display.pane, force_overlay=true)
 
-// Color Reference Table
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE - Dynamic display based on active settings
+// ═══════════════════════════════════════════════════════════════════════════════
+
+addColorRow(table tbl, int row, string name, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
 if showColorTable and barstate.islast
-    var table colorTable = table.new(position.top_right, 4, 24, bgcolor=color.new(color.black, 20), frame_width=2, frame_color=color.gray, border_width=1, border_color=color.new(color.gray, 70))
+    // Calculate row count based on active features
+    rowCount = 1  // Header
+    if effectiveShowNWOG
+        rowCount += 4  // Unfilled, Filled, Divider, Boundary
+        if showNWOGProjections
+            rowCount += 1
+    if effectiveShowNDOG
+        rowCount += 4  // Unfilled, Filled, Divider, Boundary
+        if showNDOGProjections
+            rowCount += 1
+    if effectiveShowRTHGaps
+        rowCount += 5  // Unfilled, Filled, Preview, ETH Candle, Boundary
+        if showRTHProjections
+            rowCount += 1
+    if effectiveShowBPR
+        rowCount += 6  // Bullish Unfilled/Filled/Boundary, Bearish Unfilled/Filled/Boundary
+    rowCount += 1  // Labels always shown
+
+    var table colorTable = table.new(position.top_right, 3, 30, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header
-    table.cell(colorTable, 0, 0, "Setting", text_color=color.white, bgcolor=color.new(color.gray, 30), text_size=size.small)
-    table.cell(colorTable, 1, 0, "Line", text_color=color.white, bgcolor=color.new(color.gray, 30), text_size=size.small)
-    table.cell(colorTable, 2, 0, "RGB Values", text_color=color.white, bgcolor=color.new(color.gray, 30), text_size=size.small)
-    table.cell(colorTable, 3, 0, "Transp", text_color=color.white, bgcolor=color.new(color.gray, 30), text_size=size.small)
+    table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
 
-    // NWOG Colors
-    table.cell(colorTable, 0, 1, "NWOG Unfilled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 1, "57", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 1, str.format("R:{0} G:{1} B:{2}", int(color.r(nwogUnfilledColor)), int(color.g(nwogUnfilledColor)), int(color.b(nwogUnfilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 1, str.tostring(int(color.t(nwogUnfilledColor))), text_size=size.small, text_color=color.white)
+    int currentRow = 1
 
-    table.cell(colorTable, 0, 2, "NWOG Filled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 2, "58", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 2, str.format("R:{0} G:{1} B:{2}", int(color.r(nwogFilledColor)), int(color.g(nwogFilledColor)), int(color.b(nwogFilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 2, str.tostring(int(color.t(nwogFilledColor))), text_size=size.small, text_color=color.white)
+    if effectiveShowNWOG
+        addColorRow(colorTable, currentRow, "NWOG Unfilled", nwogUnfilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "NWOG Filled", nwogFilledColor)
+        currentRow += 1
+        if showNWOGDividers
+            addColorRow(colorTable, currentRow, "NWOG Divider", nwogDividerColor)
+            currentRow += 1
+        addColorRow(colorTable, currentRow, "NWOG Boundary", nwogBoundaryColor)
+        currentRow += 1
+        if showNWOGProjections
+            addColorRow(colorTable, currentRow, "NWOG Projection", nwogProjectionColor)
+            currentRow += 1
 
-    table.cell(colorTable, 0, 3, "NWOG Divider", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 3, "62", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 3, str.format("R:{0} G:{1} B:{2}", int(color.r(nwogDividerColor)), int(color.g(nwogDividerColor)), int(color.b(nwogDividerColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 3, str.tostring(int(color.t(nwogDividerColor))), text_size=size.small, text_color=color.white)
+    // NDOG Colors (only if enabled)
+    if effectiveShowNDOG
+        addColorRow(colorTable, currentRow, "NDOG Unfilled", ndogUnfilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "NDOG Filled", ndogFilledColor)
+        currentRow += 1
+        if showNDOGDividers
+            addColorRow(colorTable, currentRow, "NDOG Divider", ndogDividerColor)
+            currentRow += 1
+        addColorRow(colorTable, currentRow, "NDOG Boundary", ndogBoundaryColor)
+        currentRow += 1
+        if showNDOGProjections
+            addColorRow(colorTable, currentRow, "NDOG Projection", ndogProjectionColor)
+            currentRow += 1
 
-    table.cell(colorTable, 0, 4, "NWOG Boundary", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 4, "64", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 4, str.format("R:{0} G:{1} B:{2}", int(color.r(nwogBoundaryColor)), int(color.g(nwogBoundaryColor)), int(color.b(nwogBoundaryColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 4, str.tostring(int(color.t(nwogBoundaryColor))), text_size=size.small, text_color=color.white)
+    // RTH Colors (only if enabled)
+    if effectiveShowRTHGaps
+        addColorRow(colorTable, currentRow, "RTH Unfilled", rthUnfilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "RTH Filled", rthFilledColor)
+        currentRow += 1
+        if showPreview
+            addColorRow(colorTable, currentRow, "RTH Preview", previewColor)
+            currentRow += 1
+        if muteETHCandles
+            addColorRow(colorTable, currentRow, "RTH ETH Candle", ethCandleColor)
+            currentRow += 1
+        addColorRow(colorTable, currentRow, "RTH Boundary", rthBoundaryColor)
+        currentRow += 1
+        if showRTHProjections
+            addColorRow(colorTable, currentRow, "RTH Projection", rthProjectionColor)
+            currentRow += 1
 
-    // NDOG Colors
-    table.cell(colorTable, 0, 5, "NDOG Unfilled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 5, "69", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 5, str.format("R:{0} G:{1} B:{2}", int(color.r(ndogUnfilledColor)), int(color.g(ndogUnfilledColor)), int(color.b(ndogUnfilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 5, str.tostring(int(color.t(ndogUnfilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 6, "NDOG Filled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 6, "70", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 6, str.format("R:{0} G:{1} B:{2}", int(color.r(ndogFilledColor)), int(color.g(ndogFilledColor)), int(color.b(ndogFilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 6, str.tostring(int(color.t(ndogFilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 7, "NDOG Divider", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 7, "74", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 7, str.format("R:{0} G:{1} B:{2}", int(color.r(ndogDividerColor)), int(color.g(ndogDividerColor)), int(color.b(ndogDividerColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 7, str.tostring(int(color.t(ndogDividerColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 8, "NDOG Boundary", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 8, "76", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 8, str.format("R:{0} G:{1} B:{2}", int(color.r(ndogBoundaryColor)), int(color.g(ndogBoundaryColor)), int(color.b(ndogBoundaryColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 8, str.tostring(int(color.t(ndogBoundaryColor))), text_size=size.small, text_color=color.white)
-
-    // RTH Colors
-    table.cell(colorTable, 0, 9, "RTH Unfilled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 9, "81", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 9, str.format("R:{0} G:{1} B:{2}", int(color.r(rthUnfilledColor)), int(color.g(rthUnfilledColor)), int(color.b(rthUnfilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 9, str.tostring(int(color.t(rthUnfilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 10, "RTH Filled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 10, "82", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 10, str.format("R:{0} G:{1} B:{2}", int(color.r(rthFilledColor)), int(color.g(rthFilledColor)), int(color.b(rthFilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 10, str.tostring(int(color.t(rthFilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 11, "RTH Preview", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 11, "85", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(previewColor)), int(color.g(previewColor)), int(color.b(previewColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 11, str.tostring(int(color.t(previewColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 12, "RTH ETH Candle", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 12, "87", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(ethCandleColor)), int(color.g(ethCandleColor)), int(color.b(ethCandleColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 12, str.tostring(int(color.t(ethCandleColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 13, "RTH Boundary", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 13, "89", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 13, str.format("R:{0} G:{1} B:{2}", int(color.r(rthBoundaryColor)), int(color.g(rthBoundaryColor)), int(color.b(rthBoundaryColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 13, str.tostring(int(color.t(rthBoundaryColor))), text_size=size.small, text_color=color.white)
-
-    // BPR Colors
-    table.cell(colorTable, 0, 14, "BPR Bullish Unfilled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 14, "94", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 14, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBullishUnfilledColor)), int(color.g(bprBullishUnfilledColor)), int(color.b(bprBullishUnfilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 14, str.tostring(int(color.t(bprBullishUnfilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 15, "BPR Bullish Filled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 15, "95", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 15, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBullishFilledColor)), int(color.g(bprBullishFilledColor)), int(color.b(bprBullishFilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 15, str.tostring(int(color.t(bprBullishFilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 16, "BPR Bearish Unfilled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 16, "96", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 16, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBearishUnfilledColor)), int(color.g(bprBearishUnfilledColor)), int(color.b(bprBearishUnfilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 16, str.tostring(int(color.t(bprBearishUnfilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 17, "BPR Bearish Filled", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 17, "97", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 17, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBearishFilledColor)), int(color.g(bprBearishFilledColor)), int(color.b(bprBearishFilledColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 17, str.tostring(int(color.t(bprBearishFilledColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 18, "BPR Bullish Boundary", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 18, "101", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 18, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBullishBoundaryColor)), int(color.g(bprBullishBoundaryColor)), int(color.b(bprBullishBoundaryColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 18, str.tostring(int(color.t(bprBullishBoundaryColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 19, "BPR Bearish Boundary", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 19, "102", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 19, str.format("R:{0} G:{1} B:{2}", int(color.r(bprBearishBoundaryColor)), int(color.g(bprBearishBoundaryColor)), int(color.b(bprBearishBoundaryColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 19, str.tostring(int(color.t(bprBearishBoundaryColor))), text_size=size.small, text_color=color.white)
+    // BPR Colors (only if enabled)
+    if effectiveShowBPR
+        addColorRow(colorTable, currentRow, "BPR+ Unfilled", bprBullishUnfilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "BPR+ Filled", bprBullishFilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "BPR+ Boundary", bprBullishBoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "BPR- Unfilled", bprBearishUnfilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "BPR- Filled", bprBearishFilledColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "BPR- Boundary", bprBearishBoundaryColor)
+        currentRow += 1
 
     // Appearance Colors
-    table.cell(colorTable, 0, 20, "Internal Lines", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 20, "106", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 20, str.format("R:{0} G:{1} B:{2}", int(color.r(internalLinesColor)), int(color.g(internalLinesColor)), int(color.b(internalLinesColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 20, str.tostring(int(color.t(internalLinesColor))), text_size=size.small, text_color=color.white)
-
-    table.cell(colorTable, 0, 21, "Labels", text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 1, 21, "107", text_size=size.small, text_color=color.yellow)
-    table.cell(colorTable, 2, 21, str.format("R:{0} G:{1} B:{2}", int(color.r(labelColor)), int(color.g(labelColor)), int(color.b(labelColor))), text_size=size.small, text_color=color.white)
-    table.cell(colorTable, 3, 21, str.tostring(int(color.t(labelColor))), text_size=size.small, text_color=color.white)
+    addColorRow(colorTable, currentRow, "Labels", labelColor)
