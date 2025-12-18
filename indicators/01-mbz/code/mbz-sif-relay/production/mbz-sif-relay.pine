@@ -14,7 +14,7 @@
 //   4H  chart → D   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="mbz sif relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -232,6 +232,12 @@ zone_label_size  = input.string("Large", "Size", options=["Tiny", "Small", "Norm
                    tooltip="Font size for zone labels")
 show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_ZONE_DISPLAY,
                      tooltip="Show preview zones that are forming during the current HTF candle. These zones update in real-time and may appear/disappear as the forming candle changes. Dashed border indicates preview state.")
+show_validation_boundary = input.bool(false, "Validation Boundary", group=GROUP_ZONE_DISPLAY, inline="vb1",
+                           tooltip="Draw a vertical line within each zone marking where the HTF candle closed. Everything left of this line was the formation period (zone not yet valid).")
+validation_boundary_bull_color = input.color(color.new(color.rgb(77, 208, 225), 50), "+", group=GROUP_ZONE_DISPLAY, inline="vb1")
+validation_boundary_bear_color = input.color(color.new(color.rgb(249, 121, 246), 50), "-", group=GROUP_ZONE_DISPLAY, inline="vb1")
+validation_boundary_width = input.int(2, "", minval=1, maxval=4, group=GROUP_ZONE_DISPLAY, inline="vb2")
+validation_boundary_style = input.string("Dotted", "", options=["Solid", "Dashed", "Dotted"], group=GROUP_ZONE_DISPLAY, inline="vb2")
 
 // ─── 🎯 MBZ Settings ───
 GROUP_MBZ        = "🎯 MBZ Settings"
@@ -312,6 +318,13 @@ string ZONE_LABEL_SIZE_RESOLVED = switch zone_label_size
     "Large"  => size.large
     "Huge"   => size.huge
     => size.large
+
+// Resolve validation boundary line style
+string VALIDATION_LINE_STYLE = switch validation_boundary_style
+    "Solid"  => line.style_solid
+    "Dashed" => line.style_dashed
+    "Dotted" => line.style_dotted
+    => line.style_dotted
 
 // Resolve MBZ invalidation threshold based on mode
 float MBZ_INVALIDATION_THRESHOLD = switch invalidation_mode
@@ -436,6 +449,7 @@ type CandleZone
 
     // ─── Visual elements ───
     box    zone_box
+    line   validation_line    // Vertical line marking when HTF candle closed (zone became valid)
 
 // Unified zone storage (declared early so functions can reference it)
 var array<CandleZone> zone_array = array.new<CandleZone>()
@@ -1429,6 +1443,8 @@ cleanup_preview_zones() =>
             CandleZone zone = array.get(preview_zone_array, i)
             if not na(zone.zone_box)
                 box.delete(zone.zone_box)
+            if not na(zone.validation_line)
+                line.delete(zone.validation_line)
         array.clear(preview_zone_array)
 
 // Create and render a preview zone
@@ -1769,10 +1785,16 @@ check_zone_invalidation_live(float htf_open_price) =>
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
             else if needs_update
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
 
             array.set(zone_array, i, zone)
 
@@ -1804,16 +1826,22 @@ check_zone_invalidation(float htf_open_price, float htf_close_price) =>
             // If NO active components remain, mark zone as fully invalidated
             if not zone.has_mbz and not zone.has_sif
                 zone.is_invalidated := true
-                // Delete the zone box
+                // Delete the zone box and validation line
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
             else if needs_update
                 // Partial invalidation: update zone label (box will be updated in rendering loop)
                 // Force box recreation by setting to na
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
 
             array.set(zone_array, i, zone)
 
@@ -1825,6 +1853,8 @@ cleanup_zones(int window_start) =>
             if zone.formation_time < window_start
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
                 array.remove(zone_array, i)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2325,7 +2355,10 @@ if IS_VALID
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
-                    array.set(zone_array, i, zone)
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
+                array.set(zone_array, i, zone)
                 continue
 
             // Apply direction filter
@@ -2335,7 +2368,10 @@ if IS_VALID
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
-                    array.set(zone_array, i, zone)
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
+                array.set(zone_array, i, zone)
                 continue
 
             // Zone visibility: show if zone has at least one enabled engine component
@@ -2344,7 +2380,10 @@ if IS_VALID
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
-                    array.set(zone_array, i, zone)
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
+                array.set(zone_array, i, zone)
                 continue
 
             // Same-Source filter logic (MBZ only - SIF zones always pass through)
@@ -2375,7 +2414,10 @@ if IS_VALID
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
-                    array.set(zone_array, i, zone)
+                if not na(zone.validation_line)
+                    line.delete(zone.validation_line)
+                    zone.validation_line := na
+                array.set(zone_array, i, zone)
                 continue
 
             // Create box if doesn't exist yet
@@ -2401,6 +2443,13 @@ if IS_VALID
                 string zone_label_text = build_zone_label(zone)
 
                 zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, fill_transparency), border_color=color.new(zone_color, border_transparency), border_width=3, text=zone_label_text, text_color=label_color_resolved, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+
+                // Draw validation boundary line (marks when HTF candle closed)
+                if show_validation_boundary
+                    int validation_time = zone.formation_time + HTF_MS
+                    color vb_color = zone.is_bullish ? validation_boundary_bull_color : validation_boundary_bear_color
+                    zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=validation_boundary_width, style=VALIDATION_LINE_STYLE)
+
                 array.set(zone_array, i, zone)
             else
                 // Update extension and opacity
