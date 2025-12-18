@@ -178,7 +178,6 @@ GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 
 // Workspace Mode Constants (hardcoded values for live workspace)
 WORKSPACE_EXTENSION_OFFSET = 2
-WORKSPACE_ATR_MULTIPLIER = 3.5
 
 // Display text & abbreviation constants
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
@@ -256,8 +255,14 @@ DEFAULT_STATUS_TABLE_OFFSET = 0
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // === 🎤 WORKSPACE TOOLS ===
-workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance')
-adaptive_boost_enabled = input.bool(false, 'Enable Adaptive Boost', group=GROUP_LIVE_WORKSPACE, tooltip='When no MBZs are within ATR range, automatically boosts to 12× capacity to scan deeper history.\n\nRequires:\n• Workspace Mode enabled\n• 1-15 minute timeframe\n\nStatus table shows "BOOST" when active.')
+WORKSPACE_DEFAULT_NEAREST = 3
+WORKSPACE_FADE_OPACITY = 80
+workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_LIVE_WORKSPACE,
+                         tooltip="Extend only the nearest N zones to current price. Non-extended zones use faded opacity.")
+workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bullish zones to extend to current price")
+workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bearish zones to extend to current price")
 
 // === 🎯 DETECTION ===
 max_valid_mbzs = input.int(DEFAULT_MAX_VALID_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_VALID_MBZS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid MBZs visible on chart (0-55 limit)')
@@ -433,10 +438,6 @@ var array<ConsolidatedMBZ> last_consolidated_mbzs = array.new<ConsolidatedMBZ>()
 // Performance optimization flags
 var bool needs_visual_update = true
 
-// ATR Distance Filter calculation (fixed 14-period ATR)
-atr_value = ta.atr(14)
-atr_max_distance = atr_value * WORKSPACE_ATR_MULTIPLIER
-
 // Pre-calculated padding strings (performance optimization)
 horizontal_padding_str = ""
 for i = 0 to extension_label_horizontal_padding - 1
@@ -450,18 +451,9 @@ for i = 0 to extension_label_vertical_padding - 1
 // Convert user's capacity_mode to numeric level (0=Optimized, 1=Boost, 2=Ultra, 3=Ultra Pro)
 user_capacity_level = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST ? 3 : capacity_mode == CAPACITY_MODE_ULTRA_BOOST ? 2 : capacity_mode == CAPACITY_MODE_BOOST ? 1 : 0
 
-// Adaptive boost only works on 1-15 minute timeframes
-tf_seconds = timeframe.in_seconds()
-is_adaptive_boost_timeframe = tf_seconds >= 60 and tf_seconds <= 900
-
-// Adaptive boost: only boost when previous bar had no zones in ATR range
-var bool adaptive_boost_needed = true
-adaptive_boost_active = workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe and adaptive_boost_needed
-effective_capacity_level = adaptive_boost_active ? 3 : user_capacity_level
-
-is_capacity_boost = effective_capacity_level == 1
-is_capacity_ultra_boost = effective_capacity_level == 2
-is_capacity_ultra_pro_boost = effective_capacity_level >= 3
+is_capacity_boost = user_capacity_level == 1
+is_capacity_ultra_boost = user_capacity_level == 2
+is_capacity_ultra_pro_boost = user_capacity_level >= 3
 
 // Base (Optimized)
 base_valid_mbzs = max_valid_mbzs
@@ -1762,16 +1754,6 @@ should_display_consolidated_mbz(consolidated_mbz) =>
 
     should_display
 
-// ATR distance filter helper - checks if zone is within ATR range from current price
-passes_atr_distance_filter(zone_top, zone_bottom) =>
-    if not workspace_mode_enabled
-        true
-    else
-        // Distance to nearest edge: 0 if price inside zone, otherwise distance to closest edge
-        distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
-        distance_to_zone <= atr_max_distance
-
-
 // Box creation
 create_box(left_bar, top_price, bottom_price, box_color, label_text) =>
     box.new(
@@ -1887,10 +1869,66 @@ manage_consolidated_mbz_display() =>
     // Group displayable MBZs by candle (will return empty array if no displayable MBZs)
     consolidated_mbzs = group_mbzs_by_candle(displayable_mbzs)
 
-    // Only process if we have consolidated MBZs
-    // Auto-boost counter: track how many MBZs pass ATR filter (split by direction)
-    bullish_atr_count = 0
-    bearish_atr_count = 0
+    // ─── Pre-pass for Nearest Zone Extension ───
+    var map<int, bool> extend_to_current = map.new<int, bool>()
+    map.clear(extend_to_current)
+
+    if workspace_mode_enabled and barstate.islast and array.size(consolidated_mbzs) > 0
+        var array<float> bull_distances = array.new<float>()
+        var array<int> bull_indices = array.new<int>()
+        var array<float> bear_distances = array.new<float>()
+        var array<int> bear_indices = array.new<int>()
+        array.clear(bull_distances)
+        array.clear(bull_indices)
+        array.clear(bear_distances)
+        array.clear(bear_indices)
+
+        float current_price = close
+
+        for pre_idx = 0 to array.size(consolidated_mbzs) - 1
+            pre_mbz = array.get(consolidated_mbzs, pre_idx)
+            if not should_display_consolidated_mbz(pre_mbz)
+                continue
+            [pre_top, pre_bottom] = calculate_consolidated_zone_boundaries(pre_mbz.mbz_group)
+
+            float dist = pre_mbz.is_bullish ? math.abs(current_price - pre_top) : math.abs(current_price - pre_bottom)
+
+            if pre_mbz.is_bullish
+                array.push(bull_distances, dist)
+                array.push(bull_indices, pre_idx)
+            else
+                array.push(bear_distances, dist)
+                array.push(bear_indices, pre_idx)
+
+        // Select nearest N bullish zones
+        if workspace_nearest_bull > 0 and array.size(bull_indices) > 0
+            for n = 0 to math.min(workspace_nearest_bull, array.size(bull_indices)) - 1
+                float min_dist = 1e18
+                int min_idx = -1
+                int min_pos = -1
+                for j = 0 to array.size(bull_distances) - 1
+                    if array.get(bull_distances, j) < min_dist
+                        min_dist := array.get(bull_distances, j)
+                        min_idx := array.get(bull_indices, j)
+                        min_pos := j
+                if min_idx >= 0
+                    map.put(extend_to_current, min_idx, true)
+                    array.set(bull_distances, min_pos, 1e18)
+
+        // Select nearest N bearish zones
+        if workspace_nearest_bear > 0 and array.size(bear_indices) > 0
+            for n = 0 to math.min(workspace_nearest_bear, array.size(bear_indices)) - 1
+                float min_dist = 1e18
+                int min_idx = -1
+                int min_pos = -1
+                for j = 0 to array.size(bear_distances) - 1
+                    if array.get(bear_distances, j) < min_dist
+                        min_dist := array.get(bear_distances, j)
+                        min_idx := array.get(bear_indices, j)
+                        min_pos := j
+                if min_idx >= 0
+                    map.put(extend_to_current, min_idx, true)
+                    array.set(bear_distances, min_pos, 1e18)
 
     if array.size(consolidated_mbzs) > 0
         gap_boxes_already_created = array.new<int>()
@@ -1908,15 +1946,6 @@ manage_consolidated_mbz_display() =>
             current_consolidated_mbz.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_mbz.consolidated_zone_bottom := consolidated_zone_bottom_boundary
 
-            if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
-                continue
-
-            if adaptive_boost_active
-                if current_consolidated_mbz.is_bullish
-                    bullish_atr_count += 1
-                else
-                    bearish_atr_count += 1
-
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_mbz)
             current_consolidated_mbz.is_consolidated_invalidated := is_currently_invalidated
@@ -1932,6 +1961,14 @@ manage_consolidated_mbz_display() =>
             if should_highlight_consolidated_zone
                 [consolidated_highlight_color, consolidated_extension_color] = get_consolidated_mbz_colors(current_consolidated_mbz)
 
+                // Calculate nearest zone extension and fade BEFORE creating boxes
+                bool should_extend_to_current = workspace_mode_enabled and map.contains(extend_to_current, consolidated_group_index)
+                bool is_faded = workspace_mode_enabled and not should_extend_to_current
+                int fill_fade = is_faded ? 99 : 0
+
+                // Apply fade to highlight color for faded zones
+                color final_highlight_color = is_faded ? color.new(consolidated_highlight_color, fill_fade) : consolidated_highlight_color
+
                 // Highlight box (consolidated zone)
                 consolidated_highlight_box = box.new(
                      left=current_consolidated_mbz.formation_time,
@@ -1939,14 +1976,23 @@ manage_consolidated_mbz_display() =>
                      top=current_consolidated_mbz.consolidated_zone_top,
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
                      xloc=xloc.bar_time,
-                     bgcolor=consolidated_highlight_color,
+                     bgcolor=final_highlight_color,
                      border_color=na
                  )
                 array.push(mbz_body_highlights, consolidated_highlight_box)
 
-                // Live extension: calculate offset and extension right time
-                calculated_offset_bars = workspace_mode_enabled ? get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET) : 0
-                extension_right_time = workspace_mode_enabled ? math.max(time, current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)) + (calculated_offset_bars * bar_duration_ms) : current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
+                // Extension box - normal extension or workspace mode nearest zone extension
+                int normal_extension_right_time = current_consolidated_mbz.formation_time + (extended_box_length * bar_duration_ms)
+
+                // Workspace mode: extend nearest zones to current price with staggering
+                int extension_right_time = normal_extension_right_time
+                if should_extend_to_current
+                    stagger_offset_bars = get_extension_offset(current_consolidated_mbz.bar_index, current_consolidated_mbz.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET)
+                    extension_right_time := math.max(time + (stagger_offset_bars * bar_duration_ms), normal_extension_right_time)
+
+                // Apply fade to non-extended zones when workspace mode is enabled
+                int border_fade = is_faded ? WORKSPACE_FADE_OPACITY : 0
+                color label_color_final = is_faded ? color.new(extended_box_text_color, WORKSPACE_FADE_OPACITY) : extended_box_text_color
 
                 // Get cached source count for performance
                 mbz_source_count = array.size(current_consolidated_mbz.mbz_group)
@@ -1956,7 +2002,12 @@ manage_consolidated_mbz_display() =>
 
                 // Live extension: cycling border opacity for visual distinction
                 border_transparency = get_border_transparency(current_consolidated_mbz.bar_index)
-                staggered_border_color = color.new(border_color_to_use, border_transparency)
+                // Combine stagger transparency with fade
+                int final_border_transparency = is_faded ? math.max(border_transparency, border_fade) : border_transparency
+                staggered_border_color = color.new(border_color_to_use, final_border_transparency)
+
+                // Apply fade to extension color
+                color final_extension_color = is_faded ? color.new(consolidated_extension_color, fill_fade) : consolidated_extension_color
 
                 consolidated_extension_box = box.new(
                      left=current_consolidated_mbz.formation_time,
@@ -1964,13 +2015,13 @@ manage_consolidated_mbz_display() =>
                      top=current_consolidated_mbz.consolidated_zone_top,
                      bottom=current_consolidated_mbz.consolidated_zone_bottom,
                      xloc=xloc.bar_time,
-                     bgcolor=consolidated_extension_color,
+                     bgcolor=final_extension_color,
                      border_color=staggered_border_color,
                      border_width=border_width_to_use,
                      text=current_consolidated_mbz.consolidated_extension_label,
                      text_halign=get_extension_label_halign(),
                      text_valign=get_extension_label_valign(),
-                     text_color=extended_box_text_color,
+                     text_color=label_color_final,
                      text_size=size.tiny
                  )
                 array.push(mbz_extended_boxes, consolidated_extension_box)
@@ -2019,9 +2070,6 @@ manage_consolidated_mbz_display() =>
     if array.size(consolidated_mbzs) > 0
         for cache_i = 0 to array.size(consolidated_mbzs) - 1
             array.push(last_consolidated_mbzs, array.get(consolidated_mbzs, cache_i))
-
-    // Return ATR pass counts for auto-boost logic (bullish, bearish)
-    [bullish_atr_count, bearish_atr_count]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN DETECTION LOGIC - ENHANCED WITH VOLUME IMBALANCE SUPPORT // ═══════════════════════════════════════════════════════════════════════════════
@@ -2240,9 +2288,7 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
 should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
-    [bullish_count, bearish_count] = manage_consolidated_mbz_display()
-    if barstate.islast and workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe
-        adaptive_boost_needed := bullish_count == 0 or bearish_count == 0
+    manage_consolidated_mbz_display()
     last_update_bar := bar_index
     needs_full_update := false
     needs_visual_update := false
@@ -2358,8 +2404,8 @@ if show_status_table and barstate.islast
 
     gaps_text = all_gaps_enabled ? STATUS_DISPLAY_ALL : array.join(gap_parts, "·")
 
-    capacity_text = adaptive_boost_active ? "BOOST" : (is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : "")
-    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost or adaptive_boost_active
+    capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : ""
+    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost
 
     // Get invalidation threshold display
     inv_display = switch mbz_invalidation_mode

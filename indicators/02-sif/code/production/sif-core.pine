@@ -146,7 +146,6 @@ GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 
 // Workspace Mode Constants (hardcoded values for live workspace)
 WORKSPACE_EXTENSION_OFFSET = 2
-WORKSPACE_ATR_MULTIPLIER = 3.5
 
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
 GAP_SOURCE_IMPLIED_DISPLAY = "imp"
@@ -233,8 +232,14 @@ const color DEFAULT_BREAKAWAY_BEARISH_BORDER_COLOR = color.new(color.rgb(249, 12
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // === 🎤 WORKSPACE TOOLS ===
-workspace_mode_enabled = input.bool(false, 'Enable Workspace Mode', group=GROUP_LIVE_WORKSPACE, tooltip='Enables live workspace features:\n• Extends zones to current price\n• Filters zones beyond ATR distance')
-adaptive_boost_enabled = input.bool(false, 'Enable Adaptive Boost', group=GROUP_LIVE_WORKSPACE, tooltip='When no SIFs are within ATR range, automatically boosts to 12× capacity to scan deeper history.\n\nRequires:\n• Workspace Mode enabled\n• 1-15 minute timeframe\n\nStatus table shows "BOOST" when active.')
+WORKSPACE_DEFAULT_NEAREST = 3
+WORKSPACE_FADE_OPACITY = 80
+workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_LIVE_WORKSPACE,
+                         tooltip="Extend only the nearest N zones to current price. Non-extended zones use faded opacity.")
+workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bullish zones to extend to current price")
+workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bearish zones to extend to current price")
 
 // === 🎯 DETECTION ===
 max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, INPUT_LABEL_MAX_VALID_SIFS, minval=0, maxval=MAX_VALID_SIFS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid SIFs to display on chart. Max: 55\n\n• 0 = Show no valid SIFs\n• Higher values show more valid SIFs\n• Independent of invalidated SIF limit')
@@ -304,17 +309,9 @@ status_table_offset = input.int(DEFAULT_STATUS_TABLE_OFFSET, 'Offset', minval=-1
 // Effective capacity settings (Boost mode temporarily raises limits)
 user_capacity_level = capacity_mode == CAPACITY_MODE_ULTRA_PRO_BOOST ? 3 : capacity_mode == CAPACITY_MODE_ULTRA_BOOST ? 2 : capacity_mode == CAPACITY_MODE_BOOST ? 1 : 0
 
-tf_seconds = timeframe.in_seconds()
-is_adaptive_boost_timeframe = tf_seconds >= 60 and tf_seconds <= 900
-
-// Adaptive boost: only boost when previous bar had no zones in ATR range
-var bool adaptive_boost_needed = true
-adaptive_boost_active = workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe and adaptive_boost_needed
-effective_capacity_level = adaptive_boost_active ? 3 : user_capacity_level
-
-is_capacity_boost = effective_capacity_level == 1
-is_capacity_ultra_boost = effective_capacity_level == 2
-is_capacity_ultra_pro_boost = effective_capacity_level >= 3
+is_capacity_boost = user_capacity_level == 1
+is_capacity_ultra_boost = user_capacity_level == 2
+is_capacity_ultra_pro_boost = user_capacity_level >= 3
 
 // Base (Optimized)
 base_valid_sifs = max_valid_sifs
@@ -464,10 +461,6 @@ var array<int> displayed_sif_indices = array.new<int>()
 var bool needs_visual_update = true
 var int last_update_bar = na
 var bool needs_full_update = true
-
-// ATR Distance Filter calculation (fixed 14-period ATR)
-atr_value = ta.atr(14)
-atr_max_distance = atr_value * WORKSPACE_ATR_MULTIPLIER
 
 // Pre-calculated padding strings (performance optimization)
 horizontal_padding_str = ""
@@ -1491,15 +1484,6 @@ should_display_consolidated_sif(consolidated_sif) =>
 
     should_display
 
-// ATR distance filter helper - checks if zone is within ATR range from current price
-passes_atr_distance_filter(zone_top, zone_bottom) =>
-    if not workspace_mode_enabled
-        true
-    else
-        // Distance to nearest edge: 0 if price inside zone, otherwise distance to closest edge
-        distance_to_zone = close > zone_top ? close - zone_top : (close < zone_bottom ? zone_bottom - close : 0.0)
-        distance_to_zone <= atr_max_distance
-
 get_consolidated_sif_colors(consolidated_sif) =>
     // Check if any SIF in group is breakaway
     has_breakaway = false
@@ -1863,8 +1847,66 @@ manage_consolidated_sif_display() =>
     // Group displayable SIFs by candle (will return empty array if no displayable SIFs)
     consolidated_sifs = group_sifs_by_candle(displayable_sifs)
 
-    bullish_atr_count = 0
-    bearish_atr_count = 0
+    // ─── Pre-pass for Nearest Zone Extension ───
+    var map<int, bool> extend_to_current = map.new<int, bool>()
+    map.clear(extend_to_current)
+
+    if workspace_mode_enabled and barstate.islast and array.size(consolidated_sifs) > 0
+        var array<float> bull_distances = array.new<float>()
+        var array<int> bull_indices = array.new<int>()
+        var array<float> bear_distances = array.new<float>()
+        var array<int> bear_indices = array.new<int>()
+        array.clear(bull_distances)
+        array.clear(bull_indices)
+        array.clear(bear_distances)
+        array.clear(bear_indices)
+
+        float current_price = close
+
+        for pre_idx = 0 to array.size(consolidated_sifs) - 1
+            pre_sif = array.get(consolidated_sifs, pre_idx)
+            if not should_display_consolidated_sif(pre_sif)
+                continue
+            [pre_top, pre_bottom] = calculate_consolidated_zone_boundaries(pre_sif.sif_group)
+
+            float dist = pre_sif.is_bullish ? math.abs(current_price - pre_top) : math.abs(current_price - pre_bottom)
+
+            if pre_sif.is_bullish
+                array.push(bull_distances, dist)
+                array.push(bull_indices, pre_idx)
+            else
+                array.push(bear_distances, dist)
+                array.push(bear_indices, pre_idx)
+
+        // Select nearest N bullish zones
+        if workspace_nearest_bull > 0 and array.size(bull_indices) > 0
+            for n = 0 to math.min(workspace_nearest_bull, array.size(bull_indices)) - 1
+                float min_dist = 1e18
+                int min_idx = -1
+                int min_pos = -1
+                for j = 0 to array.size(bull_distances) - 1
+                    if array.get(bull_distances, j) < min_dist
+                        min_dist := array.get(bull_distances, j)
+                        min_idx := array.get(bull_indices, j)
+                        min_pos := j
+                if min_idx >= 0
+                    map.put(extend_to_current, min_idx, true)
+                    array.set(bull_distances, min_pos, 1e18)
+
+        // Select nearest N bearish zones
+        if workspace_nearest_bear > 0 and array.size(bear_indices) > 0
+            for n = 0 to math.min(workspace_nearest_bear, array.size(bear_indices)) - 1
+                float min_dist = 1e18
+                int min_idx = -1
+                int min_pos = -1
+                for j = 0 to array.size(bear_distances) - 1
+                    if array.get(bear_distances, j) < min_dist
+                        min_dist := array.get(bear_distances, j)
+                        min_idx := array.get(bear_indices, j)
+                        min_pos := j
+                if min_idx >= 0
+                    map.put(extend_to_current, min_idx, true)
+                    array.set(bear_distances, min_pos, 1e18)
 
     if array.size(consolidated_sifs) > 0
         // Process each consolidated group
@@ -1880,15 +1922,6 @@ manage_consolidated_sif_display() =>
             [consolidated_zone_top_boundary, consolidated_zone_bottom_boundary] = calculate_consolidated_zone_boundaries(current_consolidated_sif.sif_group)
             current_consolidated_sif.consolidated_zone_top := consolidated_zone_top_boundary
             current_consolidated_sif.consolidated_zone_bottom := consolidated_zone_bottom_boundary
-
-            if not passes_atr_distance_filter(consolidated_zone_top_boundary, consolidated_zone_bottom_boundary)
-                continue
-
-            if adaptive_boost_active
-                if current_consolidated_sif.is_bullish
-                    bullish_atr_count += 1
-                else
-                    bearish_atr_count += 1
 
             // Determine consolidated status
             is_currently_invalidated = determine_consolidated_status(current_consolidated_sif)
@@ -1909,6 +1942,14 @@ manage_consolidated_sif_display() =>
                 sif_source_count = array.size(current_consolidated_sif.sif_group)
                 [border_width_final, border_color_final] = get_border_properties_for_sif(current_consolidated_sif, sif_source_count)
 
+                // Calculate nearest zone extension and fade BEFORE creating boxes
+                bool should_extend_to_current = workspace_mode_enabled and map.contains(extend_to_current, consolidated_group_index)
+                bool is_faded = workspace_mode_enabled and not should_extend_to_current
+                int fill_fade = is_faded ? 99 : 0
+
+                // Apply fade to highlight color for faded zones
+                color final_highlight_color = is_faded ? color.new(consolidated_highlight_color, fill_fade) : consolidated_highlight_color
+
                 // Highlight box (consolidated zone)
                 consolidated_highlight_box = box.new(
                      left=current_consolidated_sif.bar_index,
@@ -1916,19 +1957,33 @@ manage_consolidated_sif_display() =>
                      top=current_consolidated_sif.consolidated_zone_top,
                      bottom=current_consolidated_sif.consolidated_zone_bottom,
                      xloc=xloc.bar_index,
-                     bgcolor=consolidated_highlight_color,
+                     bgcolor=final_highlight_color,
                      border_color=na
                  )
                 array.push(sif_body_highlights, consolidated_highlight_box)
 
                 // Extension box with consolidated label
-                // Live extension: calculate offset and extension right position
-                calculated_offset = workspace_mode_enabled ? get_extension_offset(current_consolidated_sif.bar_index, current_consolidated_sif.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET) : 0
-                extension_right = workspace_mode_enabled ? math.max(bar_index, current_consolidated_sif.bar_index + extended_box_length) + calculated_offset : current_consolidated_sif.bar_index + extended_box_length
+                // Normal extension (non-workspace mode)
+                int normal_extension_right = current_consolidated_sif.bar_index + extended_box_length
+                int extension_right = normal_extension_right
+
+                // Workspace mode: extend nearest zones to current price with staggering
+                if should_extend_to_current
+                    stagger_offset = get_extension_offset(current_consolidated_sif.bar_index, current_consolidated_sif.consolidated_zone_top, WORKSPACE_EXTENSION_OFFSET)
+                    extension_right := math.max(bar_index + 2 + stagger_offset, normal_extension_right)
+
+                // Apply fade to non-extended zones when workspace mode is enabled
+                int border_fade = is_faded ? WORKSPACE_FADE_OPACITY : 0
+                color label_color_final = is_faded ? color.new(get_consolidated_sif_extension_text_color(current_consolidated_sif, extended_box_text_color), WORKSPACE_FADE_OPACITY) : get_consolidated_sif_extension_text_color(current_consolidated_sif, extended_box_text_color)
 
                 // Live extension: cycling border opacity for visual distinction
                 border_transparency = get_border_transparency(current_consolidated_sif.bar_index)
-                staggered_border_color = color.new(border_color_final, border_transparency)
+                // Combine stagger transparency with fade
+                int final_border_transparency = is_faded ? math.max(border_transparency, border_fade) : border_transparency
+                staggered_border_color = color.new(border_color_final, final_border_transparency)
+
+                // Apply fade to extension color
+                color final_extension_color = is_faded ? color.new(consolidated_extension_color, fill_fade) : consolidated_extension_color
 
                 consolidated_extension_box = box.new(
                      left=current_consolidated_sif.bar_index,
@@ -1936,13 +1991,13 @@ manage_consolidated_sif_display() =>
                      top=current_consolidated_sif.consolidated_zone_top,
                      bottom=current_consolidated_sif.consolidated_zone_bottom,
                      xloc=xloc.bar_index,
-                     bgcolor=consolidated_extension_color,
+                     bgcolor=final_extension_color,
                      border_color=staggered_border_color,
                      border_width=border_width_final,
                      text=current_consolidated_sif.consolidated_extension_label,
                      text_halign=get_extension_label_halign(),
                      text_valign=get_extension_label_valign(),
-                     text_color=get_consolidated_sif_extension_text_color(current_consolidated_sif, extended_box_text_color),
+                     text_color=label_color_final,
                      text_size=size.tiny
                  )
                 array.push(sif_extended_boxes, consolidated_extension_box)
@@ -1990,15 +2045,11 @@ manage_consolidated_sif_display() =>
         for cache_i = 0 to array.size(consolidated_sifs) - 1
             array.push(last_consolidated_sifs, array.get(consolidated_sifs, cache_i))
 
-    [bullish_atr_count, bearish_atr_count]
-
 // OPTIMIZED: Smart visual update system - only when necessary (match MBZ gating)
 should_update_visuals = needs_full_update or needs_visual_update or barstate.islastconfirmedhistory or (barstate.islast and bar_index != last_update_bar)
 
 if should_update_visuals
-    [bullish_count, bearish_count] = manage_consolidated_sif_display()
-    if barstate.islast and workspace_mode_enabled and adaptive_boost_enabled and is_adaptive_boost_timeframe
-        adaptive_boost_needed := bullish_count == 0 or bearish_count == 0
+    manage_consolidated_sif_display()
     last_update_bar := bar_index
     needs_full_update := false
     needs_visual_update := false
@@ -2125,11 +2176,12 @@ if show_status_table and barstate.islast
         INVALIDATION_LENIENT => STATUS_DISPLAY_INV_85
         => "[" + str.tostring(int(custom_threshold_percent)) + "]"
 
-    capacity_text = adaptive_boost_active ? "BOOST" : (is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : "")
-    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost or adaptive_boost_active
+    capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : ""
+    is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost
 
-    // Build status text (WS only shown if enabled, capacity only if boosted)
-    status_text = workspace_mode_enabled ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
+    // Build status text (WS shown if workspace mode enabled, capacity only if boosted)
+    bool show_ws_indicator = workspace_mode_enabled
+    status_text = show_ws_indicator ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
     status_text := status_text + "  " + inv_display + (is_boosted ? "  " + capacity_text : "")
 
     // Create table with offset padding

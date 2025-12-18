@@ -182,6 +182,17 @@ const string DIR_BEARISH = "Bearish Only"
 // Gap color
 const color GAP_COLOR = color.new(color.rgb(187, 217, 251), 90)
 
+// ─── 🎤 Workspace Tools ───
+GROUP_LIVE_WORKSPACE = "🎤 Workspace Tools"
+WORKSPACE_DEFAULT_NEAREST = 1
+WORKSPACE_FADE_OPACITY = 80
+workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_LIVE_WORKSPACE,
+                         tooltip="Extend only the nearest N zones to current price. Non-extended zones use faded opacity.")
+workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bullish zones to extend to current price")
+workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
+                         tooltip="Number of nearest bearish zones to extend to current price")
+
 // ─── ⚡ Zone Engine ───
 GROUP_ENGINE     = "⚡ Zone Engine"
 engine_mode      = input.string(ENGINE_MBZ_SIF, "Engine Mode", options=[ENGINE_MBZ_SIF, ENGINE_MBZ_ONLY, ENGINE_SIF_ONLY], group=GROUP_ENGINE,
@@ -2213,6 +2224,80 @@ if IS_VALID
                     // Loop backwards, so keep updating - last one seen = oldest (first) chronologically
                     map.put(first_touch_index_per_gap, gap_id, zone_index)
 
+        // ─── Pre-pass for Nearest Zone Extension ───
+        // Calculate which zones should extend to current price based on proximity
+        var map<int, bool> extend_to_current = map.new<int, bool>()
+        map.clear(extend_to_current)
+
+        if workspace_mode_enabled and barstate.islast
+            // Collect visible zones with their distances to price
+            var array<float> bull_distances = array.new<float>()
+            var array<int> bull_indices = array.new<int>()
+            var array<float> bear_distances = array.new<float>()
+            var array<int> bear_indices = array.new<int>()
+            array.clear(bull_distances)
+            array.clear(bull_indices)
+            array.clear(bear_distances)
+            array.clear(bear_indices)
+
+            float current_price = close
+
+            for zone_idx = 0 to array.size(zone_array) - 1
+                CandleZone z = array.get(zone_array, zone_idx)
+                if z.is_invalidated
+                    continue
+                if not z.has_mbz and not z.has_sif
+                    continue
+                // Check direction filter
+                bool show_dir = mbz_direction_filter == DIR_BOTH or (z.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not z.is_bullish and mbz_direction_filter == DIR_BEARISH)
+                if not show_dir
+                    continue
+                // Check engine visibility
+                bool visible = (enable_mbz_engine and z.has_mbz) or (enable_sif_engine and z.has_sif)
+                if not visible
+                    continue
+
+                // Calculate distance: for bullish use zone_top, for bearish use zone_bottom
+                float dist = z.is_bullish ? math.abs(current_price - z.zone_top) : math.abs(current_price - z.zone_bottom)
+
+                if z.is_bullish
+                    array.push(bull_distances, dist)
+                    array.push(bull_indices, zone_idx)
+                else
+                    array.push(bear_distances, dist)
+                    array.push(bear_indices, zone_idx)
+
+            // Sort and select nearest N bullish zones
+            if workspace_nearest_bull > 0 and array.size(bull_indices) > 0
+                // Simple selection: find N smallest distances
+                for n = 0 to math.min(workspace_nearest_bull, array.size(bull_indices)) - 1
+                    float min_dist = 1e18
+                    int min_idx = -1
+                    int min_pos = -1
+                    for j = 0 to array.size(bull_distances) - 1
+                        if array.get(bull_distances, j) < min_dist
+                            min_dist := array.get(bull_distances, j)
+                            min_idx := array.get(bull_indices, j)
+                            min_pos := j
+                    if min_idx >= 0
+                        map.put(extend_to_current, min_idx, true)
+                        array.set(bull_distances, min_pos, 1e18)  // Mark as used
+
+            // Sort and select nearest N bearish zones
+            if workspace_nearest_bear > 0 and array.size(bear_indices) > 0
+                for n = 0 to math.min(workspace_nearest_bear, array.size(bear_indices)) - 1
+                    float min_dist = 1e18
+                    int min_idx = -1
+                    int min_pos = -1
+                    for j = 0 to array.size(bear_distances) - 1
+                        if array.get(bear_distances, j) < min_dist
+                            min_dist := array.get(bear_distances, j)
+                            min_idx := array.get(bear_indices, j)
+                            min_pos := j
+                    if min_idx >= 0
+                        map.put(extend_to_current, min_idx, true)
+                        array.set(bear_distances, min_pos, 1e18)  // Mark as used
+
         for i = 0 to array.size(zone_array) - 1
             CandleZone zone = array.get(zone_array, i)
 
@@ -2294,16 +2379,36 @@ if IS_VALID
                 continue
 
             // Create box if doesn't exist yet
+            bool should_extend_to_current = workspace_mode_enabled and map.contains(extend_to_current, i)
+            // Apply staggering to extended zones to prevent all ending at same edge
+            int stagger_hash = should_extend_to_current ? (zone.formation_time + int(zone.zone_top * 100)) % 7 : 0
+            int stagger_offset_ms = stagger_hash * (HTF_MS / 4)  // Stagger by fractions of HTF candle
+            int normal_extension_right = zone.formation_time + zone_extension_width
+            int zone_right_edge = should_extend_to_current ? math.max(time + stagger_offset_ms, normal_extension_right) : normal_extension_right
+
+            // Apply faded opacity to non-extended zones when feature is enabled
+            // Fade % directly controls border transparency (90 = very faded, 50 = less faded)
+            // Fill becomes nearly invisible for faded zones
+            bool is_faded = workspace_mode_enabled and not should_extend_to_current
+            int fill_transparency = is_faded ? 99 : MBZ_FILL_TRANSPARENCY
+            int border_transparency = is_faded ? WORKSPACE_FADE_OPACITY : 0
+
+            // Apply fade to label text as well
+            color label_color_resolved = is_faded ? color.new(zone_label_color, WORKSPACE_FADE_OPACITY) : zone_label_color
+
             if na(zone.zone_box)
                 color zone_color = zone.is_bullish ? zone_color_bull : zone_color_bear
                 string zone_label_text = build_zone_label(zone)
-                int zone_right_edge = zone.formation_time + zone_extension_width
 
-                zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, MBZ_FILL_TRANSPARENCY), border_color=zone_color, border_width=3, text=zone_label_text, text_color=zone_label_color, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+                zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, fill_transparency), border_color=color.new(zone_color, border_transparency), border_width=3, text=zone_label_text, text_color=label_color_resolved, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
                 array.set(zone_array, i, zone)
             else
-                // Update extension
-                box.set_right(zone.zone_box, zone.formation_time + zone_extension_width)
+                // Update extension and opacity
+                box.set_right(zone.zone_box, zone_right_edge)
+                color zone_color = zone.is_bullish ? zone_color_bull : zone_color_bear
+                box.set_bgcolor(zone.zone_box, color.new(zone_color, fill_transparency))
+                box.set_border_color(zone.zone_box, color.new(zone_color, border_transparency))
+                box.set_text_color(zone.zone_box, label_color_resolved)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATUS TABLE
@@ -2338,8 +2443,9 @@ if IS_VALID and show_status_table and barstate.islast
             array.push(gap_parts, STATUS_DISPLAY_VOL)
         gap_type_display := array.size(gap_parts) > 0 ? array.join(gap_parts, "·") : "none"
     string ref_wick_display = extend_to_reference_wick ? "  " + STATUS_DISPLAY_REF_WICK : ""
+    string workspace_display = workspace_mode_enabled ? "  WS" : ""
 
-    string status_text = LTF_LABEL + " → " + HTF_LABEL + "  " + gap_type_display + ref_wick_display
+    string status_text = LTF_LABEL + " → " + HTF_LABEL + "  " + gap_type_display + ref_wick_display + workspace_display
     table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
 
     // Right padding cell
