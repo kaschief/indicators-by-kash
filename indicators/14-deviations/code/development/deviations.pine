@@ -73,6 +73,15 @@ type SessionData
     line lowProximityLine
     // Alerts
     bool enableAlert
+    // Delayed mitigation (evaluate only from 05:00 onward)
+    bool delayedMitigation
+    // Provisional mitigation tracking (overnight breach pending 05:00 confirmation)
+    bool provisionalHighMitigated
+    bool provisionalLowMitigated
+    int provisionalHighTime
+    int provisionalLowTime
+    line highPendingLine
+    line lowPendingLine
 
 type BiasData
     float premarketHigh    // Current day's Premarket high (tracking)
@@ -163,6 +172,7 @@ BIAS_LABEL_INSIDE_BELOW = "1600: ↔ Return to Range Below"   // Session is abov
 // Style constants
 MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 2
+MITIGATION_PENDING_LINE_WIDTH = 1
 PROXIMITY_LINE_WIDTH = 1
 
 // Mute overnight color
@@ -384,6 +394,7 @@ opening_1800_2100_deviationColor = input.color(color.new(color.rgb(165, 214, 167
 opening_1800_2100_mitigationColor = input.color(color.rgb(76, 175, 80), "Mitigation", inline="1800_2", group=GROUP_1800_2100)
 opening_1800_2100_showLabels = input.string(OPT_OFF, LABEL_DEVIATION_LABELS, inline="1800_3", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1800_2100)
 opening_1800_2100_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POSITION, inline="1800_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_1800_2100)
+opening_1800_2100_delayedMitigation = input.bool(false, "Delay Mitigation Until 05:00", group=GROUP_1800_2100, tooltip="Only evaluate mitigation from 05:00 onward. Overnight touches are ignored.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 05:00-07:45
@@ -624,6 +635,11 @@ deleteSession(SessionData sess) =>
         line.delete(sess.lowMitigationLine)
     if not na(sess.midMitigationLine)
         line.delete(sess.midMitigationLine)
+    // Delete pending mitigation lines
+    if not na(sess.highPendingLine)
+        line.delete(sess.highPendingLine)
+    if not na(sess.lowPendingLine)
+        line.delete(sess.lowPendingLine)
     // Delete proximity lines
     if not na(sess.highProximityLine)
         line.delete(sess.highProximityLine)
@@ -744,6 +760,7 @@ var array<string> openingSessions_labelPosition = array.from(opening_2000_2015_l
 var array<bool> openingSessions_mitigation = array.from(opening_2000_2015_mitigation, opening_2100_2200_mitigation, opening_0200_0215_mitigation, opening_0900_0915_mitigation, opening_1200_1230_mitigation, opening_1400_1415_mitigation, opening_0600_0900_mitigation, opening_1600_0500_mitigation, opening_0500_0915_mitigation, opening_0930_0945_mitigation, opening_0930_1000_mitigation, opening_1800_2100_mitigation, opening_0500_0745_mitigation)
 var array<color> openingSessions_mitigationColor = array.from(opening_2000_2015_mitigationColor, opening_2100_2200_mitigationColor, opening_0200_0215_mitigationColor, opening_0900_0915_mitigationColor, opening_1200_1230_mitigationColor, opening_1400_1415_mitigationColor, opening_0600_0900_mitigationColor, opening_1600_0500_mitigationColor, opening_0500_0915_mitigationColor, opening_0930_0945_mitigationColor, opening_0930_1000_mitigationColor, opening_1800_2100_mitigationColor, opening_0500_0745_mitigationColor)
 var array<bool> openingSessions_alert = array.from(opening_2000_2015_alert, opening_2100_2200_alert, opening_0200_0215_alert, opening_0900_0915_alert, opening_1200_1230_alert, opening_1400_1415_alert, opening_0600_0900_alert, opening_1600_0500_alert, opening_0500_0915_alert, opening_0930_0945_alert, opening_0930_1000_alert, opening_1800_2100_alert, opening_0500_0745_alert)
+var array<bool> openingSessions_delayedMitigation = array.from(false, false, false, false, false, false, false, false, false, false, false, opening_1800_2100_delayedMitigation, false)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 1: SESSION DETECTION - Detect new sessions starting
@@ -832,6 +849,7 @@ if validTimeframe
                 showMitigation = array.get(openingSessions_mitigation, i)
                 mitigationColor = array.get(openingSessions_mitigationColor, i)
                 enableAlert = array.get(openingSessions_alert, i)
+                delayedMitigation = array.get(openingSessions_delayedMitigation, i)
                 showBody = mode == OPT_BODY or mode == OPT_BOTH or mode == OPT_CORE
                 showWick = mode == OPT_WICK or mode == OPT_BOTH or mode == OPT_CORE
                 drawDeviations = mode == OPT_BODY or mode == OPT_WICK or mode == OPT_BOTH
@@ -886,7 +904,14 @@ if validTimeframe
                      midMitigationLine=na,
                      highProximityLine=na,
                      lowProximityLine=na,
-                     enableAlert=enableAlert
+                     enableAlert=enableAlert,
+                     delayedMitigation=delayedMitigation,
+                     provisionalHighMitigated=false,
+                     provisionalLowMitigated=false,
+                     provisionalHighTime=na,
+                     provisionalLowTime=na,
+                     highPendingLine=na,
+                     lowPendingLine=na
                  )
 
                 array.push(activeSessions, newSession)
@@ -1055,41 +1080,89 @@ atrRange = atrValue * PROXIMITY_ATR_MULTIPLIER
 if validTimeframe and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
-            // Check for high mitigation (price goes above the high)
-            if not sess.highMitigated and high >= sess.dominantHigh
-                sess.highMitigated := true
-                sess.highMitigationBar := bar_index
-                // Draw mitigated line if in Mitigated mode
-                if mitigationMode == MIT_MITIGATED
-                    sess.highMitigationLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                // Delete unmitigated line and label when mitigated (for Unmitigated mode)
-                if not na(sess.highUnmitigatedLine)
-                    line.delete(sess.highUnmitigatedLine)
-                    sess.highUnmitigatedLine := na
-                if not na(sess.highUnmitigatedLabel)
-                    label.delete(sess.highUnmitigatedLabel)
-                    sess.highUnmitigatedLabel := na
-                if sess.enableAlert
-                    alertMsg = sess.sessionName + ALERT_HIGH_MITIGATED
-                    alert(alertMsg, alert.freq_once_per_bar)
+            // For delayed mitigation, only evaluate from 05:00 to 16:00 (excludes overnight evening hours)
+            canEvaluateMitigation = not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN)
+            isInOvernightWindow = sess.delayedMitigation and not canEvaluateMitigation
 
-            // Check for low mitigation (price goes below the low)
-            if not sess.lowMitigated and low <= sess.dominantLow
-                sess.lowMitigated := true
-                sess.lowMitigationBar := bar_index
-                // Draw mitigated line if in Mitigated mode
-                if mitigationMode == MIT_MITIGATED
-                    sess.lowMitigationLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                // Delete unmitigated line and label when mitigated (for Unmitigated mode)
-                if not na(sess.lowUnmitigatedLine)
-                    line.delete(sess.lowUnmitigatedLine)
-                    sess.lowUnmitigatedLine := na
-                if not na(sess.lowUnmitigatedLabel)
-                    label.delete(sess.lowUnmitigatedLabel)
-                    sess.lowUnmitigatedLabel := na
-                if sess.enableAlert
-                    alertMsg = sess.sessionName + ALERT_LOW_MITIGATED
-                    alert(alertMsg, alert.freq_once_per_bar)
+            // === HIGH MITIGATION LOGIC ===
+            if not sess.highMitigated
+                if canEvaluateMitigation and high >= sess.dominantHigh
+                    // Mitigation confirmed (either normal or after provisional overnight breach)
+                    sess.highMitigated := true
+                    sess.highMitigationBar := bar_index
+                    if mitigationMode == MIT_MITIGATED
+                        if sess.provisionalHighMitigated
+                            // Had overnight breach - extend dashed line to confirmation point, keep solid at breach
+                            if not na(sess.highPendingLine)
+                                line.set_x2(sess.highPendingLine, time)
+                        else
+                            // Normal mitigation (no overnight breach) - draw solid line
+                            sess.highMitigationLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                    // Delete unmitigated line and label
+                    if not na(sess.highUnmitigatedLine)
+                        line.delete(sess.highUnmitigatedLine)
+                        sess.highUnmitigatedLine := na
+                    if not na(sess.highUnmitigatedLabel)
+                        label.delete(sess.highUnmitigatedLabel)
+                        sess.highUnmitigatedLabel := na
+                    if sess.enableAlert
+                        alertMsg = sess.sessionName + ALERT_HIGH_MITIGATED
+                        alert(alertMsg, alert.freq_once_per_bar)
+
+                else if isInOvernightWindow and high >= sess.dominantHigh
+                    // Provisional breach during overnight - draw solid to breach, then dashed continuation
+                    if not sess.provisionalHighMitigated
+                        sess.provisionalHighMitigated := true
+                        sess.provisionalHighTime := time
+                        if mitigationMode == MIT_MITIGATED
+                            // Solid line from origin to breach point
+                            sess.highMitigationLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                            // Dashed pending line starts from breach point
+                            sess.highPendingLine := line.new(time, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+
+                // Extend pending line during overnight (before 05:00 confirmation window)
+                if sess.provisionalHighMitigated and not na(sess.highPendingLine) and not sess.highMitigated
+                    line.set_x2(sess.highPendingLine, time)
+
+            // === LOW MITIGATION LOGIC ===
+            if not sess.lowMitigated
+                if canEvaluateMitigation and low <= sess.dominantLow
+                    // Mitigation confirmed (either normal or after provisional overnight breach)
+                    sess.lowMitigated := true
+                    sess.lowMitigationBar := bar_index
+                    if mitigationMode == MIT_MITIGATED
+                        if sess.provisionalLowMitigated
+                            // Had overnight breach - extend dashed line to confirmation point, keep solid at breach
+                            if not na(sess.lowPendingLine)
+                                line.set_x2(sess.lowPendingLine, time)
+                        else
+                            // Normal mitigation (no overnight breach) - draw solid line
+                            sess.lowMitigationLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                    // Delete unmitigated line and label
+                    if not na(sess.lowUnmitigatedLine)
+                        line.delete(sess.lowUnmitigatedLine)
+                        sess.lowUnmitigatedLine := na
+                    if not na(sess.lowUnmitigatedLabel)
+                        label.delete(sess.lowUnmitigatedLabel)
+                        sess.lowUnmitigatedLabel := na
+                    if sess.enableAlert
+                        alertMsg = sess.sessionName + ALERT_LOW_MITIGATED
+                        alert(alertMsg, alert.freq_once_per_bar)
+
+                else if isInOvernightWindow and low <= sess.dominantLow
+                    // Provisional breach during overnight - draw solid to breach, then dashed continuation
+                    if not sess.provisionalLowMitigated
+                        sess.provisionalLowMitigated := true
+                        sess.provisionalLowTime := time
+                        if mitigationMode == MIT_MITIGATED
+                            // Solid line from origin to breach point
+                            sess.lowMitigationLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                            // Dashed pending line starts from breach point
+                            sess.lowPendingLine := line.new(time, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+
+                // Extend pending line during overnight (before 05:00 confirmation window)
+                if sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated
+                    line.set_x2(sess.lowPendingLine, time)
 
             // Unmitigated mode: show persistent lines for unmitigated levels
             if mitigationMode == MIT_UNMITIGATED
