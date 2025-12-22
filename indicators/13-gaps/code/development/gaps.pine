@@ -6,7 +6,9 @@ const float CE_LEVEL = 0.50
 const float Q1_LEVEL = 0.25
 const float Q3_LEVEL = 0.75
 const int COMPACT_WIDTH = 5
-const int COMPACT_OFFSET = 10
+const int COMPACT_OFFSET_RTH = 10
+const int COMPACT_OFFSET_NDOG = 18
+const int COMPACT_OFFSET_NWOG = 26
 
 const int CLOSE_HOUR = 16
 const int CLOSE_MINUTE = 59
@@ -54,6 +56,7 @@ const string GROUP_APPEARANCE = "Appearance"
 
 // Quick Filter options
 const string FILTER_ALL = "All"
+const string FILTER_RECENTS = "Recents"
 const string FILTER_NWOG = "NWOG Only"
 const string FILTER_NDOG = "NDOG Only"
 const string FILTER_RTH_TODAY = "Today's RTH Gap"
@@ -86,7 +89,8 @@ const color DEFAULT_INTERNAL_LINES_COLOR = color.new(color.rgb(184, 184, 184), 4
 const color DEFAULT_LABEL_COLOR = color.rgb(128, 128, 128)
 
 // General Settings
-quickFilter = input.string(FILTER_ALL, "Quick Filter", options=[FILTER_ALL, FILTER_NWOG, FILTER_NDOG, FILTER_RTH_TODAY, FILTER_RTH_PREV_5], group=GROUP_GENERAL, tooltip="Filter presets:\n• All: Show all gap types (respects individual toggles)\n• NWOG Only: New Week Opening Gaps only\n• NDOG Only: New Day Opening Gaps only\n• Today's RTH Gap: Show only today's RTH gap\n• Previous 5 RTH: Show last 5 RTH gaps (ignores Hide Filled)")
+quickFilter = input.string(FILTER_RECENTS, "Quick Filter", options=[FILTER_ALL, FILTER_RECENTS, FILTER_NWOG, FILTER_NDOG, FILTER_RTH_TODAY, FILTER_RTH_PREV_5], group=GROUP_GENERAL, tooltip="Filter presets:\n• All: Show all gap types (respects individual toggles)\n• Recents: Most recent unfilled NWOG, NDOG, RTH gap + last 5 BPRs\n• NWOG Only: New Week Opening Gaps only\n• NDOG Only: New Day Opening Gaps only\n• Today's RTH Gap: Show only today's RTH gap\n• Previous 5 RTH: Show last 5 RTH gaps (ignores Hide Filled)")
+floatingMode = input.bool(true, "Floating Mode", group=GROUP_GENERAL, tooltip="When enabled, the most recent unfilled RTH, NWOG, and NDOG gaps display as compact offset boxes instead of extending from their origin. Keeps gaps visible without blocking live price action. Once filled, gaps return to historical position.")
 
 // NWOG
 showNWOG = input.bool(true, LABEL_NWOG, group=GROUP_NWOG, inline="1")
@@ -163,6 +167,7 @@ isValidNWOGTimeframe = timeframe.in_seconds(timeframe.period) >= timeframe.in_se
 isGapTypeInFilter(string gapType) =>
     switch quickFilter
         FILTER_ALL => true
+        FILTER_RECENTS => gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG or gapType == GAP_TYPE_RTH or gapType == GAP_TYPE_BPR_BULLISH or gapType == GAP_TYPE_BPR_BEARISH
         FILTER_NWOG => gapType == GAP_TYPE_NWOG
         FILTER_NDOG => gapType == GAP_TYPE_NDOG
         FILTER_RTH_TODAY => gapType == GAP_TYPE_RTH
@@ -172,30 +177,45 @@ isGapTypeInFilter(string gapType) =>
 // Effective settings based on Quick Filter
 effectiveShowNWOG = switch quickFilter
     FILTER_ALL => showNWOG
+    FILTER_RECENTS => true
     FILTER_NWOG => true
     => false
 
 effectiveShowNDOG = switch quickFilter
     FILTER_ALL => showNDOG
+    FILTER_RECENTS => true
     FILTER_NDOG => true
     => false
 
 effectiveShowRTHGaps = switch quickFilter
     FILTER_ALL => showRTHGaps
+    FILTER_RECENTS => true
     FILTER_RTH_TODAY => true
     FILTER_RTH_PREV_5 => true
     => false
 
 effectiveShowBPR = switch quickFilter
     FILTER_ALL => showBPR
+    FILTER_RECENTS => true
     => false
 
+effectiveNwogGapsToShow = switch quickFilter
+    FILTER_RECENTS => 1
+    => nwogGapsToShow
+
+effectiveNdogGapsToShow = switch quickFilter
+    FILTER_RECENTS => 1
+    => ndogGapsToShow
+
 effectiveRthGapsToShow = switch quickFilter
+    FILTER_RECENTS => 1
     FILTER_RTH_TODAY => 1
     FILTER_RTH_PREV_5 => 5
     => rthGapsToShow
 
 effectiveHideFilledRTH = quickFilter == FILTER_RTH_PREV_5 ? false : hideFilledRTH
+effectiveHideFilledNWOG = quickFilter == FILTER_RECENTS ? true : hideFilledNWOG
+effectiveHideFilledNDOG = quickFilter == FILTER_RECENTS ? true : hideFilledNDOG
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PERFORMANCE: Cache 1-minute intrabar data ONCE per bar
@@ -263,7 +283,7 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
     boxColor = isPreview ? previewColor : unfilled
 
     isCompact = isPreview and previewMode == "Compact"
-    leftBar = not na(customLeftBar) ? customLeftBar : (isPreview ? (isCompact ? bar_index + COMPACT_OFFSET : previewStartBar) : bar_index)
+    leftBar = not na(customLeftBar) ? customLeftBar : (isPreview ? (isCompact ? bar_index + COMPACT_OFFSET_RTH : previewStartBar) : bar_index)
     rightBar = isPreview ? (isCompact ? leftBar + COMPACT_WIDTH : bar_index) : bar_index
 
     topUnfilledBox = box.new(leftBar, topPrice, rightBar, bottomPrice, bgcolor=boxColor, border_color=na)
@@ -280,8 +300,8 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
     topBoundaryLine = not isPreview ? line.new(leftBar, topPrice, rightBar, topPrice, color=boundaryColor, style=line.style_solid, width=1) : na
     bottomBoundaryLine = not isPreview ? line.new(leftBar, bottomPrice, rightBar, bottomPrice, color=boundaryColor, style=line.style_solid, width=1) : na
 
-    showLabel = (gapType == GAP_TYPE_NWOG or gapType == GAP_TYPE_NDOG or gapType == GAP_TYPE_BPR_BULLISH or gapType == GAP_TYPE_BPR_BEARISH) and not isPreview
-    gapLabel = showLabel ? label.new(leftBar, gapMid, gapType, color=color.new(color.white, 100), textcolor=labelColor, style=label.style_none, size=size.tiny) : na
+    // Gap type labels removed - dateLabel shows type + date instead
+    label gapLabel = na
 
     // Create date label for NWOG, NDOG, and RTH gaps (when enabled)
     label dateLabel = na
@@ -295,9 +315,9 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
         // Format month name
         monthName = gapMonth == 1 ? "Jan" : gapMonth == 2 ? "Feb" : gapMonth == 3 ? "Mar" : gapMonth == 4 ? "Apr" : gapMonth == 5 ? "May" : gapMonth == 6 ? "Jun" : gapMonth == 7 ? "Jul" : gapMonth == 8 ? "Aug" : gapMonth == 9 ? "Sep" : gapMonth == 10 ? "Oct" : gapMonth == 11 ? "Nov" : "Dec"
 
-        // Create date string: "NWOG Oct 26, 2025", "NDOG Oct 26, 2025", or "RTH Oct 26, 2025"
+        // Create date string with line break: "NWOG\nOct 26, 2025"
         gapPrefix = gapType == GAP_TYPE_NWOG ? "NWOG" : gapType == GAP_TYPE_NDOG ? "NDOG" : "RTH"
-        dateStr = gapPrefix + " " + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+        dateStr = gapPrefix + "\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
 
         // Use boundary color for text (same color as boundary lines)
         dateLabelColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : rthBoundaryColor
@@ -378,6 +398,53 @@ draw_gap_projections(GapData gap, int rightEdgeTime) =>
             projLabel = label.new(rightEdgeTime, projPrice, labelText, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(chart.bg_color, 0), textcolor=projColor, size=size.tiny)
             array.push(gap.projectionLabels, projLabel)
 
+// Helper: Determine if gap should use compact offset positioning
+// RTH: floats if most recent unfilled and no preview showing
+// NWOG: floats if most recent unfilled
+// NDOG: floats if most recent unfilled AND doesn't overlap with NWOG (avoids duplicate floating)
+// Once filled, gaps return to historical position
+shouldUseCompactPosition(GapData gap, bool hasPreview, int mostRecentRTHBar, int mostRecentNWOGBar, int mostRecentNDOGBar, bool ndogOverlapsNWOG) =>
+    if not floatingMode or gap.filled
+        false
+    else if gap.gapType == GAP_TYPE_RTH
+        not hasPreview and gap.creationBar == mostRecentRTHBar
+    else if gap.gapType == GAP_TYPE_NWOG
+        gap.creationBar == mostRecentNWOGBar
+    else if gap.gapType == GAP_TYPE_NDOG
+        // Don't float NDOG if it overlaps with NWOG (NWOG takes precedence with combined label)
+        gap.creationBar == mostRecentNDOGBar and not ndogOverlapsNWOG
+    else
+        false
+
+// Helper: Update all drawing positions for a gap
+// Centralizes position-setting logic for boxes, lines, and labels
+updateGapDrawingPositions(GapData gap, int leftEdge, int rightEdge) =>
+    box.set_left(gap.topUnfilledBox, leftEdge)
+    box.set_right(gap.topUnfilledBox, rightEdge)
+    box.set_left(gap.filledBox, leftEdge)
+    box.set_right(gap.filledBox, rightEdge)
+    box.set_left(gap.bottomUnfilledBox, leftEdge)
+    box.set_right(gap.bottomUnfilledBox, rightEdge)
+    if not na(gap.ceLine)
+        line.set_x1(gap.ceLine, leftEdge)
+        line.set_x2(gap.ceLine, rightEdge)
+    if not na(gap.q1Line)
+        line.set_x1(gap.q1Line, leftEdge)
+        line.set_x2(gap.q1Line, rightEdge)
+    if not na(gap.q3Line)
+        line.set_x1(gap.q3Line, leftEdge)
+        line.set_x2(gap.q3Line, rightEdge)
+    if not na(gap.topBoundaryLine)
+        line.set_x1(gap.topBoundaryLine, leftEdge)
+        line.set_x2(gap.topBoundaryLine, rightEdge)
+    if not na(gap.bottomBoundaryLine)
+        line.set_x1(gap.bottomBoundaryLine, leftEdge)
+        line.set_x2(gap.bottomBoundaryLine, rightEdge)
+    if not na(gap.dateLabel)
+        label.set_x(gap.dateLabel, math.round((leftEdge + rightEdge) / 2))
+    if not na(gap.gapLabel)
+        label.set_x(gap.gapLabel, leftEdge)
+
 deleteGap(GapData gap) =>
     box.delete(gap.topUnfilledBox)
     box.delete(gap.filledBox)
@@ -436,7 +503,7 @@ if not inRTH and not na(previewGap) and not na(rthClosePrice) and showPreview an
     newBottom = math.min(rthClosePrice, close)
 
     isCompact = previewMode == "Compact"
-    previewLeft = isCompact ? bar_index + COMPACT_OFFSET : previewStartBar
+    previewLeft = isCompact ? bar_index + COMPACT_OFFSET_RTH : previewStartBar
     previewRight = isCompact ? previewLeft + COMPACT_WIDTH : bar_index
 
     box.set_top(previewGap.topUnfilledBox, newTop)
@@ -515,13 +582,50 @@ if rthStart and not na(rthClosePrice) and effectiveShowRTHGaps
 if array.size(gapsArray) > 0
     mostRecentUnfilledNWOGBar = -1
     mostRecentUnfilledNDOGBar = -1
+    mostRecentRTHBar = -1  // Track most recent RTH gap for floating mode
+
+    // Track geometry of most recent unfilled NWOG/NDOG for overlap detection
+    float mostRecentNWOGTop = na
+    float mostRecentNWOGBottom = na
+    float mostRecentNDOGTop = na
+    float mostRecentNDOGBottom = na
 
     for i = 0 to array.size(gapsArray) - 1
         gap = array.get(gapsArray, i)
         if gap.gapType == GAP_TYPE_NWOG and not gap.filled and gap.creationBar > mostRecentUnfilledNWOGBar
             mostRecentUnfilledNWOGBar := gap.creationBar
+            mostRecentNWOGTop := gap.top
+            mostRecentNWOGBottom := gap.bottom
         if gap.gapType == GAP_TYPE_NDOG and not gap.filled and gap.creationBar > mostRecentUnfilledNDOGBar
             mostRecentUnfilledNDOGBar := gap.creationBar
+            mostRecentNDOGTop := gap.top
+            mostRecentNDOGBottom := gap.bottom
+        if gap.gapType == GAP_TYPE_RTH and gap.creationBar > mostRecentRTHBar
+            mostRecentRTHBar := gap.creationBar
+
+    // Check if preview is currently showing (if so, preview handles floating, not formed gaps)
+    hasPreview = not na(previewGap)
+
+    // Detect if most recent NDOG shares geometry with most recent NWOG (Sunday open creates both)
+    ndogOverlapsNWOG = not na(mostRecentNWOGTop) and not na(mostRecentNDOGTop) and mostRecentNWOGTop == mostRecentNDOGTop and mostRecentNWOGBottom == mostRecentNDOGBottom
+
+    // Combine NWOG/NDOG labels when they share the same geometry (Sunday open = both NWOG and NDOG)
+    for i = 0 to array.size(gapsArray) - 1
+        nwogGap = array.get(gapsArray, i)
+        if nwogGap.gapType == GAP_TYPE_NWOG
+            for j = 0 to array.size(gapsArray) - 1
+                ndogGap = array.get(gapsArray, j)
+                if ndogGap.gapType == GAP_TYPE_NDOG and ndogGap.top == nwogGap.top and ndogGap.bottom == nwogGap.bottom
+                    // Same geometry - combine labels
+                    if not na(nwogGap.dateLabel)
+                        gapYear = year(nwogGap.creationTime)
+                        gapMonth = month(nwogGap.creationTime)
+                        gapDay = dayofmonth(nwogGap.creationTime)
+                        monthName = gapMonth == 1 ? "Jan" : gapMonth == 2 ? "Feb" : gapMonth == 3 ? "Mar" : gapMonth == 4 ? "Apr" : gapMonth == 5 ? "May" : gapMonth == 6 ? "Jun" : gapMonth == 7 ? "Jul" : gapMonth == 8 ? "Aug" : gapMonth == 9 ? "Sep" : gapMonth == 10 ? "Oct" : gapMonth == 11 ? "Nov" : "Dec"
+                        combinedStr = "NWOG/NDOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+                        label.set_text(nwogGap.dateLabel, combinedStr)
+                    if not na(ndogGap.dateLabel)
+                        label.set_text(ndogGap.dateLabel, "")  // Hide NDOG label
 
     for i = array.size(gapsArray) - 1 to 0
         gap = array.get(gapsArray, i)
@@ -679,7 +783,7 @@ if array.size(gapsArray) > 0
                                 line.set_x2(gap.bottomBoundaryLine, bar_index)
 
         if gap.filled
-            if (gap.gapType == GAP_TYPE_NWOG and hideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and hideFilledNDOG) or ((gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and hideFilledBPR) or (gap.gapType == GAP_TYPE_RTH and effectiveHideFilledRTH)
+            if (gap.gapType == GAP_TYPE_NWOG and effectiveHideFilledNWOG) or (gap.gapType == GAP_TYPE_NDOG and effectiveHideFilledNDOG) or ((gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH) and hideFilledBPR) or (gap.gapType == GAP_TYPE_RTH and effectiveHideFilledRTH)
                 deleteGap(gap)
                 array.remove(gapsArray, i)
                 continue
@@ -716,41 +820,33 @@ if array.size(gapsArray) > 0
             box.set_top(gap.bottomUnfilledBox, gap.bottom)
             box.set_bottom(gap.bottomUnfilledBox, gap.bottom)
 
-        // Extension logic varies by gap type
-        // RTH: Continue extending unfilled gaps past next session
-        // NWOG/NDOG: "Extend to Present" ON → extend all gaps to present
-        //            "Extend to Present" OFF → unfilled extends to present, filled extends minimum to next session
+        // Extension and positioning logic
+        // RTH: extends if current session or unfilled historical
+        // NWOG/NDOG: respects Extend toggle, or extends if unfilled/current session
+        // BPR: respects Extend toggle, or extends if unfilled
         shouldExtend = false
         if gap.gapType == GAP_TYPE_RTH
             shouldExtend := not gap.passedNextSession or (gap.passedNextSession and not gap.filled)
         else if gap.gapType == GAP_TYPE_NWOG
-            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled extends until next session
             shouldExtend := extendNWOGToPresent or not gap.filled or not gap.passedNextSession
         else if gap.gapType == GAP_TYPE_NDOG
-            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled extends until next session
             shouldExtend := extendNDOGToPresent or not gap.filled or not gap.passedNextSession
         else if gap.gapType == GAP_TYPE_BPR_BULLISH or gap.gapType == GAP_TYPE_BPR_BEARISH
-            // Toggle ON: extend all | Toggle OFF: unfilled extends, filled stops immediately
             shouldExtend := extendBPRToPresent or not gap.filled
 
         if shouldExtend
-            rightEdge = bar_index + RIGHT_EDGE_CUSHION
-            box.set_right(gap.topUnfilledBox, rightEdge)
-            box.set_right(gap.filledBox, rightEdge)
-            box.set_right(gap.bottomUnfilledBox, rightEdge)
-            if not na(gap.ceLine)
-                line.set_x2(gap.ceLine, rightEdge)
-            if not na(gap.q1Line)
-                line.set_x2(gap.q1Line, rightEdge)
-            if not na(gap.q3Line)
-                line.set_x2(gap.q3Line, rightEdge)
-            if not na(gap.topBoundaryLine)
-                line.set_x2(gap.topBoundaryLine, rightEdge)
-            if not na(gap.bottomBoundaryLine)
-                line.set_x2(gap.bottomBoundaryLine, rightEdge)
+            // Floating mode: most recent unfilled RTH/NWOG/NDOG uses compact position
+            // Each gap type has its own offset to avoid overlap when multiple float
+            useCompact = shouldUseCompactPosition(gap, hasPreview, mostRecentRTHBar, mostRecentUnfilledNWOGBar, mostRecentUnfilledNDOGBar, ndogOverlapsNWOG)
+            compactOffset = gap.gapType == GAP_TYPE_NWOG ? COMPACT_OFFSET_NWOG : gap.gapType == GAP_TYPE_NDOG ? COMPACT_OFFSET_NDOG : COMPACT_OFFSET_RTH
+            leftEdge = useCompact ? bar_index + compactOffset : gap.leftBar
+            rightEdge = useCompact ? leftEdge + COMPACT_WIDTH : bar_index + RIGHT_EDGE_CUSHION
+
+            updateGapDrawingPositions(gap, leftEdge, rightEdge)
+
+
             // Extend projection lines and update labels (use time-based coordinates)
             if not na(gap.projectionLines) and array.size(gap.projectionLines) > 0
-                // Calculate right edge time for projections
                 rightEdgeTime = time + (timeframe.in_seconds(timeframe.period) * 1000 * RIGHT_EDGE_CUSHION)
                 for projLine in gap.projectionLines
                     line.set_x2(projLine, rightEdgeTime)
@@ -805,7 +901,7 @@ if effectiveShowNWOG and isValidNWOGTimeframe
                     nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false, na, nwogIsBullish)
                     array.push(gapsArray, nwogGap)
 
-                    if countGapsByType(GAP_TYPE_NWOG) > nwogGapsToShow
+                    if countGapsByType(GAP_TYPE_NWOG) > effectiveNwogGapsToShow
                         removeOldestGap(GAP_TYPE_NWOG)
 
                 fridayClosePrice := na
@@ -909,7 +1005,7 @@ if (showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
 
     if not na(arrayTimes) and array.size(arrayTimes) > 0
         // Calculate lookback limit based on which dividers are enabled
-        maxGapsToShow = showNWOGDividers ? nwogGapsToShow : ndogGapsToShow
+        maxGapsToShow = showNWOGDividers ? effectiveNwogGapsToShow : effectiveNdogGapsToShow
         lookbackPeriod = showNWOGDividers ? MILLISECONDS_PER_WEEK : MILLISECONDS_PER_DAY
         lookbackLimit = time - (maxGapsToShow * 3 * lookbackPeriod)
 
@@ -973,7 +1069,7 @@ if effectiveShowNDOG and isValidNWOGTimeframe
                         ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false, na, ndogIsBullish)
                         array.push(gapsArray, ndogGap)
 
-                        if countGapsByType(GAP_TYPE_NDOG) > ndogGapsToShow
+                        if countGapsByType(GAP_TYPE_NDOG) > effectiveNdogGapsToShow
                             removeOldestGap(GAP_TYPE_NDOG)
 
                     prevDayClosePrice := na
@@ -1077,7 +1173,7 @@ if array.size(dividerLines) > 0
 // Requires BOTH "Show NDOG" and "NDOG Dividers" to be enabled
 if effectiveShowNDOG and showNDOGDividers and array.size(ndogDividers.dividerTimes) > 0
     // Only show dividers for the number of NDOGs being displayed
-    count = math.min(ndogGapsToShow, array.size(ndogDividers.dividerTimes))
+    count = math.min(effectiveNdogGapsToShow, array.size(ndogDividers.dividerTimes))
 
     for i = 0 to count - 1
         idx = array.size(ndogDividers.dividerTimes) - 1 - i
@@ -1089,7 +1185,7 @@ if effectiveShowNDOG and showNDOGDividers and array.size(ndogDividers.dividerTim
 // Requires BOTH "Show NWOG" and "NWOG Dividers" to be enabled
 if effectiveShowNWOG and showNWOGDividers and array.size(nwogDividers.dividerTimes) > 0
     // Only show dividers for the number of NWOGs being displayed
-    count = math.min(nwogGapsToShow, array.size(nwogDividers.dividerTimes))
+    count = math.min(effectiveNwogGapsToShow, array.size(nwogDividers.dividerTimes))
 
     for i = 0 to count - 1
         idx = array.size(nwogDividers.dividerTimes) - 1 - i
