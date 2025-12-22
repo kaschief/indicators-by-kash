@@ -204,6 +204,9 @@ OPT_BELOW = "Below"
 
 // Session indices
 THIRTYSECOPENING_SESSION_IDX = 13
+PREMARKET_SESSION_IDX = 8
+NY_EARLY_HOURS_SESSION_IDX = 6
+var array<int> BIAS_DISPLAY_SESSIONS = array.from(PREMARKET_SESSION_IDX, NY_EARLY_HOURS_SESSION_IDX)
 
 // Global mitigation display mode
 MIT_MITIGATED = "Mitigated"
@@ -579,6 +582,23 @@ isTurningPointZone(DeviationZone zone, array<DeviationZone> tpZones) =>
             break
     result
 
+// Helper to get bias label text for a session (returns empty string if no bias should be shown)
+getBiasLabelText(SessionData sess, BiasData biasData, bool show1600Bias) =>
+    string result = ""
+    if array.includes(BIAS_DISPLAY_SESSIONS, sess.sessionIndex) and show1600Bias and not na(biasData.bias)
+        sessionDate = dayofmonth(sess.startTime, NY_TIMEZONE)
+        if sessionDate != biasData.biasDate
+            if biasData.bias == BIAS_ABOVE
+                result := BIAS_LABEL_ABOVE
+            else if biasData.bias == BIAS_BELOW
+                result := BIAS_LABEL_BELOW
+            else
+                // INSIDE: determine directional hint based on session position relative to Evaluation Day's Premarket range
+                sessionAboveRange = sess.wickLow > biasData.evalRangeHigh
+                sessionBelowRange = sess.wickHigh < biasData.evalRangeLow
+                result := sessionAboveRange ? BIAS_LABEL_INSIDE_BELOW : sessionBelowRange ? BIAS_LABEL_INSIDE_ABOVE : BIAS_LABEL_INSIDE
+    result
+
 // Drawing helper - unified function for all deviation zones (singles and ranges)
 drawDeviations(SessionData sess, float high, float low, float height, array<DeviationZone> zones, color deviationColor, color lineColor, bool showLabels, string labelSize, string labelPosition, color labelColor, string suffix, int startBarOffset, int endBarOffset, bool drawAbove, bool drawBelow, string turningPointDev, color turningPointColor) =>
     if array.size(zones) > 0 and (drawAbove or drawBelow)
@@ -739,10 +759,10 @@ clearLiveDrawings(SessionData sess) =>
         box.delete(db)
     array.clear(sess.deviationBoxes)
 
-// Draw live deviations for active session (uses current bar time as end time)
-drawLiveSessionDeviations(SessionData sess, int currentTime, int currentBarIndex) =>
+// Draw live deviations for active session (uses projected end time)
+drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBarIndex, BiasData biasData) =>
     // Set temporary end values for drawing
-    sess.endTime := currentTime
+    sess.endTime := projectedEndTime
     sess.endBar := currentBarIndex
 
     // Calculate heights
@@ -760,6 +780,20 @@ drawLiveSessionDeviations(SessionData sess, int currentTime, int currentBarIndex
         sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
         if sess.drawDeviations
             drawCoreWithDeviations(sess, sess.wickHigh, sess.wickLow, wickHeight, false)
+
+    // Draw live session name label with bias (if applicable)
+    if showLabels
+        labelX = int(math.round((sess.startTime + sess.endTime) / 2))
+        labelY = sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow
+        labelStyle = sess.labelPosition == OPT_ABOVE ? label.style_label_down : label.style_label_up
+
+        labelText = sess.chartLabel
+        biasText = getBiasLabelText(sess, biasData, show1600Bias)
+        if biasText != ""
+            labelText := labelText + "\n" + biasText
+
+        liveLabel = label.new(labelX, labelY, labelText, style=labelStyle, textcolor=labelColor, size=size.tiny, color=labelsBgColor, textalign=text.align_center, xloc=xloc.bar_time)
+        sess.labels.push(liveLabel)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
@@ -850,6 +884,7 @@ barMinutes = validTimeframe ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIM
 prevBarMinutes = validTimeframe ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
 barSeconds = validTimeframe ? second(time, NY_TIMEZONE) : 0
 prevBarSeconds = validTimeframe ? second(time[1], NY_TIMEZONE) : 0
+currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 30S OPENING DATA - Fetch actual 30-second candle data
@@ -904,15 +939,10 @@ if needToCapture30sData
 // 1600 BIAS DETECTION - Track Premarket range and classify at 16:00
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Session indices and time windows for 1600 Bias
-PREMARKET_SESSION_IDX = 8       // Premarket (05:00-09:15)
-NY_EARLY_HOURS_SESSION_IDX = 6  // NY Early Hours (06:00-09:00)
+// Time windows for 1600 Bias
 PREMARKET_START_MIN = array.get(openingSessions_startMin, PREMARKET_SESSION_IDX)  // 300 = 05:00
 PREMARKET_END_MIN = array.get(openingSessions_endMin, PREMARKET_SESSION_IDX)      // 555 = 09:15
 CLOSE_1600_MIN = 960  // 16:00 = 16 * 60
-
-// Sessions that display 1600 Bias on their labels (expandable)
-var array<int> BIAS_DISPLAY_SESSIONS = array.from(PREMARKET_SESSION_IDX, NY_EARLY_HOURS_SESSION_IDX)
 
 // Bias state
 var BiasData biasData = BiasData.new()
@@ -1098,7 +1128,9 @@ if validTimeframe and array.size(activeSessions) > 0
                 // Live deviation drawing - clear and redraw each bar
                 if showLiveDeviations
                     clearLiveDrawings(sess)
-                    drawLiveSessionDeviations(sess, time, bar_index)
+                    // Calculate projected end time based on session's end minute
+                    projectedEndTime = crossesMidnight and barMinutes >= startMin ? currentDayStart + 24 * 60 * 60 * 1000 + endMin * 60 * 1000 : currentDayStart + endMin * 60 * 1000
+                    drawLiveSessionDeviations(sess, projectedEndTime, bar_index, biasData)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
@@ -1125,8 +1157,6 @@ if validTimeframe and array.size(activeSessions) > 0
             sess.endBar := bar_index - 1
             // For 30s Opening, extend visualization until 16:00 (RTH close)
             if idx == THIRTYSECOPENING_SESSION_IDX
-                // Calculate 16:00 timestamp for the current day
-                currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
                 sess.endTime := currentDayStart + CLOSE_1600_MIN * 60 * 1000
             else
                 sess.endTime := not na(time[1]) ? time[1] : time
@@ -1181,22 +1211,10 @@ if validTimeframe and array.size(activeSessions) > 0
                 labelY = sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow
                 labelStyle = sess.labelPosition == OPT_ABOVE ? label.style_label_down : label.style_label_up
 
-                // Build label text, appending 1600 bias for configured sessions on Trading Day
                 labelText = sess.chartLabel
-                if array.includes(BIAS_DISPLAY_SESSIONS, sess.sessionIndex) and show1600Bias and not na(biasData.bias)
-                    sessionDate = dayofmonth(sess.startTime, NY_TIMEZONE)
-                    if sessionDate != biasData.biasDate
-                        string biasLabel = na
-                        if biasData.bias == BIAS_ABOVE
-                            biasLabel := BIAS_LABEL_ABOVE
-                        else if biasData.bias == BIAS_BELOW
-                            biasLabel := BIAS_LABEL_BELOW
-                        else
-                            // INSIDE: determine directional hint based on session position relative to Evaluation Day's Premarket range
-                            sessionAboveRange = sess.wickLow > biasData.evalRangeHigh
-                            sessionBelowRange = sess.wickHigh < biasData.evalRangeLow
-                            biasLabel := sessionAboveRange ? BIAS_LABEL_INSIDE_BELOW : sessionBelowRange ? BIAS_LABEL_INSIDE_ABOVE : BIAS_LABEL_INSIDE
-                        labelText := labelText + "\n" + biasLabel
+                biasText = getBiasLabelText(sess, biasData, show1600Bias)
+                if biasText != ""
+                    labelText := labelText + "\n" + biasText
 
                 sessionLabel = label.new(labelX, labelY, labelText, style=labelStyle, textcolor=labelColor, size=size.tiny, color=labelsBgColor, textalign=text.align_center, xloc=xloc.bar_time)
                 sess.labels.push(sessionLabel)
