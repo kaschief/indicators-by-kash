@@ -179,6 +179,12 @@ GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 // Workspace Mode Constants (hardcoded values for live workspace)
 WORKSPACE_EXTENSION_OFFSET = 2
 
+// Auto Workspace Configuration (extensible - add more timeframes as needed)
+NY_TIMEZONE = "America/New_York"
+AUTO_WS_TIMEFRAMES = array.from("1", "2", "3", "5", "15", "60")  // 1m, 2m, 3m, 5m, 15m, 1h
+AUTO_WS_START_HOUR = 8   // NY time
+AUTO_WS_END_HOUR = 13    // NY time
+
 // Display text & abbreviation constants
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
 GAP_SOURCE_IMPLIED_DISPLAY = "imp"
@@ -259,10 +265,18 @@ WORKSPACE_DEFAULT_NEAREST = 2
 WORKSPACE_FADE_OPACITY = 80
 workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_LIVE_WORKSPACE,
                          tooltip="Extend only the nearest N zones to current price. Non-extended zones use faded opacity.")
+auto_workspace_enabled = input.bool(true, "Auto Workspace", group=GROUP_LIVE_WORKSPACE,
+                         tooltip="Automatically enable workspace mode when on configured timeframes during NY 8-13.")
 workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
                          tooltip="Number of nearest bullish zones to extend to current price")
 workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
                          tooltip="Number of nearest bearish zones to extend to current price")
+
+// Auto workspace detection
+is_auto_ws_timeframe = array.includes(AUTO_WS_TIMEFRAMES, timeframe.period)
+ny_hour = hour(time, NY_TIMEZONE)
+is_auto_ws_time_window = ny_hour >= AUTO_WS_START_HOUR and ny_hour < AUTO_WS_END_HOUR
+workspace_active = workspace_mode_enabled or (auto_workspace_enabled and is_auto_ws_timeframe and is_auto_ws_time_window)
 
 // === 🎯 DETECTION ===
 max_valid_mbzs = input.int(DEFAULT_MAX_VALID_MBZS, INPUT_LABEL_MAX_VALID_MBZS, minval=0, maxval=MAX_VALID_MBZS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid MBZs visible on chart (0-55 limit)')
@@ -1873,7 +1887,7 @@ manage_consolidated_mbz_display() =>
     var map<int, bool> extend_to_current = map.new<int, bool>()
     map.clear(extend_to_current)
 
-    if workspace_mode_enabled and barstate.islast and array.size(consolidated_mbzs) > 0
+    if workspace_active and barstate.islast and array.size(consolidated_mbzs) > 0
         var array<float> bull_distances = array.new<float>()
         var array<int> bull_indices = array.new<int>()
         var array<float> bear_distances = array.new<float>()
@@ -1962,8 +1976,8 @@ manage_consolidated_mbz_display() =>
                 [consolidated_highlight_color, consolidated_extension_color] = get_consolidated_mbz_colors(current_consolidated_mbz)
 
                 // Calculate nearest zone extension and fade BEFORE creating boxes
-                bool should_extend_to_current = workspace_mode_enabled and map.contains(extend_to_current, consolidated_group_index)
-                bool is_faded = workspace_mode_enabled and not should_extend_to_current
+                bool should_extend_to_current = workspace_active and map.contains(extend_to_current, consolidated_group_index)
+                bool is_faded = workspace_active and not should_extend_to_current
                 int fill_fade = is_faded ? 99 : 0
 
                 // Apply fade to highlight color for faded zones
@@ -2414,8 +2428,8 @@ if show_status_table and barstate.islast
         INVALIDATION_STRICT => STATUS_DISPLAY_INV_55
         => "[" + str.tostring(int(custom_threshold_percent)) + "]"
 
-    // Build status text (WS only shown if enabled, capacity only if boosted)
-    status_text = workspace_mode_enabled ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
+    // Build status text (WS only shown if active, capacity only if boosted)
+    status_text = workspace_active ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
     // Add ref wick symbol if enabled
     status_text := extend_to_reference_wick ? status_text + "  " + SUBTYPE_EXT_DISPLAY : status_text
     // Add invalidation threshold

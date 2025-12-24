@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='sif core •'
-SHORT_TITLE="sif core •"
+SHORT_TITLE="sif core • development"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -147,6 +147,12 @@ GROUP_SOURCE_ORIGINS = '📦 Source Origins'
 // Workspace Mode Constants (hardcoded values for live workspace)
 WORKSPACE_EXTENSION_OFFSET = 2
 
+// Auto Workspace Configuration (extensible - add more timeframes as needed)
+NY_TIMEZONE = "America/New_York"
+AUTO_WS_TIMEFRAMES = array.from("1", "2", "3", "5", "15", "60")  // 1m, 2m, 3m, 5m, 15m, 1h
+AUTO_WS_START_HOUR = 8   // NY time
+AUTO_WS_END_HOUR = 13    // NY time
+
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
 GAP_SOURCE_IMPLIED_DISPLAY = "imp"
 GAP_SOURCE_VOLUME_DISPLAY = "vol"
@@ -236,10 +242,18 @@ WORKSPACE_DEFAULT_NEAREST = 2
 WORKSPACE_FADE_OPACITY = 80
 workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_LIVE_WORKSPACE,
                          tooltip="Extend only the nearest N zones to current price. Non-extended zones use faded opacity.")
+auto_workspace_enabled = input.bool(true, "Auto Workspace", group=GROUP_LIVE_WORKSPACE,
+                         tooltip="Automatically enable workspace mode when on configured timeframes during NY 8-10am.\nEdit AUTO_WS_TIMEFRAMES array to add more timeframes.")
 workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
                          tooltip="Number of nearest bullish zones to extend to current price")
 workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest",
                          tooltip="Number of nearest bearish zones to extend to current price")
+
+// Auto workspace detection
+is_auto_ws_timeframe = array.includes(AUTO_WS_TIMEFRAMES, timeframe.period)
+ny_hour = hour(time, NY_TIMEZONE)
+is_auto_ws_time_window = ny_hour >= AUTO_WS_START_HOUR and ny_hour < AUTO_WS_END_HOUR
+workspace_active = workspace_mode_enabled or (auto_workspace_enabled and is_auto_ws_timeframe and is_auto_ws_time_window)
 
 // === 🎯 DETECTION ===
 max_valid_sifs = input.int(DEFAULT_MAX_VALID_SIFS, INPUT_LABEL_MAX_VALID_SIFS, minval=0, maxval=MAX_VALID_SIFS_LIMIT, group=GROUP_DETECTION, inline='det1', tooltip='Maximum number of valid SIFs to display on chart. Max: 55\n\n• 0 = Show no valid SIFs\n• Higher values show more valid SIFs\n• Independent of invalidated SIF limit')
@@ -1851,7 +1865,7 @@ manage_consolidated_sif_display() =>
     var map<int, bool> extend_to_current = map.new<int, bool>()
     map.clear(extend_to_current)
 
-    if workspace_mode_enabled and barstate.islast and array.size(consolidated_sifs) > 0
+    if workspace_active and barstate.islast and array.size(consolidated_sifs) > 0
         var array<float> bull_distances = array.new<float>()
         var array<int> bull_indices = array.new<int>()
         var array<float> bear_distances = array.new<float>()
@@ -1943,8 +1957,8 @@ manage_consolidated_sif_display() =>
                 [border_width_final, border_color_final] = get_border_properties_for_sif(current_consolidated_sif, sif_source_count)
 
                 // Calculate nearest zone extension and fade BEFORE creating boxes
-                bool should_extend_to_current = workspace_mode_enabled and map.contains(extend_to_current, consolidated_group_index)
-                bool is_faded = workspace_mode_enabled and not should_extend_to_current
+                bool should_extend_to_current = workspace_active and map.contains(extend_to_current, consolidated_group_index)
+                bool is_faded = workspace_active and not should_extend_to_current
                 int fill_fade = is_faded ? 99 : 0
 
                 // Apply fade to highlight color for faded zones
@@ -2179,8 +2193,8 @@ if show_status_table and barstate.islast
     capacity_text = is_capacity_ultra_pro_boost ? STATUS_DISPLAY_CAP_12X : is_capacity_ultra_boost ? STATUS_DISPLAY_CAP_8X : is_capacity_boost ? STATUS_DISPLAY_CAP_4X : ""
     is_boosted = is_capacity_boost or is_capacity_ultra_boost or is_capacity_ultra_pro_boost
 
-    // Build status text (WS shown if workspace mode enabled, capacity only if boosted)
-    bool show_ws_indicator = workspace_mode_enabled
+    // Build status text (WS shown if workspace mode active, capacity only if boosted)
+    bool show_ws_indicator = workspace_active
     status_text = show_ws_indicator ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
     status_text := status_text + "  " + inv_display + (is_boosted ? "  " + capacity_text : "")
 
