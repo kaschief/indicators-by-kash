@@ -3,7 +3,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='30s ranges •'
-SHORT_TITLE="30s • development"
+SHORT_TITLE="30s •"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -17,13 +17,15 @@ const string TIMEZONE = "America/New_York"
 const int OR30_START_MIN = 570   // 09:30 = 9*60 + 30
 const int CR30_START_MIN = 950   // 15:50 = 15*60 + 50
 
-// End time modes (for future flexibility)
-const string END_NEXT_OCCURRENCE = "Next Occurrence"
-const string END_SESSION_CLOSE = "Session Close"
-const string END_PRESENT = "Present"
+// Extend mode options
+const string EXTEND_NEXT_OCCURRENCE = "Next Occurrence"
+const string EXTEND_3_DAYS = "3 Days"
+
+// Milliseconds
+const int MS_PER_DAY = 24 * 60 * 60 * 1000
 
 // Color defaults
-const color DEFAULT_OR30_COLOR = color.new(color.rgb(255, 224, 178), 95)
+const color DEFAULT_OR30_COLOR = color.new(color.rgb(165, 214, 167), 95)
 const color DEFAULT_OR30_BOUNDARY_COLOR = color.rgb(165, 214, 167)
 const color DEFAULT_OR30_LABEL_COLOR = color.rgb(230, 81, 0)
 const color DEFAULT_CR30_COLOR = color.new(color.rgb(206, 147, 216), 95)
@@ -38,16 +40,18 @@ GROUP_COLOR_TABLE = "Color Reference Table"
 // ═══════════════════════════════════════════════════════════════════════════════
 
 showOR30 = input.bool(true, "Opening Range 30s", inline="or30", tooltip="Show the first 30 seconds of RTH (09:30:00-09:30:30)")
-or30Limit = input.int(5, "", minval=1, maxval=20, inline="or30")
+or30Limit = input.int(20, "", minval=1, maxval=20, inline="or30")
 or30Color = input.color(DEFAULT_OR30_COLOR, "", inline="or30")
 or30BoundaryColor = input.color(DEFAULT_OR30_BOUNDARY_COLOR, "Border", inline="or30b")
 or30LabelColor = input.color(DEFAULT_OR30_LABEL_COLOR, "Label", inline="or30b")
 
 showCR30 = input.bool(true, "Closing Range 30s", inline="cr30", tooltip="Show the 30-second candle at 15:50:00")
-cr30Limit = input.int(5, "", minval=1, maxval=20, inline="cr30")
+cr30Limit = input.int(20, "", minval=1, maxval=20, inline="cr30")
 cr30Color = input.color(DEFAULT_CR30_COLOR, "", inline="cr30")
 cr30BoundaryColor = input.color(DEFAULT_CR30_BOUNDARY_COLOR, "Border", inline="cr30b")
 cr30LabelColor = input.color(DEFAULT_CR30_LABEL_COLOR, "Label", inline="cr30b")
+
+extendMode = input.string(EXTEND_3_DAYS, "Extend", options=[EXTEND_NEXT_OCCURRENCE, EXTEND_3_DAYS], tooltip="Next Occurrence: extends until next range. 3 Days: extends at least 3 days (or to next occurrence if longer)")
 
 // Color Reference Table
 showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a reference table showing all range colors and their RGB values")
@@ -103,6 +107,13 @@ getDayName(int dow) =>
         5 => "Thu"
         6 => "Fri"
         => "Sat"
+
+// Calculate timestamp 3 trading days after startTime (skips weekends)
+// Mon/Tue: +3 calendar days, Wed/Thu/Fri: +5 calendar days (skip weekend)
+add3TradingDays(int startTime) =>
+    dow = dayofweek(startTime, TIMEZONE)
+    calendarDays = (dow == 2 or dow == 3) ? 3 : 5  // Mon=2, Tue=3 -> +3 days, else +5
+    startTime + (calendarDays * MS_PER_DAY)
 
 deleteRange(RangeData r) =>
     if not na(r.rangeBox)
@@ -160,13 +171,13 @@ closeRange(RangeData r, int endTime) =>
     centerTime = math.round((r.startTime + endTime) / 2)
     label.set_x(r.dateLabel, centerTime)
 
-// Extend range to current time (for live extending - doesn't set endTime)
-extendToPresent(RangeData r) =>
-    box.set_right(r.rangeBox, time)
-    line.set_x2(r.topLine, time)
-    line.set_x2(r.bottomLine, time)
-    line.set_x2(r.eqLine, time)
-    centerTime = math.round((r.startTime + time) / 2)
+// Extend range to a specific time (updates visuals only, doesn't set endTime)
+extendRangeTo(RangeData r, int targetTime) =>
+    box.set_right(r.rangeBox, targetTime)
+    line.set_x2(r.topLine, targetTime)
+    line.set_x2(r.bottomLine, targetTime)
+    line.set_x2(r.eqLine, targetTime)
+    centerTime = math.round((r.startTime + targetTime) / 2)
     label.set_x(r.dateLabel, centerTime)
 
 // Capture a range if conditions are met (reusable for any range type)
@@ -174,18 +185,28 @@ captureRange(array<RangeData> rangeArray, int targetMin, bool show, int ltfMinut
     if show and ltfMinutes == targetMin and ltfSeconds == 0
         alreadyExists = array.size(rangeArray) > 0 ? array.get(rangeArray, array.size(rangeArray) - 1).dayNum == ltfDay : false
         if not alreadyExists
+            // Always close previous range at next occurrence (sets endTime)
             if array.size(rangeArray) > 0
                 closeRange(array.get(rangeArray, array.size(rangeArray) - 1), ltfTime)
             array.push(rangeArray, createRange(ltfHigh, ltfLow, ltfTime, boxColor, borderColor, lblColor, labelPrefix))
             if array.size(rangeArray) > limit
                 deleteRange(array.shift(rangeArray))
 
-// Extend most recent range to present if not closed
-extendMostRecent(array<RangeData> rangeArray) =>
+// Update all ranges based on extend mode
+updateRangeExtensions(array<RangeData> rangeArray) =>
     if array.size(rangeArray) > 0
-        mostRecent = array.get(rangeArray, array.size(rangeArray) - 1)
-        if na(mostRecent.endTime)
-            extendToPresent(mostRecent)
+        for i = 0 to array.size(rangeArray) - 1
+            r = array.get(rangeArray, i)
+            if extendMode == EXTEND_NEXT_OCCURRENCE
+                // Extend only the most recent (unclosed) to present
+                if i == array.size(rangeArray) - 1 and na(r.endTime)
+                    extendRangeTo(r, time)
+            else
+                // 3 Days mode: extend to the LONGER of (next occurrence, start + 3 trading days)
+                minEnd = add3TradingDays(r.startTime)
+                targetEnd = na(r.endTime) ? minEnd : math.max(minEnd, r.endTime)
+                // Cap at present if target is in the future
+                extendRangeTo(r, math.min(targetEnd, time))
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 30S DATA CAPTURE
@@ -206,11 +227,11 @@ if (showOR30 or showCR30) and not na(cached_30s_times) and array.size(cached_30s
         captureRange(cr30Array, CR30_START_MIN, showCR30, ltfMinutes, ltfSeconds, ltfDay, ltfTime, ltfHigh, ltfLow, cr30Color, cr30BoundaryColor, cr30LabelColor, "Closing\nRange", cr30Limit)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EXTEND MOST RECENT RANGES TO PRESENT
+// UPDATE RANGE EXTENSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-extendMostRecent(or30Array)
-extendMostRecent(cr30Array)
+updateRangeExtensions(or30Array)
+updateRangeExtensions(cr30Array)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
