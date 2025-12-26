@@ -1,0 +1,250 @@
+//@version=6
+INDICATOR_MAX_BOXES = 500
+INDICATOR_MAX_LABELS = 500
+INDICATOR_MAX_LINES = 500
+INDICATOR_TITLE='30s ranges •'
+SHORT_TITLE="30s • development"
+
+indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const string TIMEZONE = "America/New_York"
+
+// 30s Range time constants (minutes from midnight)
+const int OR30_START_MIN = 570   // 09:30 = 9*60 + 30
+const int CR30_START_MIN = 950   // 15:50 = 15*60 + 50
+
+// End time modes (for future flexibility)
+const string END_NEXT_OCCURRENCE = "Next Occurrence"
+const string END_SESSION_CLOSE = "Session Close"
+const string END_PRESENT = "Present"
+
+// Color defaults
+const color DEFAULT_OR30_COLOR = color.new(color.rgb(255, 224, 178), 95)
+const color DEFAULT_OR30_BOUNDARY_COLOR = color.rgb(165, 214, 167)
+const color DEFAULT_OR30_LABEL_COLOR = color.rgb(230, 81, 0)
+const color DEFAULT_CR30_COLOR = color.new(color.rgb(206, 147, 216), 95)
+const color DEFAULT_CR30_BOUNDARY_COLOR = color.rgb(206, 147, 216)
+const color DEFAULT_CR30_LABEL_COLOR = color.rgb(156, 156, 156)
+
+// Input groups
+GROUP_COLOR_TABLE = "Color Reference Table"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showOR30 = input.bool(true, "Opening Range 30s", inline="or30", tooltip="Show the first 30 seconds of RTH (09:30:00-09:30:30)")
+or30Limit = input.int(5, "", minval=1, maxval=20, inline="or30")
+or30Color = input.color(DEFAULT_OR30_COLOR, "", inline="or30")
+or30BoundaryColor = input.color(DEFAULT_OR30_BOUNDARY_COLOR, "Border", inline="or30b")
+or30LabelColor = input.color(DEFAULT_OR30_LABEL_COLOR, "Label", inline="or30b")
+
+showCR30 = input.bool(true, "Closing Range 30s", inline="cr30", tooltip="Show the 30-second candle at 15:50:00")
+cr30Limit = input.int(5, "", minval=1, maxval=20, inline="cr30")
+cr30Color = input.color(DEFAULT_CR30_COLOR, "", inline="cr30")
+cr30BoundaryColor = input.color(DEFAULT_CR30_BOUNDARY_COLOR, "Border", inline="cr30b")
+cr30LabelColor = input.color(DEFAULT_CR30_LABEL_COLOR, "Label", inline="cr30b")
+
+// Color Reference Table
+showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a reference table showing all range colors and their RGB values")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type RangeData
+    box rangeBox
+    line topLine
+    line bottomLine
+    line eqLine
+    label dateLabel
+    float high
+    float low
+    int startTime
+    int endTime
+    int dayNum
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<RangeData> or30Array = array.new<RangeData>()
+var array<RangeData> cr30Array = array.new<RangeData>()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+getMonthName(int monthNum) =>
+    switch monthNum
+        1 => "Jan"
+        2 => "Feb"
+        3 => "Mar"
+        4 => "Apr"
+        5 => "May"
+        6 => "Jun"
+        7 => "Jul"
+        8 => "Aug"
+        9 => "Sep"
+        10 => "Oct"
+        11 => "Nov"
+        => "Dec"
+
+getDayName(int dow) =>
+    switch dow
+        1 => "Sun"
+        2 => "Mon"
+        3 => "Tue"
+        4 => "Wed"
+        5 => "Thu"
+        6 => "Fri"
+        => "Sat"
+
+deleteRange(RangeData r) =>
+    if not na(r.rangeBox)
+        box.delete(r.rangeBox)
+    if not na(r.topLine)
+        line.delete(r.topLine)
+    if not na(r.bottomLine)
+        line.delete(r.bottomLine)
+    if not na(r.eqLine)
+        line.delete(r.eqLine)
+    if not na(r.dateLabel)
+        label.delete(r.dateLabel)
+
+createRange(float highPrice, float lowPrice, int startTime, color boxColor, color borderColor, color lblColor, string labelPrefix) =>
+    // Create box (right edge will be updated later)
+    rangeBox = box.new(startTime, highPrice, startTime, lowPrice, xloc=xloc.bar_time, bgcolor=boxColor, border_color=na)
+
+    // Boundary lines
+    topLine = line.new(startTime, highPrice, startTime, highPrice, xloc=xloc.bar_time, color=borderColor, style=line.style_solid, width=1)
+    bottomLine = line.new(startTime, lowPrice, startTime, lowPrice, xloc=xloc.bar_time, color=borderColor, style=line.style_solid, width=1)
+
+    // EQ line (midpoint, dotted)
+    eqPrice = (highPrice + lowPrice) / 2
+    eqLine = line.new(startTime, eqPrice, startTime, eqPrice, xloc=xloc.bar_time, color=borderColor, style=line.style_dotted, width=1)
+
+    // Date label
+    rangeDow = dayofweek(startTime, TIMEZONE)
+    rangeMonth = month(startTime, TIMEZONE)
+    rangeDayNum = dayofmonth(startTime, TIMEZONE)
+    dayName = getDayName(rangeDow)
+    monthName = getMonthName(rangeMonth)
+    labelStr = labelPrefix + "\n" + dayName + "\n" + monthName + " " + str.tostring(rangeDayNum)
+    dateLabel = label.new(startTime, lowPrice, labelStr, xloc=xloc.bar_time, color=color.new(color.rgb(255, 255, 255), 100), textcolor=lblColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
+
+    RangeData.new(
+         rangeBox = rangeBox,
+         topLine = topLine,
+         bottomLine = bottomLine,
+         eqLine = eqLine,
+         dateLabel = dateLabel,
+         high = highPrice,
+         low = lowPrice,
+         startTime = startTime,
+         endTime = na,
+         dayNum = dayofmonth(startTime, TIMEZONE)
+     )
+
+// Close a range permanently (when next occurrence is detected)
+closeRange(RangeData r, int endTime) =>
+    r.endTime := endTime
+    box.set_right(r.rangeBox, endTime)
+    line.set_x2(r.topLine, endTime)
+    line.set_x2(r.bottomLine, endTime)
+    line.set_x2(r.eqLine, endTime)
+    centerTime = math.round((r.startTime + endTime) / 2)
+    label.set_x(r.dateLabel, centerTime)
+
+// Extend range to current time (for live extending - doesn't set endTime)
+extendToPresent(RangeData r) =>
+    box.set_right(r.rangeBox, time)
+    line.set_x2(r.topLine, time)
+    line.set_x2(r.bottomLine, time)
+    line.set_x2(r.eqLine, time)
+    centerTime = math.round((r.startTime + time) / 2)
+    label.set_x(r.dateLabel, centerTime)
+
+// Capture a range if conditions are met (reusable for any range type)
+captureRange(array<RangeData> rangeArray, int targetMin, bool show, int ltfMinutes, int ltfSeconds, int ltfDay, int ltfTime, float ltfHigh, float ltfLow, color boxColor, color borderColor, color lblColor, string labelPrefix, int limit) =>
+    if show and ltfMinutes == targetMin and ltfSeconds == 0
+        alreadyExists = array.size(rangeArray) > 0 ? array.get(rangeArray, array.size(rangeArray) - 1).dayNum == ltfDay : false
+        if not alreadyExists
+            if array.size(rangeArray) > 0
+                closeRange(array.get(rangeArray, array.size(rangeArray) - 1), ltfTime)
+            array.push(rangeArray, createRange(ltfHigh, ltfLow, ltfTime, boxColor, borderColor, lblColor, labelPrefix))
+            if array.size(rangeArray) > limit
+                deleteRange(array.shift(rangeArray))
+
+// Extend most recent range to present if not closed
+extendMostRecent(array<RangeData> rangeArray) =>
+    if array.size(rangeArray) > 0
+        mostRecent = array.get(rangeArray, array.size(rangeArray) - 1)
+        if na(mostRecent.endTime)
+            extendToPresent(mostRecent)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 30S DATA CAPTURE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+[cached_30s_times, cached_30s_highs, cached_30s_lows] = request.security_lower_tf(syminfo.tickerid, "30S", [time, high, low])
+
+if (showOR30 or showCR30) and not na(cached_30s_times) and array.size(cached_30s_times) > 0
+    for i = 0 to array.size(cached_30s_times) - 1
+        ltfTime = array.get(cached_30s_times, i)
+        ltfMinutes = hour(ltfTime, TIMEZONE) * 60 + minute(ltfTime, TIMEZONE)
+        ltfSeconds = second(ltfTime, TIMEZONE)
+        ltfDay = dayofmonth(ltfTime, TIMEZONE)
+        ltfHigh = array.get(cached_30s_highs, i)
+        ltfLow = array.get(cached_30s_lows, i)
+
+        captureRange(or30Array, OR30_START_MIN, showOR30, ltfMinutes, ltfSeconds, ltfDay, ltfTime, ltfHigh, ltfLow, or30Color, or30BoundaryColor, or30LabelColor, "Opening\nRange", or30Limit)
+        captureRange(cr30Array, CR30_START_MIN, showCR30, ltfMinutes, ltfSeconds, ltfDay, ltfTime, ltfHigh, ltfLow, cr30Color, cr30BoundaryColor, cr30LabelColor, "Closing\nRange", cr30Limit)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXTEND MOST RECENT RANGES TO PRESENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+extendMostRecent(or30Array)
+extendMostRecent(cr30Array)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+addColorRow(table tbl, int row, string name, string colorType, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, colorType, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 3, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
+if showColorTable and barstate.islast
+    var table colorTable = table.new(position.top_right, 4, 10, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+    // Header row
+    table.cell(colorTable, 0, 0, "Range", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "Type", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 3, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+    int currentRow = 1
+
+    if showOR30
+        addColorRow(colorTable, currentRow, "Opening Range", "Fill", or30Color)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Opening Range", "Border", or30BoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Opening Range", "Label", or30LabelColor)
+        currentRow += 1
+
+    if showCR30
+        addColorRow(colorTable, currentRow, "Closing Range", "Fill", cr30Color)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Closing Range", "Border", cr30BoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Closing Range", "Label", cr30LabelColor)
+        currentRow += 1
