@@ -171,6 +171,8 @@ fvgBullishFilledColor = input.color(DEFAULT_FVG_BULLISH_FILLED_COLOR, "Filled", 
 fvgBearishUnfilledColor = input.color(DEFAULT_FVG_BEARISH_UNFILLED_COLOR, "Bearish Unfilled", group=GROUP_FVG, inline="3")
 fvgBearishFilledColor = input.color(DEFAULT_FVG_BEARISH_FILLED_COLOR, "Filled", group=GROUP_FVG, inline="3")
 hideFilledFVG = input.bool(true, LABEL_HIDE_FILLED, group=GROUP_FVG, inline="4")
+includeTrueGap = input.bool(true, "True Gap", group=GROUP_FVG, inline="4", tooltip="Expand FVG boundaries to include contiguous True Gaps (complete wick separation)")
+includeVI = input.bool(true, "VI", group=GROUP_FVG, inline="4", tooltip="Expand FVG boundaries to include contiguous Volume Imbalances (body gaps where wicks still connect)")
 fvgBullishBoundaryColor = input.color(DEFAULT_FVG_BULLISH_BOUNDARY_COLOR, "Bullish Border", group=GROUP_FVG, inline="5")
 fvgBearishBoundaryColor = input.color(DEFAULT_FVG_BEARISH_BOUNDARY_COLOR, "Bearish Border", group=GROUP_FVG, inline="5")
 fvgLabelColor = input.color(DEFAULT_FVG_LABEL_COLOR, "Label", group=GROUP_FVG, inline="6")
@@ -1027,24 +1029,29 @@ if array.size(gapsArray) > 0
                 gap.entryDirection := ENTRY_FROM_ABOVE
 
         if not gap.filled
+            // FVGs use body (like SIF), other gaps use wicks
+            isFVGType = isFVG(gap.gapType)
+            priceHigh = isFVGType ? math.max(open, close) : high
+            priceLow = isFVGType ? math.min(open, close) : low
+
             if gap.entryDirection == ENTRY_FROM_BELOW
-                if high >= gap.bottom and high <= gap.top
-                    gap.penetrationLevel := na(gap.penetrationLevel) ? high : math.max(gap.penetrationLevel, high)
-                if high >= gap.top
+                if priceHigh >= gap.bottom and priceHigh <= gap.top
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? priceHigh : math.max(gap.penetrationLevel, priceHigh)
+                if priceHigh >= gap.top
                     gap.penetrationLevel := gap.top
                     gap.filled := true
                     clearProjections(gap)
-                    if isBPR(gap.gapType) or isFVG(gap.gapType)
+                    if isBPR(gap.gapType) or isFVGType
                         stopExtendingAt(gap, time)
 
             else if gap.entryDirection == ENTRY_FROM_ABOVE
-                if low <= gap.top and low >= gap.bottom
-                    gap.penetrationLevel := na(gap.penetrationLevel) ? low : math.min(gap.penetrationLevel, low)
-                if low <= gap.bottom
+                if priceLow <= gap.top and priceLow >= gap.bottom
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? priceLow : math.min(gap.penetrationLevel, priceLow)
+                if priceLow <= gap.bottom
                     gap.penetrationLevel := gap.bottom
                     gap.filled := true
                     clearProjections(gap)
-                    if isBPR(gap.gapType) or isFVG(gap.gapType)
+                    if isBPR(gap.gapType) or isFVGType
                         stopExtendingAt(gap, time)
 
             if not gap.filled and not na(gap.penetrationLevel)
@@ -1503,31 +1510,77 @@ if displayBPR
         bearBprBottomDetected := na
         bearBprLeftTimeDetected := na
 
-// FVG Detection (3-candle pattern, expands to include True Gap when present)
+// FVG Detection (3-candle pattern, expands to include True Gap and VI when present)
 if displayFVG and barstate.isconfirmed
     isBullishFVG = low > high[2]
     isBearishFVG = high < low[2]
-    // True Gap check for FVG expansion
-    isBullishTrueGap = low > high[1]
-    isBearishTrueGap = high < low[1]
 
-    // Bullish FVG (expand to include True Gap if present)
+    // Bullish FVG (expand to include True Gap and VI if present)
     if isBullishFVG
         fvgTop = low
-        fvgBottom = isBullishTrueGap ? math.min(high[2], high[1]) : high[2]
-        if not tryMergeGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BULLISH)
-            array.push(gapsArray, createGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BULLISH, false, time[2], true))
-            if countFVG() > fvgLimit
-                removeOldestFVG()
+        fvgBottom = high[2]
+        // True Gap expansion: check for bullish True Gaps contiguous with FVG boundaries
+        if includeTrueGap
+            // Check True Gap on exit side: between [0] and [1] (expands top)
+            isBullishTG_0_1 = low > high[1]
+            if isBullishTG_0_1
+                fvgTop := math.max(fvgTop, low)  // Already at low, but keeps pattern consistent
+            // Check True Gap within formation: between [1] and [2] (expands bottom)
+            isBullishTG_1_2 = low[1] > high[2]
+            if isBullishTG_1_2
+                fvgBottom := math.min(fvgBottom, high[2])  // Already at high[2], but include high[1] boundary
+            // The original True Gap expansion logic
+            if low > high[1]
+                fvgBottom := math.min(fvgBottom, high[1])
+        // VI expansion: check for bullish VIs contiguous with FVG boundaries
+        if includeVI
+            // Check VI on exit side: between [0] and [1] (expands top)
+            isBullishVI_0_1 = math.min(open, close) > math.max(open[1], close[1]) and low <= high[1]
+            if isBullishVI_0_1
+                fvgTop := math.max(fvgTop, math.min(open, close))
+            // Check VI within formation: between [1] and [2] (expands bottom)
+            isBullishVI_1_2 = math.min(open[1], close[1]) > math.max(open[2], close[2]) and low[1] <= high[2]
+            if isBullishVI_1_2
+                fvgBottom := math.min(fvgBottom, math.max(open[2], close[2]))
+            // Check VI outside formation: between [2] and [3] (expands bottom further)
+            isBullishVI_2_3 = math.min(open[2], close[2]) > math.max(open[3], close[3]) and low[2] <= high[3]
+            if isBullishVI_2_3
+                fvgBottom := math.min(fvgBottom, math.max(open[3], close[3]))
+        array.push(gapsArray, createGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BULLISH, false, time[2], true))
+        if countFVG() > fvgLimit
+            removeOldestFVG()
 
-    // Bearish FVG (expand to include True Gap if present)
+    // Bearish FVG (expand to include True Gap and VI if present)
     else if isBearishFVG
-        fvgTop = isBearishTrueGap ? math.max(low[2], low[1]) : low[2]
+        fvgTop = low[2]
         fvgBottom = high
-        if not tryMergeGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BEARISH)
-            array.push(gapsArray, createGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BEARISH, false, time[2], false))
-            if countFVG() > fvgLimit
-                removeOldestFVG()
+        // True Gap expansion: check for bearish True Gaps contiguous with FVG boundaries
+        if includeTrueGap
+            // Check True Gap within formation: between [1] and [2] (expands top)
+            isBearishTG_1_2 = high[1] < low[2]
+            if isBearishTG_1_2
+                fvgTop := math.max(fvgTop, low[1])
+            // Check True Gap on exit side: between [0] and [1] (expands bottom)
+            isBearishTG_0_1 = high < low[1]
+            if isBearishTG_0_1
+                fvgBottom := math.min(fvgBottom, high)  // Already at high, but keeps pattern consistent
+        // VI expansion: check for bearish VIs contiguous with FVG boundaries
+        if includeVI
+            // Check VI outside formation: between [2] and [3] (expands top further)
+            isBearishVI_2_3 = math.max(open[2], close[2]) < math.min(open[3], close[3]) and high[2] >= low[3]
+            if isBearishVI_2_3
+                fvgTop := math.max(fvgTop, math.min(open[3], close[3]))
+            // Check VI within formation: between [1] and [2] (expands top)
+            isBearishVI_1_2 = math.max(open[1], close[1]) < math.min(open[2], close[2]) and high[1] >= low[2]
+            if isBearishVI_1_2
+                fvgTop := math.max(fvgTop, math.min(open[2], close[2]))
+            // Check VI on exit side: between [0] and [1] (expands bottom)
+            isBearishVI_0_1 = math.max(open, close) < math.min(open[1], close[1]) and high >= low[1]
+            if isBearishVI_0_1
+                fvgBottom := math.min(fvgBottom, math.max(open, close))
+        array.push(gapsArray, createGap(fvgTop, fvgBottom, GAP_TYPE_FVG_BEARISH, false, time[2], false))
+        if countFVG() > fvgLimit
+            removeOldestFVG()
 
 // Clear old divider lines
 if array.size(dividerLines) > 0
