@@ -70,6 +70,65 @@ line.new(..., style=line.style_dotted)  // Value used directly
 
 Lazy refactoring leaves "dead" code controls that serve no purpose and confuse future developers. Clean code means removing unnecessary abstractions entirely.
 
+## Always Keep Code DRY - Parameterize Functions
+
+**CORE PRINCIPLE: Never duplicate code. Always parameterize functions to make them reusable.**
+
+When similar logic is needed for multiple contexts (e.g., multiple timeframes, multiple data sources):
+
+- ❌ **WRONG**: Duplicate the function with different variable names
+- ✅ **CORRECT**: Parameterize the function to accept the data it needs
+
+### Examples
+
+#### ❌ WRONG (Duplicated Functions)
+
+```pine
+// Duplicated function for HTF1
+is_htf_displacement_candle() =>
+    float c2_body = math.abs(htf_c2 - htf_o2)
+    float avg_body = (math.abs(htf_c3 - htf_o3) + math.abs(htf_c4 - htf_o4)) / 2
+    c2_body >= avg_body * 1.25
+
+// Duplicated function for HTF2 - BAD!
+is_htf2_displacement_candle() =>
+    float c2_body = math.abs(htf2_c2 - htf2_o2)
+    float avg_body = (math.abs(htf2_c3 - htf2_o3) + math.abs(htf2_c4 - htf2_o4)) / 2
+    c2_body >= avg_body * 1.25
+```
+
+#### ✅ CORRECT (Parameterized Function)
+
+```pine
+// Single parameterized function - works for any HTF
+is_displacement_candle(float o2, float c2, float o3, float c3, float o4, float c4) =>
+    float c2_body = math.abs(c2 - o2)
+    float avg_body = (math.abs(c3 - o3) + math.abs(c4 - o4)) / 2
+    c2_body >= avg_body * 1.25
+
+// Usage:
+is_displacement_candle(htf_o2, htf_c2, htf_o3, htf_c3, htf_o4, htf_c4)   // HTF1
+is_displacement_candle(htf2_o2, htf2_c2, htf2_o3, htf2_c3, htf2_o4, htf2_c4) // HTF2
+```
+
+### What MUST Be Separate (Unavoidable)
+
+- **State variables** - Each context needs its own state (`htf_open` vs `htf2_open`)
+- **Storage arrays** - Each context needs its own arrays (`gap_array` vs `gap_array_htf2`)
+
+### What MUST Be Parameterized (No Duplication)
+
+- **Detection functions** - Pass OHLC data as parameters
+- **Calculation functions** - Pass values, don't read globals
+- **Validation functions** - Accept the data they operate on
+
+### Why This Matters
+
+- Bugs fixed in one place are fixed everywhere
+- Changes only need to be made once
+- Code is easier to understand and maintain
+- Reduces file size and cognitive load
+
 ## Never Add Subjective Commentary
 
 **NEVER add subjective or editorial comments in code such as:**
