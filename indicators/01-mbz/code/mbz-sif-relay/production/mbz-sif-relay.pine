@@ -14,7 +14,7 @@
 //   4H  chart → D   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="relay • development", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -444,8 +444,70 @@ type CandleZone
     box    zone_box
     line   validation_line    // Vertical line marking when HTF candle closed (zone became valid)
 
-// Unified zone storage (declared early so functions can reference it)
-var array<CandleZone> zone_array = array.new<CandleZone>()
+// ═══════════════════════════════════════════════════════════════════════════════
+// HTF CONTEXT TYPE (for multi-HTF support)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Encapsulates all state for a single HTF timeframe
+// Functions accept arrays as parameters to enable reuse across multiple HTFs
+
+type HTFContext
+    // ─── Configuration ───
+    string htf_string              // TradingView timeframe string ("240", "D", etc.)
+    string htf_label               // Display label ("4H", "D", etc.)
+    int    htf_ms                  // Milliseconds per HTF candle
+
+    // ─── Current forming candle ───
+    float  curr_open
+    float  curr_high
+    float  curr_low
+    int    curr_time
+
+    // ─── Confirmed candle history [1] = most recent closed ───
+    float  o1
+    float  h1
+    float  l1
+    float  c1
+    int    t1
+
+    // ─── Confirmed candle history [2] = second most recent ───
+    float  o2
+    float  h2
+    float  l2
+    float  c2
+    int    t2
+
+    // ─── Confirmed candle history [3] = third most recent ───
+    float  o3
+    float  h3
+    float  l3
+    float  c3
+    int    t3
+
+    // ─── Extra history for displacement lookback ───
+    float  o4
+    float  h4
+    float  l4
+    float  c4
+    float  o5
+    float  h5
+    float  l5
+    float  c5
+
+    // ─── Breakaway trend range (20-bar HTF high/low) ───
+    float  breakaway_upper_1
+    float  breakaway_lower_1
+    float  breakaway_upper_2
+    float  breakaway_lower_2
+    float  breakaway_upper_3
+    float  breakaway_lower_3
+
+    // ─── Data arrays ───
+    array<GapData>      gap_array
+    array<CandleZone>   zone_array
+    array<int>          htf_times      // Track HTF candle times for window
+
+    // ─── Unique ID counter ───
+    int    next_gap_id
 
 // Preview zone storage (separate from confirmed zones - rebuilt each bar)
 var array<CandleZone> preview_zone_array = array.new<CandleZone>()
@@ -599,12 +661,12 @@ create_candle_zone(int formation_bar_index, int formation_time, float candle_ope
     zone
 
 // Find existing zone for a candle by formation_time
-// Returns index in zone_array, or -1 if not found
-find_zone_index_for_candle(int formation_time) =>
+// Returns index in zone_arr, or -1 if not found
+find_zone_index_for_candle(array<CandleZone> zone_arr, int formation_time) =>
     int result = -1
-    if array.size(zone_array) > 0
-        for i = 0 to array.size(zone_array) - 1
-            CandleZone z = array.get(zone_array, i)
+    if array.size(zone_arr) > 0
+        for i = 0 to array.size(zone_arr) - 1
+            CandleZone z = array.get(zone_arr, i)
             if z.formation_time == formation_time
                 result := i
                 break
@@ -614,12 +676,12 @@ find_zone_index_for_candle(int formation_time) =>
 // If zone exists, returns it for updating
 // If not, creates new zone and adds to array
 // Note: Caller must update the zone and call array.set() after modifications
-get_or_create_zone(int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension) =>
-    int existing_idx = find_zone_index_for_candle(formation_time)
+get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension) =>
+    int existing_idx = find_zone_index_for_candle(zone_arr, formation_time)
 
     if existing_idx >= 0
         // Return existing zone
-        [array.get(zone_array, existing_idx), existing_idx, false]
+        [array.get(zone_arr, existing_idx), existing_idx, false]
     else
         // Create new zone with empty source arrays
         array<int> gap_ids = array.new<int>()
@@ -627,7 +689,7 @@ get_or_create_zone(int formation_bar_index, int formation_time, float candle_ope
 
         CandleZone new_zone = create_candle_zone(formation_bar_index, formation_time, candle_open, candle_close, candle_high, candle_low, is_bullish, gap_ids, gap_types, ref_high, ref_low, allow_wick_extension, false, false, false)
 
-        array.unshift(zone_array, new_zone)
+        array.unshift(zone_arr, new_zone)
         [new_zone, 0, true]
 
 // Add source gap to zone's source arrays (avoids duplicates)
@@ -649,46 +711,48 @@ add_source_to_zone(CandleZone zone, int gap_id, string gap_type, bool gap_is_bre
             zone.is_breakaway := true
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// STATE VARIABLES
+// HTF1 CONTEXT INSTANCE
 // ═══════════════════════════════════════════════════════════════════════════════
+// Primary HTF context - encapsulates all state for the main timeframe
 
-// HTF OHLC tracking - current forming candle
-var float htf_open  = 0.0
-var float htf_high  = 0.0
-var float htf_low   = 0.0
-var int   htf_time  = 0
+var HTFContext htf1 = HTFContext.new(
+    htf_string       = HTF_STRING,
+    htf_label        = HTF_LABEL,
+    htf_ms           = HTF_MS,
+    curr_open        = 0.0,
+    curr_high        = 0.0,
+    curr_low         = 0.0,
+    curr_time        = 0,
+    o1 = 0.0, h1 = 0.0, l1 = 0.0, c1 = 0.0, t1 = 0,
+    o2 = 0.0, h2 = 0.0, l2 = 0.0, c2 = 0.0, t2 = 0,
+    o3 = 0.0, h3 = 0.0, l3 = 0.0, c3 = 0.0, t3 = 0,
+    o4 = 0.0, h4 = 0.0, l4 = 0.0, c4 = 0.0,
+    o5 = 0.0, h5 = 0.0, l5 = 0.0, c5 = 0.0,
+    breakaway_upper_1 = na, breakaway_lower_1 = na,
+    breakaway_upper_2 = na, breakaway_lower_2 = na,
+    breakaway_upper_3 = na, breakaway_lower_3 = na,
+    gap_array        = array.new<GapData>(),
+    zone_array       = array.new<CandleZone>(),
+    htf_times        = array.new<int>(),
+    next_gap_id      = 1
+)
 
-// HTF candle history [1], [2], [3] - full OHLC for implied FVG detection
-var float htf_o1 = 0.0, var float htf_h1 = 0.0, var float htf_l1 = 0.0, var float htf_c1 = 0.0, var int htf_t1 = 0
-var float htf_o2 = 0.0, var float htf_h2 = 0.0, var float htf_l2 = 0.0, var float htf_c2 = 0.0, var int htf_t2 = 0
-var float htf_o3 = 0.0, var float htf_h3 = 0.0, var float htf_l3 = 0.0, var float htf_c3 = 0.0, var int htf_t3 = 0
-var float htf_o4 = 0.0, var float htf_h4 = 0.0, var float htf_l4 = 0.0, var float htf_c4 = 0.0  // Extra for displacement lookback
-var float htf_o5 = 0.0, var float htf_h5 = 0.0, var float htf_l5 = 0.0, var float htf_c5 = 0.0  // Extra for displacement lookback
-
-// Breakaway trend range tracking (20-bar HTF high/low)
-var float htf_breakaway_upper_1 = na  // 20-bar highest at htf_*1
-var float htf_breakaway_lower_1 = na  // 20-bar lowest at htf_*1
-var float htf_breakaway_upper_2 = na  // 20-bar highest at htf_*2
-var float htf_breakaway_lower_2 = na  // 20-bar lowest at htf_*2
-var float htf_breakaway_upper_3 = na  // 20-bar highest at htf_*3 (anchor)
-var float htf_breakaway_lower_3 = na  // 20-bar lowest at htf_*3 (anchor)
+// ═══════════════════════════════════════════════════════════════════════════════
+// NON-CONTEXT STATE (visual elements, not tied to HTF data)
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // Current candle boxes
 var box wick_box = na
 var box body_box = na
 
 // Track previous wick boxes for MBZ highlighting
-// At MBZ check: prev_wick_box = htf_*1's box (MBZ), prev_prev_wick_box = htf_*2's box (reference)
 var box prev_wick_box = na
 var box prev_prev_wick_box = na
 
-// Storage arrays
+// Visual storage (shared across HTFs)
 var array<HTFCandle> candle_boxes = array.new<HTFCandle>()
-var array<GapData>   gap_array    = array.new<GapData>()
-var array<int>       htf_times    = array.new<int>()  // Track HTF candle times for window (independent of display)
-var array<box>       inversion_highlights = array.new<box>()  // Visual debug: highlight candles that invert gaps
-var array<box>       tap_highlights = array.new<box>()  // Visual debug: highlight first tapper candles
-var int next_gap_id = 1  // Unique ID counter for gap tracking
+var array<box>       inversion_highlights = array.new<box>()
+var array<box>       tap_highlights = array.new<box>()
 
 // HTF boundary detection
 bool new_htf = IS_VALID ? ta.change(time(HTF_STRING)) != 0 : false
@@ -947,15 +1011,15 @@ htf_body_top(float o, float c) => math.max(o, c)
 htf_body_bot(float o, float c) => math.min(o, c)
 
 // ─── HTF Displacement Candle Check ───
-// Checks if C2 (htf_o2/htf_c2) is a displacement candle relative to C3-C5
+// Checks if C2 (htf1.o2/htf1.c2) is a displacement candle relative to C3-C5
 is_htf_displacement_candle() =>
     // C2 body size
-    float c2_body = math.abs(htf_c2 - htf_o2)
+    float c2_body = math.abs(htf1.c2 - htf1.o2)
 
     // Average body size of C3, C4, C5 (lookback candles)
-    float c3_body = math.abs(htf_c3 - htf_o3)
-    float c4_body = math.abs(htf_c4 - htf_o4)
-    float c5_body = math.abs(htf_c5 - htf_o5)
+    float c3_body = math.abs(htf1.c3 - htf1.o3)
+    float c4_body = math.abs(htf1.c4 - htf1.o4)
+    float c5_body = math.abs(htf1.c5 - htf1.o5)
     float avg_body = (c3_body + c4_body + c5_body) / 3.0
 
     // Require C2 >= multiplier * average
@@ -976,22 +1040,22 @@ detect_htf_implied_fvg() =>
         // Body boundaries
         // old = htf_*3 (oldest)
         // new = htf_*1 (newest)
-        float old_body_top = htf_body_top(htf_o3, htf_c3)
-        float old_body_bot = htf_body_bot(htf_o3, htf_c3)
-        float new_body_top = htf_body_top(htf_o1, htf_c1)
-        float new_body_bot = htf_body_bot(htf_o1, htf_c1)
+        float old_body_top = htf_body_top(htf1.o3, htf1.c3)
+        float old_body_bot = htf_body_bot(htf1.o3, htf1.c3)
+        float new_body_top = htf_body_top(htf1.o1, htf1.c1)
+        float new_body_bot = htf_body_bot(htf1.o1, htf1.c1)
 
         // ─── BULLISH Implied FVG ───
         // Price moved UP: old candle below, new candle above
         // Bodies separate: old body top < new body bottom (gap between)
         // Wicks overlap: old upper wick overlaps new lower wick
         bool bodies_sep_bull = old_body_top < new_body_bot
-        bool old_upper_wick_exists = htf_h3 > old_body_top
-        bool new_lower_wick_exists = new_body_bot > htf_l1
+        bool old_upper_wick_exists = htf1.h3 > old_body_top
+        bool new_lower_wick_exists = new_body_bot > htf1.l1
         bool bull_wicks_valid = bodies_sep_bull and old_upper_wick_exists and new_lower_wick_exists
 
-        float bull_overlap_lo = math.max(old_body_top, htf_l1)
-        float bull_overlap_hi = math.min(htf_h3, new_body_bot)
+        float bull_overlap_lo = math.max(old_body_top, htf1.l1)
+        float bull_overlap_hi = math.min(htf1.h3, new_body_bot)
         bool bull_has_overlap = bull_overlap_hi > bull_overlap_lo and bull_wicks_valid
 
         if bull_has_overlap
@@ -1002,12 +1066,12 @@ detect_htf_implied_fvg() =>
             // Bodies separate: new body top < old body bottom (gap between)
             // Wicks overlap: new upper wick overlaps old lower wick
             bool bodies_sep_bear = new_body_top < old_body_bot
-            bool new_upper_wick_exists = htf_h1 > new_body_top
-            bool old_lower_wick_exists = old_body_bot > htf_l3
+            bool new_upper_wick_exists = htf1.h1 > new_body_top
+            bool old_lower_wick_exists = old_body_bot > htf1.l3
             bool bear_wicks_valid = bodies_sep_bear and new_upper_wick_exists and old_lower_wick_exists
 
-            float bear_overlap_lo = math.max(new_body_top, htf_l3)
-            float bear_overlap_hi = math.min(htf_h1, old_body_bot)
+            float bear_overlap_lo = math.max(new_body_top, htf1.l3)
+            float bear_overlap_hi = math.min(htf1.h1, old_body_bot)
             bool bear_has_overlap = bear_overlap_hi > bear_overlap_lo and bear_wicks_valid
 
             if bear_has_overlap
@@ -1023,20 +1087,20 @@ detect_htf_implied_fvg() =>
 // Uses htf_*1 (newest) and htf_*2 (previous) candles
 // Condition: htf_*1 body completely above htf_*2 body, but wicks still connect
 is_htf_bullish_vi() =>
-    float curr_body_bot = htf_body_bot(htf_o1, htf_c1)  // Current body bottom
-    float prev_body_top = htf_body_top(htf_o2, htf_c2)  // Previous body top
+    float curr_body_bot = htf_body_bot(htf1.o1, htf1.c1)  // Current body bottom
+    float prev_body_top = htf_body_top(htf1.o2, htf1.c2)  // Previous body top
     bool bodies_separated = curr_body_bot > prev_body_top
-    bool wicks_still_connect = htf_l1 <= htf_h2  // Current low reaches previous high
+    bool wicks_still_connect = htf1.l1 <= htf1.h2  // Current low reaches previous high
     bodies_separated and wicks_still_connect
 
 // Detects 2-candle bearish Volume Imbalance with body separation and wick overlap
 // Uses htf_*1 (newest) and htf_*2 (previous) candles
 // Condition: htf_*1 body completely below htf_*2 body, but wicks still connect
 is_htf_bearish_vi() =>
-    float curr_body_top = htf_body_top(htf_o1, htf_c1)  // Current body top
-    float prev_body_bot = htf_body_bot(htf_o2, htf_c2)  // Previous body bottom
+    float curr_body_top = htf_body_top(htf1.o1, htf1.c1)  // Current body top
+    float prev_body_bot = htf_body_bot(htf1.o2, htf1.c2)  // Previous body bottom
     bool bodies_separated = curr_body_top < prev_body_bot
-    bool wicks_still_connect = htf_h1 >= htf_l2  // Current high reaches previous low
+    bool wicks_still_connect = htf1.h1 >= htf1.l2  // Current high reaches previous low
     bodies_separated and wicks_still_connect
 
 // Calculates Volume Imbalance gap coordinates using 2-candle body separation
@@ -1044,25 +1108,25 @@ is_htf_bearish_vi() =>
 get_htf_vi_coordinates(bool is_bullish_gap) =>
     if is_bullish_gap
         // Bullish VI: gap between htf_*2 body top and htf_*1 body bottom
-        float gap_bottom = htf_body_top(htf_o2, htf_c2)  // Previous body top
-        float gap_top = htf_body_bot(htf_o1, htf_c1)     // Current body bottom
+        float gap_bottom = htf_body_top(htf1.o2, htf1.c2)  // Previous body top
+        float gap_top = htf_body_bot(htf1.o1, htf1.c1)     // Current body bottom
         [gap_top, gap_bottom]
     else
         // Bearish VI: gap between htf_*2 body bottom and htf_*1 body top
-        float gap_top = htf_body_bot(htf_o2, htf_c2)     // Previous body bottom
-        float gap_bottom = htf_body_top(htf_o1, htf_c1)  // Current body top
+        float gap_top = htf_body_bot(htf1.o2, htf1.c2)     // Previous body bottom
+        float gap_bottom = htf_body_top(htf1.o1, htf1.c1)  // Current body top
         [gap_top, gap_bottom]
 
 // Checks if Volume Imbalance should be suppressed by higher-priority gaps
 // Matches SIF-Core's is_gap_overlapping logic exactly:
 // VI is suppressed if there's an overlapping FVG or Implied FVG of the same direction that is still open
-is_htf_vi_suppressed_by_gaps(float vi_top, float vi_bottom, bool is_vi_bullish) =>
-    if array.size(gap_array) == 0
+is_htf_vi_suppressed_by_gaps(array<GapData> gap_arr, float vi_top, float vi_bottom, bool is_vi_bullish) =>
+    if array.size(gap_arr) == 0
         false  // No existing gaps = no suppression
     else
         bool has_overlap = false
-        for i = 0 to array.size(gap_array) - 1
-            GapData gap = array.get(gap_array, i)
+        for i = 0 to array.size(gap_arr) - 1
+            GapData gap = array.get(gap_arr, i)
 
             // Check for both FVG AND Implied FVG (not volume) - institutional gap hierarchy
             // Matches SIF-Core: (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED)
@@ -1084,7 +1148,7 @@ is_htf_vi_suppressed_by_gaps(float vi_top, float vi_bottom, bool is_vi_bullish) 
 //   2. Inversion only: solid border (red=bullish gap inverted, green=bearish gap inverted)
 //   3. Both (same candle): solid border + fill (immediate SIF)
 // Also registers SIF zones when enable_sif_engine is true
-check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_candle_low, float htf_candle_close, int htf_candle_time) =>
+check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float htf_candle_open, float htf_candle_high, float htf_candle_low, float htf_candle_close, int htf_candle_time) =>
     // OPTIMIZATION: Check if any visual toggle is enabled (skip visual tracking if all off)
     bool any_visual_enabled = show_first_tap_only or show_immediate_sif or show_delayed_inversion
 
@@ -1111,10 +1175,10 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
     bool is_candle_bullish = htf_candle_close > htf_candle_open
     bool is_candle_bearish = htf_candle_close < htf_candle_open
 
-    if array.size(gap_array) > 0
+    if array.size(gap_arr) > 0
         // PASS 1: Process all gaps, update state, and determine highest priority interaction
-        for i = 0 to array.size(gap_array) - 1
-            GapData gap = array.get(gap_array, i)
+        for i = 0 to array.size(gap_arr) - 1
+            GapData gap = array.get(gap_arr, i)
 
             // Skip already inverted gaps
             if gap.is_inverted
@@ -1180,7 +1244,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
 
             // Update gap if anything changed
             if is_first_tap or is_inversion
-                array.set(gap_array, i, gap)
+                array.set(gap_arr, i, gap)
 
             // Determine colors based on gap direction
             color tap_color = gap.is_bullish ? TAP_BEARISH_CANDLE_COLOR : TAP_BULLISH_CANDLE_COLOR
@@ -1208,7 +1272,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
         if enable_sif_engine and has_immediate_sif
             // Immediate SIF detected - get or create zone for this candle
             // SIF zones don't use reference wick extension (set ref to na, allow_extension to false)
-            [zone, zone_idx, is_new] = get_or_create_zone(bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false)
+            [zone, zone_idx, is_new] = get_or_create_zone(zone_arr, bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false)
 
             // Update zone with SIF flag
             zone.has_sif := true
@@ -1219,7 +1283,7 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
                 add_source_to_zone(zone, array.get(sif_gap_ids, j), array.get(sif_gap_types, j), array.get(sif_gap_breakaways, j))
 
             // Save updated zone back to array
-            array.set(zone_array, zone_idx, zone)
+            array.set(zone_arr, zone_idx, zone)
 
         // PASS 3: Draw ONE highlight based on highest priority interaction (skip if all toggles off)
         if any_visual_enabled
@@ -1241,9 +1305,9 @@ check_gap_interactions(float htf_candle_open, float htf_candle_high, float htf_c
 // Check for MBZ formation (check tap + conviction in single pass)
 // prev_* = reference candle (htf_*2 = candle before the one that just completed)
 // curr_* = MBZ candle (htf_*1 = candle that just completed)
-// ref_time = reference candle's start time (htf_t2) - must be AFTER gap formation
+// ref_time = reference candle's start time (htf1.t2) - must be AFTER gap formation
 // Returns array of MBZFormationMatch for ALL gaps that form MBZs on this candle
-check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int ref_time, float curr_o, float curr_h, float curr_l, float curr_c) =>
+check_mbz_formation(array<GapData> gap_arr, float prev_o, float prev_h, float prev_l, float prev_c, int ref_time, float curr_o, float curr_h, float curr_l, float curr_c) =>
     array<MBZFormationMatch> matches = array.new<MBZFormationMatch>()
 
     // Previous candle (reference) direction
@@ -1254,9 +1318,9 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
     bool curr_is_bullish = curr_c > curr_o
     bool curr_is_bearish = curr_c < curr_o
 
-    if array.size(gap_array) > 0
-        for i = 0 to array.size(gap_array) - 1
-            GapData gap = array.get(gap_array, i)
+    if array.size(gap_arr) > 0
+        for i = 0 to array.size(gap_arr) - 1
+            GapData gap = array.get(gap_arr, i)
 
             // Skip closed gaps - inverted gaps are closed and cannot form MBZ
             if gap.is_inverted
@@ -1291,7 +1355,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                         // Mark source FVG - freeze box at reference candle + track MBZ direction
                         gap.mbz_ref_time := ref_time
                         gap.mbz_is_bullish := true
-                        array.set(gap_array, i, gap)
+                        array.set(gap_arr, i, gap)
                         // Detect subtype from MBZ candle (always on)
                         [detected_subtype, _has_dominant] = detect_zone_subtype(curr_o, curr_c, curr_h, curr_l)
                         // Create match record
@@ -1309,7 +1373,7 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
                         // Mark source FVG - freeze box at reference candle + track MBZ direction
                         gap.mbz_ref_time := ref_time
                         gap.mbz_is_bullish := false
-                        array.set(gap_array, i, gap)
+                        array.set(gap_arr, i, gap)
                         // Detect subtype from MBZ candle (always on)
                         [detected_subtype, _has_dominant] = detect_zone_subtype(curr_o, curr_c, curr_h, curr_l)
                         // Create match record
@@ -1325,8 +1389,8 @@ check_mbz_formation(float prev_o, float prev_h, float prev_l, float prev_c, int 
 
 // Update FVG box positions and visibility based on display mode + direction filter
 // Priority: mbz_ref_time (freeze at reference candle) > inverted_time > current time
-update_gap_positions() =>
-    int gap_count = array.size(gap_array)
+update_gap_positions(array<GapData> gap_arr, array<CandleZone> zone_arr) =>
+    int gap_count = array.size(gap_arr)
     if gap_count > 0
         // OPTIMIZATION: Pre-calculate colors outside loop
         color gap_bg_visible = color.new(GAP_COLOR, 90)
@@ -1340,10 +1404,10 @@ update_gap_positions() =>
         // This converts O(n*m) nested loops to O(n+m) with O(1) lookups
         map<int, bool> active_mbz_gap_ids = map.new<int, bool>()
         map<int, bool> active_sif_gap_ids = map.new<int, bool>()
-        int zone_count = array.size(zone_array)
+        int zone_count = array.size(zone_arr)
         if zone_count > 0
             for i = 0 to zone_count - 1
-                CandleZone zone = array.get(zone_array, i)
+                CandleZone zone = array.get(zone_arr, i)
                 int gap_id_count = array.size(zone.source_gap_ids)
                 if gap_id_count > 0
                     if zone.has_mbz and not zone.mbz_invalidated
@@ -1354,7 +1418,7 @@ update_gap_positions() =>
                             map.put(active_sif_gap_ids, array.get(zone.source_gap_ids, j), true)
 
         for i = 0 to gap_count - 1
-            GapData gap = array.get(gap_array, i)
+            GapData gap = array.get(gap_arr, i)
             // Freeze at reference candle when MBZ formed, else at inversion, else extend
             int right_edge = gap.mbz_ref_time > 0 ? gap.mbz_ref_time : (gap.is_inverted ? gap.inverted_time : time)
             box.set_right(gap.gap_box, right_edge)
@@ -1387,19 +1451,19 @@ update_gap_positions() =>
             label.set_textcolor(gap.tf_label, show_gap ? gap_label_visible : gap_label_hidden)
 
 // Cleanup FVGs: window-based + enforce max count
-cleanup_gaps(int window_start, int max_count) =>
+cleanup_gaps(array<GapData> gap_arr, int window_start, int max_count) =>
     // Remove FVGs outside data window
-    if window_start > 0 and array.size(gap_array) > 0
-        for i = array.size(gap_array) - 1 to 0
-            GapData gap = array.get(gap_array, i)
+    if window_start > 0 and array.size(gap_arr) > 0
+        for i = array.size(gap_arr) - 1 to 0
+            GapData gap = array.get(gap_arr, i)
             if gap.start_time < window_start
                 box.delete(gap.gap_box)
                 line.delete(gap.ce_line)
                 label.delete(gap.tf_label)
-                array.remove(gap_array, i)
+                array.remove(gap_arr, i)
     // Enforce max count (remove oldest to stay under drawing limit)
-    while array.size(gap_array) > max_count
-        GapData old = array.pop(gap_array)
+    while array.size(gap_arr) > max_count
+        GapData old = array.pop(gap_arr)
         box.delete(old.gap_box)
         line.delete(old.ce_line)
         label.delete(old.tf_label)
@@ -1490,9 +1554,9 @@ create_preview_zone(int formation_time, float candle_open, float candle_close, f
 // Check for preview MBZ formation using forming candle
 // ref_* = reference candle (htf_*1 = last confirmed candle)
 // forming_* = forming candle (htf_open, htf_high, htf_low, current close)
-// ref_time = reference candle's time (htf_t1)
+// ref_time = reference candle's time (htf1.t1)
 // Returns array of MBZFormationMatch for potential MBZs
-check_preview_mbz_formation(float ref_o, float ref_h, float ref_l, float ref_c, int ref_time, float forming_o, float forming_h, float forming_l, float forming_c) =>
+check_preview_mbz_formation(array<GapData> gap_arr, float ref_o, float ref_h, float ref_l, float ref_c, int ref_time, float forming_o, float forming_h, float forming_l, float forming_c) =>
     array<MBZFormationMatch> matches = array.new<MBZFormationMatch>()
 
     // Reference candle direction
@@ -1503,9 +1567,9 @@ check_preview_mbz_formation(float ref_o, float ref_h, float ref_l, float ref_c, 
     bool forming_is_bullish = forming_c > forming_o
     bool forming_is_bearish = forming_c < forming_o
 
-    if array.size(gap_array) > 0
-        for i = 0 to array.size(gap_array) - 1
-            GapData gap = array.get(gap_array, i)
+    if array.size(gap_arr) > 0
+        for i = 0 to array.size(gap_arr) - 1
+            GapData gap = array.get(gap_arr, i)
 
             // Skip closed gaps - inverted gaps cannot form MBZ
             if gap.is_inverted
@@ -1561,7 +1625,7 @@ check_preview_mbz_formation(float ref_o, float ref_h, float ref_l, float ref_c, 
 
 // Check for preview SIF formation using forming candle
 // Returns [has_sif, is_bullish_candle, gap_ids, gap_types, gap_breakaways]
-check_preview_sif_formation(float forming_o, float forming_h, float forming_l, float forming_c, int forming_time) =>
+check_preview_sif_formation(array<GapData> gap_arr, float forming_o, float forming_h, float forming_l, float forming_c, int forming_time) =>
     array<int> sif_gap_ids = array.new<int>()
     array<string> sif_gap_types = array.new<string>()
     array<bool> sif_gap_breakaways = array.new<bool>()
@@ -1571,9 +1635,9 @@ check_preview_sif_formation(float forming_o, float forming_h, float forming_l, f
     bool is_candle_bullish = forming_c > forming_o
     bool is_candle_bearish = forming_c < forming_o
 
-    if array.size(gap_array) > 0
-        for i = 0 to array.size(gap_array) - 1
-            GapData gap = array.get(gap_array, i)
+    if array.size(gap_arr) > 0
+        for i = 0 to array.size(gap_arr) - 1
+            GapData gap = array.get(gap_arr, i)
 
             // Skip already inverted gaps
             if gap.is_inverted
@@ -1625,19 +1689,19 @@ check_preview_sif_formation(float forming_o, float forming_h, float forming_l, f
     [has_immediate_sif, is_candle_bullish, sif_gap_ids, sif_gap_types, sif_gap_breakaways]
 
 // Get window start time from htf_times array (independent of candle display)
-get_window_start() =>
+get_window_start(array<int> times_arr) =>
     int start = 0
-    if array.size(htf_times) > 0
-        int idx = math.min(max_htf_candles - 1, array.size(htf_times) - 1)
+    if array.size(times_arr) > 0
+        int idx = math.min(max_htf_candles - 1, array.size(times_arr) - 1)
         if idx >= 0
-            start := array.get(htf_times, idx)
+            start := array.get(times_arr, idx)
     start
 
 // Maintain htf_times array for window tracking
-update_htf_times(int candle_time) =>
-    array.unshift(htf_times, candle_time)
-    while array.size(htf_times) > max_htf_candles
-        array.pop(htf_times)
+update_htf_times(array<int> times_arr, int candle_time) =>
+    array.unshift(times_arr, candle_time)
+    while array.size(times_arr) > max_htf_candles
+        array.pop(times_arr)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INVALIDATION FUNCTIONS
@@ -1750,10 +1814,10 @@ check_sif_component_opening_gap(CandleZone zone, float candle_open) =>
 
 // Live invalidation for unified zones - OPENING GAPS ONLY (permanent)
 // Close-based invalidation is computed in rendering for visual hide/show
-check_zone_invalidation_live(float htf_open_price) =>
-    if array.size(zone_array) > 0
-        for i = 0 to array.size(zone_array) - 1
-            CandleZone zone = array.get(zone_array, i)
+check_zone_invalidation_live(array<CandleZone> zone_arr, float htf_open_price) =>
+    if array.size(zone_arr) > 0
+        for i = 0 to array.size(zone_arr) - 1
+            CandleZone zone = array.get(zone_arr, i)
 
             if zone.is_invalidated
                 continue
@@ -1789,14 +1853,14 @@ check_zone_invalidation_live(float htf_open_price) =>
                     line.delete(zone.validation_line)
                     zone.validation_line := na
 
-            array.set(zone_array, i, zone)
+            array.set(zone_arr, i, zone)
 
 // Check invalidation for all unified zones - tracks MBZ and SIF independently
-// This is for CONFIRMED HTF candles only (called on new_htf with htf_o1, htf_c1)
-check_zone_invalidation(float htf_open_price, float htf_close_price) =>
-    if array.size(zone_array) > 0
-        for i = 0 to array.size(zone_array) - 1
-            CandleZone zone = array.get(zone_array, i)
+// This is for CONFIRMED HTF candles only (called on new_htf with htf1.o1, htf1.c1)
+check_zone_invalidation(array<CandleZone> zone_arr, float htf_open_price, float htf_close_price) =>
+    if array.size(zone_arr) > 0
+        for i = 0 to array.size(zone_arr) - 1
+            CandleZone zone = array.get(zone_arr, i)
 
             // Skip fully invalidated zones
             if zone.is_invalidated
@@ -1836,19 +1900,19 @@ check_zone_invalidation(float htf_open_price, float htf_close_price) =>
                     line.delete(zone.validation_line)
                     zone.validation_line := na
 
-            array.set(zone_array, i, zone)
+            array.set(zone_arr, i, zone)
 
 // Cleanup unified zones outside window
-cleanup_zones(int window_start) =>
-    if window_start > 0 and array.size(zone_array) > 0
-        for i = array.size(zone_array) - 1 to 0
-            CandleZone zone = array.get(zone_array, i)
+cleanup_zones(array<CandleZone> zone_arr, int window_start) =>
+    if window_start > 0 and array.size(zone_arr) > 0
+        for i = array.size(zone_arr) - 1 to 0
+            CandleZone zone = array.get(zone_arr, i)
             if zone.formation_time < window_start
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
-                array.remove(zone_array, i)
+                array.remove(zone_arr, i)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN EXECUTION
@@ -1857,7 +1921,7 @@ cleanup_zones(int window_start) =>
 if IS_VALID
     if new_htf
         // ─── Window Management ───
-        int window_start = get_window_start()
+        int window_start = get_window_start(htf1.htf_times)
 
         // ─── Reset Preview Tracking (new HTF candle = new preview context) ───
         prev_preview_close := na
@@ -1872,185 +1936,185 @@ if IS_VALID
 
         // ─── Shift History (full OHLC for implied FVG) ───
         // Shift [4] → [5]
-        htf_o5 := htf_o4, htf_h5 := htf_h4, htf_l5 := htf_l4, htf_c5 := htf_c4
+        htf1.o5 := htf1.o4, htf1.h5 := htf1.h4, htf1.l5 := htf1.l4, htf1.c5 := htf1.c4
         // Shift [3] → [4]
-        htf_o4 := htf_o3, htf_h4 := htf_h3, htf_l4 := htf_l3, htf_c4 := htf_c3
+        htf1.o4 := htf1.o3, htf1.h4 := htf1.h3, htf1.l4 := htf1.l3, htf1.c4 := htf1.c3
         // Shift [2] → [3]
-        htf_o3 := htf_o2, htf_h3 := htf_h2, htf_l3 := htf_l2, htf_c3 := htf_c2, htf_t3 := htf_t2
+        htf1.o3 := htf1.o2, htf1.h3 := htf1.h2, htf1.l3 := htf1.l2, htf1.c3 := htf1.c2, htf1.t3 := htf1.t2
         // Shift [1] → [2]
-        htf_o2 := htf_o1, htf_h2 := htf_h1, htf_l2 := htf_l1, htf_c2 := htf_c1, htf_t2 := htf_t1
+        htf1.o2 := htf1.o1, htf1.h2 := htf1.h1, htf1.l2 := htf1.l1, htf1.c2 := htf1.c1, htf1.t2 := htf1.t1
         // Shift current → [1]
-        htf_o1 := htf_open, htf_h1 := htf_high, htf_l1 := htf_low, htf_c1 := htf_close, htf_t1 := htf_time
+        htf1.o1 := htf1.curr_open, htf1.h1 := htf1.curr_high, htf1.l1 := htf1.curr_low, htf1.c1 := htf_close, htf1.t1 := htf1.curr_time
 
         // ─── Shift Breakaway Trend Range ───
-        htf_breakaway_upper_3 := htf_breakaway_upper_2
-        htf_breakaway_lower_3 := htf_breakaway_lower_2
-        htf_breakaway_upper_2 := htf_breakaway_upper_1
-        htf_breakaway_lower_2 := htf_breakaway_lower_1
-        htf_breakaway_upper_1 := htf_breakaway_upper
-        htf_breakaway_lower_1 := htf_breakaway_lower
+        htf1.breakaway_upper_3 := htf1.breakaway_upper_2
+        htf1.breakaway_lower_3 := htf1.breakaway_lower_2
+        htf1.breakaway_upper_2 := htf1.breakaway_upper_1
+        htf1.breakaway_lower_2 := htf1.breakaway_lower_1
+        htf1.breakaway_upper_1 := htf_breakaway_upper
+        htf1.breakaway_lower_1 := htf_breakaway_lower
 
         // ─── Track Window (independent of candle display) ───
-        update_htf_times(htf_t1)
+        update_htf_times(htf1.htf_times, htf1.t1)
 
         // ─── Gap Detection (ALL enabled types detected independently) ───
         // Each gap type is detected and stored separately to support multi-source MBZs
-        if htf_h3 > 0  // Ensure we have 3 candles of history
-            bool gap_in_window = htf_t3 >= window_start or window_start == 0
+        if htf1.h3 > 0  // Ensure we have 3 candles of history
+            bool gap_in_window = htf1.t3 >= window_start or window_start == 0
 
             // ─── Standard FVG Detection (Bullish) ───
             if enable_fvg and gap_in_window
-                bool is_bull_fvg = htf_l1 > htf_h3
+                bool is_bull_fvg = htf1.l1 > htf1.h3
                 if is_bull_fvg
-                    float gap_top = htf_l1
-                    float gap_bot = htf_h3
+                    float gap_top = htf1.l1
+                    float gap_bot = htf1.h3
                     float gap_ce = (gap_top + gap_bot) / 2
-                    int this_gap_id = next_gap_id
-                    next_gap_id := next_gap_id + 1
+                    int this_gap_id = htf1.next_gap_id
+                    htf1.next_gap_id := htf1.next_gap_id + 1
                     GapData new_gap = GapData.new()
                     new_gap.top := gap_top
                     new_gap.bottom := gap_bot
                     new_gap.ce := gap_ce
                     new_gap.bar_index := bar_index
-                    new_gap.start_time := htf_t3
-                    new_gap.formation_end_time := htf_t1
+                    new_gap.start_time := htf1.t3
+                    new_gap.formation_end_time := htf1.t1
                     new_gap.is_bullish := true
                     new_gap.gap_type := GAP_TYPE_FVG
                     new_gap.gap_id := this_gap_id
-                    new_gap.is_breakaway := not na(htf_breakaway_upper_3) and htf_l1 > htf_breakaway_upper_3
-                    new_gap.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                    new_gap.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_gap.is_breakaway := not na(htf1.breakaway_upper_3) and htf1.l1 > htf1.breakaway_upper_3
+                    new_gap.gap_box := box.new(htf1.t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_gap.ce_line := line.new(htf1.t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(gap_array, new_gap)
+                    array.unshift(htf1.gap_array, new_gap)
 
             // ─── Standard FVG Detection (Bearish) ───
             if enable_fvg and gap_in_window
-                bool is_bear_fvg = htf_h1 < htf_l3
+                bool is_bear_fvg = htf1.h1 < htf1.l3
                 if is_bear_fvg
-                    float gap_top = htf_l3
-                    float gap_bot = htf_h1
+                    float gap_top = htf1.l3
+                    float gap_bot = htf1.h1
                     float gap_ce = (gap_top + gap_bot) / 2
-                    int this_gap_id = next_gap_id
-                    next_gap_id := next_gap_id + 1
+                    int this_gap_id = htf1.next_gap_id
+                    htf1.next_gap_id := htf1.next_gap_id + 1
                     GapData new_gap = GapData.new()
                     new_gap.top := gap_top
                     new_gap.bottom := gap_bot
                     new_gap.ce := gap_ce
                     new_gap.bar_index := bar_index
-                    new_gap.start_time := htf_t3
-                    new_gap.formation_end_time := htf_t1
+                    new_gap.start_time := htf1.t3
+                    new_gap.formation_end_time := htf1.t1
                     new_gap.is_bullish := false
                     new_gap.gap_type := GAP_TYPE_FVG
                     new_gap.gap_id := this_gap_id
-                    new_gap.is_breakaway := not na(htf_breakaway_lower_3) and htf_h1 < htf_breakaway_lower_3
-                    new_gap.gap_box := box.new(htf_t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                    new_gap.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_gap.is_breakaway := not na(htf1.breakaway_lower_3) and htf1.h1 < htf1.breakaway_lower_3
+                    new_gap.gap_box := box.new(htf1.t3, gap_top, time, gap_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_gap.ce_line := line.new(htf1.t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL, xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(gap_array, new_gap)
+                    array.unshift(htf1.gap_array, new_gap)
 
             // ─── Implied FVG Detection (independent of FVG) ───
             if enable_implied and gap_in_window
                 [impl_found, impl_bot, impl_top, impl_bull] = detect_htf_implied_fvg()
                 if impl_found
                     float gap_ce = (impl_top + impl_bot) / 2
-                    int this_gap_id = next_gap_id
-                    next_gap_id := next_gap_id + 1
+                    int this_gap_id = htf1.next_gap_id
+                    htf1.next_gap_id := htf1.next_gap_id + 1
                     GapData new_gap = GapData.new()
                     new_gap.top := impl_top
                     new_gap.bottom := impl_bot
                     new_gap.ce := gap_ce
                     new_gap.bar_index := bar_index
-                    new_gap.start_time := htf_t3
-                    new_gap.formation_end_time := htf_t1
+                    new_gap.start_time := htf1.t3
+                    new_gap.formation_end_time := htf1.t1
                     new_gap.is_bullish := impl_bull
                     new_gap.gap_type := GAP_TYPE_IMPLIED
                     new_gap.gap_id := this_gap_id
-                    new_gap.gap_box := box.new(htf_t3, impl_top, time, impl_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                    new_gap.ce_line := line.new(htf_t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                    new_gap.gap_box := box.new(htf1.t3, impl_top, time, impl_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                    new_gap.ce_line := line.new(htf1.t3, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                     new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL + " imp", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                    array.unshift(gap_array, new_gap)
+                    array.unshift(htf1.gap_array, new_gap)
 
             // ─── Volume Imbalance Detection (Bullish - with suppression check matching SIF-Core) ───
-            if enable_volume and htf_h2 > 0
-                bool vi_in_window = htf_t2 >= window_start or window_start == 0
+            if enable_volume and htf1.h2 > 0
+                bool vi_in_window = htf1.t2 >= window_start or window_start == 0
                 if vi_in_window and is_htf_bullish_vi()
                     [vi_top, vi_bot] = get_htf_vi_coordinates(true)
                     // Check for overlapping gaps before creating (matches SIF-Core is_gap_overlapping)
                     // Can be disabled via toggle for testing
-                    bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(vi_top, vi_bot, true)
+                    bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(htf1.gap_array, vi_top, vi_bot, true)
                     if not vi_is_suppressed
                         float gap_ce = (vi_top + vi_bot) / 2
-                        int this_gap_id = next_gap_id
-                        next_gap_id := next_gap_id + 1
+                        int this_gap_id = htf1.next_gap_id
+                        htf1.next_gap_id := htf1.next_gap_id + 1
                         GapData new_gap = GapData.new()
                         new_gap.top := vi_top
                         new_gap.bottom := vi_bot
                         new_gap.ce := gap_ce
                         new_gap.bar_index := bar_index
-                        new_gap.start_time := htf_t2
-                        new_gap.formation_end_time := htf_t1
+                        new_gap.start_time := htf1.t2
+                        new_gap.formation_end_time := htf1.t1
                         new_gap.is_bullish := true
                         new_gap.gap_type := GAP_TYPE_VOLUME
                         new_gap.gap_id := this_gap_id
-                        new_gap.gap_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                        new_gap.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                        new_gap.gap_box := box.new(htf1.t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_gap.ce_line := line.new(htf1.t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                         new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                        array.unshift(gap_array, new_gap)
+                        array.unshift(htf1.gap_array, new_gap)
 
             // ─── Volume Imbalance Detection (Bearish - with suppression check matching SIF-Core) ───
-            if enable_volume and htf_h2 > 0
-                bool vi_in_window = htf_t2 >= window_start or window_start == 0
+            if enable_volume and htf1.h2 > 0
+                bool vi_in_window = htf1.t2 >= window_start or window_start == 0
                 if vi_in_window and is_htf_bearish_vi()
                     [vi_top, vi_bot] = get_htf_vi_coordinates(false)
                     // Check for overlapping gaps before creating (matches SIF-Core is_gap_overlapping)
                     // Can be disabled via toggle for testing
-                    bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(vi_top, vi_bot, false)
+                    bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(htf1.gap_array, vi_top, vi_bot, false)
                     if not vi_is_suppressed
                         float gap_ce = (vi_top + vi_bot) / 2
-                        int this_gap_id = next_gap_id
-                        next_gap_id := next_gap_id + 1
+                        int this_gap_id = htf1.next_gap_id
+                        htf1.next_gap_id := htf1.next_gap_id + 1
                         GapData new_gap = GapData.new()
                         new_gap.top := vi_top
                         new_gap.bottom := vi_bot
                         new_gap.ce := gap_ce
                         new_gap.bar_index := bar_index
-                        new_gap.start_time := htf_t2
-                        new_gap.formation_end_time := htf_t1
+                        new_gap.start_time := htf1.t2
+                        new_gap.formation_end_time := htf1.t1
                         new_gap.is_bullish := false
                         new_gap.gap_type := GAP_TYPE_VOLUME
                         new_gap.gap_id := this_gap_id
-                        new_gap.gap_box := box.new(htf_t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
-                        new_gap.ce_line := line.new(htf_t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
+                        new_gap.gap_box := box.new(htf1.t2, vi_top, time, vi_bot, xloc=xloc.bar_time, bgcolor=color.new(GAP_COLOR, 100), border_color=color.new(GAP_COLOR, 100), border_width=1)
+                        new_gap.ce_line := line.new(htf1.t2, gap_ce, time, gap_ce, xloc=xloc.bar_time, color=color.new(GAP_COLOR, 100), style=line.style_dotted, width=1)
                         new_gap.tf_label := label.new(time, gap_ce, HTF_LABEL + " vol", xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100), textcolor=color.new(GAP_COLOR, 100), size=size.small)
-                        array.unshift(gap_array, new_gap)
+                        array.unshift(htf1.gap_array, new_gap)
 
-        cleanup_gaps(window_start, MAX_FVGS)
-        cleanup_zones(window_start)
+        cleanup_gaps(htf1.gap_array, window_start, MAX_FVGS)
+        cleanup_zones(htf1.zone_array, window_start)
 
         // ─── Reset Current Candle ───
-        htf_open := open
-        htf_high := high
-        htf_low  := low
-        htf_time := time
+        htf1.curr_open := open
+        htf1.curr_high := high
+        htf1.curr_low  := low
+        htf1.curr_time := time
 
         // ─── Gap Interaction Check (BEFORE MBZ detection) ───
         // Check if MBZ candle (htf_*1) taps and/or closes through any gaps
         // Sets sif_body_tapper and is_inverted, draws visual highlights
-        check_gap_interactions(htf_o1, htf_h1, htf_l1, htf_c1, htf_t1)
+        check_gap_interactions(htf1.gap_array, htf1.zone_array, htf1.o1, htf1.h1, htf1.l1, htf1.c1, htf1.t1)
         cleanup_inversion_highlights()
         cleanup_tap_highlights()
 
         // ─── Invalidation Check ───
         // Check if the just-completed HTF candle invalidates any zones
         if enable_invalidation
-            check_zone_invalidation(htf_o1, htf_c1)
+            check_zone_invalidation(htf1.zone_array, htf1.o1, htf1.c1)
 
         // ─── MBZ Formation Check (supports consolidated candles with multiple sources) ───
         // htf_*2 = reference candle (tapped gap) → prev_prev_wick_box
         // htf_*1 = MBZ candle (conviction candle) → prev_wick_box
-        // htf_t2 = reference candle time (must be > FVG formation_end_time)
+        // htf1.t2 = reference candle time (must be > FVG formation_end_time)
         if enable_mbz_engine
-            array<MBZFormationMatch> mbz_matches = check_mbz_formation(htf_o2, htf_h2, htf_l2, htf_c2, htf_t2, htf_o1, htf_h1, htf_l1, htf_c1)
+            array<MBZFormationMatch> mbz_matches = check_mbz_formation(htf1.gap_array, htf1.o2, htf1.h2, htf1.l2, htf1.c2, htf1.t2, htf1.o1, htf1.h1, htf1.l1, htf1.c1)
             int num_matches = array.size(mbz_matches)
 
             if num_matches > 0
@@ -2068,7 +2132,7 @@ if IS_VALID
 
                     for i = 0 to num_matches - 1
                         MBZFormationMatch match = array.get(mbz_matches, i)
-                        [match_zone_top, match_zone_bot] = get_mbz_zone(htf_o1, htf_h1, htf_l1, htf_c1, match.is_bullish, match.subtype, htf_h2, htf_l2)
+                        [match_zone_top, match_zone_bot] = get_mbz_zone(htf1.o1, htf1.h1, htf1.l1, htf1.c1, match.is_bullish, match.subtype, htf1.h2, htf1.l2)
                         if i == 0
                             consolidated_zone_top := match_zone_top
                             consolidated_zone_bottom := match_zone_bot
@@ -2079,16 +2143,16 @@ if IS_VALID
 
                     // ─── Register MBZ in unified zone_array ───
                     // Get or create zone for this candle (MBZ uses reference wick extension)
-                    [zone, zone_idx, is_new] = get_or_create_zone(bar_index, htf_t1, htf_o1, htf_c1, htf_h1, htf_l1, mbz_bull, htf_h2, htf_l2, extend_to_reference_wick)
+                    [zone, zone_idx, is_new] = get_or_create_zone(htf1.zone_array, bar_index, htf1.t1, htf1.o1, htf1.c1, htf1.h1, htf1.l1, mbz_bull, htf1.h2, htf1.l2, extend_to_reference_wick)
 
                     // Update zone with MBZ flag
                     zone.has_mbz := true
-                    zone.ref_candle_high := htf_h2
-                    zone.ref_candle_low := htf_l2
+                    zone.ref_candle_high := htf1.h2
+                    zone.ref_candle_low := htf1.l2
 
                     // If existing zone (e.g., SIF created first) and wick extension enabled but not applied, recalculate boundaries
                     if not is_new and extend_to_reference_wick and not zone.is_wick_extended
-                        [new_top, new_bottom, now_extended] = calculate_zone_boundaries(htf_o1, htf_c1, htf_h1, htf_l1, mbz_bull, zone.zone_subtype, htf_h2, htf_l2, true)
+                        [new_top, new_bottom, now_extended] = calculate_zone_boundaries(htf1.o1, htf1.c1, htf1.h1, htf1.l1, mbz_bull, zone.zone_subtype, htf1.h2, htf1.l2, true)
                         zone.zone_top := new_top
                         zone.zone_bottom := new_bottom
                         zone.is_wick_extended := now_extended
@@ -2099,7 +2163,7 @@ if IS_VALID
                         add_source_to_zone(zone, match.source_gap_id, match.source_gap_type, match.source_gap_is_breakaway)
 
                     // Save updated zone back to array
-                    array.set(zone_array, zone_idx, zone)
+                    array.set(htf1.zone_array, zone_idx, zone)
 
         // ─── Create New Candle Boxes (ALWAYS create for MBZ highlighting) ───
         bool is_bull = close >= open
@@ -2121,14 +2185,14 @@ if IS_VALID
 
     else
         // ─── Update Forming Candle ───
-        htf_high := math.max(high, htf_high)
-        htf_low  := math.min(low, htf_low)
+        htf1.curr_high := math.max(high, htf1.curr_high)
+        htf1.curr_low  := math.min(low, htf1.curr_low)
 
         // Always update wick_box position (for MBZ highlighting)
         if not na(wick_box)
-            bool is_bull = close >= htf_open
-            box.set_top(wick_box, htf_high)
-            box.set_bottom(wick_box, htf_low)
+            bool is_bull = close >= htf1.curr_open
+            box.set_top(wick_box, htf1.curr_high)
+            box.set_bottom(wick_box, htf1.curr_low)
             box.set_right(wick_box, time)
             // Only set visual colors if overlay ON
             if show_htf_candles
@@ -2136,20 +2200,20 @@ if IS_VALID
                 box.set_border_color(wick_box, is_bull ? BULL_BORDER : BEAR_BORDER)
 
         if show_htf_candles and not na(body_box)
-            bool is_bull = close >= htf_open
-            box.set_top(body_box, math.max(htf_open, close))
-            box.set_bottom(body_box, math.min(htf_open, close))
+            bool is_bull = close >= htf1.curr_open
+            box.set_top(body_box, math.max(htf1.curr_open, close))
+            box.set_bottom(body_box, math.min(htf1.curr_open, close))
             box.set_right(body_box, time)
             box.set_bgcolor(body_box, is_bull ? htf_bull_body_color : htf_bear_body_color)
 
     // ─── FVG Updates (every bar) ───
-    update_gap_positions()
+    update_gap_positions(htf1.gap_array, htf1.zone_array)
 
     // ─── Live Invalidation (every bar) ───
     // Check for OPENING GAPS only (permanent invalidation)
     // Close-based invalidation is computed in rendering loop for visual hide/show
     if enable_invalidation
-        check_zone_invalidation_live(htf_open)
+        check_zone_invalidation_live(htf1.zone_array, htf1.curr_open)
 
     // ─── Preview Zone Detection (realtime only, on price change) ───
     // Check for zones forming during the current HTF candle
@@ -2157,7 +2221,7 @@ if IS_VALID
     // Only runs on realtime bars to avoid performance overhead on historical data
     // Only updates when close price changes to avoid unnecessary box recreation
     bool preview_close_changed = close != prev_preview_close
-    if show_forming_zones and htf_t1 > 0 and barstate.isrealtime and preview_close_changed
+    if show_forming_zones and htf1.t1 > 0 and barstate.isrealtime and preview_close_changed
         prev_preview_close := close
         // Clear existing preview zones before re-detecting
         cleanup_preview_zones()
@@ -2168,7 +2232,7 @@ if IS_VALID
 
         // Preview MBZ: htf_*1 = reference candle, forming candle = potential MBZ candle
         if enable_mbz_engine
-            array<MBZFormationMatch> preview_mbz_matches = check_preview_mbz_formation(htf_o1, htf_h1, htf_l1, htf_c1, htf_t1, htf_open, htf_high, htf_low, close)
+            array<MBZFormationMatch> preview_mbz_matches = check_preview_mbz_formation(htf1.gap_array, htf1.o1, htf1.h1, htf1.l1, htf1.c1, htf1.t1, htf1.curr_open, htf1.curr_high, htf1.curr_low, close)
             int num_preview_mbz = array.size(preview_mbz_matches)
 
             if num_preview_mbz > 0
@@ -2188,11 +2252,11 @@ if IS_VALID
                         array.push(mbz_gap_types, match.source_gap_type)
 
                     // Create preview zone (MBZ uses reference wick extension from htf_*1)
-                    create_preview_zone(htf_time, htf_open, close, htf_high, htf_low, preview_mbz_bull, htf_h1, htf_l1, extend_to_reference_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
+                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_reference_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
 
         // Preview SIF: Check if forming candle would create immediate SIF
         if enable_sif_engine
-            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types, sif_gap_breakaways] = check_preview_sif_formation(htf_open, htf_high, htf_low, close, htf_time)
+            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types, sif_gap_breakaways] = check_preview_sif_formation(htf1.gap_array, htf1.curr_open, htf1.curr_high, htf1.curr_low, close, htf1.curr_time)
 
             if has_preview_sif
                 // Apply direction filter (SIF direction = candle direction)
@@ -2215,13 +2279,13 @@ if IS_VALID
                         array.set(preview_zone_array, 0, existing)
                     else
                         // Create new SIF-only preview zone
-                        create_preview_zone(htf_time, htf_open, close, htf_high, htf_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
+                        create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
 
     // ─── Unified Zone Rendering (on HTF change or current bar) ───
     // Only render when: HTF candle closes (new_htf) OR current bar updates (barstate.islast)
     // This avoids redundant iterations on historical bars where zone state cannot change
     // Live invalidation is preserved via barstate.islast (updates every tick on current bar)
-    if array.size(zone_array) > 0 and (new_htf or barstate.islast)
+    if array.size(htf1.zone_array) > 0 and (new_htf or barstate.islast)
         int zone_extension_width = zone_extension_bars * HTF_MS
         color zone_color_bull = zone_bull_color
         color zone_color_bear = zone_bear_color
@@ -2235,8 +2299,8 @@ if IS_VALID
         // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ zone per gap_id
         // Note: Same-Source filter only applies to MBZ zones, not SIF-only zones
         if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-            for zone_index = array.size(zone_array) - 1 to 0
-                CandleZone current_zone = array.get(zone_array, zone_index)
+            for zone_index = array.size(htf1.zone_array) - 1 to 0
+                CandleZone current_zone = array.get(htf1.zone_array, zone_index)
                 // Only consider MBZ zones for same-source filtering
                 if not current_zone.has_mbz
                     continue
@@ -2265,8 +2329,8 @@ if IS_VALID
 
             float current_price = close
 
-            for zone_idx = 0 to array.size(zone_array) - 1
-                CandleZone z = array.get(zone_array, zone_idx)
+            for zone_idx = 0 to array.size(htf1.zone_array) - 1
+                CandleZone z = array.get(htf1.zone_array, zone_idx)
                 if z.is_invalidated
                     continue
                 if not z.has_mbz and not z.has_sif
@@ -2321,8 +2385,8 @@ if IS_VALID
                         map.put(extend_to_current, min_idx, true)
                         array.set(bear_distances, min_pos, 1e18)  // Mark as used
 
-        for i = 0 to array.size(zone_array) - 1
-            CandleZone zone = array.get(zone_array, i)
+        for i = 0 to array.size(htf1.zone_array) - 1
+            CandleZone zone = array.get(htf1.zone_array, i)
 
             // Skip permanently invalidated zones
             if zone.is_invalidated
@@ -2335,8 +2399,8 @@ if IS_VALID
             // ─── Live Invalidation Check (computed, not permanent) ───
             // Compute if zone WOULD be invalidated by forming HTF close
             // If so, hide visually but don't set permanent flags (zone can "un-invalidate" if price rallies)
-            bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf_open, close)
-            bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf_open, close)
+            bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf1.curr_open, close)
+            bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf1.curr_open, close)
 
             // Check if all ACTIVE components are live-invalidated
             bool mbz_active = enable_mbz_engine and zone.has_mbz
@@ -2351,7 +2415,7 @@ if IS_VALID
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(zone_array, i, zone)
+                array.set(htf1.zone_array, i, zone)
                 continue
 
             // Apply direction filter
@@ -2364,7 +2428,7 @@ if IS_VALID
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(zone_array, i, zone)
+                array.set(htf1.zone_array, i, zone)
                 continue
 
             // Zone visibility: show if zone has at least one enabled engine component
@@ -2376,7 +2440,7 @@ if IS_VALID
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(zone_array, i, zone)
+                array.set(htf1.zone_array, i, zone)
                 continue
 
             // Same-Source filter logic (MBZ only - SIF zones always pass through)
@@ -2410,7 +2474,7 @@ if IS_VALID
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(zone_array, i, zone)
+                array.set(htf1.zone_array, i, zone)
                 continue
 
             // Create box if doesn't exist yet
@@ -2439,7 +2503,7 @@ if IS_VALID
                     color vb_color = zone.is_bullish ? validation_boundary_bull_color : validation_boundary_bear_color
                     zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=validation_boundary_width, style=VALIDATION_LINE_STYLE)
 
-                array.set(zone_array, i, zone)
+                array.set(htf1.zone_array, i, zone)
             else
                 // Update extension and opacity
                 box.set_right(zone.zone_box, zone_right_edge)
