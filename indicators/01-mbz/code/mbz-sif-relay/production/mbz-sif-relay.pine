@@ -149,20 +149,31 @@ const color DEFAULT_ZONE_LABEL_COLOR = color.new(color.rgb(156, 156, 156), 20)
 // To add a new pairing: add one case to the switch below
 // ═══════════════════════════════════════════════════════════════════════════════
 
-get_tf_pairing(string chart_tf) =>
-    switch chart_tf
-        "30S" => [true, "5",   "5m",  300000,    "30s"]   // 30s → 5m   (10x)
-        "1"   => [true, "15",  "15m", 900000,    "1m"]    // 1m  → 15m  (15x)
-        "2"   => [true, "30",  "30m", 1800000,   "2m"]    // 2m  → 30m  (15x)
-        "3"   => [true, "30",  "30m", 1800000,   "3m"]    // 3m  → 30m  (10x)
-        "5"   => [true, "60",  "1H",  3600000,   "5m"]    // 5m  → 1H   (12x)
-        "15"  => [true, "240", "4H",  14400000,  "15m"]   // 15m → 4H   (16x)
-        "60"  => [true, "D",   "D",   86400000,   "1H"]    // 1H  → D    (24x)
-        "240" => [true, "D",   "D",   86400000,   "4H"]   // 4H  → D    (6x)
-        =>       [false, "",   "",    0,          ""]     // Unsupported
+// HTF slot constants
+const string HTF_SLOT_PRIMARY   = "primary"
+const string HTF_SLOT_SECONDARY = "secondary"
+
+// Unified HTF pairing function
+get_tf_pairing(string chart_tf, string slot) =>
+    if slot == HTF_SLOT_PRIMARY
+        switch chart_tf
+            "30S" => [true, "5",   "5m",  300000,    "30s"]   // 30s → 5m   (10x)
+            "1"   => [true, "15",  "15m", 900000,    "1m"]    // 1m  → 15m  (15x)
+            "2"   => [true, "30",  "30m", 1800000,   "2m"]    // 2m  → 30m  (15x)
+            "3"   => [true, "30",  "30m", 1800000,   "3m"]    // 3m  → 30m  (10x)
+            "5"   => [true, "60",  "1H",  3600000,   "5m"]    // 5m  → 1H   (12x)
+            "15"  => [true, "240", "4H",  14400000,  "15m"]   // 15m → 4H   (16x)
+            "60"  => [true, "D",   "D",   86400000,  "1H"]    // 1H  → D    (24x)
+            "240" => [true, "D",   "D",   86400000,  "4H"]    // 4H  → D    (6x)
+            =>       [false, "",   "",    0,         ""]      // Unsupported
+    else  // secondary
+        switch chart_tf
+            "5"   => [true, "240", "4H", 14400000, "5m"]      // 5m → 4H (MVP)
+            =>       [false, "",   "",   0,        ""]        // Not supported
 
 string CHART_TF = timeframe.period
-[IS_VALID, HTF_STRING, HTF_LABEL, HTF_MS, LTF_LABEL] = get_tf_pairing(CHART_TF)
+[IS_VALID, HTF_STRING, HTF_LABEL, HTF_MS, LTF_LABEL] = get_tf_pairing(CHART_TF, HTF_SLOT_PRIMARY)
+[IS_VALID_HTF2, HTF2_STRING, HTF2_LABEL, HTF2_MS, _] = get_tf_pairing(CHART_TF, HTF_SLOT_SECONDARY)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
@@ -223,6 +234,16 @@ enable_volume   = input.bool(true, "Volume Imbalance", group=GROUP_GAP_SOURCES, 
 GROUP_FILTERS    = "🔍 Detection Filters"
 max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_FILTERS)
 mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_FILTERS)
+
+// HTF display mode
+const string HTF_DISPLAY_BOTH     = "Primary + Secondary"
+const string HTF_DISPLAY_PRIMARY  = "Primary"
+const string HTF_DISPLAY_SECONDARY = "Secondary"
+htf_display_mode = input.string(HTF_DISPLAY_BOTH, "HTF Display", options=[HTF_DISPLAY_BOTH, HTF_DISPLAY_PRIMARY, HTF_DISPLAY_SECONDARY], group=GROUP_FILTERS)
+
+// Derived display flags
+bool show_htf1 = htf_display_mode == HTF_DISPLAY_BOTH or htf_display_mode == HTF_DISPLAY_PRIMARY
+bool show_htf2 = IS_VALID_HTF2 and (htf_display_mode == HTF_DISPLAY_BOTH or htf_display_mode == HTF_DISPLAY_SECONDARY)
 
 // ─── 🎨 Zone Display ───
 GROUP_ZONE_DISPLAY = "🎨 Zone Display"
@@ -737,6 +758,29 @@ var HTFContext htf1 = HTFContext.new(
     next_gap_id      = 1
 )
 
+// Secondary HTF context
+var HTFContext htf2 = HTFContext.new(
+    htf_string       = HTF2_STRING,
+    htf_label        = HTF2_LABEL,
+    htf_ms           = HTF2_MS,
+    curr_open        = 0.0,
+    curr_high        = 0.0,
+    curr_low         = 0.0,
+    curr_time        = 0,
+    o1 = 0.0, h1 = 0.0, l1 = 0.0, c1 = 0.0, t1 = 0,
+    o2 = 0.0, h2 = 0.0, l2 = 0.0, c2 = 0.0, t2 = 0,
+    o3 = 0.0, h3 = 0.0, l3 = 0.0, c3 = 0.0, t3 = 0,
+    o4 = 0.0, h4 = 0.0, l4 = 0.0, c4 = 0.0,
+    o5 = 0.0, h5 = 0.0, l5 = 0.0, c5 = 0.0,
+    breakaway_upper_1 = na, breakaway_lower_1 = na,
+    breakaway_upper_2 = na, breakaway_lower_2 = na,
+    breakaway_upper_3 = na, breakaway_lower_3 = na,
+    gap_array        = array.new<GapData>(),
+    zone_array       = array.new<CandleZone>(),
+    htf_times        = array.new<int>(),
+    next_gap_id      = 1
+)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // NON-CONTEXT STATE (visual elements, not tied to HTF data)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -756,10 +800,13 @@ var array<box>       tap_highlights = array.new<box>()
 
 // HTF boundary detection
 bool new_htf = IS_VALID ? ta.change(time(HTF_STRING)) != 0 : false
+bool new_htf2 = IS_VALID_HTF2 ? ta.change(time(HTF2_STRING)) != 0 : false
 
 // Breakaway trend range (HTF 20-bar high/low for breakaway detection)
 float htf_breakaway_upper = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
 float htf_breakaway_lower = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
+float htf2_breakaway_upper = IS_VALID_HTF2 ? request.security(syminfo.tickerid, HTF2_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
+float htf2_breakaway_lower = IS_VALID_HTF2 ? request.security(syminfo.tickerid, HTF2_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTIONS
@@ -1012,14 +1059,14 @@ htf_body_bot(float o, float c) => math.min(o, c)
 
 // ─── HTF Displacement Candle Check ───
 // Checks if C2 (htf1.o2/htf1.c2) is a displacement candle relative to C3-C5
-is_htf_displacement_candle() =>
+is_htf_displacement_candle(HTFContext ctx) =>
     // C2 body size
-    float c2_body = math.abs(htf1.c2 - htf1.o2)
+    float c2_body = math.abs(ctx.c2 - ctx.o2)
 
     // Average body size of C3, C4, C5 (lookback candles)
-    float c3_body = math.abs(htf1.c3 - htf1.o3)
-    float c4_body = math.abs(htf1.c4 - htf1.o4)
-    float c5_body = math.abs(htf1.c5 - htf1.o5)
+    float c3_body = math.abs(ctx.c3 - ctx.o3)
+    float c4_body = math.abs(ctx.c4 - ctx.o4)
+    float c5_body = math.abs(ctx.c5 - ctx.o5)
     float avg_body = (c3_body + c4_body + c5_body) / 3.0
 
     // Require C2 >= multiplier * average
@@ -1032,30 +1079,30 @@ is_htf_displacement_candle() =>
 // Returns [is_valid, bottom, top, is_bullish]
 // Convention: C1=[2] oldest, C2=[1] middle, C3=[0] newest
 // HTF tracking: htf_*3=oldest, htf_*2=middle, htf_*1=newest
-detect_htf_implied_fvg() =>
+detect_htf_implied_fvg(HTFContext ctx) =>
     // Pre-filter: Check displacement candle strength
-    if not is_htf_displacement_candle()
+    if not is_htf_displacement_candle(ctx)
         [false, float(na), float(na), bool(na)]
     else
         // Body boundaries
         // old = htf_*3 (oldest)
         // new = htf_*1 (newest)
-        float old_body_top = htf_body_top(htf1.o3, htf1.c3)
-        float old_body_bot = htf_body_bot(htf1.o3, htf1.c3)
-        float new_body_top = htf_body_top(htf1.o1, htf1.c1)
-        float new_body_bot = htf_body_bot(htf1.o1, htf1.c1)
+        float old_body_top = htf_body_top(ctx.o3, ctx.c3)
+        float old_body_bot = htf_body_bot(ctx.o3, ctx.c3)
+        float new_body_top = htf_body_top(ctx.o1, ctx.c1)
+        float new_body_bot = htf_body_bot(ctx.o1, ctx.c1)
 
         // ─── BULLISH Implied FVG ───
         // Price moved UP: old candle below, new candle above
         // Bodies separate: old body top < new body bottom (gap between)
         // Wicks overlap: old upper wick overlaps new lower wick
         bool bodies_sep_bull = old_body_top < new_body_bot
-        bool old_upper_wick_exists = htf1.h3 > old_body_top
-        bool new_lower_wick_exists = new_body_bot > htf1.l1
+        bool old_upper_wick_exists = ctx.h3 > old_body_top
+        bool new_lower_wick_exists = new_body_bot > ctx.l1
         bool bull_wicks_valid = bodies_sep_bull and old_upper_wick_exists and new_lower_wick_exists
 
-        float bull_overlap_lo = math.max(old_body_top, htf1.l1)
-        float bull_overlap_hi = math.min(htf1.h3, new_body_bot)
+        float bull_overlap_lo = math.max(old_body_top, ctx.l1)
+        float bull_overlap_hi = math.min(ctx.h3, new_body_bot)
         bool bull_has_overlap = bull_overlap_hi > bull_overlap_lo and bull_wicks_valid
 
         if bull_has_overlap
@@ -1066,12 +1113,12 @@ detect_htf_implied_fvg() =>
             // Bodies separate: new body top < old body bottom (gap between)
             // Wicks overlap: new upper wick overlaps old lower wick
             bool bodies_sep_bear = new_body_top < old_body_bot
-            bool new_upper_wick_exists = htf1.h1 > new_body_top
-            bool old_lower_wick_exists = old_body_bot > htf1.l3
+            bool new_upper_wick_exists = ctx.h1 > new_body_top
+            bool old_lower_wick_exists = old_body_bot > ctx.l3
             bool bear_wicks_valid = bodies_sep_bear and new_upper_wick_exists and old_lower_wick_exists
 
-            float bear_overlap_lo = math.max(new_body_top, htf1.l3)
-            float bear_overlap_hi = math.min(htf1.h1, old_body_bot)
+            float bear_overlap_lo = math.max(new_body_top, ctx.l3)
+            float bear_overlap_hi = math.min(ctx.h1, old_body_bot)
             bool bear_has_overlap = bear_overlap_hi > bear_overlap_lo and bear_wicks_valid
 
             if bear_has_overlap
@@ -1086,35 +1133,35 @@ detect_htf_implied_fvg() =>
 // Detects 2-candle bullish Volume Imbalance with body separation and wick overlap
 // Uses htf_*1 (newest) and htf_*2 (previous) candles
 // Condition: htf_*1 body completely above htf_*2 body, but wicks still connect
-is_htf_bullish_vi() =>
-    float curr_body_bot = htf_body_bot(htf1.o1, htf1.c1)  // Current body bottom
-    float prev_body_top = htf_body_top(htf1.o2, htf1.c2)  // Previous body top
+is_htf_bullish_vi(HTFContext ctx) =>
+    float curr_body_bot = htf_body_bot(ctx.o1, ctx.c1)  // Current body bottom
+    float prev_body_top = htf_body_top(ctx.o2, ctx.c2)  // Previous body top
     bool bodies_separated = curr_body_bot > prev_body_top
-    bool wicks_still_connect = htf1.l1 <= htf1.h2  // Current low reaches previous high
+    bool wicks_still_connect = ctx.l1 <= ctx.h2  // Current low reaches previous high
     bodies_separated and wicks_still_connect
 
 // Detects 2-candle bearish Volume Imbalance with body separation and wick overlap
 // Uses htf_*1 (newest) and htf_*2 (previous) candles
 // Condition: htf_*1 body completely below htf_*2 body, but wicks still connect
-is_htf_bearish_vi() =>
-    float curr_body_top = htf_body_top(htf1.o1, htf1.c1)  // Current body top
-    float prev_body_bot = htf_body_bot(htf1.o2, htf1.c2)  // Previous body bottom
+is_htf_bearish_vi(HTFContext ctx) =>
+    float curr_body_top = htf_body_top(ctx.o1, ctx.c1)  // Current body top
+    float prev_body_bot = htf_body_bot(ctx.o2, ctx.c2)  // Previous body bottom
     bool bodies_separated = curr_body_top < prev_body_bot
-    bool wicks_still_connect = htf1.h1 >= htf1.l2  // Current high reaches previous low
+    bool wicks_still_connect = ctx.h1 >= ctx.l2  // Current high reaches previous low
     bodies_separated and wicks_still_connect
 
 // Calculates Volume Imbalance gap coordinates using 2-candle body separation
 // Returns [gap_top, gap_bottom]
-get_htf_vi_coordinates(bool is_bullish_gap) =>
+get_htf_vi_coordinates(HTFContext ctx, bool is_bullish_gap) =>
     if is_bullish_gap
         // Bullish VI: gap between htf_*2 body top and htf_*1 body bottom
-        float gap_bottom = htf_body_top(htf1.o2, htf1.c2)  // Previous body top
-        float gap_top = htf_body_bot(htf1.o1, htf1.c1)     // Current body bottom
+        float gap_bottom = htf_body_top(ctx.o2, ctx.c2)  // Previous body top
+        float gap_top = htf_body_bot(ctx.o1, ctx.c1)     // Current body bottom
         [gap_top, gap_bottom]
     else
         // Bearish VI: gap between htf_*2 body bottom and htf_*1 body top
-        float gap_top = htf_body_bot(htf1.o2, htf1.c2)     // Previous body bottom
-        float gap_bottom = htf_body_top(htf1.o1, htf1.c1)  // Current body top
+        float gap_top = htf_body_bot(ctx.o2, ctx.c2)     // Previous body bottom
+        float gap_bottom = htf_body_top(ctx.o1, ctx.c1)  // Current body top
         [gap_top, gap_bottom]
 
 // Checks if Volume Imbalance should be suppressed by higher-priority gaps
@@ -2014,7 +2061,7 @@ if IS_VALID
 
             // ─── Implied FVG Detection (independent of FVG) ───
             if enable_implied and gap_in_window
-                [impl_found, impl_bot, impl_top, impl_bull] = detect_htf_implied_fvg()
+                [impl_found, impl_bot, impl_top, impl_bull] = detect_htf_implied_fvg(htf1)
                 if impl_found
                     float gap_ce = (impl_top + impl_bot) / 2
                     int this_gap_id = htf1.next_gap_id
@@ -2037,8 +2084,8 @@ if IS_VALID
             // ─── Volume Imbalance Detection (Bullish - with suppression check matching SIF-Core) ───
             if enable_volume and htf1.h2 > 0
                 bool vi_in_window = htf1.t2 >= window_start or window_start == 0
-                if vi_in_window and is_htf_bullish_vi()
-                    [vi_top, vi_bot] = get_htf_vi_coordinates(true)
+                if vi_in_window and is_htf_bullish_vi(htf1)
+                    [vi_top, vi_bot] = get_htf_vi_coordinates(htf1, true)
                     // Check for overlapping gaps before creating (matches SIF-Core is_gap_overlapping)
                     // Can be disabled via toggle for testing
                     bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(htf1.gap_array, vi_top, vi_bot, true)
@@ -2064,8 +2111,8 @@ if IS_VALID
             // ─── Volume Imbalance Detection (Bearish - with suppression check matching SIF-Core) ───
             if enable_volume and htf1.h2 > 0
                 bool vi_in_window = htf1.t2 >= window_start or window_start == 0
-                if vi_in_window and is_htf_bearish_vi()
-                    [vi_top, vi_bot] = get_htf_vi_coordinates(false)
+                if vi_in_window and is_htf_bearish_vi(htf1)
+                    [vi_top, vi_bot] = get_htf_vi_coordinates(htf1, false)
                     // Check for overlapping gaps before creating (matches SIF-Core is_gap_overlapping)
                     // Can be disabled via toggle for testing
                     bool vi_is_suppressed = disable_vi_suppression ? false : is_htf_vi_suppressed_by_gaps(htf1.gap_array, vi_top, vi_bot, false)
