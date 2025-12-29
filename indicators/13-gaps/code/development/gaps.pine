@@ -430,7 +430,7 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
 
         if isFVGType
             // FVG label: simple "FVG+" or "FVG-" centered in the gap
-            fvgLabelText = gapType == GAP_TYPE_FVG_BULLISH ? "FVG+" : "FVG-"
+            fvgLabelText = gapType == GAP_TYPE_FVG_BULLISH ? GAP_TYPE_FVG_BULLISH : GAP_TYPE_FVG_BEARISH
             dateLabel := label.new(centerTime, gapMid, fvgLabelText, xloc=xloc.bar_time, color=color.new(color.rgb(255, 255, 255), 100), textcolor=fvgLabelColor, style=label.style_label_center, size=size.tiny, textalign=text.align_center)
         else if isPreview
             // Preview label shows "Upcoming RTH" with NEXT trading day date
@@ -614,6 +614,22 @@ clearProjections(GapData gap) =>
             label.delete(projLabel)
         array.clear(gap.projectionLabels)
 
+// Single source of truth for gap label text (used in createGap and restoreGapDrawings)
+getGapLabelText(GapData gap) =>
+    if gap.gapType == GAP_TYPE_FVG_BULLISH
+        GAP_TYPE_FVG_BULLISH
+    else if gap.gapType == GAP_TYPE_FVG_BEARISH
+        GAP_TYPE_FVG_BEARISH
+    else if gap.gapType == GAP_TYPE_RTH
+        getRTHLabelText(gap)
+    else
+        gapYear = year(gap.creationTime, TIMEZONE)
+        gapMonth = month(gap.creationTime, TIMEZONE)
+        gapDay = dayofmonth(gap.creationTime, TIMEZONE)
+        monthName = getMonthName(gapMonth)
+        gapPrefix = gap.gapType == GAP_TYPE_NWOG ? "NWOG" : "NDOG"
+        gapPrefix + "\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+
 // Hide gap drawings without deleting the gap from array (for filter toggling)
 hideGapDrawings(GapData gap) =>
     if not na(gap.topUnfilledBox)
@@ -715,16 +731,7 @@ restoreGapDrawings(GapData gap) =>
         line.set_y1(gap.bottomBoundaryLine, gap.bottom)
         line.set_y2(gap.bottomBoundaryLine, gap.bottom)
     if not na(gap.dateLabel)
-        if gap.gapType == GAP_TYPE_RTH
-            label.set_text(gap.dateLabel, getRTHLabelText(gap))
-        else
-            gapYear = year(gap.creationTime, TIMEZONE)
-            gapMonth = month(gap.creationTime, TIMEZONE)
-            gapDay = dayofmonth(gap.creationTime, TIMEZONE)
-            monthName = getMonthName(gapMonth)
-            gapPrefix = gap.gapType == GAP_TYPE_NWOG ? "NWOG" : "NDOG"
-            dateStr = gapPrefix + "\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
-            label.set_text(gap.dateLabel, dateStr)
+        label.set_text(gap.dateLabel, getGapLabelText(gap))
 
 // Stop extending gap drawings at current time (mitigation point)
 stopExtendingAt(GapData gap, int stopTime) =>
@@ -1043,17 +1050,25 @@ if array.size(gapsArray) > 0
     for i = array.size(gapsArray) - 1 to 0
         gap = array.get(gapsArray, i)
 
-        // Skip gaps not enabled for display
+        // Hide and skip gaps not enabled for display
         if gap.gapType == GAP_TYPE_RTH and not displayRTH
+            hideGapDrawings(gap)
             continue
         if gap.gapType == GAP_TYPE_NWOG and not displayNWOG
+            hideGapDrawings(gap)
             continue
         if gap.gapType == GAP_TYPE_NDOG and not displayNDOG
+            hideGapDrawings(gap)
             continue
         if isBPR(gap.gapType) and not displayBPR
+            hideGapDrawings(gap)
             continue
         if isFVG(gap.gapType) and not displayFVG
+            hideGapDrawings(gap)
             continue
+
+        // Restore drawings for gaps that pass the filter (may have been hidden by previous filter)
+        restoreGapDrawings(gap)
 
         // Fresh filter: only show the designated unfilled candidate for each type
         if isFreshFilter
