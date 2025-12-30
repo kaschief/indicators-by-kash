@@ -14,7 +14,7 @@
 //   4H  chart → D   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="relay • development", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -207,6 +207,7 @@ workspace_mode_enabled = input.bool(false, "Enable Workspace Mode", group=GROUP_
 auto_workspace_enabled = input.bool(true, "Auto Workspace", group=GROUP_LIVE_WORKSPACE)
 workspace_nearest_bull = input.int(WORKSPACE_DEFAULT_NEAREST, "+", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest")
 workspace_nearest_bear = input.int(WORKSPACE_DEFAULT_NEAREST, "-", minval=0, maxval=10, group=GROUP_LIVE_WORKSPACE, inline="ws_nearest")
+workspace_exclude_vi_only = input.bool(true, "Exclude VI-Only Zones", group=GROUP_LIVE_WORKSPACE)
 
 // Auto workspace detection (M-F only)
 is_auto_ws_timeframe = array.includes(AUTO_WS_TIMEFRAMES, timeframe.period)
@@ -250,24 +251,42 @@ GROUP_ZONE_DISPLAY = "🎨 Zone Display"
 zone_bull_color  = input.color(DEFAULT_ZONE_BULL_COLOR, "+", group=GROUP_ZONE_DISPLAY, inline="zc")
 zone_bear_color  = input.color(DEFAULT_ZONE_BEAR_COLOR, "-", group=GROUP_ZONE_DISPLAY, inline="zc")
 
-// Zone style presets
-const string ZONE_STYLE_DEFAULT = "Default"
-const string ZONE_STYLE_MUTED   = "Muted"
-zone_style_preset = input.string(ZONE_STYLE_MUTED, "Zone Style", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED], group=GROUP_ZONE_DISPLAY)
+// Visual intensity type (must be defined before use)
+type ZoneVisualStyle
+    int border_trans      // Border transparency (0=solid, 100=invisible)
+    int fill_trans        // Fill transparency
+    int label_trans       // Label transparency
+    int border_width      // Border width
 
-// Resolve transparency values from preset
-int zone_fill_transparency = 97
-int zone_opacity = zone_style_preset == ZONE_STYLE_MUTED ? 40 : 0
+// Zone intensity presets
+const string ZONE_STYLE_DEFAULT     = "Default"
+const string ZONE_STYLE_MUTED       = "Muted"
+const string ZONE_STYLE_ULTRA_MUTED = "Ultra Muted"
+
+primary_zone_style   = input.string(ZONE_STYLE_MUTED, "Primary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED], group=GROUP_ZONE_DISPLAY)
+secondary_zone_style = input.string(ZONE_STYLE_ULTRA_MUTED, "Secondary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED], group=GROUP_ZONE_DISPLAY)
+
+// Secondary zone styling (fixed - not user configurable)
+const string SECONDARY_BORDER_STYLE = line.style_dashed
+const int SECONDARY_BORDER_WIDTH = 2
+
+// Resolve ZoneVisualStyle from preset name
+// Preset values: border_trans, fill_trans, label_trans, border_width
+get_zone_style(string preset) =>
+    switch preset
+        ZONE_STYLE_DEFAULT     => ZoneVisualStyle.new(0,  94, 0,  3)
+        ZONE_STYLE_MUTED       => ZoneVisualStyle.new(55, 98, 55, 3)
+        ZONE_STYLE_ULTRA_MUTED => ZoneVisualStyle.new(80, 99, 80, 3)
+        => ZoneVisualStyle.new(55, 98, 55, 3)  // fallback to Muted
+
+// Resolved styles for HTF1 (Primary) and HTF2 (Secondary)
+var ZoneVisualStyle htf1_style = get_zone_style(primary_zone_style)
+var ZoneVisualStyle htf2_style = get_zone_style(secondary_zone_style)
 
 zone_extension_bars = input.int(5, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_ZONE_DISPLAY)
 zone_label_color = input.color(DEFAULT_ZONE_LABEL_COLOR, "Label Color", group=GROUP_ZONE_DISPLAY, inline="lbl")
 zone_label_size  = input.string("Large", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_ZONE_DISPLAY, inline="lbl")
 show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_ZONE_DISPLAY)
-show_validation_boundary = input.bool(true, "Validation Boundary", group=GROUP_ZONE_DISPLAY, inline="vb1")
-validation_boundary_bull_color = input.color(color.new(color.rgb(77, 208, 225), 50), "+", group=GROUP_ZONE_DISPLAY, inline="vb1")
-validation_boundary_bear_color = input.color(color.new(color.rgb(249, 121, 246), 50), "-", group=GROUP_ZONE_DISPLAY, inline="vb1")
-validation_boundary_width = input.int(2, "", minval=1, maxval=4, group=GROUP_ZONE_DISPLAY, inline="vb2")
-validation_boundary_style = input.string("Dotted", "", options=["Solid", "Dashed", "Dotted"], group=GROUP_ZONE_DISPLAY, inline="vb2")
 
 // ─── 🎯 MBZ Settings ───
 GROUP_MBZ        = "🎯 MBZ Settings"
@@ -333,12 +352,8 @@ string ZONE_LABEL_SIZE_RESOLVED = switch zone_label_size
     "Huge"   => size.huge
     => size.large
 
-// Resolve validation boundary line style
-string VALIDATION_LINE_STYLE = switch validation_boundary_style
-    "Solid"  => line.style_solid
-    "Dashed" => line.style_dashed
-    "Dotted" => line.style_dotted
-    => line.style_dotted
+// Validation boundary is an inherent feature - static styling
+const string VALIDATION_LINE_STYLE = line.style_dotted
 
 // Resolve MBZ invalidation threshold based on mode
 float MBZ_INVALIDATION_THRESHOLD = switch invalidation_mode
@@ -461,6 +476,9 @@ type CandleZone
 
     // ─── Preview state ───
     bool   is_preview          // True if this is a forming/preview zone (not yet confirmed)
+
+    // ─── HTF context ───
+    string htf_label           // Which HTF this zone belongs to ("1H", "4H", etc.)
 
     // ─── Visual elements ───
     box    zone_box
@@ -647,7 +665,7 @@ calculate_zone_boundaries(float candle_open, float candle_close, float candle_hi
 // has_mbz/has_sif: which engine(s) validated this zone
 // For MBZ: provide ref_high/ref_low for wick extension
 // For SIF: is_immediate_sif indicates immediate SIF
-create_candle_zone(int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, array<int> gap_ids, array<string> gap_types, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, bool is_immediate_sif) =>
+create_candle_zone(int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, array<int> gap_ids, array<string> gap_types, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, bool is_immediate_sif, string htf_label_param) =>
     // Detect subtype from candle shape
     [subtype, _has_dominant] = detect_zone_subtype(candle_open, candle_close, candle_high, candle_low)
 
@@ -679,6 +697,7 @@ create_candle_zone(int formation_bar_index, int formation_time, float candle_ope
     zone.is_immediate_sif := is_immediate_sif
     zone.is_breakaway := false
     zone.is_preview := false
+    zone.htf_label := htf_label_param
 
     zone
 
@@ -698,7 +717,7 @@ find_zone_index_for_candle(array<CandleZone> zone_arr, int formation_time) =>
 // If zone exists, returns it for updating
 // If not, creates new zone and adds to array
 // Note: Caller must update the zone and call array.set() after modifications
-get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension) =>
+get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension, string htf_label_param) =>
     int existing_idx = find_zone_index_for_candle(zone_arr, formation_time)
 
     if existing_idx >= 0
@@ -709,7 +728,7 @@ get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int form
         array<int> gap_ids = array.new<int>()
         array<string> gap_types = array.new<string>()
 
-        CandleZone new_zone = create_candle_zone(formation_bar_index, formation_time, candle_open, candle_close, candle_high, candle_low, is_bullish, gap_ids, gap_types, ref_high, ref_low, allow_wick_extension, false, false, false)
+        CandleZone new_zone = create_candle_zone(formation_bar_index, formation_time, candle_open, candle_close, candle_high, candle_low, is_bullish, gap_ids, gap_types, ref_high, ref_low, allow_wick_extension, false, false, false, htf_label_param)
 
         array.unshift(zone_arr, new_zone)
         [new_zone, 0, true]
@@ -818,8 +837,8 @@ float htf2_breakaway_lower = IS_VALID_HTF2 ? request.security(syminfo.tickerid, 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Convert HTF label to bold Unicode
-get_bold_htf_label() =>
-    switch HTF_LABEL
+get_bold_htf_label(string label) =>
+    switch label
         "5m"  => "𝟱𝗺"
         "15m" => "𝟭𝟱𝗺"
         "30m" => "𝟯𝟬𝗺"
@@ -827,13 +846,13 @@ get_bold_htf_label() =>
         "4H"  => "𝟰𝗛"
         "D"   => "𝗗"
         "W"   => "𝗪"
-        => HTF_LABEL
+        => label
 
 // Build MBZ box label text: MBZ⁺·{𝗧𝗙} with optional source type on new line
 build_mbz_box_label(bool is_bullish, array<string> source_gap_types) =>
     string direction_suffix = is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX
     // Regular MBZ + Bold TF: MBZ⁺·𝟰𝗛
-    string result = "MBZ" + direction_suffix + "·" + get_bold_htf_label()
+    string result = "MBZ" + direction_suffix + "·" + get_bold_htf_label(HTF_LABEL)
 
     int num_sources = array.size(source_gap_types)
     if num_sources == 0
@@ -1045,7 +1064,9 @@ build_zone_label(CandleZone zone) =>
     // Prepend breakaway prefix if zone has breakaway source
     string breakaway_prefix = zone.is_breakaway ? LABEL_PREFIX_BREAKAWAY : ""
 
-    string result = breakaway_prefix + engine_prefix + direction_suffix + "·" + get_bold_htf_label()
+    // Use zone's stored HTF label (supports multi-HTF)
+    string htf_label_display = na(zone.htf_label) ? get_bold_htf_label(HTF_LABEL) : get_bold_htf_label(zone.htf_label)
+    string result = breakaway_prefix + engine_prefix + direction_suffix + "·" + htf_label_display
 
     // Add source breakdown on new line if not empty
     string source_text = build_source_breakdown(zone.source_gap_types)
@@ -1314,7 +1335,7 @@ detect_htf_gaps(HTFContext ctx, int window_start) =>
 //   2. Inversion only: solid border (red=bullish gap inverted, green=bearish gap inverted)
 //   3. Both (same candle): solid border + fill (immediate SIF)
 // Also registers SIF zones when enable_sif_engine is true
-check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float htf_candle_open, float htf_candle_high, float htf_candle_low, float htf_candle_close, int htf_candle_time) =>
+check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float htf_candle_open, float htf_candle_high, float htf_candle_low, float htf_candle_close, int htf_candle_time, string htf_label_param) =>
     // OPTIMIZATION: Check if any visual toggle is enabled (skip visual tracking if all off)
     bool any_visual_enabled = show_first_tap_only or show_immediate_sif or show_delayed_inversion
 
@@ -1438,7 +1459,7 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
         if enable_sif_engine and has_immediate_sif
             // Immediate SIF detected - get or create zone for this candle
             // SIF zones don't use reference wick extension (set ref to na, allow_extension to false)
-            [zone, zone_idx, is_new] = get_or_create_zone(zone_arr, bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false)
+            [zone, zone_idx, is_new] = get_or_create_zone(zone_arr, bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false, htf_label_param)
 
             // Update zone with SIF flag
             zone.has_sif := true
@@ -1672,7 +1693,7 @@ cleanup_preview_zones() =>
 
 // Create and render a preview zone
 // Returns the created zone (also adds to preview_zone_array)
-create_preview_zone(int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, array<int> gap_ids, array<string> gap_types, color zone_color_bull, color zone_color_bear, int zone_extension_width) =>
+create_preview_zone(int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, array<int> gap_ids, array<string> gap_types, color zone_color_bull, color zone_color_bear, int zone_extension_width, string htf_label_param) =>
     // Detect subtype from candle shape
     [subtype, _has_dominant] = detect_zone_subtype(candle_open, candle_close, candle_high, candle_low)
 
@@ -1704,6 +1725,7 @@ create_preview_zone(int formation_time, float candle_open, float candle_close, f
     zone.is_immediate_sif := has_sif
     zone.is_breakaway := false
     zone.is_preview := true
+    zone.htf_label := htf_label_param
 
     // Create visual box with preview styling (dashed border)
     color zone_color = is_bullish ? zone_color_bull : zone_color_bear
@@ -1916,6 +1938,19 @@ check_sif_component_invalidation(CandleZone zone, float candle_open, float candl
     else
         check_component_single_candle_invalidation(zone.zone_top, zone.zone_bottom, zone.is_bullish, SIF_INVALIDATION_THRESHOLD, candle_open, candle_close)
 
+// Check if zone is comprised ONLY of Volume Imbalance (VI) sources
+is_vi_only_zone(CandleZone zone) =>
+    int num_sources = array.size(zone.source_gap_types)
+    if num_sources == 0
+        false
+    else
+        bool all_vi = true
+        for i = 0 to num_sources - 1
+            if array.get(zone.source_gap_types, i) != GAP_TYPE_VOLUME
+                all_vi := false
+                break
+        all_vi
+
 // Check if MBZ component should be invalidated
 // NOTE: Historical lookback removed for relay - close[i]/open[i] is LTF data, not HTF!
 // Zones invalidate via: (1) completed HTF candles on new_htf, (2) live htf_open/close check
@@ -2093,7 +2128,7 @@ process_htf_close(HTFContext ctx, float htf_close, float breakaway_upper, float 
     cleanup_zones(ctx.zone_array, window_start, MAX_ZONES)
 
     // Gap interactions (SIF detection)
-    check_gap_interactions(ctx.gap_array, ctx.zone_array, ctx.o1, ctx.h1, ctx.l1, ctx.c1, ctx.t1)
+    check_gap_interactions(ctx.gap_array, ctx.zone_array, ctx.o1, ctx.h1, ctx.l1, ctx.c1, ctx.t1, ctx.htf_label)
     cleanup_inversion_highlights()
     cleanup_tap_highlights()
 
@@ -2128,7 +2163,7 @@ process_htf_close(HTFContext ctx, float htf_close, float breakaway_upper, float 
                         consolidated_zone_bottom := math.min(consolidated_zone_bottom, match_zone_bot)
 
                 // Register MBZ in unified zone_array
-                [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_reference_wick)
+                [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_reference_wick, ctx.htf_label)
 
                 zone.has_mbz := true
                 zone.ref_candle_high := ctx.h2
@@ -2162,7 +2197,8 @@ if IS_VALID
         prev_wick_box := wick_box
 
         // ─── Process HTF1 Candle Close ───
-        process_htf_close(htf1, close[1], htf_breakaway_upper, htf_breakaway_lower)
+        if show_htf1
+            process_htf_close(htf1, close[1], htf_breakaway_upper, htf_breakaway_lower)
 
         // ─── Create New Candle Boxes (ALWAYS create for MBZ highlighting) ───
         bool is_bull = close >= open
@@ -2206,14 +2242,32 @@ if IS_VALID
             box.set_bgcolor(body_box, is_bull ? htf_bull_body_color : htf_bear_body_color)
 
     // ─── FVG Updates (every bar) ───
-    update_gap_positions(htf1.gap_array, htf1.zone_array)
+    if show_htf1
+        update_gap_positions(htf1.gap_array, htf1.zone_array)
 
-    // ─── Live Invalidation (every bar) ───
-    // Check for OPENING GAPS only (permanent invalidation)
-    // Close-based invalidation is computed in rendering loop for visual hide/show
+        // ─── Live Invalidation (every bar) ───
+        // Check for OPENING GAPS only (permanent invalidation)
+        // Close-based invalidation is computed in rendering loop for visual hide/show
+        if enable_invalidation
+            check_zone_invalidation_live(htf1.zone_array, htf1.curr_open)
+
+// ─── HTF2 Processing (Secondary Timeframe) ───
+if IS_VALID_HTF2 and show_htf2
+    if new_htf2
+        process_htf_close(htf2, close[1], htf2_breakaway_upper, htf2_breakaway_lower)
+    else
+        // Update forming HTF2 candle
+        htf2.curr_high := math.max(high, htf2.curr_high)
+        htf2.curr_low  := math.min(low, htf2.curr_low)
+
+    // HTF2 gap position updates
+    update_gap_positions(htf2.gap_array, htf2.zone_array)
+
+    // HTF2 live invalidation
     if enable_invalidation
-        check_zone_invalidation_live(htf1.zone_array, htf1.curr_open)
+        check_zone_invalidation_live(htf2.zone_array, htf2.curr_open)
 
+if IS_VALID
     // ─── Preview Zone Detection (realtime only, on price change) ───
     // Check for zones forming during the current HTF candle
     // Uses current LTF close as potential HTF close
@@ -2251,7 +2305,7 @@ if IS_VALID
                         array.push(mbz_gap_types, match.source_gap_type)
 
                     // Create preview zone (MBZ uses reference wick extension from htf_*1)
-                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_reference_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
+                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_reference_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width, HTF_LABEL)
 
         // Preview SIF: Check if forming candle would create immediate SIF
         if enable_sif_engine
@@ -2278,45 +2332,40 @@ if IS_VALID
                         array.set(preview_zone_array, 0, existing)
                     else
                         // Create new SIF-only preview zone
-                        create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, preview_color_bull, preview_color_bear, preview_extension_width)
+                        create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, preview_color_bull, preview_color_bear, preview_extension_width, HTF_LABEL)
 
-    // ─── Unified Zone Rendering (on HTF change or current bar) ───
-    // Only render when: HTF candle closes (new_htf) OR current bar updates (barstate.islast)
-    // This avoids redundant iterations on historical bars where zone state cannot change
-    // Live invalidation is preserved via barstate.islast (updates every tick on current bar)
-    if array.size(htf1.zone_array) > 0 and (new_htf or barstate.islast)
-        int zone_extension_width = zone_extension_bars * HTF_MS
-        color zone_color_bull = zone_bull_color
-        color zone_color_bear = zone_bear_color
+// ═══════════════════════════════════════════════════════════════════════════════
+// UNIFIED ZONE RENDERING (parameterized for HTF1/HTF2)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bool is_secondary, ZoneVisualStyle style) =>
+    if array.size(zone_arr) == 0
+        false
+    else
+        int zone_ext_width = zone_extension_bars * htf_ms
 
         // Same-Source filter tracking
-        var map<int, bool> seen_gap_ids = map.new<int, bool>()  // For LATEST TOUCH mode
-        var map<int, int> first_touch_index_per_gap = map.new<int, int>()  // For FIRST TOUCH mode: gap_id -> zone index
+        var map<int, bool> seen_gap_ids = map.new<int, bool>()
+        var map<int, int> first_touch_index_per_gap = map.new<int, int>()
         map.clear(seen_gap_ids)
         map.clear(first_touch_index_per_gap)
 
         // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ zone per gap_id
-        // Note: Same-Source filter only applies to MBZ zones, not SIF-only zones
         if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-            for zone_index = array.size(htf1.zone_array) - 1 to 0
-                CandleZone current_zone = array.get(htf1.zone_array, zone_index)
-                // Only consider MBZ zones for same-source filtering
+            for zone_index = array.size(zone_arr) - 1 to 0
+                CandleZone current_zone = array.get(zone_arr, zone_index)
                 if not current_zone.has_mbz
                     continue
-                // Apply direction filter and invalidation check
                 bool show_direction = mbz_direction_filter == DIR_BOTH or (current_zone.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not current_zone.is_bullish and mbz_direction_filter == DIR_BEARISH)
                 if show_direction and not current_zone.is_invalidated and array.size(current_zone.source_gap_ids) > 0
-                    int gap_id = array.get(current_zone.source_gap_ids, 0)  // Use primary source (first gap)
-                    // Loop backwards, so keep updating - last one seen = oldest (first) chronologically
+                    int gap_id = array.get(current_zone.source_gap_ids, 0)
                     map.put(first_touch_index_per_gap, gap_id, zone_index)
 
-        // ─── Pre-pass for Nearest Zone Extension ───
-        // Calculate which zones should extend to current price based on proximity
+        // Pre-pass for Nearest Zone Extension (workspace mode - primary only)
         var map<int, bool> extend_to_current = map.new<int, bool>()
         map.clear(extend_to_current)
 
-        if workspace_active and barstate.islast
-            // Collect visible zones with their distances to price
+        if workspace_active and barstate.islast and not is_secondary
             var array<float> bull_distances = array.new<float>()
             var array<int> bull_indices = array.new<int>()
             var array<float> bear_distances = array.new<float>()
@@ -2328,22 +2377,22 @@ if IS_VALID
 
             float current_price = close
 
-            for zone_idx = 0 to array.size(htf1.zone_array) - 1
-                CandleZone z = array.get(htf1.zone_array, zone_idx)
+            for zone_idx = 0 to array.size(zone_arr) - 1
+                CandleZone z = array.get(zone_arr, zone_idx)
                 if z.is_invalidated
                     continue
                 if not z.has_mbz and not z.has_sif
                     continue
-                // Check direction filter
                 bool show_dir = mbz_direction_filter == DIR_BOTH or (z.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not z.is_bullish and mbz_direction_filter == DIR_BEARISH)
                 if not show_dir
                     continue
-                // Check engine visibility
                 bool visible = (enable_mbz_engine and z.has_mbz) or (enable_sif_engine and z.has_sif)
                 if not visible
                     continue
+                // Exclude VI-only zones from workspace extension if enabled
+                if workspace_exclude_vi_only and is_vi_only_zone(z)
+                    continue
 
-                // Calculate distance: for bullish use zone_top, for bearish use zone_bottom
                 float dist = z.is_bullish ? math.abs(current_price - z.zone_top) : math.abs(current_price - z.zone_bottom)
 
                 if z.is_bullish
@@ -2353,9 +2402,8 @@ if IS_VALID
                     array.push(bear_distances, dist)
                     array.push(bear_indices, zone_idx)
 
-            // Sort and select nearest N bullish zones
+            // Select nearest N bullish zones
             if workspace_nearest_bull > 0 and array.size(bull_indices) > 0
-                // Simple selection: find N smallest distances
                 for n = 0 to math.min(workspace_nearest_bull, array.size(bull_indices)) - 1
                     float min_dist = 1e18
                     int min_idx = -1
@@ -2367,9 +2415,9 @@ if IS_VALID
                             min_pos := j
                     if min_idx >= 0
                         map.put(extend_to_current, min_idx, true)
-                        array.set(bull_distances, min_pos, 1e18)  // Mark as used
+                        array.set(bull_distances, min_pos, 1e18)
 
-            // Sort and select nearest N bearish zones
+            // Select nearest N bearish zones
             if workspace_nearest_bear > 0 and array.size(bear_indices) > 0
                 for n = 0 to math.min(workspace_nearest_bear, array.size(bear_indices)) - 1
                     float min_dist = 1e18
@@ -2382,55 +2430,49 @@ if IS_VALID
                             min_pos := j
                     if min_idx >= 0
                         map.put(extend_to_current, min_idx, true)
-                        array.set(bear_distances, min_pos, 1e18)  // Mark as used
+                        array.set(bear_distances, min_pos, 1e18)
 
-        for i = 0 to array.size(htf1.zone_array) - 1
-            CandleZone zone = array.get(htf1.zone_array, i)
+        // Main rendering loop
+        for i = 0 to array.size(zone_arr) - 1
+            CandleZone zone = array.get(zone_arr, i)
 
-            // Skip permanently invalidated zones
             if zone.is_invalidated
                 continue
 
-            // Skip if neither engine validated (shouldn't happen, but defensive)
             if not zone.has_mbz and not zone.has_sif
                 continue
 
-            // ─── Live Invalidation Check (computed, not permanent) ───
-            // Compute if zone WOULD be invalidated by forming HTF close
-            // If so, hide visually but don't set permanent flags (zone can "un-invalidate" if price rallies)
-            bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf1.curr_open, close)
-            bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf1.curr_open, close)
+            // Live Invalidation Check (computed, not permanent)
+            bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf_curr_open, close)
+            bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf_curr_open, close)
 
-            // Check if all ACTIVE components are live-invalidated
             bool mbz_active = enable_mbz_engine and zone.has_mbz
             bool sif_active = enable_sif_engine and zone.has_sif
             bool all_live_invalidated = (not mbz_active or mbz_live_invalid) and (not sif_active or sif_live_invalid)
 
             if all_live_invalidated and (mbz_active or sif_active)
-                // Hide zone visually (but don't set permanent flags)
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(htf1.zone_array, i, zone)
+                array.set(zone_arr, i, zone)
                 continue
 
-            // Apply direction filter
+            // Direction filter
             bool show_direction = mbz_direction_filter == DIR_BOTH or (zone.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zone.is_bullish and mbz_direction_filter == DIR_BEARISH)
             if not show_direction
-                // Delete box if it exists (zone filtered out by direction)
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(htf1.zone_array, i, zone)
+                array.set(zone_arr, i, zone)
                 continue
 
-            // Zone visibility: show if zone has at least one enabled engine component
+            // Engine visibility
             bool show_zone = (enable_mbz_engine and zone.has_mbz) or (enable_sif_engine and zone.has_sif)
             if not show_zone
                 if not na(zone.zone_box)
@@ -2439,77 +2481,86 @@ if IS_VALID
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(htf1.zone_array, i, zone)
+                array.set(zone_arr, i, zone)
                 continue
 
-            // Same-Source filter logic (MBZ only - SIF zones always pass through)
+            // Same-Source filter logic (MBZ only)
             bool should_show_zone = true
             if zone.has_mbz and array.size(zone.source_gap_ids) > 0
-                int primary_gap_id = array.get(zone.source_gap_ids, 0)  // Use primary source (first gap)
+                int primary_gap_id = array.get(zone.source_gap_ids, 0)
 
                 if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
-                    // LATEST TOUCH: Show most recent MBZ zone per gap_id
                     if map.contains(seen_gap_ids, primary_gap_id)
-                        should_show_zone := false  // Already added latest for this gap
+                        should_show_zone := false
                     else
-                        // Mark as seen (we're processing forward chronologically)
                         map.put(seen_gap_ids, primary_gap_id, true)
                 else if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-                    // FIRST TOUCH: Only show FIRST (oldest) non-invalidated MBZ zone per gap_id
                     if map.contains(first_touch_index_per_gap, primary_gap_id)
                         int first_touch_idx = map.get(first_touch_index_per_gap, primary_gap_id)
-                        // Only show if this IS the first touch for this gap_id
                         if i != first_touch_idx
                             should_show_zone := false
                     else
-                        should_show_zone := false  // No first touch found (shouldn't happen)
-                // SAME_SOURCE_FILTER_ALL_TOUCHES: No filtering, show all
+                        should_show_zone := false
 
             if not should_show_zone
-                // Delete box if it exists (zone filtered out)
                 if not na(zone.zone_box)
                     box.delete(zone.zone_box)
                     zone.zone_box := na
                 if not na(zone.validation_line)
                     line.delete(zone.validation_line)
                     zone.validation_line := na
-                array.set(htf1.zone_array, i, zone)
+                array.set(zone_arr, i, zone)
                 continue
 
-            // Create box if doesn't exist yet
+            // Extension and staggering
             bool should_extend_to_current = workspace_active and map.contains(extend_to_current, i)
-            // Apply staggering to extended zones to prevent all ending at same edge
             int stagger_hash = should_extend_to_current ? (zone.formation_time + int(zone.zone_top * 100)) % 7 : 0
-            int stagger_offset_ms = stagger_hash * (HTF_MS / 4)  // Stagger by fractions of HTF candle
-            int normal_extension_right = zone.formation_time + zone_extension_width
+            int stagger_offset_ms = stagger_hash * (htf_ms / 4)
+            int normal_extension_right = zone.formation_time + zone_ext_width
             int zone_right_edge = should_extend_to_current ? math.max(time + stagger_offset_ms, normal_extension_right) : normal_extension_right
 
-            // Apply faded opacity to non-extended zones when workspace mode is enabled
-            bool is_faded = workspace_active and not should_extend_to_current
-            int fill_transparency = is_faded ? 99 : zone_fill_transparency
-            int opacity = is_faded ? WORKSPACE_FADE_OPACITY : zone_opacity
-            color label_color_resolved = opacity > 0 ? color.new(zone_label_color, opacity) : zone_label_color
+            // Faded opacity for non-extended zones in workspace mode (primary only)
+            bool is_faded = workspace_active and not should_extend_to_current and not is_secondary
+            int fill_trans = is_faded ? 99 : style.fill_trans
+            int border_trans = is_faded ? WORKSPACE_FADE_OPACITY : style.border_trans
+            int label_trans = is_faded ? WORKSPACE_FADE_OPACITY : style.label_trans
+            color label_color_resolved = label_trans > 0 ? color.new(zone_label_color, label_trans) : zone_label_color
 
             if na(zone.zone_box)
-                color zone_color = zone.is_bullish ? zone_color_bull : zone_color_bear
+                color zone_color = zone.is_bullish ? zone_bull_color : zone_bear_color
                 string zone_label_text = build_zone_label(zone)
 
-                zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, fill_transparency), border_color=color.new(zone_color, opacity), border_width=3, text=zone_label_text, text_color=label_color_resolved, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+                // Create box: secondary uses dashed border with width 2, primary uses solid with style.border_width
+                if is_secondary
+                    zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, fill_trans), border_color=color.new(zone_color, border_trans), border_width=SECONDARY_BORDER_WIDTH, border_style=SECONDARY_BORDER_STYLE, text=zone_label_text, text_color=label_color_resolved, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+                else
+                    zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=color.new(zone_color, fill_trans), border_color=color.new(zone_color, border_trans), border_width=style.border_width, text=zone_label_text, text_color=label_color_resolved, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
 
-                // Draw validation boundary line (marks when HTF candle closed)
-                if show_validation_boundary
-                    int validation_time = zone.formation_time + HTF_MS
-                    color vb_color = zone.is_bullish ? validation_boundary_bull_color : validation_boundary_bear_color
-                    zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=validation_boundary_width, style=VALIDATION_LINE_STYLE)
+                // Validation boundary line (inherent feature - static styling)
+                int validation_time = zone.formation_time + htf_ms
+                color vb_color = color.new(zone_color, 80)  // More muted than zone border
+                zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=2, style=VALIDATION_LINE_STYLE)
 
-                array.set(htf1.zone_array, i, zone)
+                array.set(zone_arr, i, zone)
             else
                 // Update extension and opacity
                 box.set_right(zone.zone_box, zone_right_edge)
-                color zone_color = zone.is_bullish ? zone_color_bull : zone_color_bear
-                box.set_bgcolor(zone.zone_box, color.new(zone_color, fill_transparency))
-                box.set_border_color(zone.zone_box, color.new(zone_color, opacity))
+                color zone_color = zone.is_bullish ? zone_bull_color : zone_bear_color
+                box.set_bgcolor(zone.zone_box, color.new(zone_color, fill_trans))
+                box.set_border_color(zone.zone_box, color.new(zone_color, border_trans))
                 box.set_text_color(zone.zone_box, label_color_resolved)
+        true
+
+if IS_VALID
+    // ─── Unified Zone Rendering (on HTF change or current bar) ───
+    // Only render when: HTF candle closes (new_htf) OR current bar updates (barstate.islast)
+    // This avoids redundant iterations on historical bars where zone state cannot change
+    if show_htf1 and (new_htf or barstate.islast)
+        render_htf_zones(htf1.zone_array, HTF_MS, htf1.curr_open, false, htf1_style)
+
+    // ─── HTF2 Zone Rendering (Secondary Timeframe - Dashed Borders) ───
+    if show_htf2 and (new_htf2 or barstate.islast)
+        render_htf_zones(htf2.zone_array, HTF2_MS, htf2.curr_open, true, htf2_style)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATUS TABLE
@@ -2546,7 +2597,16 @@ if IS_VALID and show_status_table and barstate.islast
     string ref_wick_display = extend_to_reference_wick ? "  " + STATUS_DISPLAY_REF_WICK : ""
     string workspace_display = workspace_active ? "  WS" : ""
 
-    string status_text = LTF_LABEL + " → " + HTF_LABEL + "  " + gap_type_display + ref_wick_display + workspace_display
+    // Build timeframe mapping display
+    string tf_display = ""
+    if show_htf1 and show_htf2
+        tf_display := LTF_LABEL + " → " + HTF_LABEL + " + " + HTF2_LABEL
+    else if show_htf2
+        tf_display := LTF_LABEL + " → " + HTF2_LABEL
+    else
+        tf_display := LTF_LABEL + " → " + HTF_LABEL
+
+    string status_text = tf_display + "  " + gap_type_display + ref_wick_display + workspace_display
     table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
 
     // Right padding cell
@@ -2565,11 +2625,11 @@ if show_color_table and barstate.islast
 
     table.cell(t, 0, 1, "Zone +", text_size=size.small)
     table.cell(t, 1, 1, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_bull_color)), int(color.g(zone_bull_color)), int(color.b(zone_bull_color))), text_size=size.small)
-    table.cell(t, 2, 1, str.tostring(zone_fill_transparency), text_size=size.small)
+    table.cell(t, 2, 1, str.tostring(htf1_style.fill_trans), text_size=size.small)
 
     table.cell(t, 0, 2, "Zone −", text_size=size.small)
     table.cell(t, 1, 2, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_bear_color)), int(color.g(zone_bear_color)), int(color.b(zone_bear_color))), text_size=size.small)
-    table.cell(t, 2, 2, str.tostring(zone_fill_transparency), text_size=size.small)
+    table.cell(t, 2, 2, str.tostring(htf1_style.fill_trans), text_size=size.small)
 
     table.cell(t, 0, 3, "Zone Label", text_size=size.small)
     table.cell(t, 1, 3, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_label_color)), int(color.g(zone_label_color)), int(color.b(zone_label_color))), text_size=size.small)
