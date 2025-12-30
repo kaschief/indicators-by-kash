@@ -26,6 +26,7 @@ barMs = timeframe.in_seconds(timeframe.period) * 1000
 const string GAP_TYPE_RTH = "RTH"
 const string GAP_TYPE_NWOG = "NWOG"
 const string GAP_TYPE_NDOG = "NDOG"
+const string GAP_TYPE_NWOG_NDOG = "NWOG / NDOG"
 const string GAP_TYPE_BPR_BULLISH = "BPR+"
 const string GAP_TYPE_BPR_BEARISH = "BPR-"
 const string GAP_TYPE_FVG_BULLISH = "FVG+"
@@ -369,13 +370,13 @@ getMonthName(int monthNum) =>
 barOffsetToTime(int barOffset) =>
     time + (barOffset * barMs)
 
-// Helper to generate RTH label text with fill percentage
-getRTHLabelText(GapData gap) =>
-    gapYear = year(gap.creationTime, TIMEZONE)
-    gapMonth = month(gap.creationTime, TIMEZONE)
-    gapDay = dayofmonth(gap.creationTime, TIMEZONE)
-    monthName = getMonthName(gapMonth)
-    dateStr = monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+// Helper for consistent date formatting
+formatGapDate(int timestamp) =>
+    getMonthName(month(timestamp, TIMEZONE)) + " " + str.tostring(dayofmonth(timestamp, TIMEZONE)) + ", " + str.tostring(year(timestamp, TIMEZONE))
+
+// Single helper for label text with fill percentage (used by RTH, NWOG, NDOG)
+getGapLabelWithFill(GapData gap, string prefix) =>
+    dateStr = formatGapDate(gap.creationTime)
     gapRange = gap.top - gap.bottom
     string result = na
     if not na(gap.penetrationLevel) and gapRange > 0
@@ -383,11 +384,11 @@ getRTHLabelText(GapData gap) =>
              (gap.penetrationLevel - gap.bottom) / gapRange * 100 :
              (gap.top - gap.penetrationLevel) / gapRange * 100
         if fillPercent >= 100
-            result := GAP_TYPE_RTH + " " + FILL_COMPLETE + "\n" + dateStr
+            result := prefix + " " + FILL_COMPLETE + "\n" + dateStr
         else
-            result := GAP_TYPE_RTH + " " + str.tostring(fillPercent, "#") + "%\n" + dateStr
+            result := prefix + " " + str.tostring(fillPercent, "#") + "%\n" + dateStr
     else
-        result := GAP_TYPE_RTH + "\n" + dateStr
+        result := prefix + "\n" + dateStr
     result
 
 createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = false, int customLeftTime = na, bool isBullish = false) =>
@@ -439,27 +440,51 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
             todayDow = dayofweek(time, TIMEZONE)
             daysToAdd = todayDow == dayofweek.friday ? 3 : 1
             nextTradingDay = time + (daysToAdd * MILLISECONDS_PER_DAY)
-            gapYear = year(nextTradingDay, TIMEZONE)
-            gapMonth = month(nextTradingDay, TIMEZONE)
-            gapDay = dayofmonth(nextTradingDay, TIMEZONE)
-            monthName = getMonthName(gapMonth)
-            dateStr = "Upcoming RTH\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+            dateStr = "Upcoming RTH\n" + formatGapDate(nextTradingDay)
             dateLabel := label.new(centerTime, bottomPrice, dateStr, xloc=xloc.bar_time, color=color.new(color.rgb(255, 255, 255), 100), textcolor=dateLabelColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
         else
             dateLabelColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : rthBoundaryColor
-            gapYear = year(time, TIMEZONE)
-            gapMonth = month(time, TIMEZONE)
-            gapDay = dayofmonth(time, TIMEZONE)
-            monthName = getMonthName(gapMonth)
-            gapPrefix = gapType == GAP_TYPE_NWOG ? "NWOG" : gapType == GAP_TYPE_NDOG ? "NDOG" : "RTH"
-            dateStr = gapPrefix + "\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+            gapPrefix = gapType == GAP_TYPE_NWOG ? GAP_TYPE_NWOG : gapType == GAP_TYPE_NDOG ? GAP_TYPE_NDOG : GAP_TYPE_RTH
+            dateStr = gapPrefix + "\n" + formatGapDate(time)
             dateLabel := label.new(centerTime, bottomPrice, dateStr, xloc=xloc.bar_time, color=color.new(color.rgb(255, 255, 255), 100), textcolor=dateLabelColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
-    initialDirection = ENTRY_NONE
-    if close < bottomPrice
-        initialDirection := ENTRY_FROM_BELOW
-    else if close > topPrice
-        initialDirection := ENTRY_FROM_ABOVE
+    // Determine initial entry direction and fill state based on gap direction and current price
+    // This is critical for gaps created from historical data where price may have already passed through
+    //
+    // For NWOG/NDOG gaps, isBullish tells us the original gap direction:
+    // - isBullish = true: Sunday opened HIGHER than Friday closed → gap is BELOW the open price → entry FROM_ABOVE (price drops into gap)
+    // - isBullish = false: Sunday opened LOWER than Friday closed → gap is ABOVE the open price → entry FROM_BELOW (price rises into gap)
+    initialDirection = isBullish ? ENTRY_FROM_ABOVE : ENTRY_FROM_BELOW
+    initialFilled = false
+    float initialPenetration = na
+
+    // Check current bar for fill status
+    if initialDirection == ENTRY_FROM_ABOVE
+        // Bullish gap (below price at creation) - fills when price drops down through it
+        if low <= bottomPrice
+            // Current bar crossed through the entire gap (from top to bottom)
+            initialFilled := true
+            initialPenetration := bottomPrice
+        else if low <= topPrice and low > bottomPrice
+            // Current bar penetrated but didn't fully fill
+            initialPenetration := low
+        // Also check: if price is now BELOW the gap, it must have crossed through at some point
+        if not initialFilled and close < bottomPrice
+            initialFilled := true
+            initialPenetration := bottomPrice
+    else
+        // Bearish gap (above price at creation) - fills when price rises up through it
+        if high >= topPrice
+            // Current bar crossed through the entire gap (from bottom to top)
+            initialFilled := true
+            initialPenetration := topPrice
+        else if high >= bottomPrice and high < topPrice
+            // Current bar penetrated but didn't fully fill
+            initialPenetration := high
+        // Also check: if price is now ABOVE the gap, it must have crossed through at some point
+        if not initialFilled and close > topPrice
+            initialFilled := true
+            initialPenetration := topPrice
 
     GapData.new(
          topUnfilledBox=topUnfilledBox,
@@ -476,9 +501,9 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          isBullish=isBullish,
          top=topPrice,
          bottom=bottomPrice,
-         penetrationLevel=na,
+         penetrationLevel=initialPenetration,
          entryDirection=initialDirection,
-         filled=false,
+         filled=initialFilled,
          passedNextSession=false,
          isPreview=isPreview,
          gapType=gapType,
@@ -620,15 +645,15 @@ getGapLabelText(GapData gap) =>
         GAP_TYPE_FVG_BULLISH
     else if gap.gapType == GAP_TYPE_FVG_BEARISH
         GAP_TYPE_FVG_BEARISH
+    else if gap.gapType == GAP_TYPE_BPR_BULLISH
+        GAP_TYPE_BPR_BULLISH
+    else if gap.gapType == GAP_TYPE_BPR_BEARISH
+        GAP_TYPE_BPR_BEARISH
     else if gap.gapType == GAP_TYPE_RTH
-        getRTHLabelText(gap)
+        getGapLabelWithFill(gap, GAP_TYPE_RTH)
     else
-        gapYear = year(gap.creationTime, TIMEZONE)
-        gapMonth = month(gap.creationTime, TIMEZONE)
-        gapDay = dayofmonth(gap.creationTime, TIMEZONE)
-        monthName = getMonthName(gapMonth)
-        gapPrefix = gap.gapType == GAP_TYPE_NWOG ? "NWOG" : "NDOG"
-        gapPrefix + "\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+        // NWOG or NDOG
+        getGapLabelWithFill(gap, gap.gapType)
 
 // Hide gap drawings without deleting the gap from array (for filter toggling)
 hideGapDrawings(GapData gap) =>
@@ -991,8 +1016,8 @@ if array.size(gapsArray) > 0
     int freshRTHBar = mostRecentUnfilledRTHBar
     int freshNDOGBar = mostRecentUnfilledNDOGBar
 
-    // Scan for distinct NDOG when needed (Fresh mode OR NWOG+NDOG filter with floating)
-    needsDistinctNDOG = isFreshFilter or (quickFilter == FILTER_NWOG_NDOG and floatingMode)
+    // Scan for distinct NDOG when needed (Fresh mode OR floating mode with overlap)
+    needsDistinctNDOG = isFreshFilter or (floatingMode and ndogOverlapsNWOG)
     if needsDistinctNDOG and ndogOverlapsNWOG
         // Find most recent unfilled NDOG that is DISTINCT from NWOG
         // If most recent NDOG overlaps with NWOG, scan backwards for a distinct one
@@ -1015,12 +1040,7 @@ if array.size(gapsArray) > 0
                 if ndogGap.gapType == GAP_TYPE_NDOG and ndogGap.top == nwogGap.top and ndogGap.bottom == nwogGap.bottom
                     // Same geometry - combine labels
                     if not na(nwogGap.dateLabel)
-                        gapYear = year(nwogGap.creationTime, TIMEZONE)
-                        gapMonth = month(nwogGap.creationTime, TIMEZONE)
-                        gapDay = dayofmonth(nwogGap.creationTime, TIMEZONE)
-                        monthName = getMonthName(gapMonth)
-                        combinedStr = "NWOG/NDOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
-                        label.set_text(nwogGap.dateLabel, combinedStr)
+                        label.set_text(nwogGap.dateLabel, getGapLabelWithFill(nwogGap, GAP_TYPE_NWOG_NDOG))
                     if not na(ndogGap.dateLabel)
                         label.set_text(ndogGap.dateLabel, "")  // Hide NDOG label
 
@@ -1031,12 +1051,7 @@ if array.size(gapsArray) > 0
             for i = 0 to array.size(gapsArray) - 1
                 gap = array.get(gapsArray, i)
                 if gap.gapType == GAP_TYPE_NDOG and gap.creationBar == freshNDOGBar and not na(gap.dateLabel)
-                    gapYear = year(gap.creationTime, TIMEZONE)
-                    gapMonth = month(gap.creationTime, TIMEZONE)
-                    gapDay = dayofmonth(gap.creationTime, TIMEZONE)
-                    monthName = getMonthName(gapMonth)
-                    dateStr = "NDOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
-                    label.set_text(gap.dateLabel, dateStr)
+                    label.set_text(gap.dateLabel, getGapLabelWithFill(gap, GAP_TYPE_NDOG))
                     break
 
         // Restore RTH label
@@ -1044,7 +1059,7 @@ if array.size(gapsArray) > 0
             for i = 0 to array.size(gapsArray) - 1
                 gap = array.get(gapsArray, i)
                 if gap.gapType == GAP_TYPE_RTH and gap.creationBar == freshRTHBar and not na(gap.dateLabel)
-                    label.set_text(gap.dateLabel, getRTHLabelText(gap))
+                    label.set_text(gap.dateLabel, getGapLabelWithFill(gap, GAP_TYPE_RTH))
                     break
 
     for i = array.size(gapsArray) - 1 to 0
@@ -1086,9 +1101,17 @@ if array.size(gapsArray) > 0
                     hideGapDrawings(gap)
                     continue
         else
-            // Non-Fresh mode: skip NDOG when it overlaps with NWOG (NWOG already represents both)
-            if gap.gapType == GAP_TYPE_NDOG and ndogOverlapsNWOG and gap.creationBar == mostRecentUnfilledNDOGBar
-                continue
+            // Non-Fresh mode: skip NDOG when it shares geometry with any NWOG (NWOG takes precedence)
+            if gap.gapType == GAP_TYPE_NDOG and displayNWOG
+                ndogSharesGeometry = false
+                for j = 0 to array.size(gapsArray) - 1
+                    nwogGap = array.get(gapsArray, j)
+                    if nwogGap.gapType == GAP_TYPE_NWOG and nwogGap.top == gap.top and nwogGap.bottom == gap.bottom
+                        ndogSharesGeometry := true
+                        break
+                if ndogSharesGeometry
+                    hideGapDrawings(gap)
+                    continue
 
         // Skip filled gaps that passed next session UNLESS "Extend" is ON
         skipGap = false
@@ -1262,7 +1285,7 @@ if array.size(gapsArray) > 0
 
         // Update RTH label with fill percentage
         if gap.gapType == GAP_TYPE_RTH and not na(gap.dateLabel)
-            label.set_text(gap.dateLabel, getRTHLabelText(gap))
+            label.set_text(gap.dateLabel, getGapLabelWithFill(gap, GAP_TYPE_RTH))
 
         // Extension and positioning logic
         // RTH: extends if current session or unfilled historical
@@ -1412,9 +1435,20 @@ if floatingMode and array.size(gapsArray) > 0
                 if na(floatNWOGGap) or gap.creationBar > floatNWOGGap.creationBar
                     floatNWOGGap := gap
 
-    // Check if NDOG overlaps NWOG - if so, find a distinct NDOG
-    ndogOverlapsNwog = not na(floatNDOGGap) and not na(floatNWOGGap) and floatNDOGGap.top == floatNWOGGap.top and floatNDOGGap.bottom == floatNWOGGap.bottom
-    if ndogOverlapsNwog and displayNDOG
+    // Check if ANY NDOG shares geometry with the floating NWOG (for combined label)
+    // This must check ALL NDOGs, not just unfilled, because the overlapping NDOG might be filled
+    nwogHasOverlappingNdog = false
+    if not na(floatNWOGGap) and displayNDOG
+        for gap in gapsArray
+            if gap.gapType == GAP_TYPE_NDOG and gap.top == floatNWOGGap.top and gap.bottom == floatNWOGGap.bottom
+                nwogHasOverlappingNdog := true
+                break
+
+    // Check if the selected unfilled NDOG overlaps with NWOG (to decide if we need a distinct one)
+    selectedNdogOverlapsNwog = not na(floatNDOGGap) and not na(floatNWOGGap) and floatNDOGGap.top == floatNWOGGap.top and floatNDOGGap.bottom == floatNWOGGap.bottom
+
+    // If selected NDOG overlaps NWOG, find a distinct NDOG to float separately
+    if selectedNdogOverlapsNwog and displayNDOG
         // Find most recent unfilled NDOG with different geometry from NWOG
         GapData distinctNDOG = na
         for gap in gapsArray
@@ -1432,7 +1466,7 @@ if floatingMode and array.size(gapsArray) > 0
     if not na(floatRTHGap) and not previewBlocksRTH
         leftBar = bar_index + COMPACT_OFFSET_RTH
         rightBar = leftBar + COMPACT_WIDTH
-        labelStr = getRTHLabelText(floatRTHGap)
+        labelStr = getGapLabelWithFill(floatRTHGap, GAP_TYPE_RTH)
         drawFloatingBox(floatingRTH, floatRTHGap.top, floatRTHGap.bottom, floatRTHGap.penetrationLevel, floatRTHGap.entryDirection, leftBar, rightBar, rthUnfilledColor, rthFilledColor, rthBoundaryColor, internalLinesColor, labelStr, rthBoundaryColor, showInternalLines)
 
     // Draw floating NDOG
@@ -1442,24 +1476,15 @@ if floatingMode and array.size(gapsArray) > 0
         if not skipNDOG
             leftBar = bar_index + COMPACT_OFFSET_NDOG
             rightBar = leftBar + COMPACT_WIDTH
-            gapYear = year(floatNDOGGap.creationTime, TIMEZONE)
-            gapMonth = month(floatNDOGGap.creationTime, TIMEZONE)
-            gapDay = dayofmonth(floatNDOGGap.creationTime, TIMEZONE)
-            monthName = getMonthName(gapMonth)
-            labelStr = "NDOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+            labelStr = getGapLabelWithFill(floatNDOGGap, GAP_TYPE_NDOG)
             drawFloatingBox(floatingNDOG, floatNDOGGap.top, floatNDOGGap.bottom, floatNDOGGap.penetrationLevel, floatNDOGGap.entryDirection, leftBar, rightBar, ndogUnfilledColor, ndogFilledColor, ndogBoundaryColor, internalLinesColor, labelStr, ndogBoundaryColor, showInternalLines)
 
     // Draw floating NWOG (with combined label if NDOG overlaps)
     if not na(floatNWOGGap)
         leftBar = bar_index + COMPACT_OFFSET_NWOG
         rightBar = leftBar + COMPACT_WIDTH
-        gapYear = year(floatNWOGGap.creationTime, TIMEZONE)
-        gapMonth = month(floatNWOGGap.creationTime, TIMEZONE)
-        gapDay = dayofmonth(floatNWOGGap.creationTime, TIMEZONE)
-        monthName = getMonthName(gapMonth)
-        // Combined label if NDOG shares same geometry
-        hasOverlappingNDOG = not na(floatNDOGGap) and floatNDOGGap.top == floatNWOGGap.top and floatNDOGGap.bottom == floatNWOGGap.bottom
-        labelStr = hasOverlappingNDOG ? "NWOG/NDOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear) : "NWOG\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+        nwogPrefix = nwogHasOverlappingNdog and displayNDOG ? GAP_TYPE_NWOG_NDOG : GAP_TYPE_NWOG
+        labelStr = getGapLabelWithFill(floatNWOGGap, nwogPrefix)
         drawFloatingBox(floatingNWOG, floatNWOGGap.top, floatNWOGGap.bottom, floatNWOGGap.penetrationLevel, floatNWOGGap.entryDirection, leftBar, rightBar, nwogUnfilledColor, nwogFilledColor, nwogBoundaryColor, internalLinesColor, labelStr, nwogBoundaryColor, showInternalLines)
 
     // Draw floating preview RTH
@@ -1469,11 +1494,7 @@ if floatingMode and array.size(gapsArray) > 0
         todayDow = dayofweek(time, TIMEZONE)
         daysToAdd = todayDow == dayofweek.friday ? 3 : 1
         nextTradingDay = time + (daysToAdd * MILLISECONDS_PER_DAY)
-        gapYear = year(nextTradingDay, TIMEZONE)
-        gapMonth = month(nextTradingDay, TIMEZONE)
-        gapDay = dayofmonth(nextTradingDay, TIMEZONE)
-        monthName = getMonthName(gapMonth)
-        labelStr = "Upcoming RTH\n" + monthName + " " + str.tostring(gapDay) + ", " + str.tostring(gapYear)
+        labelStr = "Upcoming RTH\n" + formatGapDate(nextTradingDay)
         drawFloatingBox(floatingPreview, previewGap.top, previewGap.bottom, na, ENTRY_NONE, leftBar, rightBar, previewColor, previewColor, rthBoundaryColor, internalLinesColor, labelStr, rthBoundaryColor, false)
 
 // Divider detection (independent of gap display toggles)
