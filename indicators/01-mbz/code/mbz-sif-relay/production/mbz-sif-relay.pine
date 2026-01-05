@@ -25,20 +25,31 @@ const color DEFAULT_ZONE_BULL_COLOR = color.rgb(77, 208, 225)   // Cyan/teal
 const color DEFAULT_ZONE_BEAR_COLOR = color.rgb(249, 121, 246)  // Pink/magenta
 const int   PREVIEW_FILL_TRANSPARENCY = 94  // Slightly more visible for preview zones
 
-// Inversion highlight colors (direction-aware by CANDLE that inverts, not gap)
-const color INVERSION_BEARISH_CANDLE_COLOR = color.rgb(239, 83, 80)   // Red (bearish candle closes through bullish gap)
-const color INVERSION_BULLISH_CANDLE_COLOR = color.rgb(38, 166, 154)  // Green (bullish candle closes through bearish gap)
-
-// First tapper highlight colors (direction-aware by CANDLE color, not gap)
-const color TAP_BULLISH_CANDLE_COLOR = color.rgb(77, 208, 225)   // Cyan (bullish candle tapping bearish gap)
-const color TAP_BEARISH_CANDLE_COLOR = color.rgb(249, 121, 246)  // Pink (bearish candle tapping bullish gap)
-
-// Development flag: suppress MBZ plotting to isolate inversion testing
-// (Now controlled via UI input in Development group)
+// Inversion/tap highlight colors (by candle direction)
+const color INVERSION_BEARISH_CANDLE_COLOR = color.rgb(239, 83, 80)   // Red
+const color INVERSION_BULLISH_CANDLE_COLOR = color.rgb(38, 166, 154)  // Green
+const color TAP_BULLISH_CANDLE_COLOR = color.rgb(77, 208, 225)        // Cyan
+const color TAP_BEARISH_CANDLE_COLOR = color.rgb(249, 121, 246)       // Pink
 
 // Drawing budget
 const int DRAW_LIMIT = 500
 const int DRAW_BUFFER = 20  // Reserve for test zones, warnings, etc.
+
+// Timeframe milliseconds
+const int TF_5M_MS  = 300000
+const int TF_15M_MS = 900000
+const int TF_30M_MS = 1800000
+const int TF_1H_MS  = 3600000
+const int TF_4H_MS  = 14400000
+const int TF_D_MS   = 86400000
+
+// Secondary extension scaling
+const float SECONDARY_4H_EXTENSION_SCALE = 1.8
+
+// Stagger configuration
+const int STAGGER_MODULO  = 7
+const int STAGGER_DIVISOR = 4
+const int STAGGER_PRICE_MULTIPLIER = 100
 
 // Gap type constants
 const string GAP_TYPE_FVG     = "fvg"
@@ -136,15 +147,15 @@ const color DEFAULT_ZONE_LABEL_COLOR = color.new(color.rgb(156, 156, 156), 20)
 // Returns: [is_valid, htf_string, htf_label, htf_ms, ltf_label]
 //
 // SUPPORTED PAIRINGS:
-//   LTF    →  HTF     Label   HTF_MS       Density
-//   30s    →  5m      "5m"    300000       10x
-//   1m     →  15m     "15m"   900000       15x
-//   2m     →  30m     "30m"   1800000      15x
-//   3m     →  30m     "30m"   1800000      10x
-//   5m     →  1H      "1H"    3600000      12x
-//   15m    →  4H      "4H"    14400000     16x
-//   1H     →  D       "D"     86400000     24x
-//   4H     →  D       "D"     86400000     6x
+//   LTF    →  Primary   Secondary
+//   30s    →  5m        -
+//   1m     →  15m       1H
+//   2m     →  30m       1H
+//   3m     →  30m       1H
+//   5m     →  1H        4H
+//   15m    →  4H        -
+//   1H     →  D         -
+//   4H     →  D         -
 //
 // To add a new pairing: add one case to the switch below
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -157,18 +168,21 @@ const string HTF_SLOT_SECONDARY = "secondary"
 get_tf_pairing(string chart_tf, string slot) =>
     if slot == HTF_SLOT_PRIMARY
         switch chart_tf
-            "30S" => [true, "5",   "5m",  300000,    "30s"]   // 30s → 5m   (10x)
-            "1"   => [true, "15",  "15m", 900000,    "1m"]    // 1m  → 15m  (15x)
-            "2"   => [true, "30",  "30m", 1800000,   "2m"]    // 2m  → 30m  (15x)
-            "3"   => [true, "30",  "30m", 1800000,   "3m"]    // 3m  → 30m  (10x)
-            "5"   => [true, "60",  "1H",  3600000,   "5m"]    // 5m  → 1H   (12x)
-            "15"  => [true, "240", "4H",  14400000,  "15m"]   // 15m → 4H   (16x)
-            "60"  => [true, "D",   "D",   86400000,  "1H"]    // 1H  → D    (24x)
-            "240" => [true, "D",   "D",   86400000,  "4H"]    // 4H  → D    (6x)
+            "30S" => [true, "5",   "5m",  TF_5M_MS,  "30s"]   // 30s → 5m   (10x)
+            "1"   => [true, "15",  "15m", TF_15M_MS, "1m"]    // 1m  → 15m  (15x)
+            "2"   => [true, "30",  "30m", TF_30M_MS, "2m"]    // 2m  → 30m  (15x)
+            "3"   => [true, "30",  "30m", TF_30M_MS, "3m"]    // 3m  → 30m  (10x)
+            "5"   => [true, "60",  "1H",  TF_1H_MS,  "5m"]    // 5m  → 1H   (12x)
+            "15"  => [true, "240", "4H",  TF_4H_MS,  "15m"]   // 15m → 4H   (16x)
+            "60"  => [true, "D",   "D",   TF_D_MS,   "1H"]    // 1H  → D    (24x)
+            "240" => [true, "D",   "D",   TF_D_MS,   "4H"]    // 4H  → D    (6x)
             =>       [false, "",   "",    0,         ""]      // Unsupported
     else  // secondary
         switch chart_tf
-            "5"   => [true, "240", "4H", 14400000, "5m"]      // 5m → 4H (MVP)
+            "1"   => [true, "60",  "1H", TF_1H_MS, "1m"]      // 1m → 1H (60x)
+            "2"   => [true, "60",  "1H", TF_1H_MS, "2m"]      // 2m → 1H (30x)
+            "3"   => [true, "60",  "1H", TF_1H_MS, "3m"]      // 3m → 1H (20x)
+            "5"   => [true, "240", "4H", TF_4H_MS, "5m"]      // 5m → 4H (48x)
             =>       [false, "",   "",   0,        ""]        // Not supported
 
 string CHART_TF = timeframe.period
@@ -259,12 +273,13 @@ type ZoneVisualStyle
     int border_width      // Border width
 
 // Zone intensity presets
-const string ZONE_STYLE_DEFAULT     = "Default"
-const string ZONE_STYLE_MUTED       = "Muted"
-const string ZONE_STYLE_ULTRA_MUTED = "Ultra Muted"
+const string ZONE_STYLE_DEFAULT         = "Default"
+const string ZONE_STYLE_MUTED           = "Muted"
+const string ZONE_STYLE_ULTRA_MUTED     = "Ultra Muted"
+const string ZONE_STYLE_ULTRA_PRO_MUTED = "Ultra Pro Muted"
 
-primary_zone_style   = input.string(ZONE_STYLE_MUTED, "Primary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED], group=GROUP_ZONE_DISPLAY)
-secondary_zone_style = input.string(ZONE_STYLE_ULTRA_MUTED, "Secondary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED], group=GROUP_ZONE_DISPLAY)
+primary_zone_style   = input.string(ZONE_STYLE_MUTED, "Primary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED, ZONE_STYLE_ULTRA_PRO_MUTED], group=GROUP_ZONE_DISPLAY)
+secondary_zone_style = input.string(ZONE_STYLE_ULTRA_MUTED, "Secondary Intensity", options=[ZONE_STYLE_DEFAULT, ZONE_STYLE_MUTED, ZONE_STYLE_ULTRA_MUTED, ZONE_STYLE_ULTRA_PRO_MUTED], group=GROUP_ZONE_DISPLAY)
 
 // Secondary zone styling (fixed - not user configurable)
 const string SECONDARY_BORDER_STYLE = line.style_dashed
@@ -274,16 +289,17 @@ const int SECONDARY_BORDER_WIDTH = 2
 // Preset values: border_trans, fill_trans, label_trans, border_width
 get_zone_style(string preset) =>
     switch preset
-        ZONE_STYLE_DEFAULT     => ZoneVisualStyle.new(0,  94, 0,  3)
-        ZONE_STYLE_MUTED       => ZoneVisualStyle.new(55, 98, 55, 3)
-        ZONE_STYLE_ULTRA_MUTED => ZoneVisualStyle.new(80, 99, 80, 3)
-        => ZoneVisualStyle.new(55, 98, 55, 3)  // fallback to Muted
+        ZONE_STYLE_DEFAULT         => ZoneVisualStyle.new(0,  94, 0,  3)
+        ZONE_STYLE_MUTED           => ZoneVisualStyle.new(55, 98, 55, 3)
+        ZONE_STYLE_ULTRA_MUTED     => ZoneVisualStyle.new(80, 99, 80, 3)
+        ZONE_STYLE_ULTRA_PRO_MUTED => ZoneVisualStyle.new(92, 99, 92, 2)
+        => ZoneVisualStyle.new(55, 98, 55, 3)
 
 // Resolved styles for HTF1 (Primary) and HTF2 (Secondary)
 var ZoneVisualStyle htf1_style = get_zone_style(primary_zone_style)
 var ZoneVisualStyle htf2_style = get_zone_style(secondary_zone_style)
 
-zone_extension_bars = input.int(6, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_ZONE_DISPLAY)
+zone_extension_bars = input.int(4, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_ZONE_DISPLAY)
 zone_label_color = input.color(DEFAULT_ZONE_LABEL_COLOR, "Label Color", group=GROUP_ZONE_DISPLAY, inline="lbl")
 zone_label_size  = input.string("Large", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_ZONE_DISPLAY, inline="lbl")
 show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_ZONE_DISPLAY)
@@ -2346,7 +2362,10 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bo
     if array.size(zone_arr) == 0
         false
     else
-        int zone_ext_width = zone_extension_bars * htf_ms
+        // Auto-scale secondary: 4H uses scaled extension, others no scaling
+        float secondary_scale = htf_ms == TF_4H_MS ? SECONDARY_4H_EXTENSION_SCALE : 1.0
+        int scaled_bars = is_secondary ? math.max(1, math.round(zone_extension_bars / secondary_scale)) : zone_extension_bars
+        int zone_ext_width = scaled_bars * htf_ms
 
         // Same-Source filter tracking
         var map<int, bool> seen_gap_ids = map.new<int, bool>()
@@ -2516,13 +2535,10 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bo
                 array.set(zone_arr, i, zone)
                 continue
 
-            // Extension and staggering (prime modulo for better distribution, time-based for replay stability)
             bool should_extend_to_current = workspace_active and map.contains(extend_to_current, i)
-            int zone_price_hash = int(zone.zone_top * 1000)
-            int zone_time_hash = int(zone.formation_time / 1000)
-            int stagger_hash = (zone_time_hash + zone_price_hash) % 13
-            int stagger_offset_ms = stagger_hash * (htf_ms / 2)
-            int normal_extension_right = zone.formation_time + zone_ext_width + stagger_offset_ms
+            int stagger_hash = should_extend_to_current ? (zone.formation_time + int(zone.zone_top * STAGGER_PRICE_MULTIPLIER)) % STAGGER_MODULO : 0
+            int stagger_offset_ms = stagger_hash * (htf_ms / STAGGER_DIVISOR)
+            int normal_extension_right = zone.formation_time + zone_ext_width
             int zone_right_edge = should_extend_to_current ? math.max(time + stagger_offset_ms, normal_extension_right) : normal_extension_right
 
             // Faded opacity for non-extended zones in workspace mode
