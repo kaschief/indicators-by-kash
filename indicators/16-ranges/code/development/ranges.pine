@@ -70,7 +70,7 @@ const string ALERT_LOW_BREACHED = " Low Breached"
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_ALL, "Quick Filter", options=[FILTER_ALL, FILTER_30S, FILTER_MONDAY, FILTER_PROXIMITY])
+quickFilter = input.string(FILTER_PROXIMITY, "Quick Filter", options=[FILTER_ALL, FILTER_30S, FILTER_MONDAY, FILTER_PROXIMITY])
 
 i_showOR30 = input.bool(true, "Opening Range 30s", inline="or30", tooltip="Show the first 30 seconds of RTH (09:30:00-09:30:30)")
 or30Limit = input.int(20, "", minval=1, maxval=20, inline="or30")
@@ -91,13 +91,13 @@ mondayBoundaryColor = input.color(DEFAULT_MONDAY_BOUNDARY_COLOR, "Border", inlin
 mondayLabelColor = input.color(DEFAULT_MONDAY_LABEL_COLOR, "Label", inline="mondayb")
 
 extendMode = input.string(EXTEND_7_DAYS, "Extend", options=[EXTEND_NEXT_OCCURRENCE, EXTEND_3_DAYS, EXTEND_7_DAYS], tooltip="Next Occurrence: extends until next range. 3/7 Days: extends at least that many days (or to next occurrence if longer). 7 Days matches proximity lookback.")
-showLabels = input.bool(true, "Show Labels", tooltip="Show date labels on all ranges")
+showLabels = input.bool(false, "Show Labels", tooltip="Show date labels on all ranges")
 
 // Pre-Open Proximity
 showPreOpenProximity = input.bool(true, "Show", group=GROUP_PRE_OPEN, inline="prox", tooltip="During 9:00-10:00 ET, highlights bars if price is inside any prior OR30 or CR30")
 proximityBgColor = input.color(color.new(color.rgb(252, 203, 205), 85), "", group=GROUP_PRE_OPEN, inline="prox")
 showProximityHistorical = input.bool(false, "Show Historical", group=GROUP_PRE_OPEN, tooltip="Show background on all historical bars. When off, only highlights the current bar.")
-useProximityBuffer = input.bool(false, "Include Nearby", group=GROUP_PRE_OPEN, tooltip="Also detect when price is near (within 25% of range height) a range, not just inside")
+useProximityBuffer = input.bool(true, "Include Nearby", group=GROUP_PRE_OPEN, tooltip="Also detect when price is near (within 25% of range height) a range, not just inside")
 
 // Alerts
 alertOR30 = input.bool(true, "Opening Range 30s", group=GROUP_ALERTS)
@@ -116,6 +116,8 @@ showMonday = i_showMonday and (quickFilter == FILTER_ALL or quickFilter == FILTE
 // Capture ranges for proximity checking even in Proximity Only mode
 captureOR30 = showOR30 or (isProximityOnly and showPreOpenProximity)
 captureCR30 = showCR30 or (isProximityOnly and showPreOpenProximity)
+// Monday: always capture if input enabled (for alerts), display controlled separately
+captureMonday = i_showMonday
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -404,7 +406,7 @@ if (captureOR30 or captureCR30) and not na(cached_30s_times) and array.size(cach
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Monday session = Sunday 18:00 to Monday 18:00 ET
-if showMonday
+if captureMonday
     currentDow = dayofweek(time, TIMEZONE)
     currentMinutes = hour(time, TIMEZONE) * 60 + minute(time, TIMEZONE)
     currentWeek = weekofyear(time, TIMEZONE)
@@ -420,7 +422,7 @@ if showMonday
             currentMondayLow := low
             currentMondayStart := time
             currentMondayWeekNum := currentWeek
-            liveMondayRange := createRange(high, low, time, mondayColor, mondayBoundaryColor, mondayLabelColor, "𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎", false)
+            liveMondayRange := createRange(high, low, time, mondayColor, mondayBoundaryColor, mondayLabelColor, "𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎", false, not showMonday)
         else
             // Continue tracking - expand range if new high/low
             // Note: No breach alerts during session - range is still forming
@@ -496,8 +498,16 @@ checkRangeAlerts(array<RangeData> rangeArray, bool enableAlert, string rangeName
 
 checkRangeAlerts(or30Array, alertOR30, "𝙾𝚙𝚎𝚗𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎")
 checkRangeAlerts(cr30Array, alertCR30, "𝙲𝚕𝚘𝚜𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎")
-checkRangeAlerts(mondayArray, alertMonday, "𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎")
-// Note: Monday Range alerts only fire after session completes (Mon 18:00+) - no alerts during formation
+
+// Monday: only alert on most recent range, skip during active session
+if alertMonday and na(liveMondayRange) and array.size(mondayArray) > 0
+    r = array.get(mondayArray, array.size(mondayArray) - 1)
+    if not r.highBreached and high > r.high
+        r.highBreached := true
+        alert("𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎" + ALERT_HIGH_BREACHED, alert.freq_once_per_bar)
+    if not r.lowBreached and low < r.low
+        r.lowBreached := true
+        alert("𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎" + ALERT_LOW_BREACHED, alert.freq_once_per_bar)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
