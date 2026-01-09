@@ -34,8 +34,6 @@ const int SESSION_START_MIN = 1080  // 18:00 = 18*60
 
 // Extend mode options
 const string EXTEND_NEXT_OCCURRENCE = "Next Occurrence"
-const string EXTEND_3_DAYS = "3 Days"
-const string EXTEND_7_DAYS = "7 Days"
 
 // Quick filter options
 const string FILTER_ALL = "All"
@@ -73,13 +71,13 @@ const string ALERT_LOW_BREACHED = " Low Breached"
 quickFilter = input.string(FILTER_PROXIMITY, "Quick Filter", options=[FILTER_ALL, FILTER_30S, FILTER_MONDAY, FILTER_PROXIMITY])
 
 i_showOR30 = input.bool(true, "Opening Range 30s", inline="or30", tooltip="Show the first 30 seconds of RTH (09:30:00-09:30:30)")
-or30Limit = input.int(20, "", minval=1, maxval=20, inline="or30")
+or30Limit = input.int(20, "", minval=1, maxval=50, inline="or30")
 or30Color = input.color(DEFAULT_OR30_COLOR, "", inline="or30")
 or30BoundaryColor = input.color(DEFAULT_OR30_BOUNDARY_COLOR, "Border", inline="or30b")
 or30LabelColor = input.color(DEFAULT_OR30_LABEL_COLOR, "Label", inline="or30b")
 
 i_showCR30 = input.bool(true, "Closing Range 30s", inline="cr30", tooltip="Show the 30-second candle at 15:50:00")
-cr30Limit = input.int(20, "", minval=1, maxval=20, inline="cr30")
+cr30Limit = input.int(20, "", minval=1, maxval=50, inline="cr30")
 cr30Color = input.color(DEFAULT_CR30_COLOR, "", inline="cr30")
 cr30BoundaryColor = input.color(DEFAULT_CR30_BOUNDARY_COLOR, "Border", inline="cr30b")
 cr30LabelColor = input.color(DEFAULT_CR30_LABEL_COLOR, "Label", inline="cr30b")
@@ -90,7 +88,7 @@ mondayColor = input.color(DEFAULT_MONDAY_COLOR, "", inline="monday")
 mondayBoundaryColor = input.color(DEFAULT_MONDAY_BOUNDARY_COLOR, "Border", inline="mondayb")
 mondayLabelColor = input.color(DEFAULT_MONDAY_LABEL_COLOR, "Label", inline="mondayb")
 
-extendMode = input.string(EXTEND_7_DAYS, "Extend", options=[EXTEND_NEXT_OCCURRENCE, EXTEND_3_DAYS, EXTEND_7_DAYS], tooltip="Next Occurrence: extends until next range. 3/7 Days: extends at least that many days (or to next occurrence if longer). 7 Days matches proximity lookback.")
+extendMode = input.string("7 Days", "Extend", options=[EXTEND_NEXT_OCCURRENCE, "2 Days", "3 Days", "5 Days", "7 Days", "10 Days"], tooltip="Next Occurrence: extends until next range. N Days: extends at least that many trading days, skipping weekends (or to next occurrence if longer).")
 showLabels = input.bool(false, "Show Labels", tooltip="Show date labels on all ranges")
 
 // Pre-Open Proximity
@@ -106,6 +104,7 @@ alertMonday = input.bool(true, "Monday Range", group=GROUP_ALERTS)
 
 // Color Reference Table
 showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a reference table showing all range colors and their RGB values")
+
 
 // Apply quick filter to show toggles
 // For Proximity Only: capture ranges (for proximity check) but hide drawings
@@ -197,13 +196,13 @@ getDayName(int dow) =>
 // Calculate timestamp N trading days after startTime (skips weekends)
 addTradingDays(int startTime, int tradingDays) =>
     dow = dayofweek(startTime, TIMEZONE)
-    int calendarDays = 0
-    if tradingDays == 3
-        // Mon/Tue: +3 calendar days, Wed/Thu/Fri: +5 calendar days (skip weekend)
-        calendarDays := (dow == 2 or dow == 3) ? 3 : 5
-    else if tradingDays == 7
-        // 7 calendar days (matches proximity lookback)
-        calendarDays := 7
+    int calendarDays = switch tradingDays
+        2 => (dow >= 2 and dow <= 4) ? 2 : 4   // Mon-Wed: 2 cal, Thu/Fri: 4 cal (skip weekend)
+        3 => (dow == 2 or dow == 3) ? 3 : 5    // Mon/Tue: 3 cal, Wed-Fri: 5 cal
+        5 => 7                                  // 5 trading days = 7 cal (1 weekend)
+        7 => (dow >= 2 and dow <= 4) ? 9 : 11   // Mon-Wed: 9 cal, Thu/Fri: 11 cal
+        10 => 14                                // 10 trading days = 14 cal (2 weekends)
+        => tradingDays
     startTime + (calendarDays * MS_PER_DAY)
 
 deleteRange(RangeData r) =>
@@ -319,9 +318,9 @@ updateRangeExtensions(array<RangeData> rangeArray) =>
                 if i == array.size(rangeArray) - 1 and na(r.endTime)
                     extendRangeTo(r, time)
             else
-                // 3/7 Days mode: extend to the LONGER of (next occurrence, start + N trading days)
-                tradingDays = extendMode == EXTEND_7_DAYS ? 7 : 3
-                minEnd = addTradingDays(r.startTime, tradingDays)
+                // N Days mode: extend to the LONGER of (next occurrence, start + N trading days)
+                days = int(str.tonumber(str.split(extendMode, " ").get(0)))
+                minEnd = addTradingDays(r.startTime, days)
                 targetEnd = na(r.endTime) ? minEnd : math.max(minEnd, r.endTime)
                 // Cap at present if target is in the future
                 extendRangeTo(r, math.min(targetEnd, time))
@@ -601,3 +600,4 @@ isInsideOrNearRange(array<RangeData> rangeArray, bool excludeToday) =>
 insideAny = insideOR30 or insideCR30
 showProximityBg = showPreOpenProximity and isPreOpenWindow and insideAny and (showProximityHistorical or barstate.islast)
 bgcolor(showProximityBg ? proximityBgColor : na)
+
