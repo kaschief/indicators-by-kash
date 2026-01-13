@@ -181,6 +181,8 @@ validTimeframe = tf_seconds >= 300 and tf_seconds <= 14400
 
 // ─── Display Mode ───
 show_only_most_recent = input.bool(true, "Most Recent Only", group=GROUP_DISPLAY_MODE, tooltip="Override weeks setting to show only the most recent session")
+fib_only_mode = input.bool(false, "Fib Only", group=GROUP_DISPLAY_MODE, inline="fib_only", tooltip="Hide everything except Fibonacci levels - useful for lower timeframes")
+fib_only_include_roots = input.bool(true, "+ Roots", group=GROUP_DISPLAY_MODE, inline="fib_only", tooltip="Also show root zones when in Fib Only mode")
 
 // ─── AMRP ───
 amrp_lookback = input.int(DEFAULT_AMRP_LOOKBACK, "Lookback", minval=MIN_AMRP_LOOKBACK, maxval=MAX_AMRP_LOOKBACK, group=GROUP_AMRP, tooltip="Weeks to analyze (1-30). Higher = more stable zones | Lower = more reactive to recent volatility.\n• 9 weeks = ~2 months (default)\n• 15-20 weeks = ~4-5 months (balanced)\n• 25-30 weeks = ~6-7 months (very stable)")
@@ -266,6 +268,17 @@ fib_style_converted = fib_style == STYLE_SOLID ? line.style_solid : fib_style ==
 
 // Convert sizes
 session_label_size_converted = session_label_size == SIZE_TINY ? size.tiny : session_label_size == SIZE_SMALL ? size.small : session_label_size == SIZE_NORMAL ? size.normal : session_label_size == SIZE_LARGE ? size.large : size.huge
+
+// Fib Only mode: override show settings to hide everything except fibs
+eff_show_boundaries = fib_only_mode ? false : show_boundaries
+eff_show_intervals = fib_only_mode ? false : show_intervals
+eff_show_session_labels = fib_only_mode ? false : show_session_labels
+eff_show_high_low_lines = fib_only_mode ? false : show_high_low_lines
+eff_show_roots = fib_only_mode ? (fib_only_include_roots and show_roots) : show_roots
+eff_show_root_zone = fib_only_mode ? (fib_only_include_roots and show_root_zone) : show_root_zone
+eff_show_root_line = fib_only_mode ? (fib_only_include_roots and show_root_line) : show_root_line
+eff_show_root_time_label = fib_only_mode ? (fib_only_include_roots and show_root_time_label) : show_root_time_label
+eff_show_amrp = not fib_only_mode  // AMRP zones/EQ/projections
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TYPE DEFINITIONS
@@ -966,24 +979,24 @@ for i = 0 to array.size(session_templates) - 1
                 alert(template.name + " Started", alert.freq_once_per_bar)
 
             // ⚠️ Draw BOTH boundaries at creation - Issue #2 fix
-            if show_boundaries
+            if eff_show_boundaries
                 new_session.start_boundary_line := line.new(calculated_start_timestamp, 1e10, calculated_start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=line.style_solid)
                 new_session.end_boundary_line := line.new(calculated_end_timestamp, 1e10, calculated_end_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=line.style_solid)
 
             // Draw interval lines at session creation for immediate visibility
-            if show_intervals
+            if eff_show_intervals
                 new_session.interval1_line := line.new(calculated_interval1_timestamp, 1e10, calculated_interval1_timestamp, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=line.style_dotted, width=WIDTH_INTERVAL)
                 new_session.interval2_line := line.new(calculated_interval2_timestamp, 1e10, calculated_interval2_timestamp, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=line.style_dotted, width=WIDTH_INTERVAL)
                 new_session.interval3_line := line.new(calculated_interval3_timestamp, 1e10, calculated_interval3_timestamp, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=line.style_dotted, width=WIDTH_INTERVAL)
 
             // Draw high/low lines at session creation (showing PREVIOUS session values)
             DttWeeklySession prev_sess_for_lines = get_previous_session(template.name)
-            if show_high_low_lines and not na(prev_sess_for_lines.name) and prev_sess_for_lines.session_high < 1e9 and prev_sess_for_lines.session_low > -1e9
+            if eff_show_high_low_lines and not na(prev_sess_for_lines.name) and prev_sess_for_lines.session_high < 1e9 and prev_sess_for_lines.session_low > -1e9
                 new_session.high_line := line.new(calculated_start_timestamp, prev_sess_for_lines.session_high, calculated_end_timestamp, prev_sess_for_lines.session_high, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=line.style_solid)
                 new_session.low_line := line.new(calculated_start_timestamp, prev_sess_for_lines.session_low, calculated_end_timestamp, prev_sess_for_lines.session_low, xloc=xloc.bar_time, color=high_low_color, width=WIDTH_HIGH_LOW, style=line.style_solid)
 
             // Draw session name as centered box
-            if show_session_labels
+            if eff_show_session_labels
                 string label_text = template.name
                 if show_root_time_in_session_label
                     int root_hour_str = math.floor(template.root_time / 100)
@@ -1368,7 +1381,7 @@ if total_sessions > 0
 
         // ─── BOUNDARIES ───
         // CRITICAL: Recreate both boundaries if missing (happens when session was outside display window)
-        if show_boundaries
+        if eff_show_boundaries
             // Recreate start boundary if missing
             if na(sess.start_boundary_line)
                 sess.start_boundary_line := line.new(sess.start_timestamp, 1e10, sess.start_timestamp, -1e6, xloc=xloc.bar_time, color=boundary_color, width=WIDTH_BOUNDARY, style=line.style_solid)
@@ -1381,7 +1394,7 @@ if total_sessions > 0
         // CRITICAL: Recreate high/low lines if they were deleted (when session was outside display window)
         // Each session shows the PREVIOUS session's high/low
         // OPTIMIZATION: Only lookup previous session if lines are missing
-        if show_high_low_lines and (na(sess.high_line) or na(sess.low_line))
+        if eff_show_high_low_lines and (na(sess.high_line) or na(sess.low_line))
             // Get previous session
             DttWeeklySession prev_sess_for_lines = get_previous_session(sess.name)
 
@@ -1408,34 +1421,36 @@ if total_sessions > 0
                     sess.amrp_dn_outer := sess.session_open_low - dn_outer
 
                     // Draw AMRP boxes (stored in struct)
-                    if na(sess.amrp_up_box)
-                        sess.amrp_up_box := box.new(sess.start_timestamp, sess.amrp_up_outer, display_end_time, sess.amrp_up_inner, xloc=xloc.bar_time, border_color=color.new(amrp_zone_color, 100), bgcolor=amrp_zone_color)
-                    if na(sess.amrp_dn_box)
-                        sess.amrp_dn_box := box.new(sess.start_timestamp, sess.amrp_dn_inner, display_end_time, sess.amrp_dn_outer, xloc=xloc.bar_time, border_color=color.new(amrp_zone_color, 100), bgcolor=amrp_zone_color)
+                    if eff_show_amrp
+                        if na(sess.amrp_up_box)
+                            sess.amrp_up_box := box.new(sess.start_timestamp, sess.amrp_up_outer, display_end_time, sess.amrp_up_inner, xloc=xloc.bar_time, border_color=color.new(amrp_zone_color, 100), bgcolor=amrp_zone_color)
+                        if na(sess.amrp_dn_box)
+                            sess.amrp_dn_box := box.new(sess.start_timestamp, sess.amrp_dn_inner, display_end_time, sess.amrp_dn_outer, xloc=xloc.bar_time, border_color=color.new(amrp_zone_color, 100), bgcolor=amrp_zone_color)
 
-                    // Draw EQ lines
-                    float up_eq = (sess.amrp_up_inner + sess.amrp_up_outer) / 2
-                    float dn_eq = (sess.amrp_dn_inner + sess.amrp_dn_outer) / 2
-                    if na(sess.amrp_up_eq_line)
-                        sess.amrp_up_eq_line := line.new(sess.start_timestamp, up_eq, display_end_time, up_eq, xloc=xloc.bar_time, color=amrp_eq_color, style=line.style_dashed)
-                    if na(sess.amrp_dn_eq_line)
-                        sess.amrp_dn_eq_line := line.new(sess.start_timestamp, dn_eq, display_end_time, dn_eq, xloc=xloc.bar_time, color=amrp_eq_color, style=line.style_dashed)
+                        // Draw EQ lines
+                        float up_eq = (sess.amrp_up_inner + sess.amrp_up_outer) / 2
+                        float dn_eq = (sess.amrp_dn_inner + sess.amrp_dn_outer) / 2
+                        if na(sess.amrp_up_eq_line)
+                            sess.amrp_up_eq_line := line.new(sess.start_timestamp, up_eq, display_end_time, up_eq, xloc=xloc.bar_time, color=amrp_eq_color, style=line.style_dashed)
+                        if na(sess.amrp_dn_eq_line)
+                            sess.amrp_dn_eq_line := line.new(sess.start_timestamp, dn_eq, display_end_time, dn_eq, xloc=xloc.bar_time, color=amrp_eq_color, style=line.style_dashed)
 
                     sess.amrp_drawn := true
 
         // Update AMRP box positions
-        if not na(sess.amrp_up_box)
-            box.set_right(sess.amrp_up_box, display_end_time)
-        if not na(sess.amrp_dn_box)
-            box.set_right(sess.amrp_dn_box, display_end_time)
-        if not na(sess.amrp_up_eq_line)
-            line.set_x2(sess.amrp_up_eq_line, display_end_time)
-        if not na(sess.amrp_dn_eq_line)
-            line.set_x2(sess.amrp_dn_eq_line, display_end_time)
+        if eff_show_amrp
+            if not na(sess.amrp_up_box)
+                box.set_right(sess.amrp_up_box, display_end_time)
+            if not na(sess.amrp_dn_box)
+                box.set_right(sess.amrp_dn_box, display_end_time)
+            if not na(sess.amrp_up_eq_line)
+                line.set_x2(sess.amrp_up_eq_line, display_end_time)
+            if not na(sess.amrp_dn_eq_line)
+                line.set_x2(sess.amrp_dn_eq_line, display_end_time)
 
         // ─── SESSION NAME BOX ───
         // Anchor to session opening price (stable, doesn't shift as price moves)
-        if show_session_labels and not na(sess.session_name_box)
+        if eff_show_session_labels and not na(sess.session_name_box)
             float box_high = sess.session_open_captured and not na(sess.session_open_high) ? sess.session_open_high : high
             float box_low = sess.session_open_captured and not na(sess.session_open_low) ? sess.session_open_low : low
             box.set_lefttop(sess.session_name_box, sess.start_timestamp, box_high)
@@ -1446,7 +1461,7 @@ if total_sessions > 0
         // This ensures projections are drawn even after boundaries change via dropdown
         bool is_active_session = bar_index >= sess.start_bar and (na(sess.end_bar) or bar_index <= sess.end_bar)
 
-        if sess.amrp_drawn and not na(sess.amrp_up_outer)
+        if eff_show_amrp and sess.amrp_drawn and not na(sess.amrp_up_outer)
             // Check breaks using session's tracked high/low (works for both active and completed sessions)
             if not sess.amrp_broke_up and sess.session_high > sess.amrp_up_outer
                 sess.amrp_broke_up := true
@@ -1710,23 +1725,23 @@ if total_sessions > 0
 
         // ─── ROOT ZONES ───
         // CRITICAL: Anchor root zone to actual root timestamp (intraday line 2051), not session start
-        if show_roots and not na(sess.root_high) and not na(sess.root_low) and not na(sess.root_timestamp)
+        if eff_show_roots and not na(sess.root_high) and not na(sess.root_low) and not na(sess.root_timestamp)
             // Root zones extend to NEXT session's end (extension_end_time)
-            if show_root_zone
+            if eff_show_root_zone
                 if na(sess.root_zone_box)
                     sess.root_zone_box := box.new(sess.root_timestamp, sess.root_high, extension_end_time, sess.root_low, xloc=xloc.bar_time, border_color=color.new(root_zone_color, 100), bgcolor=color.new(root_zone_color, 85), border_width=0)
                 else
                     box.set_lefttop(sess.root_zone_box, sess.root_timestamp, sess.root_high)
                     box.set_rightbottom(sess.root_zone_box, extension_end_time, sess.root_low)
 
-            if show_root_line
+            if eff_show_root_line
                 if na(sess.root_eq_line)
                     sess.root_eq_line := line.new(sess.root_timestamp, sess.root_price, extension_end_time, sess.root_price, xloc=xloc.bar_time, color=root_line_color, style=root_line_style_converted, width=WIDTH_ROOT)
                 else
                     line.set_xy1(sess.root_eq_line, sess.root_timestamp, sess.root_price)
                     line.set_xy2(sess.root_eq_line, extension_end_time, sess.root_price)
 
-            if show_root_time_label and not na(sess.root_timestamp)
+            if eff_show_root_time_label and not na(sess.root_timestamp)
                 string root_time_text = format_ny_time(sess.root_timestamp)
 
                 if na(sess.root_time_label)
@@ -1739,7 +1754,7 @@ if total_sessions > 0
                     label.set_size(sess.root_time_label, size.tiny)
 
         // ─── INTERVAL LINES ───
-        if show_intervals
+        if eff_show_intervals
             // Recreate interval lines if missing (happens when session was outside display window)
             if na(sess.interval1_line) and not na(sess.interval1_timestamp)
                 sess.interval1_line := line.new(sess.interval1_timestamp, 1e10, sess.interval1_timestamp, -1e6, xloc=xloc.bar_time, color=color.new(interval_color, 40), style=line.style_dotted, width=WIDTH_INTERVAL)
