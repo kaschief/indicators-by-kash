@@ -677,25 +677,25 @@ export default function IncomeTracker() {
                   <span className="flex-1">
                     Taxes {isMarried && "(Splitting)"}
                   </span>
-                  <span className="w-24 text-right">Annual</span>
-                  <span className="w-20 text-right">Monthly</span>
+                  <span className="w-28 text-right">Annual</span>
+                  <span className="w-24 text-right">Monthly</span>
                 </div>
                 <div className="flex text-gray-400">
                   <span className="flex-1">Income Tax</span>
-                  <span className="w-24 text-right">
+                  <span className="w-28 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.incomeTax)}
                   </span>
-                  <span className="w-20 text-right">
+                  <span className="w-24 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.monthlyIncomeTax)}
                   </span>
                 </div>
                 {calculations.solidaritySurcharge > 0 && (
                   <div className="flex text-gray-400">
                     <span className="flex-1">Solidarity</span>
-                    <span className="w-24 text-right">
+                    <span className="w-28 text-right whitespace-nowrap">
                       −€{formatNumber(calculations.solidaritySurcharge)}
                     </span>
-                    <span className="w-20 text-right">
+                    <span className="w-24 text-right whitespace-nowrap">
                       −€{formatNumber(calculations.monthlySolidaritySurcharge)}
                     </span>
                   </div>
@@ -703,10 +703,10 @@ export default function IncomeTracker() {
                 {calculations.churchTax > 0 && (
                   <div className="flex text-gray-400">
                     <span className="flex-1">Church Tax</span>
-                    <span className="w-24 text-right">
+                    <span className="w-28 text-right whitespace-nowrap">
                       −€{formatNumber(calculations.churchTax)}
                     </span>
-                    <span className="w-20 text-right">
+                    <span className="w-24 text-right whitespace-nowrap">
                       −€{formatNumber(calculations.monthlyChurchTax)}
                     </span>
                   </div>
@@ -717,24 +717,24 @@ export default function IncomeTracker() {
                     Social Security{" "}
                     {employmentMode === "employed" && "(your 50%)"}
                   </span>
-                  <span className="w-24 text-right">Annual</span>
-                  <span className="w-20 text-right">Monthly</span>
+                  <span className="w-28 text-right">Annual</span>
+                  <span className="w-24 text-right">Monthly</span>
                 </div>
                 <div className="flex text-gray-400">
                   <span className="flex-1">Health</span>
-                  <span className="w-24 text-right">
+                  <span className="w-28 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.annualHealthInsurance)}
                   </span>
-                  <span className="w-20 text-right">
+                  <span className="w-24 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.monthlyHealthInsurance)}
                   </span>
                 </div>
                 <div className="flex text-gray-400">
                   <span className="flex-1">Care</span>
-                  <span className="w-24 text-right">
+                  <span className="w-28 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.annualCareInsurance)}
                   </span>
-                  <span className="w-20 text-right">
+                  <span className="w-24 text-right whitespace-nowrap">
                     −€{formatNumber(calculations.monthlyCareInsurance)}
                   </span>
                 </div>
@@ -742,20 +742,20 @@ export default function IncomeTracker() {
                   <>
                     <div className="flex text-gray-400">
                       <span className="flex-1">Pension</span>
-                      <span className="w-24 text-right">
+                      <span className="w-28 text-right whitespace-nowrap">
                         −€{formatNumber(calculations.annualPensionInsurance)}
                       </span>
-                      <span className="w-20 text-right">
+                      <span className="w-24 text-right whitespace-nowrap">
                         −€{formatNumber(calculations.monthlyPensionInsurance)}
                       </span>
                     </div>
                     <div className="flex text-gray-400">
                       <span className="flex-1">Unemployment</span>
-                      <span className="w-24 text-right">
+                      <span className="w-28 text-right whitespace-nowrap">
                         −€
                         {formatNumber(calculations.annualUnemploymentInsurance)}
                       </span>
-                      <span className="w-20 text-right">
+                      <span className="w-24 text-right whitespace-nowrap">
                         −€
                         {formatNumber(
                           calculations.monthlyUnemploymentInsurance
@@ -767,10 +767,10 @@ export default function IncomeTracker() {
 
                 <div className="flex text-gray-300 font-medium pt-2 border-t border-gray-800">
                   <span className="flex-1">Total Deductions</span>
-                  <span className="w-24 text-right text-red-400">
+                  <span className="w-28 text-right text-red-400 whitespace-nowrap">
                     −€{formatNumber(calculations.totalDeductions)}
                   </span>
-                  <span className="w-20 text-right text-red-400">
+                  <span className="w-24 text-right text-red-400 whitespace-nowrap">
                     −€{formatNumber(calculations.monthlyTotalDeductions)}
                   </span>
                 </div>
@@ -845,10 +845,10 @@ export default function IncomeTracker() {
               </div>
               <div className="space-y-1 text-sm">
                 <div className="flex text-xs text-gray-600 uppercase tracking-wider mb-2 px-2">
-                  <span className="flex-1">Annual</span>
-                  <span className="flex-1 text-right">Monthly</span>
-                  <span className="flex-1 text-right">Net</span>
-                  <span className="w-20 text-right">Diff</span>
+                  <span className="flex-1">Gross/yr</span>
+                  <span className="flex-1 text-right">Gross/mo</span>
+                  <span className="flex-1 text-right">Net/mo</span>
+                  <span className="w-20 text-right">+Net</span>
                   <span className="w-16 text-right">Rate</span>
                 </div>
                 {comparisonLevels.map((level, idx) => {
