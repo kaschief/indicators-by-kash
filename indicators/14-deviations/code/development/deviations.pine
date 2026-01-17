@@ -1,5 +1,5 @@
 //@version=6
-indicator("deviations •", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("deviations • development", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIMEFRAME RESTRICTION
@@ -74,6 +74,8 @@ type SessionData
     bool enableAlert
     // Delayed mitigation (evaluate only from 05:00 onward)
     bool delayedMitigation
+    // Midnight-crossing session (e.g., 21:30-01:29) - extends same-day logic to next calendar day
+    bool crossesMidnight
     // Provisional mitigation tracking (overnight breach pending 05:00 confirmation)
     bool provisionalHighMitigated
     bool provisionalLowMitigated
@@ -102,6 +104,7 @@ GROUP_MITIGATION = "Mitigation"
 GROUP_SESSION_LABELS = "Session Labels"
 GROUP_DISPLAY = "Display"
 GROUP_INTRADAY = "Intraday Sessions"
+GROUP_2130_0129 = "Rafael's Range (21:30–01:29)"
 GROUP_1600_0500 = "Extended Opening: Overnight (16:00–05:00)"
 GROUP_0500_0915 = "Extended Opening: Premarket (05:00–09:15)"
 GROUP_0600_0900 = "Extended Opening: NY Early Hours (06:00–09:00)"
@@ -125,6 +128,7 @@ LABEL_MUTE_OVERNIGHT = "Mute Overnight"
 
 // Session UI labels (shown in settings panel)
 SESSION_INTRADAY_2015 = "20:15"
+SESSION_INTRADAY_0129 = "Rafael's Range"
 SESSION_INTRADAY_0215 = "02:15"
 SESSION_INTRADAY_0915 = "09:15"
 SESSION_INTRADAY_1230 = "12:30"
@@ -140,6 +144,7 @@ SESSION_EXTENDED_0300_0700 = "Discovery"
 
 // Chart labels (shown on the chart - can be different/multi-line)
 CHART_LABEL_2015 = "20:15"
+CHART_LABEL_0129 = "Rafael's Range"
 CHART_LABEL_0215 = "02:15"
 CHART_LABEL_0915 = "09:15"
 CHART_LABEL_1230 = "12:30"
@@ -201,18 +206,19 @@ OPT_BELOW = "Below"
 
 // Session indices
 IDX_2015 = 0
-IDX_0215 = 1
-IDX_0915 = 2
-IDX_1230 = 3
-IDX_1415 = 4
-IDX_NY_EARLY = 5
-IDX_OVERNIGHT = 6
-IDX_PREMARKET = 7
-IDX_NY_OPEN_15M = 8
-IDX_ASIA_OPEN = 9
-IDX_MINI_ONS = 10
-IDX_30S_OPENING = 11
-IDX_DISCOVERY = 12
+IDX_0129 = 1
+IDX_0215 = 2
+IDX_0915 = 3
+IDX_1230 = 4
+IDX_1415 = 5
+IDX_NY_EARLY = 6
+IDX_OVERNIGHT = 7
+IDX_PREMARKET = 8
+IDX_NY_OPEN_15M = 9
+IDX_ASIA_OPEN = 10
+IDX_MINI_ONS = 11
+IDX_30S_OPENING = 12
+IDX_DISCOVERY = 13
 var array<int> BIAS_DISPLAY_SESSIONS = array.from(IDX_PREMARKET, IDX_NY_EARLY)
 
 // Global mitigation display mode
@@ -229,22 +235,23 @@ FILTER_OVERNIGHT_PREMARKET_DISCOVERY = "Bias: Overnight + Premarket + Discovery"
 FILTER_CLEAR_BIAS = "Clear Bias: Overnight + Premarket + Mini + Early"
 FILTER_30S_ONLY = "30s Opening"
 FILTER_DISCOVERY = "Discovery"
+FILTER_RAFAEL = "Rafael's Range"
 
 // Default deviation zones (unified - body = wick for all sessions)
-// Ordered by proportion: A-D start at quarter (0.25), E-F start at one (1)
-DEV_A_0500_0915 = "0.25:0.5, 0.75:1"                     // Premarket (05:00-09:15)
-DEV_C = "0.25:0.5, 1.33:1.66"                            // NY Early Hours
-DEV_D = "0.25:0.5, 1:1.25, 1.33:1.66"                     // Asia Open, Discovery
-DEV_E_0930_0945 = "1, 2:2.5"                             // NY Open 15m (09:30-09:45)
-DEV_E_0930_093030 = "1:1.25, 2:2.156, 2.33:2.5, 4:4.5"         // 30s Opening (09:30:00-09:30:30)
-DEV_F_INTRADAY = "1, 2:2.5, 4:4.5, 6:6.5"                       // Intraday sessions, Mini ONS
-DEV_G_OVERNIGHT = "0.25:0.5, 0.75:1, 1.25:1.5"           // Overnight (16:00-05:00)
+DEV_A_PREMARKET = "0.25:0.5, 0.75:1"                     // Premarket (05:00-09:15)
+DEV_B_NY_EARLY = "0.25:0.5, 1.33:1.66"                   // NY Early Hours (06:00-09:00)
+DEV_C_ASIA_DISCOVERY = "0.25:0.5, 1:1.25, 1.33:1.66"    // Asia Open (18:00-21:00), Discovery (03:00-07:00)
+DEV_D_NY_OPEN_15M = "1, 2:2.5"                           // NY Open 15m (09:30-09:45)
+DEV_E_30S_OPENING = "1:1.25, 2:2.156, 2.33:2.5, 4:4.5"  // 30s Opening (09:30:00-09:30:30)
+DEV_F_INTRADAY = "1, 2:2.5, 4:4.5, 6:6.5"               // Intraday sessions, Mini ONS
+DEV_G_OVERNIGHT = "0.25:0.5, 0.75:1, 1.25:1.5"          // Overnight (16:00-05:00)
+DEV_H_RAFAEL = "0.5:1, 1.5, 2:2.5, 2.618:2.786, 3, 3.29:3.5, 3.75, 4:4.5, 6:6.5"  // Rafael's Range (21:30-01:29)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - General Settings
 // ═══════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_WORK_1800_FULL_NYAM, "Quick Filter", options=[FILTER_ALL, FILTER_DISCOVERY, FILTER_1800, FILTER_1800_EARLY, FILTER_1800_BIAS, FILTER_WORK_1800_FULL_NYAM, FILTER_OVERNIGHT_PREMARKET_DISCOVERY, FILTER_CLEAR_BIAS, FILTER_30S_ONLY], group=GROUP_GENERAL, tooltip="Filter presets:\n• Discovery: Discovery range only (03:00-07:00)\n• 1800 Range: Asia Open only\n• 1800 + Early: Asia Open, NY Early Hours\n• 1800 + Bias: Asia Open, NY Early Hours, Premarket, Discovery\n• Work: 1800, Mini, Early, Overnight, Discovery, 09:15, NY Open 15m/30m, 30s Opening\n• Bias: Overnight, Premarket, Discovery\n• Clear Bias: Overnight, Premarket, Mini ONS, NY Early Hours, Discovery\n• 30s Opening: 30s Opening only")
+quickFilter = input.string(FILTER_WORK_1800_FULL_NYAM, "Quick Filter", options=[FILTER_ALL, FILTER_DISCOVERY, FILTER_RAFAEL, FILTER_1800, FILTER_1800_EARLY, FILTER_1800_BIAS, FILTER_WORK_1800_FULL_NYAM, FILTER_OVERNIGHT_PREMARKET_DISCOVERY, FILTER_CLEAR_BIAS, FILTER_30S_ONLY], group=GROUP_GENERAL, tooltip="Filter presets:\n• Discovery: Discovery range only (03:00-07:00)\n• Rafael's Range: Rafael's Range only (21:30-01:29)\n• 1800 Range: Asia Open only\n• 1800 + Early: Asia Open, NY Early Hours\n• 1800 + Bias: Asia Open, NY Early Hours, Premarket, Discovery\n• Work: 1800, Mini, Early, Overnight, Discovery, 09:15, NY Open 15m/30m, 30s Opening\n• Bias: Overnight, Premarket, Discovery\n• Clear Bias: Overnight, Premarket, Mini ONS, NY Early Hours, Discovery\n• 30s Opening: 30s Opening only")
 maxSessions = input.int(1, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -288,6 +295,17 @@ opening_2000_2015_deviationColor = input.color(color.new(color.rgb(255, 235, 59)
 opening_2000_2015_mitigationColor = input.color(color.new(color.rgb(251, 192, 45), 50), "Mitigation", inline="2015_2", group=GROUP_INTRADAY)
 opening_2000_2015_showLabels = input.string(OPT_OFF, LABEL_DEVIATION_LABELS, inline="2015_3", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
 opening_2000_2015_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="2015_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
+deviations_2130_0129 = input.string(DEV_H_RAFAEL, "Deviations", group=GROUP_2130_0129)
+
+opening_2130_0129 = input.string(OPT_WICK, SESSION_INTRADAY_0129, inline="0129_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_2130_0129)
+opening_2130_0129_offset = input.bool(false, LABEL_OFFSET, inline="0129_1", group=GROUP_2130_0129)
+opening_2130_0129_mitigation = input.bool(true, "Mitigation", inline="0129_1", group=GROUP_2130_0129)
+opening_2130_0129_coreColor = input.color(color.new(color.rgb(255, 127, 114), 94), LABEL_CORE, inline="0129_2", group=GROUP_2130_0129)
+opening_2130_0129_deviationColor = input.color(color.new(color.rgb(255, 127, 114), 75), LABEL_DEVIATIONS, inline="0129_2", group=GROUP_2130_0129)
+opening_2130_0129_mitigationColor = input.color(color.new(color.rgb(255, 87, 51), 50), "Mitigation", inline="0129_2", group=GROUP_2130_0129)
+opening_2130_0129_showLabels = input.string(OPT_OFF, LABEL_DEVIATION_LABELS, inline="0129_3", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_2130_0129)
+opening_2130_0129_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0129_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_2130_0129)
+
 opening_0200_0215 = input.string(OPT_WICK, SESSION_INTRADAY_0215, inline="0215_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
 opening_0200_0215_offset = input.bool(false, LABEL_OFFSET, inline="0215_1", group=GROUP_INTRADAY)
 opening_0200_0215_mitigation = input.bool(true, "Mitigation", inline="0215_1", group=GROUP_INTRADAY)
@@ -324,7 +342,7 @@ opening_1400_1415_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POS
 // INPUTS - 06:00-09:00
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_0600_0900 = input.string(DEV_C, "Deviations", group=GROUP_0600_0900)
+deviations_0600_0900 = input.string(DEV_B_NY_EARLY, "Deviations", group=GROUP_0600_0900)
 
 opening_0600_0900 = input.string(OPT_WICK, SESSION_EXTENDED_0600_0900, inline="0600_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
 opening_0600_0900_offset = input.bool(false, LABEL_OFFSET, inline="0600_1", group=GROUP_0600_0900)
@@ -352,7 +370,7 @@ opening_1600_0500_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POS
 // INPUTS - 05:00-09:15
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_0500_0915 = input.string(DEV_A_0500_0915, "Deviations", group=GROUP_0500_0915)
+deviations_0500_0915 = input.string(DEV_A_PREMARKET, "Deviations", group=GROUP_0500_0915)
 
 opening_0500_0915 = input.string(OPT_BODY, SESSION_EXTENDED_0500_0915, inline="0500_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0500_0915)
 opening_0500_0915_offset = input.bool(false, LABEL_OFFSET, inline="0500_1", group=GROUP_0500_0915)
@@ -366,7 +384,7 @@ opening_0500_0915_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POS
 // INPUTS - 09:30-09:45
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_0930_0945 = input.string(DEV_E_0930_0945, "Deviations", group=GROUP_0930_0945)
+deviations_0930_0945 = input.string(DEV_D_NY_OPEN_15M, "Deviations", group=GROUP_0930_0945)
 
 opening_0930_0945 = input.string(OPT_CORE, SESSION_EXTENDED_0930_0945, inline="0930_0945_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_0945)
 opening_0930_0945_offset = input.bool(false, LABEL_OFFSET, inline="0930_0945_1", group=GROUP_0930_0945)
@@ -380,7 +398,7 @@ opening_0930_0945_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POS
 // INPUTS - 09:30:00-09:30:30 (30s Opening)
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_0930_093030 = input.string(DEV_E_0930_093030, "Deviations", group=GROUP_0930_093030)
+deviations_0930_093030 = input.string(DEV_E_30S_OPENING, "Deviations", group=GROUP_0930_093030)
 
 opening_0930_093030 = input.string(OPT_WICK, SESSION_EXTENDED_0930_093030, inline="0930_093030_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_093030)
 opening_0930_093030_offset = input.bool(false, LABEL_OFFSET, inline="0930_093030_1", group=GROUP_0930_093030)
@@ -394,7 +412,7 @@ opening_0930_093030_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_P
 // INPUTS - 18:00-21:00
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_1800_2100 = input.string(DEV_D, "Deviations", group=GROUP_1800_2100)
+deviations_1800_2100 = input.string(DEV_C_ASIA_DISCOVERY, "Deviations", group=GROUP_1800_2100)
 
 opening_1800_2100 = input.string(OPT_CORE, SESSION_EXTENDED_1800_2100, inline="1800_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1800_2100)
 opening_1800_2100_offset = input.bool(false, LABEL_OFFSET, inline="1800_1", group=GROUP_1800_2100)
@@ -425,7 +443,7 @@ opening_0500_0745_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POS
 // INPUTS - Discovery (03:00–07:00)
 // ═══════════════════════════════════════════════════════════════════════════
 
-deviations_0300_0700 = input.string(DEV_D, "Deviations", group=GROUP_0300_0700)
+deviations_0300_0700 = input.string(DEV_C_ASIA_DISCOVERY, "Deviations", group=GROUP_0300_0700)
 
 opening_0300_0700 = input.string(OPT_WICK, SESSION_EXTENDED_0300_0700, inline="0300_0700_1", options=[OPT_OFF, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0300_0700)
 opening_0300_0700_offset = input.bool(false, LABEL_OFFSET, inline="0300_0700_1", group=GROUP_0300_0700)
@@ -442,6 +460,7 @@ opening_0300_0700_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POS
 
 GROUP_ALERTS = "Alerts"
 opening_2000_2015_alert = input.bool(true, SESSION_INTRADAY_2015, inline="alerts_1", group=GROUP_ALERTS)
+opening_2130_0129_alert = input.bool(true, SESSION_INTRADAY_0129, inline="alerts_1", group=GROUP_ALERTS)
 opening_0200_0215_alert = input.bool(true, SESSION_INTRADAY_0215, inline="alerts_1", group=GROUP_ALERTS)
 opening_0900_0915_alert = input.bool(true, SESSION_INTRADAY_0915, inline="alerts_2", group=GROUP_ALERTS)
 opening_1200_1230_alert = input.bool(true, SESSION_INTRADAY_1230, inline="alerts_2", group=GROUP_ALERTS)
@@ -470,6 +489,7 @@ var array<SessionData> activeSessions = array.new<SessionData>()
 
 // Cached parsed deviation zones (unified - body = wick for all sessions)
 var array<DeviationZone> cachedDeviations_intraday = na
+var array<DeviationZone> cachedDeviations_2130_0129 = na
 var array<DeviationZone> cachedDeviations_0500_0915 = na
 var array<DeviationZone> cachedDeviations_0600_0900 = na
 var array<DeviationZone> cachedDeviations_0930_0945 = na
@@ -500,6 +520,14 @@ parseTimeToMinutes(string timeStr) =>
     hour = str.tonumber(str.substring(timeStr, 0, 2))
     minute = str.tonumber(str.substring(timeStr, 3, 5))
     int(hour * 60 + minute)
+
+// Check if two timestamps are on the same calendar day
+isSameCalendarDay(int t1, int t2) =>
+    dayofmonth(t1) == dayofmonth(t2) and month(t1) == month(t2) and year(t1) == year(t2)
+
+// Check if a bar is within a session's time window (handles midnight-crossing sessions)
+isInSessionTime(int idx, int minutes, int seconds, int startMin, int endMin, bool crossesMidnight) =>
+    idx == IDX_30S_OPENING ? (minutes == 570 and seconds < 30) : (crossesMidnight ? (minutes >= startMin or minutes <= endMin) : (minutes >= startMin and minutes <= endMin))
 
 toSansSerif(string inputStr) =>
     result = inputStr
@@ -647,7 +675,9 @@ calculateOffsets(SessionData sess, bool isBody) =>
 
 // Get cached deviation zones (avoids re-parsing strings on every bar)
 getCachedZones(string sessionName) =>
-    if sessionName == SESSION_EXTENDED_1600_0500
+    if sessionName == SESSION_INTRADAY_0129
+        cachedDeviations_2130_0129
+    else if sessionName == SESSION_EXTENDED_1600_0500
         cachedDeviations_1600_0500
     else if sessionName == SESSION_EXTENDED_0500_0915
         cachedDeviations_0500_0915
@@ -771,6 +801,7 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
 
 if na(cachedDeviations_intraday)
     cachedDeviations_intraday := parseDeviationZones(deviations_intraday)
+    cachedDeviations_2130_0129 := parseDeviationZones(deviations_2130_0129)
     cachedDeviations_0500_0915 := parseDeviationZones(deviations_0500_0915)
     cachedDeviations_0600_0900 := parseDeviationZones(deviations_0600_0900)
     cachedDeviations_0930_0945 := parseDeviationZones(deviations_0930_0945)
@@ -795,6 +826,8 @@ isInFilter(int idx) =>
         idx == IDX_NY_EARLY or idx == IDX_ASIA_OPEN
     else if quickFilter == FILTER_1800_BIAS
         idx == IDX_NY_EARLY or idx == IDX_PREMARKET or idx == IDX_ASIA_OPEN or idx == IDX_DISCOVERY
+    else if quickFilter == FILTER_RAFAEL
+        idx == IDX_0129
     else if quickFilter == FILTER_WORK_1800_FULL_NYAM
         idx == IDX_0915 or idx == IDX_NY_EARLY or idx == IDX_OVERNIGHT or idx == IDX_NY_OPEN_15M or idx == IDX_ASIA_OPEN or idx == IDX_MINI_ONS or idx == IDX_30S_OPENING or idx == IDX_DISCOVERY
     else if quickFilter == FILTER_OVERNIGHT_PREMARKET_DISCOVERY
@@ -810,20 +843,20 @@ isInFilter(int idx) =>
 // SESSION CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-var array<string> openingSessions_mode = array.from(opening_2000_2015, opening_0200_0215, opening_0900_0915, opening_1200_1230, opening_1400_1415, opening_0600_0900, opening_1600_0500, opening_0500_0915, opening_0930_0945, opening_1800_2100, opening_0500_0745, opening_0930_093030, opening_0300_0700)
-var array<bool> openingSessions_offset = array.from(opening_2000_2015_offset, opening_0200_0215_offset, opening_0900_0915_offset, opening_1200_1230_offset, opening_1400_1415_offset, opening_0600_0900_offset, opening_1600_0500_offset, opening_0500_0915_offset, opening_0930_0945_offset, opening_1800_2100_offset, opening_0500_0745_offset, opening_0930_093030_offset, opening_0300_0700_offset)
-var array<string> openingSessions_showLabels = array.from(opening_2000_2015_showLabels, opening_0200_0215_showLabels, opening_0900_0915_showLabels, opening_1200_1230_showLabels, opening_1400_1415_showLabels, opening_0600_0900_showLabels, opening_1600_0500_showLabels, opening_0500_0915_showLabels, opening_0930_0945_showLabels, opening_1800_2100_showLabels, opening_0500_0745_showLabels, opening_0930_093030_showLabels, opening_0300_0700_showLabels)
-var array<int> openingSessions_startMin = array.from(1200, 120, 540, 720, 840, 360, 960, 300, 570, 1080, 300, 570, 180)
-var array<int> openingSessions_endMin = array.from(1215, 135, 555, 750, 855, 540, 300, 555, 585, 1260, 465, 570, 420)
-var array<color> openingSessions_coreColor = array.from(opening_2000_2015_coreColor, opening_0200_0215_coreColor, opening_0900_0915_coreColor, opening_1200_1230_coreColor, opening_1400_1415_coreColor, opening_0600_0900_coreColor, opening_1600_0500_coreColor, opening_0500_0915_coreColor, opening_0930_0945_coreColor, opening_1800_2100_coreColor, opening_0500_0745_coreColor, opening_0930_093030_coreColor, opening_0300_0700_coreColor)
-var array<color> openingSessions_deviationColor = array.from(opening_2000_2015_deviationColor, opening_0200_0215_deviationColor, opening_0900_0915_deviationColor, opening_1200_1230_deviationColor, opening_1400_1415_deviationColor, opening_0600_0900_deviationColor, opening_1600_0500_deviationColor, opening_0500_0915_deviationColor, opening_0930_0945_deviationColor, opening_1800_2100_deviationColor, opening_0500_0745_deviationColor, opening_0930_093030_deviationColor, opening_0300_0700_deviationColor)
-var array<string> openingSessions_name = array.from(SESSION_INTRADAY_2015, SESSION_INTRADAY_0215, SESSION_INTRADAY_0915, SESSION_INTRADAY_1230, SESSION_INTRADAY_1415, SESSION_EXTENDED_0600_0900, SESSION_EXTENDED_1600_0500, SESSION_EXTENDED_0500_0915, SESSION_EXTENDED_0930_0945, SESSION_EXTENDED_1800_2100, SESSION_EXTENDED_0500_0745, SESSION_EXTENDED_0930_093030, SESSION_EXTENDED_0300_0700)
-var array<string> openingSessions_chartLabel = array.from(CHART_LABEL_2015, CHART_LABEL_0215, CHART_LABEL_0915, CHART_LABEL_1230, CHART_LABEL_1415, CHART_LABEL_0600_0900, CHART_LABEL_1600_0500, CHART_LABEL_0500_0915, CHART_LABEL_0930_0945, CHART_LABEL_1800_2100, CHART_LABEL_0500_0745, CHART_LABEL_0930_093030, CHART_LABEL_0300_0700)
-var array<string> openingSessions_labelPosition = array.from(opening_2000_2015_labelPosition, opening_0200_0215_labelPosition, opening_0900_0915_labelPosition, opening_1200_1230_labelPosition, opening_1400_1415_labelPosition, opening_0600_0900_labelPosition, opening_1600_0500_labelPosition, opening_0500_0915_labelPosition, opening_0930_0945_labelPosition, opening_1800_2100_labelPosition, opening_0500_0745_labelPosition, opening_0930_093030_labelPosition, opening_0300_0700_labelPosition)
-var array<bool> openingSessions_mitigation = array.from(opening_2000_2015_mitigation, opening_0200_0215_mitigation, opening_0900_0915_mitigation, opening_1200_1230_mitigation, opening_1400_1415_mitigation, opening_0600_0900_mitigation, opening_1600_0500_mitigation, opening_0500_0915_mitigation, opening_0930_0945_mitigation, opening_1800_2100_mitigation, opening_0500_0745_mitigation, opening_0930_093030_mitigation, opening_0300_0700_mitigation)
-var array<color> openingSessions_mitigationColor = array.from(opening_2000_2015_mitigationColor, opening_0200_0215_mitigationColor, opening_0900_0915_mitigationColor, opening_1200_1230_mitigationColor, opening_1400_1415_mitigationColor, opening_0600_0900_mitigationColor, opening_1600_0500_mitigationColor, opening_0500_0915_mitigationColor, opening_0930_0945_mitigationColor, opening_1800_2100_mitigationColor, opening_0500_0745_mitigationColor, opening_0930_093030_mitigationColor, opening_0300_0700_mitigationColor)
-var array<bool> openingSessions_alert = array.from(opening_2000_2015_alert, opening_0200_0215_alert, opening_0900_0915_alert, opening_1200_1230_alert, opening_1400_1415_alert, opening_0600_0900_alert, opening_1600_0500_alert, opening_0500_0915_alert, opening_0930_0945_alert, opening_1800_2100_alert, opening_0500_0745_alert, opening_0930_093030_alert, opening_0300_0700_alert)
-var array<bool> openingSessions_delayedMitigation = array.from(false, false, false, false, false, false, false, false, false, opening_1800_2100_delayedMitigation, false, false, false)
+var array<string> openingSessions_mode = array.from(opening_2000_2015, opening_2130_0129, opening_0200_0215, opening_0900_0915, opening_1200_1230, opening_1400_1415, opening_0600_0900, opening_1600_0500, opening_0500_0915, opening_0930_0945, opening_1800_2100, opening_0500_0745, opening_0930_093030, opening_0300_0700)
+var array<bool> openingSessions_offset = array.from(opening_2000_2015_offset, opening_2130_0129_offset, opening_0200_0215_offset, opening_0900_0915_offset, opening_1200_1230_offset, opening_1400_1415_offset, opening_0600_0900_offset, opening_1600_0500_offset, opening_0500_0915_offset, opening_0930_0945_offset, opening_1800_2100_offset, opening_0500_0745_offset, opening_0930_093030_offset, opening_0300_0700_offset)
+var array<string> openingSessions_showLabels = array.from(opening_2000_2015_showLabels, opening_2130_0129_showLabels, opening_0200_0215_showLabels, opening_0900_0915_showLabels, opening_1200_1230_showLabels, opening_1400_1415_showLabels, opening_0600_0900_showLabels, opening_1600_0500_showLabels, opening_0500_0915_showLabels, opening_0930_0945_showLabels, opening_1800_2100_showLabels, opening_0500_0745_showLabels, opening_0930_093030_showLabels, opening_0300_0700_showLabels)
+var array<int> openingSessions_startMin = array.from(1200, 1290, 120, 540, 720, 840, 360, 960, 300, 570, 1080, 300, 570, 180)
+var array<int> openingSessions_endMin = array.from(1215, 89, 135, 555, 750, 855, 540, 300, 555, 585, 1260, 465, 570, 420)
+var array<color> openingSessions_coreColor = array.from(opening_2000_2015_coreColor, opening_2130_0129_coreColor, opening_0200_0215_coreColor, opening_0900_0915_coreColor, opening_1200_1230_coreColor, opening_1400_1415_coreColor, opening_0600_0900_coreColor, opening_1600_0500_coreColor, opening_0500_0915_coreColor, opening_0930_0945_coreColor, opening_1800_2100_coreColor, opening_0500_0745_coreColor, opening_0930_093030_coreColor, opening_0300_0700_coreColor)
+var array<color> openingSessions_deviationColor = array.from(opening_2000_2015_deviationColor, opening_2130_0129_deviationColor, opening_0200_0215_deviationColor, opening_0900_0915_deviationColor, opening_1200_1230_deviationColor, opening_1400_1415_deviationColor, opening_0600_0900_deviationColor, opening_1600_0500_deviationColor, opening_0500_0915_deviationColor, opening_0930_0945_deviationColor, opening_1800_2100_deviationColor, opening_0500_0745_deviationColor, opening_0930_093030_deviationColor, opening_0300_0700_deviationColor)
+var array<string> openingSessions_name = array.from(SESSION_INTRADAY_2015, SESSION_INTRADAY_0129, SESSION_INTRADAY_0215, SESSION_INTRADAY_0915, SESSION_INTRADAY_1230, SESSION_INTRADAY_1415, SESSION_EXTENDED_0600_0900, SESSION_EXTENDED_1600_0500, SESSION_EXTENDED_0500_0915, SESSION_EXTENDED_0930_0945, SESSION_EXTENDED_1800_2100, SESSION_EXTENDED_0500_0745, SESSION_EXTENDED_0930_093030, SESSION_EXTENDED_0300_0700)
+var array<string> openingSessions_chartLabel = array.from(CHART_LABEL_2015, CHART_LABEL_0129, CHART_LABEL_0215, CHART_LABEL_0915, CHART_LABEL_1230, CHART_LABEL_1415, CHART_LABEL_0600_0900, CHART_LABEL_1600_0500, CHART_LABEL_0500_0915, CHART_LABEL_0930_0945, CHART_LABEL_1800_2100, CHART_LABEL_0500_0745, CHART_LABEL_0930_093030, CHART_LABEL_0300_0700)
+var array<string> openingSessions_labelPosition = array.from(opening_2000_2015_labelPosition, opening_2130_0129_labelPosition, opening_0200_0215_labelPosition, opening_0900_0915_labelPosition, opening_1200_1230_labelPosition, opening_1400_1415_labelPosition, opening_0600_0900_labelPosition, opening_1600_0500_labelPosition, opening_0500_0915_labelPosition, opening_0930_0945_labelPosition, opening_1800_2100_labelPosition, opening_0500_0745_labelPosition, opening_0930_093030_labelPosition, opening_0300_0700_labelPosition)
+var array<bool> openingSessions_mitigation = array.from(opening_2000_2015_mitigation, opening_2130_0129_mitigation, opening_0200_0215_mitigation, opening_0900_0915_mitigation, opening_1200_1230_mitigation, opening_1400_1415_mitigation, opening_0600_0900_mitigation, opening_1600_0500_mitigation, opening_0500_0915_mitigation, opening_0930_0945_mitigation, opening_1800_2100_mitigation, opening_0500_0745_mitigation, opening_0930_093030_mitigation, opening_0300_0700_mitigation)
+var array<color> openingSessions_mitigationColor = array.from(opening_2000_2015_mitigationColor, opening_2130_0129_mitigationColor, opening_0200_0215_mitigationColor, opening_0900_0915_mitigationColor, opening_1200_1230_mitigationColor, opening_1400_1415_mitigationColor, opening_0600_0900_mitigationColor, opening_1600_0500_mitigationColor, opening_0500_0915_mitigationColor, opening_0930_0945_mitigationColor, opening_1800_2100_mitigationColor, opening_0500_0745_mitigationColor, opening_0930_093030_mitigationColor, opening_0300_0700_mitigationColor)
+var array<bool> openingSessions_alert = array.from(opening_2000_2015_alert, opening_2130_0129_alert, opening_0200_0215_alert, opening_0900_0915_alert, opening_1200_1230_alert, opening_1400_1415_alert, opening_0600_0900_alert, opening_1600_0500_alert, opening_0500_0915_alert, opening_0930_0945_alert, opening_1800_2100_alert, opening_0500_0745_alert, opening_0930_093030_alert, opening_0300_0700_alert)
+var array<bool> openingSessions_delayedMitigation = array.from(false, false, false, false, false, false, false, false, false, false, opening_1800_2100_delayedMitigation, false, false, false)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 1: SESSION DETECTION - Detect new sessions starting
@@ -943,9 +976,8 @@ if validTimeframe
             crossesMidnight = endMin < startMin
 
             // Check if we're entering this session
-            // Special handling for 30s Opening (index 13) - uses second-level precision
-            currentlyInSession = i == IDX_30S_OPENING ? (barMinutes == 570 and barSeconds < 30) : (crossesMidnight ? (barMinutes >= startMin or barMinutes <= endMin) : (barMinutes >= startMin and barMinutes <= endMin))
-            previouslyInSession = i == IDX_30S_OPENING ? (prevBarMinutes == 570 and prevBarSeconds < 30) : (crossesMidnight ? (prevBarMinutes >= startMin or prevBarMinutes <= endMin) : (prevBarMinutes >= startMin and prevBarMinutes <= endMin))
+            currentlyInSession = isInSessionTime(i, barMinutes, barSeconds, startMin, endMin, crossesMidnight)
+            previouslyInSession = isInSessionTime(i, prevBarMinutes, prevBarSeconds, startMin, endMin, crossesMidnight)
             sessionStarted = currentlyInSession and not previouslyInSession
 
             if sessionStarted
@@ -1023,6 +1055,7 @@ if validTimeframe
                      lowProximityLine=na,
                      enableAlert=enableAlert,
                      delayedMitigation=delayedMitigation,
+                     crossesMidnight=crossesMidnight,
                      provisionalHighMitigated=false,
                      provisionalLowMitigated=false,
                      provisionalHighTime=na,
@@ -1047,8 +1080,7 @@ if validTimeframe and array.size(activeSessions) > 0
         crossesMidnight = endMin < startMin
 
         // Check if current bar is within this session's time range
-        // Special handling for 30s Opening (index 13) - uses second-level precision
-        isBarInSession = idx == IDX_30S_OPENING ? (barMinutes == 570 and barSeconds < 30) : (crossesMidnight ? (barMinutes >= startMin or barMinutes <= endMin) : (barMinutes >= startMin and barMinutes <= endMin))
+        isBarInSession = isInSessionTime(idx, barMinutes, barSeconds, startMin, endMin, crossesMidnight)
 
         if isBarInSession
             // Skip updates for 30s Opening - data is complete from request.security()
@@ -1091,9 +1123,8 @@ if validTimeframe and array.size(activeSessions) > 0
         crossesMidnight = endMin < startMin
 
         // Detect session end transition
-        // Special handling for 30s Opening (index 13) - uses second-level precision
-        isCurrentBarInSession = idx == IDX_30S_OPENING ? (barMinutes == 570 and barSeconds < 30) : (crossesMidnight ? (barMinutes >= startMin or barMinutes <= endMin) : (barMinutes >= startMin and barMinutes <= endMin))
-        wasPreviousBarInSession = idx == IDX_30S_OPENING ? (prevBarMinutes == 570 and prevBarSeconds < 30) : (crossesMidnight ? (prevBarMinutes >= startMin or prevBarMinutes <= endMin) : (prevBarMinutes >= startMin and prevBarMinutes <= endMin))
+        isCurrentBarInSession = isInSessionTime(idx, barMinutes, barSeconds, startMin, endMin, crossesMidnight)
+        wasPreviousBarInSession = isInSessionTime(idx, prevBarMinutes, prevBarSeconds, startMin, endMin, crossesMidnight)
         hasSessionEnded = not isCurrentBarInSession and wasPreviousBarInSession
 
         if hasSessionEnded
@@ -1193,8 +1224,11 @@ if validTimeframe and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
             // Same-day mitigation: only track mitigations on the same calendar day (Asia Open is exempt)
-            isSameCalendarDay = dayofmonth(sess.startTime) == dayofmonth(time) and month(sess.startTime) == month(time) and year(sess.startTime) == year(time)
-            isSameTradingDay = not mitigationTodayOnly or sess.sessionIndex == IDX_ASIA_OPEN or isSameCalendarDay
+            // For midnight-crossing sessions (e.g., Rafael's 21:30-01:29): extend to next calendar day (the day session ends)
+            nextDayTimestamp = sess.startTime + 24 * 60 * 60 * 1000
+            isOnSessionStartDay = isSameCalendarDay(sess.startTime, time)
+            isOnSessionEndDay = sess.crossesMidnight and isSameCalendarDay(nextDayTimestamp, time)
+            isSameTradingDay = not mitigationTodayOnly or sess.sessionIndex == IDX_ASIA_OPEN or isOnSessionStartDay or isOnSessionEndDay
             // For delayed mitigation (Asia Open), only evaluate from 05:00 to 16:00 (excludes overnight evening hours)
             canEvaluateMitigation = isSameTradingDay and (not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN))
             isInOvernightWindow = sess.delayedMitigation and isSameTradingDay and not canEvaluateMitigation
@@ -1475,6 +1509,9 @@ if validTimeframe and showColorTable and barstate.islast
     // Only show colors for sessions that are BOTH enabled AND in current Quick Filter
     if opening_2000_2015 != OPT_OFF and isInFilter(IDX_2015)
         currentRow += addSessionColorRows(colorTable, currentRow, "20:15", opening_2000_2015_coreColor, opening_2000_2015_deviationColor, opening_2000_2015_mitigationColor, opening_2000_2015_mitigation)
+
+    if opening_2130_0129 != OPT_OFF and isInFilter(IDX_0129)
+        currentRow += addSessionColorRows(colorTable, currentRow, "Rafael's Range", opening_2130_0129_coreColor, opening_2130_0129_deviationColor, opening_2130_0129_mitigationColor, opening_2130_0129_mitigation)
 
     if opening_0200_0215 != OPT_OFF and isInFilter(IDX_0215)
         currentRow += addSessionColorRows(colorTable, currentRow, "02:15", opening_0200_0215_coreColor, opening_0200_0215_deviationColor, opening_0200_0215_mitigationColor, opening_0200_0215_mitigation)
