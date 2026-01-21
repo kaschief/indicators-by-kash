@@ -83,6 +83,7 @@ const string SIZE_HUGE = "Huge"
 // Input Group Names (for maintainability)
 const string GROUP_DISPLAY_MODE = "Display Mode"
 const string GROUP_AMRP = "AMRP"
+const string GROUP_FORECAST = "Forecast"
 const string GROUP_FIB = "Dynamic Fibonacci"
 const string GROUP_FIB_LEVELS = "Dynamic Fibonacci Levels"
 const string GROUP_SESSIONS = "Sessions"
@@ -249,6 +250,9 @@ amrp_border_width = input.int(DEFAULT_AMRP_BORDER_WIDTH, "", minval=1, maxval=5,
 amrp_eq_color = input.color(DEFAULT_AMRP_EQ_COLOR, "EQ", group=GROUP_AMRP, inline="eq")
 projection_multipliers = input.string("1, 2, 2.5, 4", "Projections", group=GROUP_AMRP, inline="proj_settings", tooltip="Comma-separated values (max 8). Example: '1, 2, 2.5, 4' displays as -1, -2, -2.5, -4")
 projection_color = input.color(DEFAULT_PROJECTION_COLOR, "", group=GROUP_AMRP, inline="proj_settings")
+show_forecast = input.bool(true, "Forecast", group=GROUP_FORECAST, inline="forecast", tooltip="Show predicted high/low for the next upcoming session based on historical median expansion. Zones auto-scale based on current volatility.")
+forecast_color = input.color(color.new(color.orange, 50), "", group=GROUP_FORECAST, inline="forecast")
+early_expansion_fraction = input.string("1/4", "Early", options=["1/6", "1/4", "1/3", "1/2", "2/3", "3/4"], group=GROUP_FORECAST, inline="forecast", tooltip="Fraction of session duration for early expansion capture (e.g., 1/4 = first quarter, 3/4 = first 75%)")
 
 // ─── Dynamic Fibonacci Range ───
 show_fib = input.bool(true, LABEL_ON_OFF, group=GROUP_FIB, inline="fib_toggle", tooltip="Show dynamic Fibonacci levels anchored to AMRP boundaries, trailing with price extremes")
@@ -377,6 +381,7 @@ type DttIntradaySession
     float root_high                      // Captured 1min high at root time
     float root_low                       // Captured 1min low at root time
     bool root_captured                   // Flag to prevent re-capture
+    bool early_captured                  // Flag to prevent re-capture of early expansion
     line root_line                       // Horizontal line at root price (EQ)
     label root_label                     // Label showing time + price
     box root_box                         // Shaded zone from root_low to root_high
@@ -651,6 +656,48 @@ var array<float> amrp_model1001_up = array.new<float>()
 var array<float> amrp_model1001_dn = array.new<float>()
 var array<float> amrp_model111_up = array.new<float>()
 var array<float> amrp_model111_dn = array.new<float>()
+
+// Early expansion data storage (configurable fraction of session after root)
+var array<float> early_damasu_up = array.new<float>()
+var array<float> early_damasu_dn = array.new<float>()
+var array<float> early_osaka_up = array.new<float>()
+var array<float> early_osaka_dn = array.new<float>()
+var array<float> early_kyoto_up = array.new<float>()
+var array<float> early_kyoto_dn = array.new<float>()
+var array<float> early_nagasaki_up = array.new<float>()
+var array<float> early_nagasaki_dn = array.new<float>()
+var array<float> early_turncoat_up = array.new<float>()
+var array<float> early_turncoat_dn = array.new<float>()
+var array<float> early_bishop_up = array.new<float>()
+var array<float> early_bishop_dn = array.new<float>()
+var array<float> early_knight_up = array.new<float>()
+var array<float> early_knight_dn = array.new<float>()
+var array<float> early_bigben_up = array.new<float>()
+var array<float> early_bigben_dn = array.new<float>()
+var array<float> early_nyopen_up = array.new<float>()
+var array<float> early_nyopen_dn = array.new<float>()
+var array<float> early_judas_up = array.new<float>()
+var array<float> early_judas_dn = array.new<float>()
+var array<float> early_model11_up = array.new<float>()
+var array<float> early_model11_dn = array.new<float>()
+var array<float> early_model110_up = array.new<float>()
+var array<float> early_model110_dn = array.new<float>()
+var array<float> early_lunch_up = array.new<float>()
+var array<float> early_lunch_dn = array.new<float>()
+var array<float> early_model1001_up = array.new<float>()
+var array<float> early_model1001_dn = array.new<float>()
+var array<float> early_model111_up = array.new<float>()
+var array<float> early_model111_dn = array.new<float>()
+
+// Pre-Session Forecast state - Full Session AMRP
+var box forecast_up_box = na
+var box forecast_dn_box = na
+var line forecast_up_median_line = na
+var line forecast_dn_median_line = na
+var label forecast_label = na
+// Pre-Session Forecast state - Early Expansion
+var box forecast_early_up_box = na
+var box forecast_early_dn_box = na
 
 // Track previous input values to detect changes that require redrawing
 var int prev_amrp_lookback = 9
@@ -945,6 +992,114 @@ add_to_amrp_arrays(session_name, up_exp, dn_exp, lookback) =>
             array.pop(amrp_model111_up)
         while array.size(amrp_model111_dn) > lookback
             array.pop(amrp_model111_dn)
+
+// Helper to add early expansion data to session-specific arrays
+add_to_early_arrays(session_name, up_exp, dn_exp, lookback) =>
+    if session_name == SESSION_DAMASU
+        array.unshift(early_damasu_up, up_exp)
+        array.unshift(early_damasu_dn, dn_exp)
+        while array.size(early_damasu_up) > lookback
+            array.pop(early_damasu_up)
+        while array.size(early_damasu_dn) > lookback
+            array.pop(early_damasu_dn)
+    else if session_name == SESSION_OSAKA
+        array.unshift(early_osaka_up, up_exp)
+        array.unshift(early_osaka_dn, dn_exp)
+        while array.size(early_osaka_up) > lookback
+            array.pop(early_osaka_up)
+        while array.size(early_osaka_dn) > lookback
+            array.pop(early_osaka_dn)
+    else if session_name == SESSION_KYOTO
+        array.unshift(early_kyoto_up, up_exp)
+        array.unshift(early_kyoto_dn, dn_exp)
+        while array.size(early_kyoto_up) > lookback
+            array.pop(early_kyoto_up)
+        while array.size(early_kyoto_dn) > lookback
+            array.pop(early_kyoto_dn)
+    else if session_name == SESSION_NAGASAKI
+        array.unshift(early_nagasaki_up, up_exp)
+        array.unshift(early_nagasaki_dn, dn_exp)
+        while array.size(early_nagasaki_up) > lookback
+            array.pop(early_nagasaki_up)
+        while array.size(early_nagasaki_dn) > lookback
+            array.pop(early_nagasaki_dn)
+    else if session_name == SESSION_TURNCOAT
+        array.unshift(early_turncoat_up, up_exp)
+        array.unshift(early_turncoat_dn, dn_exp)
+        while array.size(early_turncoat_up) > lookback
+            array.pop(early_turncoat_up)
+        while array.size(early_turncoat_dn) > lookback
+            array.pop(early_turncoat_dn)
+    else if session_name == SESSION_BISHOP
+        array.unshift(early_bishop_up, up_exp)
+        array.unshift(early_bishop_dn, dn_exp)
+        while array.size(early_bishop_up) > lookback
+            array.pop(early_bishop_up)
+        while array.size(early_bishop_dn) > lookback
+            array.pop(early_bishop_dn)
+    else if session_name == SESSION_KNIGHT
+        array.unshift(early_knight_up, up_exp)
+        array.unshift(early_knight_dn, dn_exp)
+        while array.size(early_knight_up) > lookback
+            array.pop(early_knight_up)
+        while array.size(early_knight_dn) > lookback
+            array.pop(early_knight_dn)
+    else if session_name == SESSION_BIGBEN
+        array.unshift(early_bigben_up, up_exp)
+        array.unshift(early_bigben_dn, dn_exp)
+        while array.size(early_bigben_up) > lookback
+            array.pop(early_bigben_up)
+        while array.size(early_bigben_dn) > lookback
+            array.pop(early_bigben_dn)
+    else if session_name == SESSION_NYOPEN
+        array.unshift(early_nyopen_up, up_exp)
+        array.unshift(early_nyopen_dn, dn_exp)
+        while array.size(early_nyopen_up) > lookback
+            array.pop(early_nyopen_up)
+        while array.size(early_nyopen_dn) > lookback
+            array.pop(early_nyopen_dn)
+    else if session_name == SESSION_JUDAS
+        array.unshift(early_judas_up, up_exp)
+        array.unshift(early_judas_dn, dn_exp)
+        while array.size(early_judas_up) > lookback
+            array.pop(early_judas_up)
+        while array.size(early_judas_dn) > lookback
+            array.pop(early_judas_dn)
+    else if session_name == SESSION_MODEL11
+        array.unshift(early_model11_up, up_exp)
+        array.unshift(early_model11_dn, dn_exp)
+        while array.size(early_model11_up) > lookback
+            array.pop(early_model11_up)
+        while array.size(early_model11_dn) > lookback
+            array.pop(early_model11_dn)
+    else if session_name == SESSION_MODEL110
+        array.unshift(early_model110_up, up_exp)
+        array.unshift(early_model110_dn, dn_exp)
+        while array.size(early_model110_up) > lookback
+            array.pop(early_model110_up)
+        while array.size(early_model110_dn) > lookback
+            array.pop(early_model110_dn)
+    else if session_name == SESSION_LUNCH
+        array.unshift(early_lunch_up, up_exp)
+        array.unshift(early_lunch_dn, dn_exp)
+        while array.size(early_lunch_up) > lookback
+            array.pop(early_lunch_up)
+        while array.size(early_lunch_dn) > lookback
+            array.pop(early_lunch_dn)
+    else if session_name == SESSION_MODEL1001
+        array.unshift(early_model1001_up, up_exp)
+        array.unshift(early_model1001_dn, dn_exp)
+        while array.size(early_model1001_up) > lookback
+            array.pop(early_model1001_up)
+        while array.size(early_model1001_dn) > lookback
+            array.pop(early_model1001_dn)
+    else if session_name == SESSION_MODEL111
+        array.unshift(early_model111_up, up_exp)
+        array.unshift(early_model111_dn, dn_exp)
+        while array.size(early_model111_up) > lookback
+            array.pop(early_model111_up)
+        while array.size(early_model111_dn) > lookback
+            array.pop(early_model111_dn)
 
 // Calculate percentile from array (for AMRP)
 calculate_percentile(arr, pct) =>
@@ -1309,6 +1464,299 @@ get_amrp_percentiles(session_name, inner_pct, outer_pct, custom_lookback = 0) =>
 
     [has_data, up_inner, up_outer, dn_inner, dn_outer]
 
+// Helper to get median from array (filters zeros first)
+get_median(arr) =>
+    calculate_percentile(filter_zeros(arr), 50)
+
+// Get median expansions for a session (for Pre-Session Forecast)
+get_median_expansions(session_name) =>
+    median_up = 0.0
+    median_dn = 0.0
+    has_data = false
+
+    if session_name == SESSION_DAMASU
+        if array.size(amrp_damasu_up) > 0 and array.size(amrp_damasu_dn) > 0
+            median_up := get_median(amrp_damasu_up)
+            median_dn := get_median(amrp_damasu_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_OSAKA
+        if array.size(amrp_osaka_up) > 0 and array.size(amrp_osaka_dn) > 0
+            median_up := get_median(amrp_osaka_up)
+            median_dn := get_median(amrp_osaka_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_KYOTO
+        if array.size(amrp_kyoto_up) > 0 and array.size(amrp_kyoto_dn) > 0
+            median_up := get_median(amrp_kyoto_up)
+            median_dn := get_median(amrp_kyoto_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_NAGASAKI
+        if array.size(amrp_nagasaki_up) > 0 and array.size(amrp_nagasaki_dn) > 0
+            median_up := get_median(amrp_nagasaki_up)
+            median_dn := get_median(amrp_nagasaki_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_TURNCOAT
+        if array.size(amrp_turncoat_up) > 0 and array.size(amrp_turncoat_dn) > 0
+            median_up := get_median(amrp_turncoat_up)
+            median_dn := get_median(amrp_turncoat_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_BISHOP
+        if array.size(amrp_bishop_up) > 0 and array.size(amrp_bishop_dn) > 0
+            median_up := get_median(amrp_bishop_up)
+            median_dn := get_median(amrp_bishop_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_KNIGHT
+        if array.size(amrp_knight_up) > 0 and array.size(amrp_knight_dn) > 0
+            median_up := get_median(amrp_knight_up)
+            median_dn := get_median(amrp_knight_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_BIGBEN
+        if array.size(amrp_bigben_up) > 0 and array.size(amrp_bigben_dn) > 0
+            median_up := get_median(amrp_bigben_up)
+            median_dn := get_median(amrp_bigben_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_NYOPEN
+        if array.size(amrp_nyopen_up) > 0 and array.size(amrp_nyopen_dn) > 0
+            median_up := get_median(amrp_nyopen_up)
+            median_dn := get_median(amrp_nyopen_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_JUDAS
+        if array.size(amrp_judas_up) > 0 and array.size(amrp_judas_dn) > 0
+            median_up := get_median(amrp_judas_up)
+            median_dn := get_median(amrp_judas_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_MODEL11
+        if array.size(amrp_model11_up) > 0 and array.size(amrp_model11_dn) > 0
+            median_up := get_median(amrp_model11_up)
+            median_dn := get_median(amrp_model11_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_MODEL110
+        if array.size(amrp_model110_up) > 0 and array.size(amrp_model110_dn) > 0
+            median_up := get_median(amrp_model110_up)
+            median_dn := get_median(amrp_model110_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_LUNCH
+        if array.size(amrp_lunch_up) > 0 and array.size(amrp_lunch_dn) > 0
+            median_up := get_median(amrp_lunch_up)
+            median_dn := get_median(amrp_lunch_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_MODEL1001
+        if array.size(amrp_model1001_up) > 0 and array.size(amrp_model1001_dn) > 0
+            median_up := get_median(amrp_model1001_up)
+            median_dn := get_median(amrp_model1001_dn)
+            has_data := median_up > 0 or median_dn > 0
+    else if session_name == SESSION_MODEL111
+        if array.size(amrp_model111_up) > 0 and array.size(amrp_model111_dn) > 0
+            median_up := get_median(amrp_model111_up)
+            median_dn := get_median(amrp_model111_dn)
+            has_data := median_up > 0 or median_dn > 0
+
+    [median_up, median_dn, has_data]
+
+// Get early expansion percentiles for a session (for Pre-Session Forecast)
+get_early_expansion_percentiles(session_name) =>
+    up_inner = 0.0
+    up_outer = 0.0
+    dn_inner = 0.0
+    dn_outer = 0.0
+    has_data = false
+
+    if session_name == SESSION_DAMASU and array.size(early_damasu_up) > 0 and array.size(early_damasu_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_damasu_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_damasu_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_OSAKA and array.size(early_osaka_up) > 0 and array.size(early_osaka_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_osaka_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_osaka_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_KYOTO and array.size(early_kyoto_up) > 0 and array.size(early_kyoto_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_kyoto_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_kyoto_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_NAGASAKI and array.size(early_nagasaki_up) > 0 and array.size(early_nagasaki_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_nagasaki_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_nagasaki_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_TURNCOAT and array.size(early_turncoat_up) > 0 and array.size(early_turncoat_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_turncoat_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_turncoat_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_BISHOP and array.size(early_bishop_up) > 0 and array.size(early_bishop_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_bishop_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_bishop_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_KNIGHT and array.size(early_knight_up) > 0 and array.size(early_knight_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_knight_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_knight_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_BIGBEN and array.size(early_bigben_up) > 0 and array.size(early_bigben_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_bigben_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_bigben_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_NYOPEN and array.size(early_nyopen_up) > 0 and array.size(early_nyopen_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_nyopen_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_nyopen_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_JUDAS and array.size(early_judas_up) > 0 and array.size(early_judas_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_judas_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_judas_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_MODEL11 and array.size(early_model11_up) > 0 and array.size(early_model11_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_model11_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_model11_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_MODEL110 and array.size(early_model110_up) > 0 and array.size(early_model110_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_model110_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_model110_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_LUNCH and array.size(early_lunch_up) > 0 and array.size(early_lunch_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_lunch_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_lunch_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_MODEL1001 and array.size(early_model1001_up) > 0 and array.size(early_model1001_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_model1001_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_model1001_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+    else if session_name == SESSION_MODEL111 and array.size(early_model111_up) > 0 and array.size(early_model111_dn) > 0
+        [up_q1, up_q3] = calculate_iqr(filter_zeros(early_model111_up))
+        [dn_q1, dn_q3] = calculate_iqr(filter_zeros(early_model111_dn))
+        up_inner := up_q1, up_outer := up_q3, dn_inner := dn_q1, dn_outer := dn_q3, has_data := true
+
+    [has_data, up_inner, up_outer, dn_inner, dn_outer]
+
+// Get early median expansions for a session
+get_early_median_expansions(session_name) =>
+    median_up = 0.0
+    median_dn = 0.0
+    has_data = false
+
+    if session_name == SESSION_DAMASU and array.size(early_damasu_up) > 0 and array.size(early_damasu_dn) > 0
+        median_up := get_median(early_damasu_up), median_dn := get_median(early_damasu_dn), has_data := true
+    else if session_name == SESSION_OSAKA and array.size(early_osaka_up) > 0 and array.size(early_osaka_dn) > 0
+        median_up := get_median(early_osaka_up), median_dn := get_median(early_osaka_dn), has_data := true
+    else if session_name == SESSION_KYOTO and array.size(early_kyoto_up) > 0 and array.size(early_kyoto_dn) > 0
+        median_up := get_median(early_kyoto_up), median_dn := get_median(early_kyoto_dn), has_data := true
+    else if session_name == SESSION_NAGASAKI and array.size(early_nagasaki_up) > 0 and array.size(early_nagasaki_dn) > 0
+        median_up := get_median(early_nagasaki_up), median_dn := get_median(early_nagasaki_dn), has_data := true
+    else if session_name == SESSION_TURNCOAT and array.size(early_turncoat_up) > 0 and array.size(early_turncoat_dn) > 0
+        median_up := get_median(early_turncoat_up), median_dn := get_median(early_turncoat_dn), has_data := true
+    else if session_name == SESSION_BISHOP and array.size(early_bishop_up) > 0 and array.size(early_bishop_dn) > 0
+        median_up := get_median(early_bishop_up), median_dn := get_median(early_bishop_dn), has_data := true
+    else if session_name == SESSION_KNIGHT and array.size(early_knight_up) > 0 and array.size(early_knight_dn) > 0
+        median_up := get_median(early_knight_up), median_dn := get_median(early_knight_dn), has_data := true
+    else if session_name == SESSION_BIGBEN and array.size(early_bigben_up) > 0 and array.size(early_bigben_dn) > 0
+        median_up := get_median(early_bigben_up), median_dn := get_median(early_bigben_dn), has_data := true
+    else if session_name == SESSION_NYOPEN and array.size(early_nyopen_up) > 0 and array.size(early_nyopen_dn) > 0
+        median_up := get_median(early_nyopen_up), median_dn := get_median(early_nyopen_dn), has_data := true
+    else if session_name == SESSION_JUDAS and array.size(early_judas_up) > 0 and array.size(early_judas_dn) > 0
+        median_up := get_median(early_judas_up), median_dn := get_median(early_judas_dn), has_data := true
+    else if session_name == SESSION_MODEL11 and array.size(early_model11_up) > 0 and array.size(early_model11_dn) > 0
+        median_up := get_median(early_model11_up), median_dn := get_median(early_model11_dn), has_data := true
+    else if session_name == SESSION_MODEL110 and array.size(early_model110_up) > 0 and array.size(early_model110_dn) > 0
+        median_up := get_median(early_model110_up), median_dn := get_median(early_model110_dn), has_data := true
+    else if session_name == SESSION_LUNCH and array.size(early_lunch_up) > 0 and array.size(early_lunch_dn) > 0
+        median_up := get_median(early_lunch_up), median_dn := get_median(early_lunch_dn), has_data := true
+    else if session_name == SESSION_MODEL1001 and array.size(early_model1001_up) > 0 and array.size(early_model1001_dn) > 0
+        median_up := get_median(early_model1001_up), median_dn := get_median(early_model1001_dn), has_data := true
+    else if session_name == SESSION_MODEL111 and array.size(early_model111_up) > 0 and array.size(early_model111_dn) > 0
+        median_up := get_median(early_model111_up), median_dn := get_median(early_model111_dn), has_data := true
+
+    [median_up, median_dn, has_data]
+
+// Get upcoming session name based on current time (for Pre-Session Forecast)
+// Sessions run: Damasu(18:00) → Osaka → Kyoto → Nagasaki(crosses midnight) → Turncoat(03:00) → ... → Model111(14:09-18:00)
+get_upcoming_session_by_time(current_time_hhmm) =>
+    result = SESSION_DAMASU  // Default
+
+    // Handle the circular 24-hour day properly
+    // Morning/afternoon sessions (00:00 - 18:00)
+    if current_time_hhmm < TIME_TURNCOAT_START  // Before 03:00 (after midnight, before Turncoat)
+        result := SESSION_TURNCOAT
+    else if current_time_hhmm < TIME_BISHOP_START  // 03:00 - 03:44
+        result := SESSION_BISHOP
+    else if current_time_hhmm < TIME_KNIGHT_START  // 03:44 - 05:20
+        result := SESSION_KNIGHT
+    else if current_time_hhmm < TIME_BIGBEN_START  // 05:20 - 06:39
+        result := SESSION_BIGBEN
+    else if current_time_hhmm < TIME_NYOPEN_START  // 06:39 - 09:30
+        result := SESSION_NYOPEN
+    else if current_time_hhmm < TIME_JUDAS_START  // 09:30 - 09:55
+        result := SESSION_JUDAS
+    else if current_time_hhmm < TIME_MODEL11_START  // 09:55 - 10:20
+        result := SESSION_MODEL11
+    else if current_time_hhmm < TIME_MODEL110_START  // 10:20 - 11:10
+        result := SESSION_MODEL110
+    else if current_time_hhmm < TIME_LUNCH_START  // 11:10 - 11:49
+        result := SESSION_LUNCH
+    else if current_time_hhmm < TIME_MODEL1001_START  // 11:49 - 12:35
+        result := SESSION_MODEL1001
+    else if current_time_hhmm < TIME_MODEL111_START  // 12:35 - 14:09
+        result := SESSION_MODEL111
+    else if current_time_hhmm < TIME_DAMASU_START  // 14:09 - 18:00
+        result := SESSION_DAMASU
+    // Evening sessions (18:00 - 24:00)
+    else if current_time_hhmm < TIME_OSAKA_START  // 18:00 - 19:01
+        result := SESSION_OSAKA
+    else if current_time_hhmm < TIME_KYOTO_START  // 19:01 - 21:14
+        result := SESSION_KYOTO
+    else if current_time_hhmm < TIME_NAGASAKI_START  // 21:14 - 23:04
+        result := SESSION_NAGASAKI
+    else  // 23:04 - 24:00 (Nagasaki continues, next is Turncoat)
+        result := SESSION_TURNCOAT
+
+    result
+
+// Get session template by name (returns start_time, end_time, duration_minutes)
+get_session_template_times(session_name) =>
+    start_time = 0
+    end_time = 0
+    duration_minutes = 0
+
+    if session_name == SESSION_DAMASU
+        start_time := TIME_DAMASU_START, end_time := TIME_DAMASU_END
+    else if session_name == SESSION_OSAKA
+        start_time := TIME_OSAKA_START, end_time := TIME_OSAKA_END
+    else if session_name == SESSION_KYOTO
+        start_time := TIME_KYOTO_START, end_time := TIME_KYOTO_END
+    else if session_name == SESSION_NAGASAKI
+        start_time := TIME_NAGASAKI_START, end_time := TIME_NAGASAKI_END
+    else if session_name == SESSION_TURNCOAT
+        start_time := TIME_TURNCOAT_START, end_time := TIME_TURNCOAT_END
+    else if session_name == SESSION_BISHOP
+        start_time := TIME_BISHOP_START, end_time := TIME_BISHOP_END
+    else if session_name == SESSION_KNIGHT
+        start_time := TIME_KNIGHT_START, end_time := TIME_KNIGHT_END
+    else if session_name == SESSION_BIGBEN
+        start_time := TIME_BIGBEN_START, end_time := TIME_BIGBEN_END
+    else if session_name == SESSION_NYOPEN
+        start_time := TIME_NYOPEN_START, end_time := TIME_NYOPEN_END
+    else if session_name == SESSION_JUDAS
+        start_time := TIME_JUDAS_START, end_time := TIME_JUDAS_END
+    else if session_name == SESSION_MODEL11
+        start_time := TIME_MODEL11_START, end_time := TIME_MODEL11_END
+    else if session_name == SESSION_MODEL110
+        start_time := TIME_MODEL110_START, end_time := TIME_MODEL110_END
+    else if session_name == SESSION_LUNCH
+        start_time := TIME_LUNCH_START, end_time := TIME_LUNCH_END
+    else if session_name == SESSION_MODEL1001
+        start_time := TIME_MODEL1001_START, end_time := TIME_MODEL1001_END
+    else if session_name == SESSION_MODEL111
+        start_time := TIME_MODEL111_START, end_time := TIME_MODEL111_END
+
+    // Calculate duration in minutes (handling midnight wrap)
+    start_hour = math.floor(start_time / 100)
+    start_min = start_time % 100
+    end_hour = math.floor(end_time / 100)
+    end_min = end_time % 100
+    start_minutes = start_hour * 60 + start_min
+    end_minutes = end_hour * 60 + end_min
+
+    if end_minutes < start_minutes  // Wraps midnight
+        duration_minutes := (1440 - start_minutes) + end_minutes
+    else
+        duration_minutes := end_minutes - start_minutes
+
+    [start_time, end_time, duration_minutes]
+
 // Define session templates (in cascade order - 15 DTT sessions)
 var session_templates = array.new<SessionTemplate>()
 if barstate.isfirst
@@ -1355,7 +1803,7 @@ process_sessions = is_247_asset or (current_day != dayofweek.saturday and curren
 
 // Helper function to get the last instance of a session type (completed or active)
 get_last_session_of_type(session_name) =>
-    result = DttIntradaySession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, na, false, na, na, na, na, na, na, na, na, na, 0, na, na, na, na, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
+    result = DttIntradaySession.new(0, 0, "", "", na, na, na, na, na, na, na, na, na, na, na, false, na, na, na, na, na, na, na, na, na, 0, na, na, na, na, false, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
     if array.size(session_instances) > 0
         for i = array.size(session_instances) - 1 to 0
             sess = array.get(session_instances, i)
@@ -1778,7 +2226,7 @@ if process_sessions
 
             // ⚠️ CRITICAL: Initialize with extreme values so first 1-minute data always sets the high/low
             // DO NOT CHANGE -1e10 and 1e10 - see Developer Docs section 2.1
-            new_sess = DttIntradaySession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, session_start_timestamp, calculated_end_timestamp, day_number, -1e10, 1e10, bar_index, bar_index, na, na, false, na, na, na, na, na, na, na, na, na, template.root_time, na, na, na, na, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
+            new_sess = DttIntradaySession.new(template.start_time, template.end_time, template.name, template.prev_session_name, bar_index, na, session_start_timestamp, calculated_end_timestamp, day_number, -1e10, 1e10, bar_index, bar_index, na, na, false, na, na, na, na, na, na, na, na, na, template.root_time, na, na, na, na, false, false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false, false, false, false, na, na, na, na, na, na, na, na)
             array.push(session_instances, new_sess)
 
             // Alert: New session start (only if not pre-creation)
@@ -2037,6 +2485,29 @@ if validTimeframe and array.size(session_instances) > 0
                             if one_min_low < sess.session_low
                                 sess.session_low := one_min_low
                                 sess.session_low_bar := bar_index
+
+                            // Capture early expansion at configured fraction of session after root
+                            if sess.root_captured and not sess.early_captured and not na(sess.root_high) and not na(sess.root_low)
+                                root_hour = math.floor(sess.root_time / 100)
+                                root_minute = sess.root_time % 100
+                                root_minutes_total = root_hour * 60 + root_minute
+                                minutes_since_root = one_min_minutes - root_minutes_total
+
+                                // Handle midnight wrap for Nagasaki (root is after midnight)
+                                if sess.root_time < 300 and one_min_minutes > 1200
+                                    minutes_since_root := (one_min_minutes - 1440) - root_minutes_total
+
+                                // Calculate session duration and early threshold
+                                [_, _, sess_duration] = get_session_template_times(sess.name)
+                                float early_fraction = early_expansion_fraction == "1/6" ? 1.0/6 : early_expansion_fraction == "1/4" ? 0.25 : early_expansion_fraction == "1/3" ? 1.0/3 : early_expansion_fraction == "1/2" ? 0.5 : early_expansion_fraction == "2/3" ? 2.0/3 : 0.75
+                                int early_threshold = math.ceil(sess_duration * early_fraction)
+
+                                // Capture at X+ minutes after root (first bar at or past configured time)
+                                if minutes_since_root >= early_threshold
+                                    early_up = sess.session_high - sess.root_high
+                                    early_dn = sess.root_low - sess.session_low
+                                    add_to_early_arrays(sess.name, early_up, early_dn, amrp_lookback)
+                                    sess.early_captured := true
 
                             // Update Fibonacci anchors dynamically if price breaks AMRP boundaries
                             // PERFORMANCE: Only update for sessions that are NOT ended (na(end_bar))
@@ -2523,6 +2994,143 @@ if validTimeframe and eff_show_amrp and array.size(session_instances) > 0
                     array.set(session_instances, i, sess)
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PRE-SESSION FORECAST
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Show projected AMRP geometry for the next upcoming session
+if validTimeframe and show_forecast and not fib_only_mode
+    // Get upcoming session name based on current time
+    next_session = get_upcoming_session_by_time(current_time)
+
+    // Get session timing info
+    [sess_start_time, sess_end_time, sess_duration_minutes] = get_session_template_times(next_session)
+
+    // Calculate minutes until session START
+    current_hour = math.floor(current_time / 100)
+    current_min = current_time % 100
+    current_minutes = current_hour * 60 + current_min
+
+    sess_start_hour = math.floor(sess_start_time / 100)
+    sess_start_min = sess_start_time % 100
+    sess_start_minutes = sess_start_hour * 60 + sess_start_min
+
+    // Handle midnight wrap (if session starts tomorrow relative to current time)
+    int minutes_until_start = sess_start_minutes - current_minutes
+    if minutes_until_start <= 0
+        minutes_until_start := minutes_until_start + 1440  // Add 24 hours
+
+    // Calculate bars until session start and end
+    int bars_until_start = math.ceil(minutes_until_start / timeframe.multiplier)
+    int bars_for_session = math.ceil(sess_duration_minutes / timeframe.multiplier)
+
+    // Get full session AMRP data (for expected range by session end)
+    [amrp_has_data, amrp_up_inner, amrp_up_outer, amrp_dn_inner, amrp_dn_outer] = get_amrp_percentiles(next_session, 25, 75, 0)
+    [amrp_median_up, amrp_median_dn, amrp_has_median] = get_median_expansions(next_session)
+
+    // Get early expansion data
+    [early_has_data, early_up_inner, early_up_outer, early_dn_inner, early_dn_outer] = get_early_expansion_percentiles(next_session)
+
+    // Calculate volatility scaling ratio (recent vs historical ATR)
+    int recent_lookback = math.ceil(60 / timeframe.multiplier)    // Normalized: 60 min of recent data
+    int historical_lookback = math.ceil(300 / timeframe.multiplier)  // Normalized: 300 min baseline
+    recent_atr = ta.atr(recent_lookback)   // Recent volatility
+    historical_atr = ta.atr(historical_lookback)  // Longer-term baseline
+    vol_ratio = not na(recent_atr) and not na(historical_atr) and historical_atr > 0 ? recent_atr / historical_atr : 1.0
+    // Clamp ratio to reasonable bounds (0.5x to 2.0x)
+    vol_ratio := math.max(0.5, math.min(2.0, vol_ratio))
+
+    if amrp_has_data
+        // Use current price as the anchor (proxy for where the session might open)
+        anchor = close
+
+        // Apply volatility scaling to expansion values
+        scaled_amrp_up_inner = amrp_up_inner * vol_ratio
+        scaled_amrp_up_outer = amrp_up_outer * vol_ratio
+        scaled_amrp_dn_inner = amrp_dn_inner * vol_ratio
+        scaled_amrp_dn_outer = amrp_dn_outer * vol_ratio
+        scaled_median_up = amrp_median_up * vol_ratio
+        scaled_median_dn = amrp_median_dn * vol_ratio
+        scaled_early_up_inner = early_up_inner * vol_ratio
+        scaled_early_up_outer = early_up_outer * vol_ratio
+        scaled_early_dn_inner = early_dn_inner * vol_ratio
+        scaled_early_dn_outer = early_dn_outer * vol_ratio
+
+        // Calculate forecast zone boundaries from SCALED data
+        forecast_up_inner = anchor + scaled_amrp_up_inner
+        forecast_up_outer = anchor + scaled_amrp_up_outer
+        forecast_dn_inner = anchor - scaled_amrp_dn_inner
+        forecast_dn_outer = anchor - scaled_amrp_dn_outer
+
+        // Calculate median lines (50th percentile - most likely target by session end)
+        forecast_up_median = anchor + scaled_median_up
+        forecast_dn_median = anchor - scaled_median_dn
+
+        // Calculate early expansion zone boundaries
+        early_up_price_inner = anchor + scaled_early_up_inner
+        early_up_price_outer = anchor + scaled_early_up_outer
+        early_dn_price_inner = anchor - scaled_early_dn_inner
+        early_dn_price_outer = anchor - scaled_early_dn_outer
+
+        // Delete old forecast elements
+        if not na(forecast_up_box)
+            box.delete(forecast_up_box)
+        if not na(forecast_dn_box)
+            box.delete(forecast_dn_box)
+        if not na(forecast_up_median_line)
+            line.delete(forecast_up_median_line)
+        if not na(forecast_dn_median_line)
+            line.delete(forecast_dn_median_line)
+        if not na(forecast_label)
+            label.delete(forecast_label)
+        if not na(forecast_early_up_box)
+            box.delete(forecast_early_up_box)
+        if not na(forecast_early_dn_box)
+            box.delete(forecast_early_dn_box)
+
+        // Calculate bar positions - forecast starts at actual session start time
+        int forecast_start = bar_index + bars_until_start
+        int forecast_end = forecast_start + bars_for_session
+        float early_frac = early_expansion_fraction == "1/6" ? 1.0/6 : early_expansion_fraction == "1/4" ? 0.25 : early_expansion_fraction == "1/3" ? 1.0/3 : early_expansion_fraction == "1/2" ? 0.5 : early_expansion_fraction == "2/3" ? 2.0/3 : 0.75
+        int early_minutes = math.ceil(sess_duration_minutes * early_frac)
+        int early_end = forecast_start + math.ceil(early_minutes / timeframe.multiplier)  // Fraction of session after start
+
+        // 1. FULL SESSION AMRP ZONES (expected range by session end)
+        forecast_up_box := box.new(forecast_start, forecast_up_outer, forecast_end, forecast_up_inner,
+                                    border_color=forecast_color, bgcolor=color.new(forecast_color, 90),
+                                    border_width=1, border_style=line.style_dashed)
+        forecast_dn_box := box.new(forecast_start, forecast_dn_inner, forecast_end, forecast_dn_outer,
+                                    border_color=forecast_color, bgcolor=color.new(forecast_color, 90),
+                                    border_width=1, border_style=line.style_dashed)
+
+        // 2. MEDIAN LINES (most likely target by session end)
+        if amrp_has_median
+            forecast_up_median_line := line.new(forecast_start, forecast_up_median, forecast_end, forecast_up_median,
+                                                 color=forecast_color, width=2, style=line.style_solid)
+            forecast_dn_median_line := line.new(forecast_start, forecast_dn_median, forecast_end, forecast_dn_median,
+                                                 color=forecast_color, width=2, style=line.style_solid)
+
+        // 3. EARLY EXPANSION ZONES - smaller, more opaque
+        if early_has_data
+            early_color = color.new(forecast_color, 70)
+            forecast_early_up_box := box.new(forecast_start, early_up_price_outer, early_end, early_up_price_inner,
+                                              border_color=forecast_color, bgcolor=early_color,
+                                              border_width=2, border_style=line.style_solid)
+            forecast_early_dn_box := box.new(forecast_start, early_dn_price_inner, early_end, early_dn_price_outer,
+                                              border_color=forecast_color, bgcolor=early_color,
+                                              border_width=2, border_style=line.style_solid)
+
+        // Label showing session name above the forecast zone
+        int forecast_mid = forecast_start + (forecast_end - forecast_start) / 2
+        float label_offset = (forecast_up_outer - forecast_dn_outer) * 0.05  // 5% of total zone height
+        // Label text color: same as forecast but half the transparency (more visible)
+        float forecast_opacity = color.t(forecast_color)
+        float label_text_opacity = forecast_opacity / 2
+        color label_text_col = color.new(color.rgb(color.r(forecast_color), color.g(forecast_color), color.b(forecast_color)), label_text_opacity)
+        forecast_label := label.new(forecast_mid, forecast_up_outer + label_offset,
+                                     text=next_session,
+                                     style=label.style_text_outline, color=color.new(color.rgb(245, 245, 245), 20), textcolor=label_text_col, size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
 // ALERT DETECTION - ALL EVENTS GROUPED PER SESSION
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2656,7 +3264,7 @@ if validTimeframe and array.size(session_instances) > 0
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 
 if validTimeframe and show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 3, 22, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 3, 23, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -2750,3 +3358,9 @@ if validTimeframe and show_color_table and barstate.islast
     table.cell(color_table, 0, 21, "Fib 0.0", text_size=size.small)
     table.cell(color_table, 1, 21, str.format("R:{0} G:{1} B:{2}", color.r(fib_color_0), color.g(fib_color_0), color.b(fib_color_0)), text_size=size.small)
     table.cell(color_table, 2, 21, str.tostring(color.t(fib_color_0)), text_size=size.small)
+
+    // Forecast Colors
+    table.cell(color_table, 0, 22, "Forecast Zone", text_size=size.small)
+    table.cell(color_table, 1, 22, str.format("R:{0} G:{1} B:{2}", color.r(forecast_color), color.g(forecast_color), color.b(forecast_color)), text_size=size.small)
+    table.cell(color_table, 2, 22, str.tostring(color.t(forecast_color)), text_size=size.small)
+
