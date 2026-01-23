@@ -50,6 +50,7 @@ const string LABEL_SEPARATOR = " • "
 const string LABEL_SUFFIX = " algo draw"
 
 color COLOR_TRANSPARENT = color.new(color.white, 100)
+color COLOR_STATUS_BG = color.new(color.rgb(245, 245, 245), 20)
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -64,6 +65,7 @@ adr_filter_enabled = input.bool(true, 'ADR Filter', group=GROUP_DYN_FILTER, inli
 adr_lookback = input.int(5, 'Days', minval=1, maxval=20, group=GROUP_DYN_FILTER, inline='adr', tooltip='Number of days for ADR calculation')
 adr_multiplier = input.float(1.0, '×', minval=0.4, maxval=2.0, step=0.1, group=GROUP_DYN_FILTER, inline='adr', tooltip='1.0 = exact ADR, 1.5 = extended range')
 multi_tf_only = input.bool(true, 'Multi-TF Only', group=GROUP_DYN_FILTER, inline='multi_tf', tooltip='When ON: Macro levels always show; Swing/Intraday only show if 2+ TFs align\nWhen OFF: show all levels')
+highlight_nearest = input.bool(true, 'Highlight Nearest', group=GROUP_DYN_FILTER, inline='highlight', tooltip='Dynamic mode: bump size and width of nearest BSL above and SSL below price')
 
 dyn_htf1_enabled = input.bool(true, 'M', group=GROUP_DYN_MACRO, inline='tf')
 dyn_htf2_enabled = input.bool(true, 'W', group=GROUP_DYN_MACRO, inline='tf')
@@ -341,13 +343,13 @@ get_reference_levels_cap() =>
         CAP_DEFAULT
 
 
-size_from_str(string sz) =>
+get_size(string sz, bool bump) =>
     switch sz
-        SIZE_TINY => size.tiny
-        SIZE_SMALL => size.small
-        SIZE_NORMAL => size.normal
-        SIZE_LARGE => size.large
-        => size.small
+        SIZE_TINY => bump ? size.small : size.tiny
+        SIZE_SMALL => bump ? size.normal : size.small
+        SIZE_NORMAL => bump ? size.large : size.normal
+        SIZE_LARGE => bump ? size.huge : size.large
+        => bump ? size.normal : size.small
 
 get_tier_from_rank(int rank) =>
     if rank <= TIER_MACRO_MAX_RANK
@@ -618,7 +620,8 @@ dyn_collect_levels(array<float> bsl_targets, array<bool> bsl_open,
 dyn_draw_consolidated(array<int> ticks, array<bool> is_bsl, array<string> tags, array<int> ranks,
                       array<line> lines_arr, array<label> labels_arr,
                       color line_col, color daily_col, color bsl_lbl_col, color ssl_lbl_col, int end_bar,
-                      int w1, int w2, int w3, string s1, string s2, string s3, bool multi_tf_only) =>
+                      int w1, int w2, int w3, string s1, string s2, string s3, bool multi_tf_only,
+                      bool do_highlight, int nearest_bsl_tick, int nearest_ssl_tick) =>
     int tick_count = array.size(ticks)
     if tick_count > 0
         for i = 0 to tick_count - 1
@@ -628,11 +631,15 @@ dyn_draw_consolidated(array<int> ticks, array<bool> is_bsl, array<string> tags, 
             bool has_multiple_tfs = str.contains(all_tags, ",")
             if multi_tf_only and not is_macro and not has_multiple_tfs
                 continue
-            price = from_tick(array.get(ticks, i))
+            tick = array.get(ticks, i)
+            price = from_tick(tick)
             is_buy = array.get(is_bsl, i)
             tier = get_tier_from_rank(rank)
+            bool is_nearest = do_highlight and ((is_buy and tick == nearest_bsl_tick) or (not is_buy and tick == nearest_ssl_tick))
             line_w = tier == 1 ? w1 : tier == 2 ? w2 : w3
-            lbl_sz = size_from_str(tier == 1 ? s1 : tier == 2 ? s2 : s3)
+            line_w := is_nearest ? line_w + 1 : line_w
+            tier_size = tier == 1 ? s1 : tier == 2 ? s2 : s3
+            lbl_sz = get_size(tier_size, is_nearest)
             lbl_col = is_buy ? bsl_lbl_col : ssl_lbl_col
             lbl_text = format_dyn_label(all_tags, is_buy)
             ln_col = rank == 3 ? daily_col : line_col
@@ -673,7 +680,7 @@ create_end_label(end_time, target_price, label_text_color, is_bsl, tooltip_text)
          text=format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl),
          style=label.style_label_left,
          textcolor=label_text_color,
-         size=size_from_str(htf1_label_size),
+         size=get_size(htf1_label_size, false),
          xloc=xloc.bar_time,
          tooltip=tooltip_text
      )
@@ -735,14 +742,14 @@ manual_display_levels(array<int> failure_bars, array<int> failure_times, array<f
                         new_label = label.new(x=local_end_time, y=local_target,
                              text=format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl),
                              style=label.style_label_left, textcolor=text_color,
-                             size=size_from_str(htf1_label_size), xloc=xloc.bar_time, tooltip=tt_text)
+                             size=get_size(htf1_label_size, false), xloc=xloc.bar_time, tooltip=tt_text)
                         label.set_color(new_label, COLOR_TRANSPARENT)
                         array.set(labels_arr, i, new_label)
                     else
                         label.set_xy(local_label, local_end_time, local_target)
                         label.set_text(local_label, format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl))
                         label.set_textcolor(local_label, text_color)
-                        label.set_size(local_label, size_from_str(htf1_label_size))
+                        label.set_size(local_label, get_size(htf1_label_size, false))
                         label.set_color(local_label, COLOR_TRANSPARENT)
                         label.set_tooltip(local_label, tt_text)
                 else if not na(local_label)
@@ -1381,11 +1388,41 @@ if barstate.islast
         if dyn_htf8_valid
             dyn_collect_levels(dyn8_bsl_targets, dyn8_bsl_open, dyn8_ssl_targets, dyn8_ssl_open, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf8), 8, use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
 
+        // Find nearest BSL (above price) and SSL (below price) for highlighting
+        // Must apply same multi_tf_only filter as draw function
+        int nearest_bsl_tick = na
+        int nearest_ssl_tick = na
+        int current_tick = to_tick(close)
+        int cons_size = array.size(cons_ticks)
+        if cons_size > 0
+            float min_bsl_dist = na
+            float min_ssl_dist = na
+            for i = 0 to cons_size - 1
+                int rank = array.get(cons_ranks, i)
+                string all_tags = array.get(cons_tags, i)
+                bool is_macro = rank <= TIER_MACRO_MAX_RANK
+                bool has_multiple_tfs = str.contains(all_tags, ",")
+                if multi_tf_only and not is_macro and not has_multiple_tfs
+                    continue
+                int lvl_tick = array.get(cons_ticks, i)
+                bool is_buy = array.get(cons_is_bsl, i)
+                if is_buy and lvl_tick > current_tick
+                    float dist = lvl_tick - current_tick
+                    if na(min_bsl_dist) or dist < min_bsl_dist
+                        min_bsl_dist := dist
+                        nearest_bsl_tick := lvl_tick
+                else if not is_buy and lvl_tick < current_tick
+                    float dist = current_tick - lvl_tick
+                    if na(min_ssl_dist) or dist < min_ssl_dist
+                        min_ssl_dist := dist
+                        nearest_ssl_tick := lvl_tick
+
         // Draw consolidated levels (one line per unique price, highest HTF label with TF context)
         dyn_draw_consolidated(cons_ticks, cons_is_bsl, cons_tags, cons_ranks, dyn_lines, dyn_labels,
             line_color, daily_line_color, bsl_text_color, ssl_text_color, line_end_bar,
             dyn_width_tier1, dyn_width_tier2, dyn_width_tier3,
-            dyn_size_tier1, dyn_size_tier2, dyn_size_tier3, multi_tf_only)
+            dyn_size_tier1, dyn_size_tier2, dyn_size_tier3, multi_tf_only,
+            highlight_nearest, nearest_bsl_tick, nearest_ssl_tick)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // MANUAL MODE DISPLAY - HTF1/HTF2/HTF3 lines (only when not in Dynamic mode)
@@ -1513,12 +1550,13 @@ if show_status_table and barstate.islast
 
     string mode_display = htf_mode == MODE_DYNAMIC ? "d" : "m"
     string mtf_display = htf_mode == MODE_DYNAMIC and multi_tf_only ? "  mtf" : ""
-    string adr_display = adr_filter_enabled ? "  adr" : ""
+    bool adr_applies = htf_mode == MODE_DYNAMIC and adr_filter_enabled and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS
+    string adr_display = adr_applies ? (adr_multiplier == 1.0 ? "  adr" : "  adr " + str.tostring(adr_multiplier, "#.#")) : ""
     string status_text = mode_display + mtf_display + adr_display
 
     table.cell(status_table, 0, 0, left_pad, bgcolor=color.new(color.white, 100), text_size=size.tiny)
     table.cell(status_table, 1, 0, "htf algo •", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
-    table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
+    table.cell(status_table, 2, 0, status_text, bgcolor=COLOR_STATUS_BG, text_color=color.black, text_size=size.tiny)
     table.cell(status_table, 3, 0, right_pad, bgcolor=color.new(color.white, 100), text_size=size.tiny)
 
 // htf algo •
