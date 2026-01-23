@@ -108,6 +108,10 @@ type SessionData
     line lowPendingLine
     // Deviation extension (extends deviation zones beyond session end)
     int deviationExtendMs
+    // Wick border boxes (NY Early Hours 6-9)
+    bool wickBorderEnabled
+    box wickBorderBoxTop
+    box wickBorderBoxBottom
 
 type BiasData
     float premarketHigh    // Current day's Premarket high (tracking)
@@ -262,14 +266,17 @@ MIT_UNMITIGATED = "Unmitigated"
 // Quick filter presets
 FILTER_ALL = "All"
 FILTER_RAFAEL = "Rafael's Range"
-FILTER_RAFAEL_1800 = "Bias: Rafael + 1800"
-FILTER_RAFAEL_1800_EARLY = "Rafael + 1800 + Early"
+FILTER_RAFAEL_1800 = "Rafael + 1800"
+FILTER_RAFAEL_1800_EARLY = "Prep: Rafael + 1800 + Early"
 FILTER_RAFAEL_1800_EARLY_2203 = "Rafael + 1800 + Early + 2203"
 FILTER_RAFAEL_1800_EARLY_OVERNIGHT = "Rafael + 1800 + Early + Overnight"
 FILTER_FULL_NYAM = "Full NYAM"
+FILTER_NYAM_LITE = "NYAM Lite"
+FILTER_RAFAEL_1800_NYAM_LITE = "Work: Rafael + 1800 + NYAM Lite"
+FILTER_RAFAEL_1800_2203_NYAM_LITE = "Deep: Rafael + 1800 + 2203 + NYAM Lite"
 FILTER_1800 = "1800 Range"
 FILTER_1800_EARLY = "1800 + Early"
-FILTER_RAFAEL_1800_FULL_NYAM = "Work: Rafael + 1800 + Full NYAM"
+FILTER_RAFAEL_1800_FULL_NYAM = "Rafael + 1800 + Full NYAM"
 FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT = "Rafael + 1800 + Full NYAM + Overnight"
 FILTER_INTRADAY = "Intraday"
 FILTER_0800_0850 = "News Release"
@@ -297,7 +304,7 @@ DEV_I_NEWS_EVENING = "0.25:0.5, 1:1.25, 1.33:1.66, 2:2.5, 4:4.5"  // News Releas
 // INPUTS - General Settings
 // ═══════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_RAFAEL_1800_FULL_NYAM, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_2203, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT, FILTER_INTRADAY, FILTER_1800, FILTER_1800_EARLY, FILTER_0800_0850, FILTER_1845_2203], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
+quickFilter = input.string(FILTER_RAFAEL_1800_EARLY, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_2203, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_FULL_NYAM, FILTER_NYAM_LITE, FILTER_RAFAEL_1800_NYAM_LITE, FILTER_RAFAEL_1800_2203_NYAM_LITE, FILTER_RAFAEL_1800_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT, FILTER_INTRADAY, FILTER_1800, FILTER_1800_EARLY, FILTER_0800_0850, FILTER_1845_2203], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
 maxSessions = input.int(1, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -326,6 +333,7 @@ muteOvernightColor = input.color(DEFAULT_OVERNIGHT_MUTE_COLOR, "", inline="mute_
 enableDeviationGlow = input.bool(false, "Deviation Glow", group=GROUP_DISPLAY, tooltip="Darken deviation zones when price touches them. The darkening only persists while the touch is within the configured time window.")
 glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1)
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Time window in hours. Touches older than this will not show the darkening effect.")
+quickCheckMode = input.bool(false, "Quick Check", group=GROUP_DISPLAY, tooltip="Hide deviations for Rafael, 1800, and 2203 - show core only")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Intraday Sessions
@@ -415,6 +423,8 @@ opening_0600_0900_deviationColor = input.color(color.new(color.rgb(77, 208, 225)
 opening_0600_0900_mitigationColor = input.color(color.new(color.rgb(178, 235, 242), 0), LABEL_MITIGATION, inline="0600_2", group=GROUP_0600_0900)
 opening_0600_0900_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0600_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
 opening_0600_0900_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0600_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0600_0900)
+opening_0600_0900_wickBorder = input.bool(true, "Wick Borders", inline="0600_wick", group=GROUP_0600_0900, tooltip="Show borders around the wick extension zones (rejection bands)")
+opening_0600_0900_wickBorderColor = input.color(color.new(color.rgb(184, 184, 184), 0), "", inline="0600_wick", group=GROUP_0600_0900)
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 16:00-05:00
 // ═══════════════════════════════════════════════════════════════════════════
@@ -522,7 +532,7 @@ opening_0800_0850_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POS
 
 deviations_1845_2203 = input.string(DEV_I_NEWS_EVENING, "Deviations", group=GROUP_1845_2203)
 
-opening_1845_2203 = input.string(OPT_WICK, SESSION_EXTENDED_1845_2203, inline="1845_2203_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1845_2203)
+opening_1845_2203 = input.string(OPT_CORE, SESSION_EXTENDED_1845_2203, inline="1845_2203_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1845_2203)
 opening_1845_2203_offset = input.bool(false, LABEL_OFFSET, inline="1845_2203_1", group=GROUP_1845_2203)
 opening_1845_2203_mitigation = input.bool(true, LABEL_MITIGATION, inline="1845_2203_1", group=GROUP_1845_2203)
 opening_1845_2203_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="1845_2203_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_1845_2203)
@@ -829,18 +839,62 @@ getCachedZones(int sessionIdx) =>
         IDX_1845_2203 => cachedDeviations_1845_2203
         => cachedDeviations_intraday
 
+isQuickCheckSession(int idx) =>
+    idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_1845_2203
+
+isInFilter(int idx) =>
+    if quickFilter == FILTER_ALL
+        true
+    else if quickFilter == FILTER_RAFAEL
+        idx == IDX_0129
+    else if quickFilter == FILTER_RAFAEL_1800
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN
+    else if quickFilter == FILTER_RAFAEL_1800_EARLY
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY
+    else if quickFilter == FILTER_RAFAEL_1800_EARLY_2203
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_1845_2203
+    else if quickFilter == FILTER_RAFAEL_1800_EARLY_OVERNIGHT
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_OVERNIGHT
+    else if quickFilter == FILTER_1800
+        idx == IDX_ASIA_OPEN
+    else if quickFilter == FILTER_1800_EARLY
+        idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY
+    else if quickFilter == FILTER_INTRADAY
+        idx == IDX_2015 or idx == IDX_0215 or idx == IDX_0915 or idx == IDX_1230 or idx == IDX_1415
+    else if quickFilter == FILTER_FULL_NYAM
+        idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_NYAM_LITE
+        idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_RAFAEL_1800_NYAM_LITE
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_RAFAEL_1800_2203_NYAM_LITE
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_1845_2203 or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_OVERNIGHT or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
+    else if quickFilter == FILTER_0800_0850
+        idx == IDX_0800_0850
+    else if quickFilter == FILTER_1845_2203
+        idx == IDX_1845_2203
+    else
+        true
+
 drawCoreWithDeviations(SessionData sess, float highPrice, float lowPrice, float height, bool isBody) =>
-    [startOffset, endOffset] = calculateOffsets(sess, isBody)
-    // Position labels: when both deviations shown, body goes right and wick goes left
-    labelPos = sess.deviationMode == OPT_BOTH ? (isBody ? "Right" : "Left") : "Left"
-    suffix = isBody ? BODY_SUFFIX : WICK_SUFFIX
-    zones = getCachedZones(sess.sessionIndex)
+    // Quick check mode: skip deviations for Rafael, 1800, 2203
+    bool skipDeviations = quickCheckMode and isQuickCheckSession(sess.sessionIndex)
+    if not skipDeviations
+        [startOffset, endOffset] = calculateOffsets(sess, isBody)
+        // Position labels: when both deviations shown, body goes right and wick goes left
+        labelPos = sess.deviationMode == OPT_BOTH ? (isBody ? "Right" : "Left") : "Left"
+        suffix = isBody ? BODY_SUFFIX : WICK_SUFFIX
+        zones = getCachedZones(sess.sessionIndex)
 
-    // Determine whether to show labels based on dropdown value and body/wick type
-    showLbls = sess.deviationLabelsMode == OPT_BOTH or (sess.deviationLabelsMode == OPT_BODY and isBody) or (sess.deviationLabelsMode == OPT_WICK and not isBody)
+        // Determine whether to show labels based on dropdown value and body/wick type
+        showLbls = sess.deviationLabelsMode == OPT_BOTH or (sess.deviationLabelsMode == OPT_BODY and isBody) or (sess.deviationLabelsMode == OPT_WICK and not isBody)
 
-    // Draw all deviation zones (turning point zones get special color)
-    drawDeviations(sess, highPrice, lowPrice, height, zones, sess.deviationColor, color.new(labelColor, DEVIATION_LINE_OPACITY), showLbls, labelPos, labelColor, suffix, startOffset, endOffset, true, true)
+        // Draw all deviation zones (turning point zones get special color)
+        drawDeviations(sess, highPrice, lowPrice, height, zones, sess.deviationColor, color.new(labelColor, DEVIATION_LINE_OPACITY), showLbls, labelPos, labelColor, suffix, startOffset, endOffset, true, true)
 
 deleteSession(SessionData sess) =>
     if not na(sess.bodyBox)
@@ -883,6 +937,11 @@ deleteSession(SessionData sess) =>
         line.delete(sess.lowUnmitigatedLine)
     if not na(sess.lowUnmitigatedLabel)
         label.delete(sess.lowUnmitigatedLabel)
+    // Delete zone health boxes
+    if not na(sess.wickBorderBoxTop)
+        box.delete(sess.wickBorderBoxTop)
+    if not na(sess.wickBorderBoxBottom)
+        box.delete(sess.wickBorderBoxBottom)
 
 // Clear live drawings from active session (keeps session data, just removes visuals for redraw)
 clearLiveDrawings(SessionData sess) =>
@@ -957,42 +1016,6 @@ if na(cachedDeviations_intraday)
     cachedDeviations_30s_opening := parseDeviationZones(deviations_0930_093030)
     cachedDeviations_0800_0850 := parseDeviationZones(deviations_0800_0850)
     cachedDeviations_1845_2203 := parseDeviationZones(deviations_1845_2203)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// QUICK FILTER LOGIC
-// ═══════════════════════════════════════════════════════════════════════════
-
-isInFilter(int idx) =>
-    if quickFilter == FILTER_ALL
-        true
-    else if quickFilter == FILTER_RAFAEL
-        idx == IDX_0129
-    else if quickFilter == FILTER_RAFAEL_1800
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN
-    else if quickFilter == FILTER_RAFAEL_1800_EARLY
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY
-    else if quickFilter == FILTER_RAFAEL_1800_EARLY_2203
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_1845_2203
-    else if quickFilter == FILTER_RAFAEL_1800_EARLY_OVERNIGHT
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_OVERNIGHT
-    else if quickFilter == FILTER_1800
-        idx == IDX_ASIA_OPEN
-    else if quickFilter == FILTER_1800_EARLY
-        idx == IDX_NY_EARLY or idx == IDX_ASIA_OPEN
-    else if quickFilter == FILTER_INTRADAY
-        idx == IDX_2015 or idx == IDX_0215 or idx == IDX_0915 or idx == IDX_1230 or idx == IDX_1415
-    else if quickFilter == FILTER_FULL_NYAM
-        idx == IDX_0915 or idx == IDX_NY_EARLY or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING or idx == IDX_PREMARKET or idx == IDX_0800_0850
-    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_0915 or idx == IDX_NY_EARLY or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING or idx == IDX_PREMARKET or idx == IDX_0800_0850
-    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_0915 or idx == IDX_NY_EARLY or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING or idx == IDX_PREMARKET or idx == IDX_0800_0850 or idx == IDX_OVERNIGHT
-    else if quickFilter == FILTER_0800_0850
-        idx == IDX_0800_0850
-    else if quickFilter == FILTER_1845_2203
-        idx == IDX_1845_2203
-    else
-        true
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION CONFIGURATION - Single array replaces 14 parallel arrays
@@ -1207,7 +1230,10 @@ if validTimeframe
                      provisionalLowTime=na,
                      highPendingLine=na,
                      lowPendingLine=na,
-                     deviationExtendMs=getSessionExtendMs(i)
+                     deviationExtendMs=getSessionExtendMs(i),
+                     wickBorderEnabled=(i == IDX_NY_EARLY and opening_0600_0900_wickBorder),
+                     wickBorderBoxTop=na,
+                     wickBorderBoxBottom=na
                  )
 
                 array.push(activeSessions, newSession)
@@ -1242,6 +1268,7 @@ if validTimeframe and array.size(activeSessions) > 0
                     sess.lowBar := bar_index
                     sess.lowTime := time
 
+                // Update body/wick levels with current bar
                 sess.bodyHigh := math.max(sess.bodyHigh, currentBodyHigh)
                 sess.bodyLow := math.min(sess.bodyLow, currentBodyLow)
                 sess.wickHigh := math.max(sess.wickHigh, high)
@@ -1310,6 +1337,15 @@ if validTimeframe and array.size(activeSessions) > 0
 
             if not skipsCore(idx)
                 sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
+
+            // Create wick border boxes for NY Early Hours (rejection band areas)
+            if sess.wickBorderEnabled
+                // Top wick area: bodyHigh → wickHigh (if there's a top wick)
+                if sess.wickHigh > sess.bodyHigh
+                    sess.wickBorderBoxTop := box.new(sess.startTime, sess.wickHigh, sess.endTime, sess.bodyHigh, bgcolor=na, border_color=opening_0600_0900_wickBorderColor, border_width=1, xloc=xloc.bar_time)
+                // Bottom wick area: wickLow → bodyLow (if there's a bottom wick)
+                if sess.wickLow < sess.bodyLow
+                    sess.wickBorderBoxBottom := box.new(sess.startTime, sess.bodyLow, sess.endTime, sess.wickLow, bgcolor=na, border_color=opening_0600_0900_wickBorderColor, border_width=1, xloc=xloc.bar_time)
 
             // Draw body deviations if mode is Body or Both
             if (sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH) and not skipsBodyDeviations(idx)
@@ -1728,6 +1764,9 @@ if validTimeframe and showColorTable and barstate.islast
 
     if opening_0600_0900 != OPT_HIDDEN and isInFilter(IDX_NY_EARLY)
         currentRow += addSessionColorRows(colorTable, currentRow, "NY Early", opening_0600_0900_coreColor, opening_0600_0900_deviationColor, opening_0600_0900_mitigationColor, opening_0600_0900_mitigation)
+        if opening_0600_0900_wickBorder
+            addSingleColorRow(colorTable, currentRow, "NY Early Wick", opening_0600_0900_wickBorderColor)
+            currentRow += 1
 
     if opening_1600_0500 != OPT_HIDDEN and isInFilter(IDX_OVERNIGHT)
         currentRow += addSessionColorRows(colorTable, currentRow, "Overnight", opening_1600_0500_coreColor, opening_1600_0500_deviationColor, opening_1600_0500_mitigationColor, opening_1600_0500_mitigation)
