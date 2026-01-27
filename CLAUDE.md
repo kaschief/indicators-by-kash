@@ -180,6 +180,37 @@ You may convert colors ONLY when:
 1. User explicitly requests a specific format conversion
 2. User provides explicit permission after seeing the proposed changes
 
+## Always Keep Color Reference Table in Sync
+
+**CORE PRINCIPLE: The color reference table must always reflect ALL color inputs in the indicator.**
+
+### When Adding a Color
+
+When adding ANY new color input to an indicator:
+
+1. **Add to color reference table** - Create a new row with the color name, RGB values, and transparency
+2. **Increase table row count** - Update `table.new()` to accommodate the new row
+3. **Use consistent naming** - The table label should clearly identify what the color controls
+
+### When Removing a Color
+
+When removing ANY color input from an indicator:
+
+1. **Remove from color reference table** - Delete the corresponding table row
+2. **Decrease table row count** - Update `table.new()` to reflect fewer rows
+3. **Update row indices** - Shift remaining row numbers if needed
+
+### When Renaming a Color
+
+When renaming a color variable:
+
+1. **Update table label** - Change the display name in the table to match
+2. **Update all references** - Variable name, input label, and table label should be consistent
+
+### Why This Matters
+
+The color reference table is a debugging and documentation tool. If it doesn't match the actual colors in the indicator, it becomes useless and misleading.
+
 # Git Command Rules
 
 ## Core Rule
