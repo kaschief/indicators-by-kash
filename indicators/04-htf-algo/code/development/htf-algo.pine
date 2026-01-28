@@ -9,29 +9,19 @@ indicator('htf algo •', overlay=true, max_lines_count=500, max_labels_count=50
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const int CAP_ULTRA_SHORT = 80
-const int CAP_SHORT = 100
-const int CAP_MEDIUM_SHORT = 150
 const int CAP_MEDIUM = 200
-const int CAP_MEDIUM_LONG = 300
-const int CAP_LONG = 400
-const int CAP_DEFAULT = 200
 
 const int LINE_EXTENSION_BARS = 15
 const int LINE_LOOKBACK_BARS = 15
 
-const string MODE_MANUAL = "Manual"
-const string MODE_DYNAMIC = "Dynamic"
-
-const string GROUP_MODE = "Mode"
-const string GROUP_DYN_FILTER = "Dynamic • Filter"
-const string GROUP_DYN_MACRO = "Dynamic • Macro"
-const string GROUP_DYN_SWING = "Dynamic • Swing"
-const string GROUP_DYN_INTRADAY = "Dynamic • Intraday"
-const string GROUP_HTF = "Manual • HTF"
+const string GROUP_FILTER = "Filter"
+const string GROUP_MACRO = "Macro"
+const string GROUP_SWING = "Swing"
+const string GROUP_INTRADAY = "Intraday"
 const string GROUP_LINE_STYLES = "Line Styles"
 const string GROUP_BACKTEST = "Backtest"
 const string GROUP_DEV = "Development"
+const string GROUP_SESSION_LEVELS = "Session Levels"
 
 const string SIZE_TINY = 'Tiny'
 const string SIZE_SMALL = 'Small'
@@ -71,13 +61,11 @@ const int CHART_TF_1D = 1440
 const int CHART_TF_1W = 10080
 const int CHART_TF_1MO = 43800
 
-const string LABEL_PREFIX_BSL = "(b) "
-const string LABEL_PREFIX_SSL = "(s) "
 const string LABEL_SEPARATOR = " • "
+const string LABEL_SESSION_SEPARATOR = " | "
 const string LABEL_SUFFIX = " algo draw"
 
 color COLOR_TRANSPARENT = color.new(color.white, 100)
-color COLOR_STATUS_BG = color.new(color.rgb(245, 245, 245), 20)
 
 // Time-based price level constants
 const string NY_TIMEZONE = "America/New_York"
@@ -87,6 +75,18 @@ const string MITIGATION_WINDOW_ANYTIME = "Anytime"
 const string MITIGATION_WINDOW_MARKET_HOURS = "Market-Hours"
 const string GROUP_TIME_LEVELS = "Time Levels"
 const int MAX_STORED_LEVELS = 50
+
+// Session level name constants
+const string SESSION_NAME_ASIA_OPEN = "Asia Open"
+const string SESSION_NAME_EVENING = "Evening Range"
+const string SESSION_NAME_RAFAEL = "Rafael Range"
+
+// Session mitigation time constants (minutes from midnight)
+const int PREMARKET_START_MIN = 5 * 60    // 05:00 NY = 300 minutes
+const int CLOSE_1600_MIN = 16 * 60        // 16:00 NY = 960 minutes
+
+// Level merge tolerance (0.005% of price - levels within this range are combined)
+const float LEVEL_MERGE_PCT = 0.005
 
 // Time-based price level type
 type TimePriceLevel
@@ -102,6 +102,45 @@ type TimePriceLevel
     int current_time
     bool current_mitigated
     int current_mitigation_time
+
+// Session range level type
+type SessionRangeLevel
+    int start_hour
+    int start_minute
+    int end_hour
+    int end_minute
+    string label_text
+    color level_color
+    bool delayed_mitigation       // true = only mitigate during 05:00-16:00 NY
+    bool crosses_midnight         // true if session end < start (e.g., 21:30-01:29)
+    // Current session tracking
+    float session_high
+    float session_low
+    int session_high_time
+    int session_low_time
+    int session_start_time        // timestamp when session started
+    bool in_session
+    // Completed session (current unmitigated)
+    float current_high
+    float current_low
+    int current_high_time
+    int current_low_time
+    int current_session_start     // start time of the completed session (for same-day check)
+    bool high_mitigated
+    bool low_mitigated
+    // Provisional mitigation tracking (overnight breaches before 05:00 confirmation)
+    bool provisional_high_mitigated
+    bool provisional_low_mitigated
+    int provisional_high_time
+    int provisional_low_time
+    // Historical arrays
+    array<float> highs
+    array<float> lows
+    array<int> high_times
+    array<int> low_times
+    array<int> session_starts     // start time of each historical session
+    array<bool> highs_mitigated
+    array<bool> lows_mitigated
 
 // HTF slot type for dynamic mode
 type HtfSlot
@@ -121,86 +160,59 @@ type HtfSlot
     array<int> eligible_high_times
     array<int> eligible_low_times
 
-// Manual mode side type (buyside or sellside)
-type ManualSide
-    array<int> failure_bars
-    array<int> failure_times
-    array<float> targets
-    array<bool> is_open
-    array<int> fill_bars
-    array<int> fill_times
-    array<line> lines
-    array<label> labels
-    array<int> wick_times
-
-// Manual mode slot type
-type ManualSlot
-    ManualSide buyside
-    ManualSide sellside
-    array<int> eligible_high_ticks
-    array<int> eligible_low_ticks
-    array<int> eligible_high_times
-    array<int> eligible_low_times
-    bool has_history
-
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-htf_mode = input.string(MODE_DYNAMIC, "Mode", options=[MODE_MANUAL, MODE_DYNAMIC], group=GROUP_MODE, tooltip="Manual: Pick specific HTFs to display\nDynamic: Auto-find highest HTF with levels in today's ADR range")
-open_lines_count = input.int(1, 'Open', minval=1, maxval=20, group=GROUP_MODE, inline='limits', tooltip='Max open levels to show per TF')
-filled_lines_count = input.int(5, 'Filled', minval=0, maxval=20, group=GROUP_MODE, inline='limits', tooltip='Max filled levels to show (Manual mode)')
+adr_filter_enabled = input.bool(true, 'ADR Filter', group=GROUP_FILTER, inline='adr', tooltip='When ON: only show levels within ADR range\nWhen OFF: show N levels per TF closest to price')
+adr_multiplier = input.float(1.0, '×', minval=0.4, maxval=2.0, step=0.1, group=GROUP_FILTER, inline='adr', tooltip='1.0 = exact ADR, 1.5 = extended range')
+show_adr_lines = input.bool(true, 'ADR Lines', group=GROUP_FILTER, inline='adr_lines', tooltip='Show solid lines at ADR+ and ADR- levels')
+adr_lines_color = input.color(color.rgb(0, 0, 0), '', group=GROUP_FILTER, inline='adr_lines')
+open_lines_count = input.int(1, 'Max Levels', minval=1, maxval=20, group=GROUP_FILTER, inline='opts', tooltip='Max open levels per TF (when ADR filter OFF)')
+multi_type_only = input.bool(false, 'Multi-Type', group=GROUP_FILTER, inline='opts2', tooltip='Macro always shows; Swing/Intra only if 2+ types align (HTFs, sessions, time levels)')
+highlight_nearest = input.bool(false, 'Nearest', group=GROUP_FILTER, inline='opts2', tooltip='Bump size of nearest BSL/SSL')
+show_price_on_label = input.bool(false, 'Price', group=GROUP_FILTER, inline='opts2', tooltip='Append price to label')
 
-adr_filter_enabled = input.bool(true, 'ADR Filter', group=GROUP_DYN_FILTER, inline='adr', tooltip='When ON: only show levels within ADR range\nWhen OFF: show N levels per TF closest to price')
-adr_lookback = input.int(5, 'Days', minval=1, maxval=20, group=GROUP_DYN_FILTER, inline='adr', tooltip='Number of days for ADR calculation')
-adr_multiplier = input.float(1.0, '×', minval=0.4, maxval=2.0, step=0.1, group=GROUP_DYN_FILTER, inline='adr', tooltip='1.0 = exact ADR, 1.5 = extended range')
-multi_tf_only = input.bool(true, 'Multi-TF Only', group=GROUP_DYN_FILTER, inline='multi_tf', tooltip='When ON: Macro levels always show; Swing/Intraday only show if 2+ TFs align\nWhen OFF: show all levels')
-highlight_nearest = input.bool(true, 'Highlight Nearest', group=GROUP_DYN_FILTER, inline='highlight', tooltip='Dynamic mode: bump size and width of nearest BSL above and SSL below price')
-show_price_on_label = input.bool(false, 'Show Price', group=GROUP_DYN_FILTER, inline='price', tooltip='Dynamic mode: append price to label')
+enabled_1mo = input.bool(true, 'M', group=GROUP_MACRO, inline='tf')
+enabled_1w = input.bool(true, 'W', group=GROUP_MACRO, inline='tf')
+enabled_1d = input.bool(true, 'D', group=GROUP_MACRO, inline='tf')
+width_macro = input.int(4, 'Width', minval=1, maxval=5, group=GROUP_MACRO, inline='style')
+size_macro = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_MACRO, inline='style')
 
-dyn_htf1_enabled = input.bool(true, 'M', group=GROUP_DYN_MACRO, inline='tf')
-dyn_htf2_enabled = input.bool(true, 'W', group=GROUP_DYN_MACRO, inline='tf')
-dyn_htf3_enabled = input.bool(true, 'D', group=GROUP_DYN_MACRO, inline='tf')
-dyn_width_tier1 = input.int(4, 'Width', minval=1, maxval=5, group=GROUP_DYN_MACRO, inline='style')
-dyn_size_tier1 = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_DYN_MACRO, inline='style')
+enabled_12h = input.bool(true, '12H', group=GROUP_SWING, inline='tf')
+enabled_8h = input.bool(true, '8H', group=GROUP_SWING, inline='tf')
+enabled_7h = input.bool(true, '7H', group=GROUP_SWING, inline='tf')
+width_swing = input.int(2, 'Width', minval=1, maxval=5, group=GROUP_SWING, inline='style')
+size_swing = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_SWING, inline='style')
 
-dyn_htf4_enabled = input.bool(true, '12H', group=GROUP_DYN_SWING, inline='tf')
-dyn_htf5_enabled = input.bool(true, '8H', group=GROUP_DYN_SWING, inline='tf')
-dyn_htf6_enabled = input.bool(true, '7H', group=GROUP_DYN_SWING, inline='tf')
-dyn_width_tier2 = input.int(2, 'Width', minval=1, maxval=5, group=GROUP_DYN_SWING, inline='style')
-dyn_size_tier2 = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_DYN_SWING, inline='style')
+enabled_4h = input.bool(true, '4H', group=GROUP_INTRADAY, inline='tf')
+enabled_1h = input.bool(true, '1H', group=GROUP_INTRADAY, inline='tf')
+width_intra = input.int(1, 'Width', minval=1, maxval=5, group=GROUP_INTRADAY, inline='style')
+size_intra = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_INTRADAY, inline='style')
 
-dyn_htf7_enabled = input.bool(true, '4H', group=GROUP_DYN_INTRADAY, inline='tf')
-dyn_htf8_enabled = input.bool(true, '1H', group=GROUP_DYN_INTRADAY, inline='tf')
-dyn_width_tier3 = input.int(1, 'Width', minval=1, maxval=5, group=GROUP_DYN_INTRADAY, inline='style')
-dyn_size_tier3 = input.string(SIZE_TINY, 'Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_DYN_INTRADAY, inline='style')
-
-dyn_htf1 = TF_1MO
-dyn_htf2 = TF_1W
-dyn_htf3 = TF_1D
-dyn_htf4 = TF_12H
-dyn_htf5 = TF_8H
-dyn_htf6 = TF_7H
-dyn_htf7 = TF_4H
-dyn_htf8 = TF_1H
-
-htf1_auto = input.bool(true, 'Auto TF', group=GROUP_HTF, inline='tf')
-htf1_timeframe = input.timeframe('60', 'Manual TF', group=GROUP_HTF, inline='tf')
-htf1_open_width = input.int(2, 'Width', minval=1, maxval=5, group=GROUP_HTF, inline='style')
-htf1_filled_width = input.int(2, 'Filled Width', minval=1, maxval=5, group=GROUP_HTF, inline='style')
-htf1_label_size = input.string(SIZE_SMALL, 'Label Size', options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_HTF, inline='style')
+htf_1mo = TF_1MO
+htf_1w = TF_1W
+htf_1d = TF_1D
+htf_12h = TF_12H
+htf_8h = TF_8H
+htf_7h = TF_7H
+htf_4h = TF_4H
+htf_1h = TF_1H
 
 show_1600_close = input.bool(true, "16:00 Close", group=GROUP_TIME_LEVELS, inline='1600', tooltip="Show untapped 16:00 close levels as algo draw within ADR zone")
-close_1600_color = input.color(color.rgb(242, 54, 69), "", group=GROUP_TIME_LEVELS, inline='1600')
-time_level_most_recent_only = input.bool(true, "Most Recent Only", group=GROUP_TIME_LEVELS, inline='recent', tooltip="Only show the most recent unmitigated level. Older levels become visible once the newest is taken out.")
+time_level_most_recent_only = input.bool(true, "Most Recent Only", group=GROUP_TIME_LEVELS, inline='recent', tooltip="Only show the most recent unmitigated 16:00 level. Older levels become visible once the newest is taken out.")
 time_level_mitigation_window = input.string(MITIGATION_WINDOW_MARKET_HOURS, "Mitigation", options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], group=GROUP_TIME_LEVELS, inline='mit', tooltip="Anytime: Mitigation any hour after 13h delay\nMarket-Hours: Only 05:00-16:00 NY")
 
-line_color = input.color(color.rgb(0, 151, 0), 'Line', group=GROUP_LINE_STYLES, inline='colors')
-macro_line_color = input.color(color.rgb(247, 11, 241), 'Macro', group=GROUP_LINE_STYLES, inline='colors')
-manual_filled_color = input.color(color.rgb(249, 121, 246), 'Filled', group=GROUP_LINE_STYLES, inline='colors')
-bsl_text_color = input.color(color.rgb(247, 11, 241), 'BSL', group=GROUP_LINE_STYLES, inline='colors')
-ssl_text_color = input.color(color.rgb(0, 126, 255), 'SSL', group=GROUP_LINE_STYLES, inline='colors')
+show_asia_open = input.bool(true, "Asia Open", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Asia Open (18:00-21:00) high and low")
+show_evening = input.bool(true, "Evening", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Evening Range (18:45-22:03) high and low")
+show_rafael = input.bool(true, "Rafael", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Rafael's Range (21:30-01:29) high and low")
+
+line_color = input.color(color.rgb(0, 151, 0), 'Line', group=GROUP_LINE_STYLES, inline='line_colors')
+macro_line_color = input.color(color.rgb(247, 11, 241), 'Macro', group=GROUP_LINE_STYLES, inline='line_colors')
+close_1600_color = input.color(color.rgb(242, 54, 69), '16:00', group=GROUP_LINE_STYLES, inline='line_colors')
+session_line_color = input.color(color.rgb(41, 98, 255), 'Session', group=GROUP_LINE_STYLES, inline='line_colors')
+bsl_text_color = input.color(color.rgb(247, 11, 241), 'BSL', group=GROUP_LINE_STYLES, inline='label_colors')
+ssl_text_color = input.color(color.rgb(0, 126, 255), 'SSL', group=GROUP_LINE_STYLES, inline='label_colors')
 show_fills = input.bool(false, "Fills", group=GROUP_BACKTEST, inline='fills', tooltip="Show filled levels within today's ADR zone")
 backtest_fills_color = input.color(color.new(color.rgb(15, 15, 15), 35), "", group=GROUP_BACKTEST, inline='fills')
 fills_historical = input.bool(false, "Historical", group=GROUP_BACKTEST, inline='fills_hist', tooltip="Also show filled levels from past days")
@@ -208,14 +220,7 @@ fills_historical_days = input.int(1, "Days", minval=1, maxval=20, group=GROUP_BA
 show_adr_boxes = input.bool(false, "ADR Boxes", group=GROUP_DEV, inline='adr', tooltip="Show ADR boxes to verify calculation matches ADR indicator")
 adr_box_color = input.color(color.new(color.rgb(225, 190, 231), 92), "", group=GROUP_DEV, inline='adr')
 adr_box_days = input.int(1, "Days", minval=1, maxval=20, group=GROUP_DEV, inline='adr', tooltip="Number of ADR boxes to show")
-show_htf_candles = input.bool(false, "HTF Candles", group=GROUP_DEV, inline='htf', tooltip="Debug overlay showing HTF candles")
-htf_bull_body_color = input.color(color.new(color.rgb(102, 187, 106), 74), "Bull", group=GROUP_DEV, inline='1')
-htf_bull_wick_color = input.color(color.new(color.rgb(129, 199, 132), 85), "", group=GROUP_DEV, inline='1')
-htf_bear_body_color = input.color(color.new(color.rgb(240, 98, 146), 74), "Bear", group=GROUP_DEV, inline='1')
-htf_bear_wick_color = input.color(color.new(color.rgb(250, 161, 164), 80), "", group=GROUP_DEV, inline='1')
 show_color_table = input.bool(false, 'Color Reference Table', group=GROUP_DEV)
-show_status_table = input.bool(true, 'Status Table', group=GROUP_DEV, inline='status')
-status_table_offset = input.int(-100, 'Offset', minval=-150, maxval=150, group=GROUP_DEV, inline='status')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DERIVED VALUES
@@ -225,95 +230,7 @@ chart_tf_seconds = timeframe.in_seconds(timeframe.period)
 chart_tf_minutes = chart_tf_seconds / 60
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTF VALIDATION SYSTEM
-// ═══════════════════════════════════════════════════════════════════════════════
-
-get_limit_zone() =>
-    chart_tf_min = chart_tf_minutes
-    switch
-        chart_tf_min <= CHART_TF_3M  => "ultra_short"
-        chart_tf_min == CHART_TF_5M  => "short"
-        chart_tf_min == CHART_TF_10M => "short_med"
-        chart_tf_min <= CHART_TF_30M => "medium"
-        chart_tf_min <= CHART_TF_1H  => "medium_long"
-        chart_tf_min <= CHART_TF_4H  => "long"
-        chart_tf_min <= CHART_TF_1D  => "daily"
-        chart_tf_min <= CHART_TF_1W  => "weekly"
-        chart_tf_min >= CHART_TF_1MO => "monthly"
-        => "extended"
-
-
-get_max_allowed_htf() =>
-    chart_tf_min = chart_tf_minutes
-    switch
-        chart_tf_min <= CHART_TF_3M  => TF_15M
-        chart_tf_min == CHART_TF_5M  => TF_1H
-        chart_tf_min == CHART_TF_10M => TF_2H
-        chart_tf_min == CHART_TF_15M => TF_4H
-        chart_tf_min == CHART_TF_30M => TF_4H
-        chart_tf_min <= CHART_TF_1H  => TF_1D
-        chart_tf_min <= CHART_TF_4H  => TF_1D
-        chart_tf_min <= CHART_TF_1D  => TF_1W
-        chart_tf_min <= CHART_TF_1W  => TF_3MO
-        chart_tf_min >= CHART_TF_1MO => TF_3MO
-        => TF_1Y
-
-
-get_auto_htf_preferred() =>
-    chart_tf_min = chart_tf_minutes
-    switch
-        chart_tf_min <= 2            => TF_15M
-        chart_tf_min <= CHART_TF_5M  => TF_1H
-        chart_tf_min <= CHART_TF_15M => TF_1H
-        chart_tf_min <= CHART_TF_30M => TF_2H
-        chart_tf_min <= CHART_TF_1H  => TF_4H
-        chart_tf_min <= CHART_TF_4H  => TF_1D
-        chart_tf_min <= CHART_TF_1D  => TF_1W
-        chart_tf_min <= CHART_TF_1W  => TF_1MO
-        chart_tf_min >= CHART_TF_1MO => TF_3MO
-        => TF_1Y
-
-
-validate_and_limit_htf() =>
-    if htf1_auto
-        limit_tf = get_max_allowed_htf()
-        limit_seconds = timeframe.in_seconds(limit_tf)
-        auto_tf = get_auto_htf_preferred()
-        auto_seconds = timeframe.in_seconds(auto_tf)
-        if auto_seconds > chart_tf_seconds and auto_seconds <= limit_seconds
-            auto_tf
-        else
-            limit_tf
-    else
-        manual_seconds = timeframe.in_seconds(htf1_timeframe)
-        if manual_seconds > chart_tf_seconds
-            htf1_timeframe
-        else
-            get_max_allowed_htf()
-
-validated_htf1_timeframe = validate_and_limit_htf()
-htf1_is_valid = timeframe.in_seconds(validated_htf1_timeframe) > chart_tf_seconds
-htf1_seconds = timeframe.in_seconds(validated_htf1_timeframe)
-htf1_extension = 4
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // DATA STRUCTURES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-new_manual_side() =>
-    ManualSide.new(
-        array.new<int>(), array.new<int>(), array.new<float>(), array.new<bool>(),
-        array.new<int>(), array.new<int>(), array.new<line>(), array.new<label>(), array.new<int>())
-
-new_manual_slot() =>
-    ManualSlot.new(
-        new_manual_side(), new_manual_side(),
-        array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), false)
-
-var ManualSlot manual = new_manual_slot()
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DYNAMIC MODE - DATA STRUCTURES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 new_htf_slot(string tf, int rank) =>
@@ -322,14 +239,14 @@ new_htf_slot(string tf, int rank) =>
         array.new<float>(), array.new<bool>(), array.new<int>(), array.new<int>(),
         array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>())
 
-var HtfSlot slot1 = new_htf_slot(dyn_htf1, 1)
-var HtfSlot slot2 = new_htf_slot(dyn_htf2, 2)
-var HtfSlot slot3 = new_htf_slot(dyn_htf3, 3)
-var HtfSlot slot4 = new_htf_slot(dyn_htf4, 4)
-var HtfSlot slot5 = new_htf_slot(dyn_htf5, 5)
-var HtfSlot slot6 = new_htf_slot(dyn_htf6, 6)
-var HtfSlot slot7 = new_htf_slot(dyn_htf7, 7)
-var HtfSlot slot8 = new_htf_slot(dyn_htf8, 8)
+var HtfSlot slot_1mo = new_htf_slot(htf_1mo, 1)
+var HtfSlot slot_1w = new_htf_slot(htf_1w, 2)
+var HtfSlot slot_1d = new_htf_slot(htf_1d, 3)
+var HtfSlot slot_12h = new_htf_slot(htf_12h, 4)
+var HtfSlot slot_8h = new_htf_slot(htf_8h, 5)
+var HtfSlot slot_7h = new_htf_slot(htf_7h, 6)
+var HtfSlot slot_4h = new_htf_slot(htf_4h, 7)
+var HtfSlot slot_1h = new_htf_slot(htf_1h, 8)
 
 // Time-based price level instances
 var TimePriceLevel level_1600 = TimePriceLevel.new(
@@ -338,15 +255,42 @@ var TimePriceLevel level_1600 = TimePriceLevel.new(
     na, na, false, na
 )
 
-var array<line> dyn_lines = array.new<line>()
-var array<label> dyn_labels = array.new<label>()
+// Session range level instances (level_color not used - position-based coloring instead)
+var SessionRangeLevel level_asia_open = SessionRangeLevel.new(
+    18, 0, 21, 0, SESSION_NAME_ASIA_OPEN, na, true, false,
+    na, na, na, na, na, false,
+    na, na, na, na, na, false, false, false, false, na, na,
+    array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<int>(),
+    array.new<bool>(), array.new<bool>()
+)
+
+var SessionRangeLevel level_evening = SessionRangeLevel.new(
+    18, 45, 22, 3, SESSION_NAME_EVENING, na, true, false,
+    na, na, na, na, na, false,
+    na, na, na, na, na, false, false, false, false, na, na,
+    array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<int>(),
+    array.new<bool>(), array.new<bool>()
+)
+
+var SessionRangeLevel level_rafael = SessionRangeLevel.new(
+    21, 30, 1, 29, SESSION_NAME_RAFAEL, na, true, true,
+    na, na, na, na, na, false,
+    na, na, na, na, na, false, false, false, false, na, na,
+    array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<int>(),
+    array.new<bool>(), array.new<bool>()
+)
+
+var array<line> level_lines = array.new<line>()
+var array<label> level_labels = array.new<label>()
+var line adr_upper_line = na
+var line adr_lower_line = na
+var label adr_upper_label = na
+var label adr_lower_label = na
 
 var bool initialized = false
 
 var string last_ticker = ticker.standard()
 var string last_chart_tf = timeframe.period
-var string last_htf_tf = ""
-var string last_limit_zone = ""
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -373,6 +317,186 @@ prune_time_level(TimePriceLevel level) =>
         array.shift(level.mitigated)
         array.shift(level.mitigation_times)
 
+// SessionRangeLevel helper functions
+clear_session_range_level(SessionRangeLevel level) =>
+    level.session_high := na
+    level.session_low := na
+    level.session_high_time := na
+    level.session_low_time := na
+    level.in_session := false
+    level.current_high := na
+    level.current_low := na
+    level.current_high_time := na
+    level.current_low_time := na
+    level.high_mitigated := false
+    level.low_mitigated := false
+    level.provisional_high_mitigated := false
+    level.provisional_low_mitigated := false
+    level.provisional_high_time := na
+    level.provisional_low_time := na
+    array.clear(level.highs)
+    array.clear(level.lows)
+    array.clear(level.high_times)
+    array.clear(level.low_times)
+    array.clear(level.highs_mitigated)
+    array.clear(level.lows_mitigated)
+
+prune_session_range_level(SessionRangeLevel level) =>
+    while array.size(level.highs) > MAX_STORED_LEVELS
+        array.shift(level.highs)
+        array.shift(level.high_times)
+        array.shift(level.highs_mitigated)
+    while array.size(level.lows) > MAX_STORED_LEVELS
+        array.shift(level.lows)
+        array.shift(level.low_times)
+        array.shift(level.lows_mitigated)
+    while array.size(level.session_starts) > MAX_STORED_LEVELS
+        array.shift(level.session_starts)
+
+// Check if time is within session range (handles midnight crossing)
+is_in_session_range(int hour_ny, int minute_ny, SessionRangeLevel level) =>
+    int current_minutes = hour_ny * 60 + minute_ny
+    int start_minutes = level.start_hour * 60 + level.start_minute
+    int end_minutes = level.end_hour * 60 + level.end_minute
+    if end_minutes > start_minutes
+        // Normal session (doesn't cross midnight)
+        current_minutes >= start_minutes and current_minutes < end_minutes
+    else
+        // Session crosses midnight
+        current_minutes >= start_minutes or current_minutes < end_minutes
+
+// Check if two timestamps are on the same calendar day (NY timezone)
+is_same_calendar_day(int ts1, int ts2) =>
+    dayofmonth(ts1, NY_TIMEZONE) == dayofmonth(ts2, NY_TIMEZONE) and
+         month(ts1, NY_TIMEZONE) == month(ts2, NY_TIMEZONE) and
+         year(ts1, NY_TIMEZONE) == year(ts2, NY_TIMEZONE)
+
+// Check if bar is on the same trading day as session for mitigation purposes
+// For midnight-crossing sessions: session day OR next day (until 16:00)
+is_same_trading_day(int bar_time, int session_start, bool crosses_midnight) =>
+    bool on_session_day = is_same_calendar_day(bar_time, session_start)
+    if crosses_midnight
+        int next_day_ts = session_start + 24 * 60 * 60 * 1000
+        bool on_next_day = is_same_calendar_day(bar_time, next_day_ts)
+        on_session_day or on_next_day
+    else
+        on_session_day
+
+// Track session range level - handles state transitions, high/low updates, and mitigation
+track_session_range_level(SessionRangeLevel level, int hour_ny, int minute_ny, float bar_high, float bar_low, int bar_time) =>
+    bool currently_in_session = is_in_session_range(hour_ny, minute_ny, level)
+
+    // Session state transitions
+    if currently_in_session and not level.in_session
+        // Session just started - archive previous session if exists
+        if not na(level.current_high)
+            array.push(level.highs, level.current_high)
+            array.push(level.high_times, level.current_high_time)
+            array.push(level.highs_mitigated, level.high_mitigated)
+            array.push(level.session_starts, level.current_session_start)
+        if not na(level.current_low)
+            array.push(level.lows, level.current_low)
+            array.push(level.low_times, level.current_low_time)
+            array.push(level.lows_mitigated, level.low_mitigated)
+
+        // Start tracking new session
+        level.session_high := bar_high
+        level.session_low := bar_low
+        level.session_high_time := bar_time
+        level.session_low_time := bar_time
+        level.session_start_time := bar_time
+        level.in_session := true
+
+    else if currently_in_session and level.in_session
+        // Within session - update high/low
+        if bar_high > level.session_high
+            level.session_high := bar_high
+            level.session_high_time := bar_time
+        if bar_low < level.session_low
+            level.session_low := bar_low
+            level.session_low_time := bar_time
+
+    else if not currently_in_session and level.in_session
+        // Session just ended - finalize current levels
+        level.current_high := level.session_high
+        level.current_low := level.session_low
+        level.current_high_time := level.session_high_time
+        level.current_low_time := level.session_low_time
+        level.current_session_start := level.session_start_time
+        level.high_mitigated := false
+        level.low_mitigated := false
+        level.provisional_high_mitigated := false
+        level.provisional_low_mitigated := false
+        level.provisional_high_time := na
+        level.provisional_low_time := na
+        level.in_session := false
+
+    // Mitigation check for current level - uses delayed mitigation logic (like Deviations)
+    // For delayed_mitigation sessions: only CONFIRM during 05:00-16:00 NY
+    // Touches during overnight (same day, outside 05:00-16:00) are PROVISIONAL only
+    if not na(level.current_high) and not level.in_session
+        int bar_minutes = hour_ny * 60 + minute_ny
+        // Same-day check: session day or next day for midnight-crossing + overnight window
+        int next_day_ts = level.current_session_start + 24 * 60 * 60 * 1000
+        bool is_on_session_day = is_same_calendar_day(bar_time, level.current_session_start)
+        bool is_on_next_day = level.crosses_midnight and is_same_calendar_day(bar_time, next_day_ts)
+        bool is_in_next_day_overnight = level.delayed_mitigation and is_same_calendar_day(bar_time, next_day_ts) and bar_minutes < PREMARKET_START_MIN
+        bool is_on_actual_session_day = is_on_session_day or is_on_next_day or is_in_next_day_overnight
+
+        // canEvaluateMitigation: can confirm mitigation (05:00-16:00 for delayed sessions, anytime otherwise)
+        bool can_evaluate = not level.delayed_mitigation or (bar_minutes >= PREMARKET_START_MIN and bar_minutes < CLOSE_1600_MIN)
+        // isInOvernightWindow: provisional only (same day, outside 05:00-16:00)
+        bool is_overnight = level.delayed_mitigation and is_on_actual_session_day and not can_evaluate
+
+        // HIGH mitigation
+        if not level.high_mitigated
+            if can_evaluate and bar_high >= level.current_high
+                // Confirmed mitigation (during 05:00-16:00 or non-delayed session)
+                level.high_mitigated := true
+            else if is_overnight and bar_high >= level.current_high
+                // Provisional breach during overnight - NOT confirmed yet
+                if not level.provisional_high_mitigated
+                    level.provisional_high_mitigated := true
+                    level.provisional_high_time := bar_time
+            else if bar_high >= level.current_high
+                // Touched outside same-day window (days later) - confirm immediately
+                level.high_mitigated := true
+
+        // LOW mitigation
+        if not level.low_mitigated
+            if can_evaluate and bar_low <= level.current_low
+                // Confirmed mitigation (during 05:00-16:00 or non-delayed session)
+                level.low_mitigated := true
+            else if is_overnight and bar_low <= level.current_low
+                // Provisional breach during overnight - NOT confirmed yet
+                if not level.provisional_low_mitigated
+                    level.provisional_low_mitigated := true
+                    level.provisional_low_time := bar_time
+            else if bar_low <= level.current_low
+                // Touched outside same-day window (days later) - confirm immediately
+                level.low_mitigated := true
+
+    // Check stored levels mitigation
+    int stored_highs = array.size(level.highs)
+    if stored_highs > 0
+        int scan_size = math.min(stored_highs, 20)
+        int start_index = math.max(0, stored_highs - scan_size)
+        for i = start_index to stored_highs - 1
+            if not array.get(level.highs_mitigated, i)
+                if bar_high >= array.get(level.highs, i)
+                    array.set(level.highs_mitigated, i, true)
+
+    int stored_lows = array.size(level.lows)
+    if stored_lows > 0
+        int scan_size = math.min(stored_lows, 20)
+        int start_index = math.max(0, stored_lows - scan_size)
+        for i = start_index to stored_lows - 1
+            if not array.get(level.lows_mitigated, i)
+                if bar_low <= array.get(level.lows, i)
+                    array.set(level.lows_mitigated, i, true)
+
+    prune_session_range_level(level)
+
 clear_htf_slot(HtfSlot slot) =>
     array.clear(slot.bsl_targets)
     array.clear(slot.bsl_open)
@@ -387,48 +511,6 @@ clear_htf_slot(HtfSlot slot) =>
     array.clear(slot.eligible_high_times)
     array.clear(slot.eligible_low_times)
     slot.has_history := false
-
-clear_manual_side(ManualSide side) =>
-    array.clear(side.failure_bars)
-    array.clear(side.failure_times)
-    array.clear(side.targets)
-    array.clear(side.is_open)
-    array.clear(side.fill_bars)
-    array.clear(side.fill_times)
-    for ln in side.lines
-        line.delete(ln)
-    array.clear(side.lines)
-    for lb in side.labels
-        label.delete(lb)
-    array.clear(side.labels)
-    array.clear(side.wick_times)
-
-clear_manual_slot(ManualSlot slot) =>
-    clear_manual_side(slot.buyside)
-    clear_manual_side(slot.sellside)
-    array.clear(slot.eligible_high_ticks)
-    array.clear(slot.eligible_low_ticks)
-    array.clear(slot.eligible_high_times)
-    array.clear(slot.eligible_low_times)
-    slot.has_history := false
-
-get_reference_levels_cap() =>
-    htf_min = timeframe.in_seconds(validated_htf1_timeframe) / 60
-    if htf_min <= 2
-        CAP_ULTRA_SHORT
-    else if htf_min <= 5
-        CAP_SHORT
-    else if htf_min <= 30
-        CAP_MEDIUM_SHORT
-    else if htf_min <= 90
-        CAP_MEDIUM
-    else if htf_min <= 240
-        CAP_MEDIUM_LONG
-    else if htf_min <= 10080  // Up to weekly
-        CAP_LONG
-    else
-        CAP_DEFAULT
-
 
 get_size(string sz, bool bump) =>
     switch sz
@@ -446,24 +528,48 @@ get_tier_from_rank(int rank) =>
     else
         3
 
-format_label(string content, bool is_bsl) =>
-    prefix = is_bsl ? LABEL_PREFIX_BSL : LABEL_PREFIX_SSL
-    prefix + content + LABEL_SUFFIX
+// Format HTF tags into a chain (e.g., "8H • 1H")
+format_htf_chain(string htf_tags) =>
+    if htf_tags == ""
+        ""
+    else
+        tags_arr = str.split(htf_tags, ",")
+        result = array.get(tags_arr, 0)
+        if array.size(tags_arr) > 1
+            for i = 1 to array.size(tags_arr) - 1
+                result += LABEL_SEPARATOR + array.get(tags_arr, i)
+        result
 
-format_dyn_label(string all_tags, bool is_bsl) =>
-    tags_arr = str.split(all_tags, ",")
-    result = array.get(tags_arr, 0)
-    if array.size(tags_arr) > 1
-        for i = 1 to array.size(tags_arr) - 1
-            result += LABEL_SEPARATOR + array.get(tags_arr, i)
-    format_label(result, is_bsl)
+// Format session tags into a chain (e.g., "asia open | evening range")
+format_session_chain(string session_tags) =>
+    if session_tags == ""
+        ""
+    else
+        tags_arr = str.split(session_tags, " / ")
+        result = array.get(tags_arr, 0)
+        if array.size(tags_arr) > 1
+            for i = 1 to array.size(tags_arr) - 1
+                result += LABEL_SESSION_SEPARATOR + array.get(tags_arr, i)
+        result
+
+// Format label: HTF tags with "algo draw", then session tags appended
+format_level_label(string htf_tags, string session_tags) =>
+    htf_chain = format_htf_chain(htf_tags)
+    session_chain = format_session_chain(session_tags)
+
+    if htf_chain != "" and session_chain != ""
+        htf_chain + LABEL_SUFFIX + LABEL_SESSION_SEPARATOR + session_chain
+    else if htf_chain != ""
+        htf_chain + LABEL_SUFFIX
+    else
+        session_chain
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DYNAMIC MODE - PARAMETERIZED DETECTION FUNCTIONS (DRY)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // BSL Detection: Wick took LOW but closed at/above → target is the HIGH
-dyn_detect_bsl(float prev_high, float prev_low, float prev_close, int detect_time,
+detect_bsl(float prev_high, float prev_low, float prev_close, int detect_time,
                array<float> bsl_targets, array<bool> bsl_open,
                array<int> bsl_detect_times, array<int> bsl_fill_times,
                array<int> eligible_low_ticks, array<int> eligible_low_times) =>
@@ -493,7 +599,7 @@ dyn_detect_bsl(float prev_high, float prev_low, float prev_close, int detect_tim
         detected
 
 // SSL Detection: Wick took HIGH but closed at/below → target is the LOW
-dyn_detect_ssl(float prev_high, float prev_low, float prev_close, int detect_time,
+detect_ssl(float prev_high, float prev_low, float prev_close, int detect_time,
                array<float> ssl_targets, array<bool> ssl_open,
                array<int> ssl_detect_times, array<int> ssl_fill_times,
                array<int> eligible_high_ticks, array<int> eligible_high_times) =>
@@ -523,7 +629,7 @@ dyn_detect_ssl(float prev_high, float prev_low, float prev_close, int detect_tim
         detected
 
 // Fill Detection: Mark levels as filled when price reaches target
-dyn_check_fills(float current_high, float current_low, int current_time,
+check_fills(float current_high, float current_low, int current_time,
                 array<float> bsl_targets, array<bool> bsl_open, array<int> bsl_fill_times,
                 array<float> ssl_targets, array<bool> ssl_open, array<int> ssl_fill_times) =>
     // BSL fills when high reaches target
@@ -542,7 +648,7 @@ dyn_check_fills(float current_high, float current_low, int current_time,
                 array.set(ssl_fill_times, i, current_time)
 
 // Track eligible reference levels for a candle
-dyn_track_candle(float candle_high, float candle_low, int candle_time, int cap,
+track_candle(float candle_high, float candle_low, int candle_time, int cap,
                  array<int> eligible_high_ticks, array<int> eligible_low_ticks,
                  array<int> eligible_high_times, array<int> eligible_low_times) =>
     // Track high as potential SSL reference
@@ -561,7 +667,7 @@ dyn_track_candle(float candle_high, float candle_low, int candle_time, int cap,
         array.shift(eligible_low_times)
 
 // Remove eligible levels that were broken by the candle
-dyn_remove_broken(float candle_high, float candle_low,
+remove_broken(float candle_high, float candle_low,
                   array<int> eligible_high_ticks, array<int> eligible_high_times,
                   array<int> eligible_low_ticks, array<int> eligible_low_times) =>
     // Remove broken highs (exceeded by candle high)
@@ -582,7 +688,7 @@ dyn_remove_broken(float candle_high, float candle_low,
             idx -= 1
 
 // Process HTF detection - centralized logic for all dynamic HTF slots
-dyn_process_htf(float prev_h, float prev_l, float prev_c, int prev_t,
+process_htf(float prev_h, float prev_l, float prev_c, int prev_t,
                 array<float> bsl_targets, array<bool> bsl_open,
                 array<int> bsl_detect_times, array<int> bsl_fill_times,
                 array<float> ssl_targets, array<bool> ssl_open,
@@ -593,27 +699,27 @@ dyn_process_htf(float prev_h, float prev_l, float prev_c, int prev_t,
     result = has_history
     if not na(prev_h)
         if has_history
-            dyn_detect_bsl(prev_h, prev_l, prev_c, prev_t, bsl_targets, bsl_open, bsl_detect_times, bsl_fill_times, eligible_low_ticks, eligible_low_times)
-            dyn_detect_ssl(prev_h, prev_l, prev_c, prev_t, ssl_targets, ssl_open, ssl_detect_times, ssl_fill_times, eligible_high_ticks, eligible_high_times)
-            dyn_remove_broken(prev_h, prev_l, eligible_high_ticks, eligible_high_times, eligible_low_ticks, eligible_low_times)
-        dyn_track_candle(prev_h, prev_l, prev_t, ref_cap, eligible_high_ticks, eligible_low_ticks, eligible_high_times, eligible_low_times)
+            detect_bsl(prev_h, prev_l, prev_c, prev_t, bsl_targets, bsl_open, bsl_detect_times, bsl_fill_times, eligible_low_ticks, eligible_low_times)
+            detect_ssl(prev_h, prev_l, prev_c, prev_t, ssl_targets, ssl_open, ssl_detect_times, ssl_fill_times, eligible_high_ticks, eligible_high_times)
+            remove_broken(prev_h, prev_l, eligible_high_ticks, eligible_high_times, eligible_low_ticks, eligible_low_times)
+        track_candle(prev_h, prev_l, prev_t, ref_cap, eligible_high_ticks, eligible_low_ticks, eligible_high_times, eligible_low_times)
         result := true
     result
 
 slot_process_htf(float prev_h, float prev_l, float prev_c, int prev_t, HtfSlot slot, int ref_cap) =>
     if not na(prev_h)
         if slot.has_history
-            dyn_detect_bsl(prev_h, prev_l, prev_c, prev_t, slot.bsl_targets, slot.bsl_open, slot.bsl_detect_times, slot.bsl_fill_times, slot.eligible_low_ticks, slot.eligible_low_times)
-            dyn_detect_ssl(prev_h, prev_l, prev_c, prev_t, slot.ssl_targets, slot.ssl_open, slot.ssl_detect_times, slot.ssl_fill_times, slot.eligible_high_ticks, slot.eligible_high_times)
-            dyn_remove_broken(prev_h, prev_l, slot.eligible_high_ticks, slot.eligible_high_times, slot.eligible_low_ticks, slot.eligible_low_times)
-        dyn_track_candle(prev_h, prev_l, prev_t, ref_cap, slot.eligible_high_ticks, slot.eligible_low_ticks, slot.eligible_high_times, slot.eligible_low_times)
+            detect_bsl(prev_h, prev_l, prev_c, prev_t, slot.bsl_targets, slot.bsl_open, slot.bsl_detect_times, slot.bsl_fill_times, slot.eligible_low_ticks, slot.eligible_low_times)
+            detect_ssl(prev_h, prev_l, prev_c, prev_t, slot.ssl_targets, slot.ssl_open, slot.ssl_detect_times, slot.ssl_fill_times, slot.eligible_high_ticks, slot.eligible_high_times)
+            remove_broken(prev_h, prev_l, slot.eligible_high_ticks, slot.eligible_high_times, slot.eligible_low_ticks, slot.eligible_low_times)
+        track_candle(prev_h, prev_l, prev_t, ref_cap, slot.eligible_high_ticks, slot.eligible_low_ticks, slot.eligible_high_times, slot.eligible_low_times)
         slot.has_history := true
 
 slot_check_fills(float current_high, float current_low, int current_time, HtfSlot slot) =>
-    dyn_check_fills(current_high, current_low, current_time, slot.bsl_targets, slot.bsl_open, slot.bsl_fill_times, slot.ssl_targets, slot.ssl_open, slot.ssl_fill_times)
+    check_fills(current_high, current_low, current_time, slot.bsl_targets, slot.bsl_open, slot.bsl_fill_times, slot.ssl_targets, slot.ssl_open, slot.ssl_fill_times)
 
 // Find nearest OPEN level within ADR band
-dyn_find_nearest_in_range(array<float> targets, array<bool> is_open, float lower_band, float upper_band, float current_price) =>
+find_nearest_in_range(array<float> targets, array<bool> is_open, float lower_band, float upper_band, float current_price) =>
     float nearest = na
     float min_dist = na
     if array.size(targets) > 0
@@ -629,13 +735,14 @@ dyn_find_nearest_in_range(array<float> targets, array<bool> is_open, float lower
 
 // Collect OPEN levels, deduplicate by price
 // out_tags stores comma-separated list of all contributing TFs, primary (highest rank) first
+// out_session_tags stores session/time level tags separately (kept empty for HTF levels)
 // htf_rank: lower = higher TF (1=Monthly, 2=Weekly, 3=Daily, etc.)
 // max_levels: max BSL + SSL per TF (passed from caller based on ADR filter setting)
-dyn_collect_levels(array<float> bsl_targets, array<bool> bsl_open,
+collect_levels(array<float> bsl_targets, array<bool> bsl_open,
                    array<float> ssl_targets, array<bool> ssl_open,
                    float lower_band, float upper_band, string htf_tag, int htf_rank,
                    bool use_adr_filter, int max_levels, float current_price,
-                   array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<int> out_ranks) =>
+                   array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
     int max_bsl = max_levels
     int max_ssl = max_levels
 
@@ -679,11 +786,14 @@ dyn_collect_levels(array<float> bsl_targets, array<bool> bsl_open,
                     array.set(out_ranks, found_idx, htf_rank)
                 else
                     array.set(out_tags, found_idx, existing_tags + "," + htf_tag)
+                array.set(out_source_counts, found_idx, array.get(out_source_counts, found_idx) + 1)
             else
                 array.push(out_ticks, tick)
                 array.push(out_is_bsl, true)
                 array.push(out_tags, htf_tag)
+                array.push(out_session_tags, "")
                 array.push(out_ranks, htf_rank)
+                array.push(out_source_counts, 1)
 
     // First pass: collect all eligible SSL levels below current price
     int ssl_size = array.size(ssl_targets)
@@ -719,14 +829,17 @@ dyn_collect_levels(array<float> bsl_targets, array<bool> bsl_open,
                     array.set(out_ranks, found_idx, htf_rank)
                 else
                     array.set(out_tags, found_idx, existing_tags + "," + htf_tag)
+                array.set(out_source_counts, found_idx, array.get(out_source_counts, found_idx) + 1)
             else
                 array.push(out_ticks, tick)
                 array.push(out_is_bsl, false)
                 array.push(out_tags, htf_tag)
+                array.push(out_session_tags, "")
                 array.push(out_ranks, htf_rank)
+                array.push(out_source_counts, 1)
 
-slot_collect_levels(HtfSlot slot, float lower_band, float upper_band, string htf_tag, bool use_adr, int max_levels, float current_price, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<int> out_ranks) =>
-    dyn_collect_levels(slot.bsl_targets, slot.bsl_open, slot.ssl_targets, slot.ssl_open, lower_band, upper_band, htf_tag, slot.rank, use_adr, max_levels, current_price, out_ticks, out_is_bsl, out_tags, out_ranks)
+slot_collect_levels(HtfSlot slot, float lower_band, float upper_band, string htf_tag, bool use_adr, int max_levels, float current_price, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
+    collect_levels(slot.bsl_targets, slot.bsl_open, slot.ssl_targets, slot.ssl_open, lower_band, upper_band, htf_tag, slot.rank, use_adr, max_levels, current_price, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
 
 // Format time level label with date (e.g., "16:00 Jan 2")
 format_time_level_label(string base_text, int level_time) =>
@@ -734,7 +847,7 @@ format_time_level_label(string base_text, int level_time) =>
     string day_str = str.format("{0,date,d}", level_time)
     base_text + " " + month_str + " " + day_str
 
-// Find tick index in array, returns -1 if not found
+// Find tick index in array, returns -1 if not found (exact match)
 find_tick_index(int tick, array<int> ticks) =>
     int found_idx = -1
     int arr_size = array.size(ticks)
@@ -745,34 +858,61 @@ find_tick_index(int tick, array<int> ticks) =>
                 break
     found_idx
 
-// Merge tag into existing entry at index
+// Find nearby tick index within tolerance, returns -1 if not found
+// Returns the index of the closest match within tolerance
+find_nearby_tick_index(int tick, array<int> ticks, int tolerance_ticks) =>
+    int found_idx = -1
+    int arr_size = array.size(ticks)
+    if arr_size > 0
+        int min_dist = tolerance_ticks + 1
+        for j = 0 to arr_size - 1
+            int existing_tick = array.get(ticks, j)
+            int dist = math.abs(existing_tick - tick)
+            if dist <= tolerance_ticks and dist < min_dist
+                min_dist := dist
+                found_idx := j
+    found_idx
+
+// Merge tag into existing entry at index (appends with " / " if not empty)
 merge_tag_at_index(int idx, string new_tag, array<string> tags) =>
     existing_tags = array.get(tags, idx)
-    array.set(tags, idx, existing_tags + "," + new_tag)
+    if existing_tags == ""
+        array.set(tags, idx, new_tag)
+    else
+        array.set(tags, idx, existing_tags + " / " + new_tag)
 
-// Add or merge a time level into open levels arrays
-add_or_merge_open_level(int tick, string time_tag, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<int> out_ranks) =>
-    int found_idx = find_tick_index(tick, out_ticks)
+// Add or merge a session/time level into open levels arrays
+// Merges with existing entries at same or nearby price - one line per price with all names
+add_or_merge_open_level(int tick, string session_tag, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
+    // Calculate tolerance in ticks based on price (0.005% of price)
+    float price = from_tick(tick)
+    float tolerance_price = price * LEVEL_MERGE_PCT / 100
+    int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
+
+    int found_idx = find_nearby_tick_index(tick, out_ticks, tolerance_ticks)
     if found_idx >= 0
-        merge_tag_at_index(found_idx, time_tag, out_tags)
+        merge_tag_at_index(found_idx, session_tag, out_session_tags)
+        array.set(out_source_counts, found_idx, array.get(out_source_counts, found_idx) + 1)
     else
         array.push(out_ticks, tick)
         array.push(out_is_bsl, true)
-        array.push(out_tags, time_tag)
+        array.push(out_tags, "")
+        array.push(out_session_tags, session_tag)
         array.push(out_ranks, TIME_LEVEL_RANK)
+        array.push(out_source_counts, 1)
 
 // Collect unmitigated time-based levels within ADR range
 // Merges with existing HTF levels if they share the same price tick
 // When most_recent_only=true, only shows the current level (older levels visible once current is taken out)
 collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bool use_adr_filter, bool most_recent_only,
-                    array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<int> out_ranks) =>
+                    array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
     bool current_added = false
     if not na(level.current_price) and not level.current_mitigated
         bool in_range = use_adr_filter ? (level.current_price >= lower_band and level.current_price <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_price)
             string time_tag = format_time_level_label(level.label_text, level.current_time)
-            add_or_merge_open_level(tick, time_tag, out_ticks, out_is_bsl, out_tags, out_ranks)
+            add_or_merge_open_level(tick, time_tag, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
             current_added := true
 
     // Skip stored levels if most_recent_only is enabled and current level was added
@@ -786,39 +926,97 @@ collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bo
                     if in_range
                         int tick = to_tick(lvl)
                         string time_tag = format_time_level_label(level.label_text, array.get(level.times, i))
-                        add_or_merge_open_level(tick, time_tag, out_ticks, out_is_bsl, out_tags, out_ranks)
+                        add_or_merge_open_level(tick, time_tag, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
                         if most_recent_only
                             break  // Only show the most recent stored level
 
-// Draw consolidated levels with progressive widths/sizes and separate BSL/SSL label colors
-dyn_draw_consolidated(array<int> ticks, array<bool> is_bsl, array<string> tags, array<int> ranks,
+// Collect unmitigated session range levels (high and low) within ADR range
+collect_session_range_levels(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter, bool most_recent_only,
+                             array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
+    bool high_added = false
+    bool low_added = false
+
+    // Current session high (unmitigated)
+    if not na(level.current_high) and not level.high_mitigated and not level.in_session
+        bool in_range = use_adr_filter ? (level.current_high >= lower_band and level.current_high <= upper_band) : true
+        if in_range
+            int tick = to_tick(level.current_high)
+            add_or_merge_open_level(tick, level.label_text, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
+            high_added := true
+
+    // Current session low (unmitigated)
+    if not na(level.current_low) and not level.low_mitigated and not level.in_session
+        bool in_range = use_adr_filter ? (level.current_low >= lower_band and level.current_low <= upper_band) : true
+        if in_range
+            int tick = to_tick(level.current_low)
+            add_or_merge_open_level(tick, level.label_text, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
+            low_added := true
+
+    // Stored highs (if not most_recent_only or current wasn't added)
+    if not (most_recent_only and high_added)
+        int stored_size = array.size(level.highs)
+        if stored_size > 0
+            for i = 0 to stored_size - 1
+                if not array.get(level.highs_mitigated, i)
+                    float lvl = array.get(level.highs, i)
+                    bool in_range = use_adr_filter ? (lvl >= lower_band and lvl <= upper_band) : true
+                    if in_range
+                        int tick = to_tick(lvl)
+                        add_or_merge_open_level(tick, level.label_text, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
+                        if most_recent_only
+                            break
+
+    // Stored lows (if not most_recent_only or current wasn't added)
+    if not (most_recent_only and low_added)
+        int stored_size = array.size(level.lows)
+        if stored_size > 0
+            for i = 0 to stored_size - 1
+                if not array.get(level.lows_mitigated, i)
+                    float lvl = array.get(level.lows, i)
+                    bool in_range = use_adr_filter ? (lvl >= lower_band and lvl <= upper_band) : true
+                    if in_range
+                        int tick = to_tick(lvl)
+                        add_or_merge_open_level(tick, level.label_text, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
+                        if most_recent_only
+                            break
+
+// Draw consolidated levels with progressive widths/sizes and position-based label colors
+draw_consolidated(array<int> ticks, array<bool> is_bsl, array<string> tags, array<string> session_tags, array<int> ranks, array<int> source_counts,
                       array<line> lines_arr, array<label> labels_arr,
-                      color line_col, color macro_col, color bsl_lbl_col, color ssl_lbl_col, color c1600_col, int end_bar,
-                      int w1, int w2, int w3, string s1, string s2, string s3, bool multi_tf_only,
+                      color line_col, color macro_col, color session_col, color bsl_col, color ssl_col, color c1600_col,
+                      float current_price, int end_bar,
+                      int w1, int w2, int w3, string s1, string s2, string s3, bool multi_type_only,
                       bool do_highlight, int nearest_bsl_tick, int nearest_ssl_tick, bool show_price) =>
     int tick_count = array.size(ticks)
     if tick_count > 0
         for i = 0 to tick_count - 1
             rank = array.get(ranks, i)
-            all_tags = array.get(tags, i)
+            htf_tags = array.get(tags, i)
+            sess_tags = array.get(session_tags, i)
+            bool has_htf = htf_tags != ""
             bool is_time_level = rank == TIME_LEVEL_RANK
             bool is_macro = rank <= TIER_MACRO_MAX_RANK and not is_time_level
-            bool has_multiple_tfs = str.contains(all_tags, ",")
-            if multi_tf_only and not is_macro and not has_multiple_tfs and not is_time_level
+            int source_count = array.get(source_counts, i)
+            if multi_type_only and not is_macro and source_count < 2
                 continue
             tick = array.get(ticks, i)
             price = from_tick(tick)
             is_buy = array.get(is_bsl, i)
             tier = is_time_level ? 2 : get_tier_from_rank(rank)
-            bool is_nearest = do_highlight and not is_time_level and ((is_buy and tick == nearest_bsl_tick) or (not is_buy and tick == nearest_ssl_tick))
+            bool is_nearest = do_highlight and ((is_buy and tick == nearest_bsl_tick) or (not is_buy and tick == nearest_ssl_tick))
             line_w = tier == 1 ? w1 : tier == 2 ? w2 : w3
             line_w := is_nearest ? line_w + 1 : line_w
             tier_size = tier == 1 ? s1 : tier == 2 ? s2 : s3
             lbl_sz = get_size(tier_size, is_nearest)
-            lbl_col = is_time_level ? c1600_col : (is_buy ? bsl_lbl_col : ssl_lbl_col)
-            lbl_text = is_time_level ? all_tags : format_dyn_label(all_tags, is_buy)
+            // Line color: 1600-only → c1600_col, macro → macro_col, has session → session_col, else → line_col
+            bool is_1600_only = str.startswith(sess_tags, "16:00") and not has_htf and not str.contains(sess_tags, " / ")
+            bool has_session = str.contains(sess_tags, "Asia") or str.contains(sess_tags, "Evening") or str.contains(sess_tags, "Rafael")
+            ln_col = is_1600_only ? c1600_col : (is_macro ? macro_col : (has_session ? session_col : line_col))
+            // Label color: macro → macro_col, everything else (including 1600) → BSL/SSL based on position
+            bool is_above_price = price > current_price
+            lbl_col = is_macro ? macro_col : (is_above_price ? bsl_col : ssl_col)
+            lbl_text = format_level_label(htf_tags, sess_tags)
             lbl_text += show_price ? " • " + str.tostring(price, format.mintick) : ""
-            ln_col = is_time_level ? c1600_col : (is_macro ? macro_col : line_col)
             ln = line.new(end_bar - LINE_LOOKBACK_BARS, price, end_bar, price, color=ln_col, width=line_w, style=line.style_solid)
             lb = label.new(end_bar, price, lbl_text, style=label.style_label_left, textcolor=lbl_col, size=lbl_sz, color=color.new(color.white, 100))
             array.push(lines_arr, ln)
@@ -849,342 +1047,103 @@ get_htf_tag_for_tf(simple string tf) =>
     else
         tf
 
-create_end_label(end_time, target_price, label_text_color, is_bsl, tooltip_text) =>
-    lab = label.new(
-         x=end_time,
-         y=target_price,
-         text=format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl),
-         style=label.style_label_left,
-         textcolor=label_text_color,
-         size=get_size(htf1_label_size, false),
-         xloc=xloc.bar_time,
-         tooltip=tooltip_text
-     )
-    label.set_color(lab, COLOR_TRANSPARENT)
-    lab
-
-format_tooltip(is_bsl, wick_timestamp) =>
-    type_text = is_bsl ? "BSL: Wick took LOW" : "SSL: Wick took HIGH"
-    formatted_time = str.format_time(wick_timestamp, "MMM dd, yyyy HH:mm", syminfo.timezone)
-    type_text + " • " + formatted_time + ", " + get_htf_tag_for_tf(validated_htf1_timeframe)
-
-// Manual mode display - parameterized for BSL/SSL
-manual_display_levels(array<int> failure_bars, array<int> failure_times, array<float> targets,
-                      array<bool> is_open_arr, array<int> fill_times, array<line> lines_arr,
-                      array<label> labels_arr, array<int> wick_times, bool is_bsl, color text_color) =>
-    local_open_shown = 0
-    local_filled_shown = 0
-    arr_size = array.size(failure_bars)
-    if arr_size > 0
-        for i = arr_size - 1 to 0
-            local_is_open = array.get(is_open_arr, i)
-            local_line = array.get(lines_arr, i)
-            local_label = array.get(labels_arr, i)
-            local_target = array.get(targets, i)
-            local_show = false
-
-            if local_is_open and local_open_shown < open_lines_count
-                local_show := true
-                local_open_shown += 1
-            else if not local_is_open and local_filled_shown < filled_lines_count
-                local_show := true
-                local_filled_shown += 1
-
-            if local_show
-                local_fail_time = array.get(failure_times, i)
-                local_fill_time = array.get(fill_times, i)
-                local_end_time = local_is_open ? time + (chart_tf_seconds * 1000 * htf1_extension) : local_fill_time
-                local_ln_color = local_is_open ? line_color : manual_filled_color
-                local_ln_style = local_is_open ? line.style_solid : line.style_dashed
-                local_ln_width = local_is_open ? htf1_open_width : htf1_filled_width
-
-                if na(local_line)
-                    new_line = line.new(local_fail_time, local_target, local_end_time, local_target, xloc=xloc.bar_time)
-                    line.set_color(new_line, local_ln_color)
-                    line.set_style(new_line, local_ln_style)
-                    line.set_width(new_line, local_ln_width)
-                    array.set(lines_arr, i, new_line)
-                else
-                    line.set_xy1(local_line, local_fail_time, local_target)
-                    line.set_xy2(local_line, local_end_time, local_target)
-                    line.set_color(local_line, local_ln_color)
-                    line.set_style(local_line, local_ln_style)
-                    line.set_width(local_line, local_ln_width)
-
-                if local_is_open
-                    wick_ts = array.get(wick_times, i)
-                    tt_text = format_tooltip(is_bsl, wick_ts)
-                    if na(local_label)
-                        new_label = label.new(x=local_end_time, y=local_target,
-                             text=format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl),
-                             style=label.style_label_left, textcolor=text_color,
-                             size=get_size(htf1_label_size, false), xloc=xloc.bar_time, tooltip=tt_text)
-                        label.set_color(new_label, COLOR_TRANSPARENT)
-                        array.set(labels_arr, i, new_label)
-                    else
-                        label.set_xy(local_label, local_end_time, local_target)
-                        label.set_text(local_label, format_label(get_htf_tag_for_tf(validated_htf1_timeframe), is_bsl))
-                        label.set_textcolor(local_label, text_color)
-                        label.set_size(local_label, get_size(htf1_label_size, false))
-                        label.set_color(local_label, COLOR_TRANSPARENT)
-                        label.set_tooltip(local_label, tt_text)
-                else if not na(local_label)
-                    label.delete(local_label)
-                    array.set(labels_arr, i, na)
-            else
-                if not na(local_line)
-                    line.delete(local_line)
-                    array.set(lines_arr, i, na)
-                if not na(local_label)
-                    label.delete(local_label)
-                    array.set(labels_arr, i, na)
-
-// Manual mode cleanup - parameterized for BSL/SSL
-manual_cleanup_levels(array<int> failure_bars, array<int> failure_times, array<float> targets,
-                      array<bool> is_open_arr, array<int> fill_bars, array<int> fill_times,
-                      array<line> lines_arr, array<label> labels_arr, array<int> wick_times, int max_size) =>
-    while array.size(failure_bars) > max_size
-        old_line = array.shift(lines_arr)
-        old_label = array.shift(labels_arr)
-        if not na(old_line)
-            line.delete(old_line)
-        if not na(old_label)
-            label.delete(old_label)
-        array.shift(failure_bars)
-        array.shift(failure_times)
-        array.shift(targets)
-        array.shift(is_open_arr)
-        array.shift(fill_bars)
-        array.shift(fill_times)
-        array.shift(wick_times)
-
-// Manual mode fill detection - parameterized for BSL/SSL
-manual_check_fills(array<float> targets, array<bool> is_open_arr, array<int> failure_bars,
-                   array<int> fill_bars, array<int> fill_times, bool is_bsl) =>
-    arr_size = array.size(targets)
-    if arr_size > 0
-        for i = 0 to arr_size - 1
-            if array.get(is_open_arr, i) and bar_index > array.get(failure_bars, i)
-                target = array.get(targets, i)
-                filled = is_bsl ? high >= target : low <= target
-                if filled
-                    array.set(is_open_arr, i, false)
-                    array.set(fill_bars, i, bar_index)
-                    array.set(fill_times, i, int(time))
-
-// Get current chart timeframe display
-get_chart_tf_display() =>
-    if timeframe.isintraday
-        m = timeframe.multiplier
-        m % 60 == 0 ? str.tostring(m / 60) + "H" : str.tostring(m) + "m"
-    else if timeframe.isdaily
-        str.tostring(timeframe.multiplier) + "D"
-    else if timeframe.isweekly
-        str.tostring(timeframe.multiplier) + "W"
-    else if timeframe.ismonthly
-        str.tostring(timeframe.multiplier) + "M"
-    else
-        timeframe.period
-
-// Get allowed HTF preset list with cap - CLEAN FORMAT
-get_allowed_htf_presets() =>
-    chart_tf_min = chart_tf_minutes
-    preset_list = array.new<string>()
-    cap_display = ""
-
-    if chart_tf_min <= 3  // 1-3m chart → cap: 15m
-        array.push(preset_list, "15m")
-        cap_display := "15m"
-    else if chart_tf_min == 5  // 5m → cap: 1H
-        array.push(preset_list, "15m")
-        array.push(preset_list, "30m")
-        array.push(preset_list, "1H")
-        cap_display := "1H"
-    else if chart_tf_min == 10  // 10m → cap: 2H
-        array.push(preset_list, "15m")
-        array.push(preset_list, "30m")
-        array.push(preset_list, "1H")
-        array.push(preset_list, "2H")
-        cap_display := "2H"
-    else if chart_tf_min == 15  // 15m → cap: 4H
-        array.push(preset_list, "30m")
-        array.push(preset_list, "1H")
-        array.push(preset_list, "2H")
-        array.push(preset_list, "4H")
-        cap_display := "4H"
-    else if chart_tf_min == 30  // 30m → cap: 4H
-        array.push(preset_list, "1H")
-        array.push(preset_list, "2H")
-        array.push(preset_list, "4H")
-        cap_display := "4H"
-    else if chart_tf_min <= 60  // 45-60m → cap: 1D
-        array.push(preset_list, "2H")
-        array.push(preset_list, "4H")
-        array.push(preset_list, "1D")
-        cap_display := "1D"
-    else if chart_tf_min <= 240  // 2H-4H-6H-7H etc → cap: 1D
-        array.push(preset_list, "1D")
-        cap_display := "1D"
-    else if chart_tf_min <= 1440  // Daily → cap: 1W
-        array.push(preset_list, "1W")
-        cap_display := "1W"
-    else if chart_tf_min <= 10080  // Weekly → cap: 3M
-        array.push(preset_list, "1M")
-        array.push(preset_list, "3M")
-        cap_display := "3M"
-    else if chart_tf_min >= 43800  // Monthly+ → cap: 3M
-        array.push(preset_list, "3M")
-        cap_display := "3M"
-
-    // Convert array to comma-separated string with cap
-    if array.size(preset_list) == 0
-        "None"
-    else
-        preset_result = ""
-        for i = 0 to array.size(preset_list) - 1
-            if i > 0
-                preset_result := preset_result + ", "
-            preset_result := preset_result + array.get(preset_list, i)
-
-        // Format: "Presets: 15m, 30m, 1H • Any up to 1H"
-        "Presets: " + preset_result + " • Any up to " + cap_display
-
-// Parameterized function to add eligible level (replaces 6 duplicate functions)
-// Uses direct loop instead of array.indexof for better performance
-add_eligible_level(float price, int timestamp, array<int> ticks_arr, array<int> times_arr, int cap) =>
-    tick = to_tick(price)
-    // Check if tick already exists (direct loop, no array.indexof)
-    bool exists = false
-    int arr_size = array.size(ticks_arr)
-    if arr_size > 0
-        for i = 0 to arr_size - 1
-            if array.get(ticks_arr, i) == tick
-                exists := true
-                break
-    if not exists
-        array.push(ticks_arr, tick)
-        array.push(times_arr, timestamp)
-        // Prune if over cap
-        while array.size(ticks_arr) > cap
-            array.shift(ticks_arr)
-            array.shift(times_arr)
-
-// Reset state function for TF/symbol changes
-reset_state() =>
-    clear_manual_slot(manual)
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // CHANGE DETECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 current_ticker = ticker.standard()
 current_chart_tf = timeframe.period
-current_htf_tf = validated_htf1_timeframe
-current_limit_zone = get_limit_zone()
-
 
 symbol_changed = current_ticker != last_ticker
 chart_tf_changed = current_chart_tf != last_chart_tf
-htf_tf_changed = current_htf_tf != last_htf_tf
 
-
-limit_zone_changed = current_limit_zone != last_limit_zone
-needs_reset = symbol_changed or chart_tf_changed or (htf1_auto and limit_zone_changed) or (not htf1_auto and htf_tf_changed)
+needs_reset = symbol_changed or chart_tf_changed
 
 if needs_reset
-    reset_state()
     initialized := true
     last_ticker := current_ticker
     last_chart_tf := current_chart_tf
-    last_htf_tf := current_htf_tf
-    last_limit_zone := current_limit_zone
     clear_time_level(level_1600)
-    clear_htf_slot(slot1)
-    clear_htf_slot(slot2)
-    clear_htf_slot(slot3)
-    clear_htf_slot(slot4)
-    clear_htf_slot(slot5)
-    clear_htf_slot(slot6)
-    clear_htf_slot(slot7)
-    clear_htf_slot(slot8)
+    clear_session_range_level(level_asia_open)
+    clear_session_range_level(level_evening)
+    clear_session_range_level(level_rafael)
+    clear_htf_slot(slot_1mo)
+    clear_htf_slot(slot_1w)
+    clear_htf_slot(slot_1d)
+    clear_htf_slot(slot_12h)
+    clear_htf_slot(slot_8h)
+    clear_htf_slot(slot_7h)
+    clear_htf_slot(slot_4h)
+    clear_htf_slot(slot_1h)
 
 // Clear state on first bar (handles replay mode)
 if barstate.isfirst
-    clear_manual_slot(manual)
     clear_time_level(level_1600)
-    clear_htf_slot(slot1)
-    clear_htf_slot(slot2)
-    clear_htf_slot(slot3)
-    clear_htf_slot(slot4)
-    clear_htf_slot(slot5)
-    clear_htf_slot(slot6)
-    clear_htf_slot(slot7)
-    clear_htf_slot(slot8)
+    clear_session_range_level(level_asia_open)
+    clear_session_range_level(level_evening)
+    clear_session_range_level(level_rafael)
+    clear_htf_slot(slot_1mo)
+    clear_htf_slot(slot_1w)
+    clear_htf_slot(slot_1d)
+    clear_htf_slot(slot_12h)
+    clear_htf_slot(slot_8h)
+    clear_htf_slot(slot_7h)
+    clear_htf_slot(slot_4h)
+    clear_htf_slot(slot_1h)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTF CANDLE TRACKING - Using request.security for accurate OHLC
+// HTF REQUEST.SECURITY CALLS (8 HTF SLOTS)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// HTF OHLC (Manual mode)
-[sec_htf1_open, sec_htf1_high, sec_htf1_low, sec_htf1_close, sec_htf1_time] = request.security(syminfo.tickerid, validated_htf1_timeframe, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-bool htf1_changed = ta.change(time(validated_htf1_timeframe)) != 0
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DYNAMIC MODE - REQUEST.SECURITY CALLS (8 HTF SLOTS)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Dynamic mode enabled check
-bool is_dynamic_mode = htf_mode == MODE_DYNAMIC
 
 // Dynamic HTF1 (Monthly)
-[sec_dyn1_open, sec_dyn1_high, sec_dyn1_low, sec_dyn1_close, sec_dyn1_time] = request.security(syminfo.tickerid, dyn_htf1, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf1_seconds = timeframe.in_seconds(dyn_htf1)
-bool dyn_htf1_valid = is_dynamic_mode and dyn_htf1_enabled and dyn_htf1_seconds > chart_tf_seconds
-bool dyn_htf1_changed = dyn_htf1_valid and ta.change(time(dyn_htf1)) != 0
+[sec_1mo_open, sec_1mo_high, sec_1mo_low, sec_1mo_close, sec_1mo_time] = request.security(syminfo.tickerid, htf_1mo, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_1mo = timeframe.in_seconds(htf_1mo)
+bool valid_1mo = enabled_1mo and seconds_1mo > chart_tf_seconds
+bool changed_1mo = valid_1mo and ta.change(time(htf_1mo)) != 0
 
 // Dynamic HTF2 (Weekly)
-[sec_dyn2_open, sec_dyn2_high, sec_dyn2_low, sec_dyn2_close, sec_dyn2_time] = request.security(syminfo.tickerid, dyn_htf2, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf2_seconds = timeframe.in_seconds(dyn_htf2)
-bool dyn_htf2_valid = is_dynamic_mode and dyn_htf2_enabled and dyn_htf2_seconds > chart_tf_seconds
-bool dyn_htf2_changed = dyn_htf2_valid and ta.change(time(dyn_htf2)) != 0
+[sec_1w_open, sec_1w_high, sec_1w_low, sec_1w_close, sec_1w_time] = request.security(syminfo.tickerid, htf_1w, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_1w = timeframe.in_seconds(htf_1w)
+bool valid_1w = enabled_1w and seconds_1w > chart_tf_seconds
+bool changed_1w = valid_1w and ta.change(time(htf_1w)) != 0
 
 // Dynamic HTF3 (Daily)
-[sec_dyn3_open, sec_dyn3_high, sec_dyn3_low, sec_dyn3_close, sec_dyn3_time] = request.security(syminfo.tickerid, dyn_htf3, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf3_seconds = timeframe.in_seconds(dyn_htf3)
-bool dyn_htf3_valid = is_dynamic_mode and dyn_htf3_enabled and dyn_htf3_seconds > chart_tf_seconds
-bool dyn_htf3_changed = dyn_htf3_valid and ta.change(time(dyn_htf3)) != 0
+[sec_1d_open, sec_1d_high, sec_1d_low, sec_1d_close, sec_1d_time] = request.security(syminfo.tickerid, htf_1d, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_1d = timeframe.in_seconds(htf_1d)
+bool valid_1d = enabled_1d and seconds_1d > chart_tf_seconds
+bool changed_1d = valid_1d and ta.change(time(htf_1d)) != 0
 
 // Dynamic HTF4 (12H)
-[sec_dyn4_open, sec_dyn4_high, sec_dyn4_low, sec_dyn4_close, sec_dyn4_time] = request.security(syminfo.tickerid, dyn_htf4, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf4_seconds = timeframe.in_seconds(dyn_htf4)
-bool dyn_htf4_valid = is_dynamic_mode and dyn_htf4_enabled and dyn_htf4_seconds > chart_tf_seconds
-bool dyn_htf4_changed = dyn_htf4_valid and ta.change(time(dyn_htf4)) != 0
+[sec_12h_open, sec_12h_high, sec_12h_low, sec_12h_close, sec_12h_time] = request.security(syminfo.tickerid, htf_12h, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_12h = timeframe.in_seconds(htf_12h)
+bool valid_12h = enabled_12h and seconds_12h > chart_tf_seconds
+bool changed_12h = valid_12h and ta.change(time(htf_12h)) != 0
 
 // Dynamic HTF5 (8H)
-[sec_dyn5_open, sec_dyn5_high, sec_dyn5_low, sec_dyn5_close, sec_dyn5_time] = request.security(syminfo.tickerid, dyn_htf5, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf5_seconds = timeframe.in_seconds(dyn_htf5)
-bool dyn_htf5_valid = is_dynamic_mode and dyn_htf5_enabled and dyn_htf5_seconds > chart_tf_seconds
-bool dyn_htf5_changed = dyn_htf5_valid and ta.change(time(dyn_htf5)) != 0
+[sec_8h_open, sec_8h_high, sec_8h_low, sec_8h_close, sec_8h_time] = request.security(syminfo.tickerid, htf_8h, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_8h = timeframe.in_seconds(htf_8h)
+bool valid_8h = enabled_8h and seconds_8h > chart_tf_seconds
+bool changed_8h = valid_8h and ta.change(time(htf_8h)) != 0
 
 // Dynamic HTF6 (7H)
 // Note: 7H is excluded when on 4H chart due to unreliable bar alignment
-[sec_dyn6_open, sec_dyn6_high, sec_dyn6_low, sec_dyn6_close, sec_dyn6_time] = request.security(syminfo.tickerid, dyn_htf6, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf6_seconds = timeframe.in_seconds(dyn_htf6)
-bool is_7h_on_4h_chart = chart_tf_seconds == TF_4H_SECONDS and dyn_htf6_seconds == TF_7H_SECONDS
-bool dyn_htf6_valid = is_dynamic_mode and dyn_htf6_enabled and dyn_htf6_seconds > chart_tf_seconds and not is_7h_on_4h_chart
-bool dyn_htf6_changed = dyn_htf6_valid and ta.change(time(dyn_htf6)) != 0
+[sec_7h_open, sec_7h_high, sec_7h_low, sec_7h_close, sec_7h_time] = request.security(syminfo.tickerid, htf_7h, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_7h = timeframe.in_seconds(htf_7h)
+bool is_7h_on_4h_chart = chart_tf_seconds == TF_4H_SECONDS and seconds_7h == TF_7H_SECONDS
+bool valid_7h = enabled_7h and seconds_7h > chart_tf_seconds and not is_7h_on_4h_chart
+bool changed_7h = valid_7h and ta.change(time(htf_7h)) != 0
 
 // Dynamic HTF7 (4H)
-[sec_dyn7_open, sec_dyn7_high, sec_dyn7_low, sec_dyn7_close, sec_dyn7_time] = request.security(syminfo.tickerid, dyn_htf7, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf7_seconds = timeframe.in_seconds(dyn_htf7)
-bool dyn_htf7_valid = is_dynamic_mode and dyn_htf7_enabled and dyn_htf7_seconds > chart_tf_seconds
-bool dyn_htf7_changed = dyn_htf7_valid and ta.change(time(dyn_htf7)) != 0
+[sec_4h_open, sec_4h_high, sec_4h_low, sec_4h_close, sec_4h_time] = request.security(syminfo.tickerid, htf_4h, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_4h = timeframe.in_seconds(htf_4h)
+bool valid_4h = enabled_4h and seconds_4h > chart_tf_seconds
+bool changed_4h = valid_4h and ta.change(time(htf_4h)) != 0
 
 // Dynamic HTF8 (1H)
-[sec_dyn8_open, sec_dyn8_high, sec_dyn8_low, sec_dyn8_close, sec_dyn8_time] = request.security(syminfo.tickerid, dyn_htf8, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
-int dyn_htf8_seconds = timeframe.in_seconds(dyn_htf8)
-bool dyn_htf8_valid = is_dynamic_mode and dyn_htf8_enabled and dyn_htf8_seconds > chart_tf_seconds
-bool dyn_htf8_changed = dyn_htf8_valid and ta.change(time(dyn_htf8)) != 0
+[sec_1h_open, sec_1h_high, sec_1h_low, sec_1h_close, sec_1h_time] = request.security(syminfo.tickerid, htf_1h, [open, high, low, close, time], barmerge.gaps_off, barmerge.lookahead_off)
+int seconds_1h = timeframe.in_seconds(htf_1h)
+bool valid_1h = enabled_1h and seconds_1h > chart_tf_seconds
+bool changed_1h = valid_1h and ta.change(time(htf_1h)) != 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADR CALCULATION (5-day Average Daily Range)
@@ -1251,7 +1210,7 @@ calc_adr(array<float> ranges, int lookback) =>
     else
         float(na)
 
-current_adr := calc_adr(adr_daily_ranges, adr_lookback)
+current_adr := calc_adr(adr_daily_ranges, 5)
 
 // ADR band for relevance filtering (matches ADR indicator: anchor = day's open, full ADR each direction)
 float adr_range = nz(current_adr, 0) * adr_multiplier
@@ -1263,43 +1222,42 @@ float adr_lower = adr_current_open - adr_range
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Reference level cap for Dynamic mode
-int dyn_ref_cap = CAP_MEDIUM
+int ref_cap = CAP_MEDIUM
 
-if dyn_htf1_valid and dyn_htf1_changed
-    slot_process_htf(sec_dyn1_high[1], sec_dyn1_low[1], sec_dyn1_close[1], int(sec_dyn1_time[1]), slot1, dyn_ref_cap)
-if dyn_htf2_valid and dyn_htf2_changed
-    slot_process_htf(sec_dyn2_high[1], sec_dyn2_low[1], sec_dyn2_close[1], int(sec_dyn2_time[1]), slot2, dyn_ref_cap)
-if dyn_htf3_valid and dyn_htf3_changed
-    slot_process_htf(sec_dyn3_high[1], sec_dyn3_low[1], sec_dyn3_close[1], int(sec_dyn3_time[1]), slot3, dyn_ref_cap)
-if dyn_htf4_valid and dyn_htf4_changed
-    slot_process_htf(sec_dyn4_high[1], sec_dyn4_low[1], sec_dyn4_close[1], int(sec_dyn4_time[1]), slot4, dyn_ref_cap)
-if dyn_htf5_valid and dyn_htf5_changed
-    slot_process_htf(sec_dyn5_high[1], sec_dyn5_low[1], sec_dyn5_close[1], int(sec_dyn5_time[1]), slot5, dyn_ref_cap)
-if dyn_htf6_valid and dyn_htf6_changed
-    slot_process_htf(sec_dyn6_high[1], sec_dyn6_low[1], sec_dyn6_close[1], int(sec_dyn6_time[1]), slot6, dyn_ref_cap)
-if dyn_htf7_valid and dyn_htf7_changed
-    slot_process_htf(sec_dyn7_high[1], sec_dyn7_low[1], sec_dyn7_close[1], int(sec_dyn7_time[1]), slot7, dyn_ref_cap)
-if dyn_htf8_valid and dyn_htf8_changed
-    slot_process_htf(sec_dyn8_high[1], sec_dyn8_low[1], sec_dyn8_close[1], int(sec_dyn8_time[1]), slot8, dyn_ref_cap)
+if valid_1mo and changed_1mo
+    slot_process_htf(sec_1mo_high[1], sec_1mo_low[1], sec_1mo_close[1], int(sec_1mo_time[1]), slot_1mo, ref_cap)
+if valid_1w and changed_1w
+    slot_process_htf(sec_1w_high[1], sec_1w_low[1], sec_1w_close[1], int(sec_1w_time[1]), slot_1w, ref_cap)
+if valid_1d and changed_1d
+    slot_process_htf(sec_1d_high[1], sec_1d_low[1], sec_1d_close[1], int(sec_1d_time[1]), slot_1d, ref_cap)
+if valid_12h and changed_12h
+    slot_process_htf(sec_12h_high[1], sec_12h_low[1], sec_12h_close[1], int(sec_12h_time[1]), slot_12h, ref_cap)
+if valid_8h and changed_8h
+    slot_process_htf(sec_8h_high[1], sec_8h_low[1], sec_8h_close[1], int(sec_8h_time[1]), slot_8h, ref_cap)
+if valid_7h and changed_7h
+    slot_process_htf(sec_7h_high[1], sec_7h_low[1], sec_7h_close[1], int(sec_7h_time[1]), slot_7h, ref_cap)
+if valid_4h and changed_4h
+    slot_process_htf(sec_4h_high[1], sec_4h_low[1], sec_4h_close[1], int(sec_4h_time[1]), slot_4h, ref_cap)
+if valid_1h and changed_1h
+    slot_process_htf(sec_1h_high[1], sec_1h_low[1], sec_1h_close[1], int(sec_1h_time[1]), slot_1h, ref_cap)
 
-// Dynamic Mode - Fill Detection (only for enabled HTFs)
-if is_dynamic_mode
-    if dyn_htf1_enabled
-        slot_check_fills(high, low, int(time), slot1)
-    if dyn_htf2_enabled
-        slot_check_fills(high, low, int(time), slot2)
-    if dyn_htf3_enabled
-        slot_check_fills(high, low, int(time), slot3)
-    if dyn_htf4_enabled
-        slot_check_fills(high, low, int(time), slot4)
-    if dyn_htf5_enabled
-        slot_check_fills(high, low, int(time), slot5)
-    if dyn_htf6_enabled
-        slot_check_fills(high, low, int(time), slot6)
-    if dyn_htf7_enabled
-        slot_check_fills(high, low, int(time), slot7)
-    if dyn_htf8_enabled
-        slot_check_fills(high, low, int(time), slot8)
+// Fill Detection (only for enabled HTFs)
+if enabled_1mo
+    slot_check_fills(high, low, int(time), slot_1mo)
+if enabled_1w
+    slot_check_fills(high, low, int(time), slot_1w)
+if enabled_1d
+    slot_check_fills(high, low, int(time), slot_1d)
+if enabled_12h
+    slot_check_fills(high, low, int(time), slot_12h)
+if enabled_8h
+    slot_check_fills(high, low, int(time), slot_8h)
+if enabled_7h
+    slot_check_fills(high, low, int(time), slot_7h)
+if enabled_4h
+    slot_check_fills(high, low, int(time), slot_4h)
+if enabled_1h
+    slot_check_fills(high, low, int(time), slot_1h)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 16:00 CLOSE TRACKING
@@ -1347,159 +1305,20 @@ if show_1600_close
     prune_time_level(level_1600)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MANUAL MODE - DETECTION LOGIC
+// SESSION RANGE TRACKING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-if htf1_is_valid
-    // Initialize on last confirmed historical bar
-    if not initialized and barstate.islastconfirmedhistory and not needs_reset
-        initialized := true
+int session_hour_ny = hour(time, NY_TIMEZONE)
+int session_minute_ny = minute(time, NY_TIMEZONE)
 
-    if htf1_changed
-        // Get completed HTF candle values from request.security (same as overlay)
-        float prev_htf_high = sec_htf1_high[1]
-        float prev_htf_low = sec_htf1_low[1]
-        float prev_htf_close = sec_htf1_close[1]
-        int prev_htf_time = int(sec_htf1_time[1])
+if show_asia_open
+    track_session_range_level(level_asia_open, session_hour_ny, session_minute_ny, high, low, int(time))
 
-        // Run detection only if we have valid previous candle AND have seen at least one complete candle
-        if not na(prev_htf_high) and manual.has_history
-            // ═══ DETECTION on completed HTF candle ═══
-            local_sellside_detected = false
-            local_buyside_detected = false
+if show_evening
+    track_session_range_level(level_evening, session_hour_ny, session_minute_ny, high, low, int(time))
 
-            // BSL Detection first (like LTF Algo): Wick took LOW but closed at/above
-            if array.size(manual.eligible_low_ticks) > 0 and not local_buyside_detected
-                for i = 0 to array.size(manual.eligible_low_ticks) - 1
-                    ref_low_tick = array.get(manual.eligible_low_ticks, i)
-                    ref_low = from_tick(ref_low_tick)
-                    if prev_htf_low < ref_low and prev_htf_close >= ref_low
-                        // Check if we already have this target (deduplication)
-                        int target_tick = to_tick(prev_htf_high)
-                        bool already_exists = false
-                        if array.size(manual.buyside.targets) > 0
-                            for j = 0 to array.size(manual.buyside.targets) - 1
-                                if to_tick(array.get(manual.buyside.targets, j)) == target_tick
-                                    already_exists := true
-                                    break
-
-                        if not already_exists
-                            wick_timestamp = array.get(manual.eligible_low_times, i)
-                            // Check if already filled on this bar
-                            bool already_filled = high >= prev_htf_high
-                            array.push(manual.buyside.failure_bars, bar_index)
-                            array.push(manual.buyside.failure_times, int(time))
-                            array.push(manual.buyside.targets, prev_htf_high)
-                            array.push(manual.buyside.is_open, not already_filled)
-                            array.push(manual.buyside.fill_bars, already_filled ? bar_index : int(na))
-                            array.push(manual.buyside.fill_times, already_filled ? int(time) : int(na))
-                            array.push(manual.buyside.lines, na)
-                            array.push(manual.buyside.labels, na)
-                            array.push(manual.buyside.wick_times, wick_timestamp)
-                            local_buyside_detected := true
-                        break
-
-            // SSL Detection: Wick took HIGH but closed at/below
-            if array.size(manual.eligible_high_ticks) > 0 and not local_sellside_detected
-                for i = 0 to array.size(manual.eligible_high_ticks) - 1
-                    ref_high_tick = array.get(manual.eligible_high_ticks, i)
-                    ref_high = from_tick(ref_high_tick)
-                    if prev_htf_high > ref_high and prev_htf_close <= ref_high
-                        // Check if we already have this target (deduplication)
-                        int target_tick = to_tick(prev_htf_low)
-                        bool already_exists = false
-                        if array.size(manual.sellside.targets) > 0
-                            for j = 0 to array.size(manual.sellside.targets) - 1
-                                if to_tick(array.get(manual.sellside.targets, j)) == target_tick
-                                    already_exists := true
-                                    break
-
-                        if not already_exists
-                            wick_timestamp = array.get(manual.eligible_high_times, i)
-                            // Check if already filled on this bar
-                            bool already_filled = low <= prev_htf_low
-                            array.push(manual.sellside.failure_bars, bar_index)
-                            array.push(manual.sellside.failure_times, int(time))
-                            array.push(manual.sellside.targets, prev_htf_low)
-                            array.push(manual.sellside.is_open, not already_filled)
-                            array.push(manual.sellside.fill_bars, already_filled ? bar_index : int(na))
-                            array.push(manual.sellside.fill_times, already_filled ? int(time) : int(na))
-                            array.push(manual.sellside.lines, na)
-                            array.push(manual.sellside.labels, na)
-                            array.push(manual.sellside.wick_times, wick_timestamp)
-                            local_sellside_detected := true
-                        break
-
-            // Remove broken levels (reuses Dynamic mode function)
-            dyn_remove_broken(prev_htf_high, prev_htf_low, manual.eligible_high_ticks, manual.eligible_high_times, manual.eligible_low_ticks, manual.eligible_low_times)
-
-        // Add completed candle's levels as new eligible levels (always, if valid)
-        if not na(prev_htf_high)
-            int ref_cap = get_reference_levels_cap()
-            add_eligible_level(prev_htf_high, prev_htf_time, manual.eligible_high_ticks, manual.eligible_high_times, ref_cap)
-            add_eligible_level(prev_htf_low, prev_htf_time, manual.eligible_low_ticks, manual.eligible_low_times, ref_cap)
-            manual.has_history := true
-
-    // Fill detection on every bar
-    manual_check_fills(manual.sellside.targets, manual.sellside.is_open, manual.sellside.failure_bars,
-         manual.sellside.fill_bars, manual.sellside.fill_times, false)
-    manual_check_fills(manual.buyside.targets, manual.buyside.is_open, manual.buyside.failure_bars,
-         manual.buyside.fill_bars, manual.buyside.fill_times, true)
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// HTF CANDLE OVERLAY (DEBUG)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Track bar index where current HTF candle started
-var int dbg_htf_start_bar = na
-var box dbg_current_wick = na
-var box dbg_current_body = na
-
-// HTF change detection
-bool dbg_change_htf = ta.change(time(validated_htf1_timeframe)) != 0
-
-// Use input colors for HTF candles
-color dbg_bull_color = htf_bull_body_color
-color dbg_bear_color = htf_bear_body_color
-color dbg_bull_wick = htf_bull_wick_color
-color dbg_bear_wick = htf_bear_wick_color
-
-if show_htf_candles
-    if dbg_change_htf
-        // Draw COMPLETED candle: started at dbg_htf_start_bar, ended at bar_index - 1
-        // OHLC from sec_htf_*[1] = previous HTF candle's final values
-        if not na(dbg_htf_start_bar)
-            float prev_o = sec_htf1_open[1]
-            float prev_h = sec_htf1_high[1]
-            float prev_l = sec_htf1_low[1]
-            float prev_c = sec_htf1_close[1]
-            int end_bar = bar_index - 1
-            bool prev_bull = prev_c > prev_o
-
-            // Wick box
-            box.new(dbg_htf_start_bar, prev_h, end_bar, prev_l, prev_bull ? dbg_bull_wick : dbg_bear_wick, bgcolor=prev_bull ? dbg_bull_wick : dbg_bear_wick)
-            // Body box
-            if prev_bull
-                box.new(dbg_htf_start_bar, prev_c, end_bar, prev_o, dbg_bull_color, bgcolor=dbg_bull_color)
-            else
-                box.new(dbg_htf_start_bar, prev_o, end_bar, prev_c, dbg_bear_color, bgcolor=dbg_bear_color)
-
-        // New HTF candle starts at current bar
-        dbg_htf_start_bar := bar_index
-
-    // Draw current forming candle on last bar
-    if barstate.islast and not na(dbg_htf_start_bar)
-        box.delete(dbg_current_wick)
-        box.delete(dbg_current_body)
-
-        bool is_bull = sec_htf1_close > sec_htf1_open
-        // Wick
-        dbg_current_wick := box.new(dbg_htf_start_bar, sec_htf1_high, bar_index, sec_htf1_low, is_bull ? dbg_bull_wick : dbg_bear_wick, bgcolor=is_bull ? dbg_bull_wick : dbg_bear_wick)
-        // Body
-        if is_bull
-            dbg_current_body := box.new(dbg_htf_start_bar, sec_htf1_close, bar_index, sec_htf1_open, dbg_bull_color, bgcolor=dbg_bull_color)
-        else
-            dbg_current_body := box.new(dbg_htf_start_bar, sec_htf1_open, bar_index, sec_htf1_close, dbg_bear_color, bgcolor=dbg_bear_color)
+if show_rafael
+    track_session_range_level(level_rafael, session_hour_ny, session_minute_ny, high, low, int(time))
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DISPLAY SYSTEM
@@ -1507,123 +1326,129 @@ if show_htf_candles
 
 if barstate.islast
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // DYNAMIC MODE DISPLAY - Show ALL open levels within ADR range from ALL TFs
-    // ═══════════════════════════════════════════════════════════════════════════
-    // DYNAMIC MODE DISPLAY - Consolidated levels (deduplicated, highest HTF shown)
-    // ═══════════════════════════════════════════════════════════════════════════
-    if is_dynamic_mode
-        // Clear previous lines/labels
-        for ln in dyn_lines
-            line.delete(ln)
-        for lb in dyn_labels
-            label.delete(lb)
-        array.clear(dyn_lines)
-        array.clear(dyn_labels)
+    // Clear previous lines/labels
+    for ln in level_lines
+        line.delete(ln)
+    for lb in level_labels
+        label.delete(lb)
+    array.clear(level_lines)
+    array.clear(level_labels)
 
-        // Line end (start is calculated per-level to avoid crossing candles)
-        int line_end_bar = bar_index + LINE_EXTENSION_BARS
+    // Line end (start is calculated per-level to avoid crossing candles)
+    int line_end_bar = bar_index + LINE_EXTENSION_BARS
 
-        // Temporary arrays for consolidation
-        var array<int> cons_ticks = array.new_int()
-        var array<bool> cons_is_bsl = array.new_bool()
-        var array<string> cons_tags = array.new_string()
-        var array<int> cons_ranks = array.new_int()
-        array.clear(cons_ticks)
-        array.clear(cons_is_bsl)
-        array.clear(cons_tags)
-        array.clear(cons_ranks)
+    // Temporary arrays for consolidation
+    var array<int> cons_ticks = array.new_int()
+    var array<bool> cons_is_bsl = array.new_bool()
+    var array<string> cons_tags = array.new_string()
+    var array<string> cons_session_tags = array.new_string()
+    var array<int> cons_ranks = array.new_int()
+    var array<int> cons_source_counts = array.new_int()
+    array.clear(cons_ticks)
+    array.clear(cons_is_bsl)
+    array.clear(cons_tags)
+    array.clear(cons_session_tags)
+    array.clear(cons_ranks)
+    array.clear(cons_source_counts)
 
-        // ADR filter: user toggle AND chart TF must be below threshold
-        bool use_adr = adr_filter_enabled and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS
-        // Level caps: when ADR filter ON use rank-based caps, when OFF use global limit
-        int cap_macro = use_adr ? 999 : open_lines_count
-        int cap_swing = use_adr ? 2 : open_lines_count
-        int cap_intra = use_adr ? 999 : open_lines_count
+    // ADR filter: user toggle AND chart TF must be below threshold
+    bool use_adr = adr_filter_enabled and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS
+    // Level caps: when ADR filter ON use rank-based caps, when OFF use global limit
+    int cap_macro = use_adr ? 999 : open_lines_count
+    int cap_swing = use_adr ? 2 : open_lines_count
+    int cap_intra = use_adr ? 999 : open_lines_count
 
-        // Collect levels from all HTFs (rank 1=highest TF, 8=lowest)
-        if dyn_htf1_valid
-            slot_collect_levels(slot1, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf1), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf2_valid
-            slot_collect_levels(slot2, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf2), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf3_valid
-            slot_collect_levels(slot3, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf3), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf4_valid
-            slot_collect_levels(slot4, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf4), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf5_valid
-            slot_collect_levels(slot5, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf5), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf6_valid
-            slot_collect_levels(slot6, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf6), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf7_valid
-            slot_collect_levels(slot7, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf7), use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
-        if dyn_htf8_valid
-            slot_collect_levels(slot8, adr_lower, adr_upper, get_htf_tag_for_tf(dyn_htf8), use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
+    // Collect levels from all HTFs (rank 1=highest TF, 8=lowest)
+    if valid_1mo
+        slot_collect_levels(slot_1mo, adr_lower, adr_upper, get_htf_tag_for_tf(htf_1mo), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_1w
+        slot_collect_levels(slot_1w, adr_lower, adr_upper, get_htf_tag_for_tf(htf_1w), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_1d
+        slot_collect_levels(slot_1d, adr_lower, adr_upper, get_htf_tag_for_tf(htf_1d), use_adr, cap_macro, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_12h
+        slot_collect_levels(slot_12h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_12h), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_8h
+        slot_collect_levels(slot_8h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_8h), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_7h
+        slot_collect_levels(slot_7h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_7h), use_adr, cap_swing, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_4h
+        slot_collect_levels(slot_4h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_4h), use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if valid_1h
+        slot_collect_levels(slot_1h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_1h), use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
 
-        // Collect time-based levels
-        if show_1600_close
-            collect_time_levels(level_1600, adr_lower, adr_upper, use_adr, time_level_most_recent_only, cons_ticks, cons_is_bsl, cons_tags, cons_ranks)
+    // Collect time-based levels
+    if show_1600_close
+        collect_time_levels(level_1600, adr_lower, adr_upper, use_adr, time_level_most_recent_only, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_asia_open
+        collect_session_range_levels(level_asia_open, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_evening
+        collect_session_range_levels(level_evening, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_rafael
+        collect_session_range_levels(level_rafael, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
 
-        // Find nearest BSL (above price) and SSL (below price) for highlighting
-        // Must apply same multi_tf_only filter as draw function
-        int nearest_bsl_tick = na
-        int nearest_ssl_tick = na
-        int current_tick = to_tick(close)
-        int cons_size = array.size(cons_ticks)
-        if cons_size > 0
-            float min_bsl_dist = na
-            float min_ssl_dist = na
-            for i = 0 to cons_size - 1
-                int rank = array.get(cons_ranks, i)
-                string all_tags = array.get(cons_tags, i)
-                bool is_macro = rank <= TIER_MACRO_MAX_RANK
-                bool has_multiple_tfs = str.contains(all_tags, ",")
-                if multi_tf_only and not is_macro and not has_multiple_tfs
-                    continue
-                int lvl_tick = array.get(cons_ticks, i)
-                bool is_buy = array.get(cons_is_bsl, i)
-                if is_buy and lvl_tick > current_tick
-                    float dist = lvl_tick - current_tick
-                    if na(min_bsl_dist) or dist < min_bsl_dist
-                        min_bsl_dist := dist
-                        nearest_bsl_tick := lvl_tick
-                else if not is_buy and lvl_tick < current_tick
-                    float dist = current_tick - lvl_tick
-                    if na(min_ssl_dist) or dist < min_ssl_dist
-                        min_ssl_dist := dist
-                        nearest_ssl_tick := lvl_tick
+    // Find nearest BSL (above price) and SSL (below price) for highlighting
+    int nearest_bsl_tick = na
+    int nearest_ssl_tick = na
+    int current_tick = to_tick(close)
+    int cons_size = array.size(cons_ticks)
+    if cons_size > 0
+        float min_bsl_dist = na
+        float min_ssl_dist = na
+        for i = 0 to cons_size - 1
+            int lvl_tick = array.get(cons_ticks, i)
+            bool is_buy = array.get(cons_is_bsl, i)
+            if is_buy and lvl_tick > current_tick
+                float dist = lvl_tick - current_tick
+                if na(min_bsl_dist) or dist < min_bsl_dist
+                    min_bsl_dist := dist
+                    nearest_bsl_tick := lvl_tick
+            else if not is_buy and lvl_tick < current_tick
+                float dist = current_tick - lvl_tick
+                if na(min_ssl_dist) or dist < min_ssl_dist
+                    min_ssl_dist := dist
+                    nearest_ssl_tick := lvl_tick
 
-        // Draw consolidated levels (one line per unique price, highest HTF label with TF context)
-        dyn_draw_consolidated(cons_ticks, cons_is_bsl, cons_tags, cons_ranks, dyn_lines, dyn_labels,
-            line_color, macro_line_color, bsl_text_color, ssl_text_color, close_1600_color, line_end_bar,
-            dyn_width_tier1, dyn_width_tier2, dyn_width_tier3,
-            dyn_size_tier1, dyn_size_tier2, dyn_size_tier3, multi_tf_only,
-            highlight_nearest, nearest_bsl_tick, nearest_ssl_tick, show_price_on_label)
+    // Merge ADR labels into nearby levels (if ADR lines enabled and at same price)
+    bool adr_upper_merged = false
+    bool adr_lower_merged = false
+    if show_adr_lines and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and not na(current_adr)
+        int adr_upper_tick = to_tick(adr_upper)
+        int adr_lower_tick = to_tick(adr_lower)
+        float tolerance_price = adr_upper * LEVEL_MERGE_PCT / 100
+        int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // MANUAL MODE DISPLAY - HTF1/HTF2/HTF3 lines (only when not in Dynamic mode)
-    // ═══════════════════════════════════════════════════════════════════════════
+        for i = 0 to array.size(cons_ticks) - 1
+            int lvl_tick = array.get(cons_ticks, i)
+            if not adr_upper_merged and math.abs(lvl_tick - adr_upper_tick) <= tolerance_ticks
+                string existing = array.get(cons_session_tags, i)
+                array.set(cons_session_tags, i, existing == "" ? "ADR+" : existing + LABEL_SESSION_SEPARATOR + "ADR+")
+                adr_upper_merged := true
+            if not adr_lower_merged and math.abs(lvl_tick - adr_lower_tick) <= tolerance_ticks
+                string existing = array.get(cons_session_tags, i)
+                array.set(cons_session_tags, i, existing == "" ? "ADR-" : existing + LABEL_SESSION_SEPARATOR + "ADR-")
+                adr_lower_merged := true
 
-    // BSL/SSL Display (Manual mode only)
-    if not is_dynamic_mode
-        manual_display_levels(manual.buyside.failure_bars, manual.buyside.failure_times, manual.buyside.targets,
-             manual.buyside.is_open, manual.buyside.fill_times, manual.buyside.lines, manual.buyside.labels,
-             manual.buyside.wick_times, true, bsl_text_color)
-        manual_display_levels(manual.sellside.failure_bars, manual.sellside.failure_times, manual.sellside.targets,
-             manual.sellside.is_open, manual.sellside.fill_times, manual.sellside.lines, manual.sellside.labels,
-             manual.sellside.wick_times, false, ssl_text_color)
+    // Draw consolidated levels (one line per unique price, highest HTF label with TF context)
+    draw_consolidated(cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts, level_lines, level_labels,
+        line_color, macro_line_color, session_line_color, bsl_text_color, ssl_text_color, close_1600_color,
+        close, line_end_bar,
+        width_macro, width_swing, width_intra,
+        size_macro, size_swing, size_intra, multi_type_only,
+        highlight_nearest, nearest_bsl_tick, nearest_ssl_tick, show_price_on_label)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MEMORY CLEANUP
-// ═══════════════════════════════════════════════════════════════════════════════
+    // Draw ADR lines at same position as algo levels (only if not merged with existing level)
+    if show_adr_lines and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and not na(current_adr)
+        line.delete(adr_upper_line)
+        line.delete(adr_lower_line)
+        label.delete(adr_upper_label)
+        label.delete(adr_lower_label)
+        if not adr_upper_merged
+            adr_upper_line := line.new(bar_index, adr_upper, line_end_bar, adr_upper, color=adr_lines_color, style=line.style_solid, width=1)
+            adr_upper_label := label.new(line_end_bar, adr_upper, "ADR+", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
+        if not adr_lower_merged
+            adr_lower_line := line.new(bar_index, adr_lower, line_end_bar, adr_lower, color=adr_lines_color, style=line.style_solid, width=1)
+            adr_lower_label := label.new(line_end_bar, adr_lower, "ADR-", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
 
-if barstate.islast and initialized
-    cleanup_max = math.max(100, (open_lines_count + filled_lines_count) * 2)
-    manual_cleanup_levels(manual.buyside.failure_bars, manual.buyside.failure_times, manual.buyside.targets,
-         manual.buyside.is_open, manual.buyside.fill_bars, manual.buyside.fill_times,
-         manual.buyside.lines, manual.buyside.labels, manual.buyside.wick_times, cleanup_max)
-    manual_cleanup_levels(manual.sellside.failure_bars, manual.sellside.failure_times, manual.sellside.targets,
-         manual.sellside.is_open, manual.sellside.fill_bars, manual.sellside.fill_times,
-         manual.sellside.lines, manual.sellside.labels, manual.sellside.wick_times, cleanup_max)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADR BOXES DEBUG VISUALIZATION (verify ADR calculation matches ADR indicator)
@@ -1632,7 +1457,7 @@ if barstate.islast and initialized
 var box adr_current_box = na
 var array<box> adr_hist_boxes = array.new<box>()
 
-if show_adr_boxes and is_dynamic_mode and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and barstate.islast
+if show_adr_boxes and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and barstate.islast
     // Delete old boxes
     box.delete(adr_current_box)
     for b in adr_hist_boxes
@@ -1844,7 +1669,7 @@ slot_collect_filled_history(HtfSlot slot, array<float> hist_opens, array<float> 
     collect_filled_history_for_htf(slot.bsl_targets, slot.bsl_open, slot.bsl_detect_times, slot.bsl_fill_times, hist_opens, hist_adrs, hist_starts, hist_ends, adr_mult, max_days, htf_tag)
     collect_filled_history_for_htf(slot.ssl_targets, slot.ssl_open, slot.ssl_detect_times, slot.ssl_fill_times, hist_opens, hist_adrs, hist_starts, hist_ends, adr_mult, max_days, htf_tag)
 
-if show_fills and is_dynamic_mode and barstate.islast
+if show_fills and barstate.islast
     // Clear old visuals
     for ln in fills_lines
         line.delete(ln)
@@ -1860,22 +1685,22 @@ if show_fills and is_dynamic_mode and barstate.islast
     array.clear(fh_tags)
 
     // Collect from all enabled HTFs - TODAY (always when feature is on)
-    if dyn_htf1_enabled
-        slot_collect_filled_today(slot1, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf1))
-    if dyn_htf2_enabled
-        slot_collect_filled_today(slot2, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf2))
-    if dyn_htf3_enabled
-        slot_collect_filled_today(slot3, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf3))
-    if dyn_htf4_enabled
-        slot_collect_filled_today(slot4, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf4))
-    if dyn_htf5_enabled
-        slot_collect_filled_today(slot5, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf5))
-    if dyn_htf6_enabled
-        slot_collect_filled_today(slot6, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf6))
-    if dyn_htf7_enabled
-        slot_collect_filled_today(slot7, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf7))
-    if dyn_htf8_enabled
-        slot_collect_filled_today(slot8, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(dyn_htf8))
+    if enabled_1mo
+        slot_collect_filled_today(slot_1mo, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_1mo))
+    if enabled_1w
+        slot_collect_filled_today(slot_1w, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_1w))
+    if enabled_1d
+        slot_collect_filled_today(slot_1d, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_1d))
+    if enabled_12h
+        slot_collect_filled_today(slot_12h, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_12h))
+    if enabled_8h
+        slot_collect_filled_today(slot_8h, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_8h))
+    if enabled_7h
+        slot_collect_filled_today(slot_7h, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_7h))
+    if enabled_4h
+        slot_collect_filled_today(slot_4h, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_4h))
+    if enabled_1h
+        slot_collect_filled_today(slot_1h, adr_current_open, current_adr, adr_day_start_time, adr_multiplier, get_htf_tag_for_tf(htf_1h))
 
     // Collect filled time levels
     if show_1600_close
@@ -1883,22 +1708,22 @@ if show_fills and is_dynamic_mode and barstate.islast
 
     // Collect from all enabled HTFs - PAST DAYS (only if Historical is enabled)
     if fills_historical
-        if dyn_htf1_enabled
-            slot_collect_filled_history(slot1, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf1))
-        if dyn_htf2_enabled
-            slot_collect_filled_history(slot2, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf2))
-        if dyn_htf3_enabled
-            slot_collect_filled_history(slot3, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf3))
-        if dyn_htf4_enabled
-            slot_collect_filled_history(slot4, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf4))
-        if dyn_htf5_enabled
-            slot_collect_filled_history(slot5, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf5))
-        if dyn_htf6_enabled
-            slot_collect_filled_history(slot6, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf6))
-        if dyn_htf7_enabled
-            slot_collect_filled_history(slot7, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf7))
-        if dyn_htf8_enabled
-            slot_collect_filled_history(slot8, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(dyn_htf8))
+        if enabled_1mo
+            slot_collect_filled_history(slot_1mo, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_1mo))
+        if enabled_1w
+            slot_collect_filled_history(slot_1w, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_1w))
+        if enabled_1d
+            slot_collect_filled_history(slot_1d, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_1d))
+        if enabled_12h
+            slot_collect_filled_history(slot_12h, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_12h))
+        if enabled_8h
+            slot_collect_filled_history(slot_8h, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_8h))
+        if enabled_7h
+            slot_collect_filled_history(slot_7h, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_7h))
+        if enabled_4h
+            slot_collect_filled_history(slot_4h, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_4h))
+        if enabled_1h
+            slot_collect_filled_history(slot_1h, adr_hist_opens, adr_hist_adrs, adr_hist_starts, adr_hist_ends, adr_multiplier, fills_historical_days, get_htf_tag_for_tf(htf_1h))
 
     // Draw consolidated levels
     int fh_count = array.size(fh_ticks)
@@ -1925,7 +1750,7 @@ if show_fills and is_dynamic_mode and barstate.islast
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table colorTable = table.new(position.top_right, 3, 13, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table colorTable = table.new(position.top_right, 3, 9, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     table.cell(colorTable, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -1939,9 +1764,9 @@ if show_color_table and barstate.islast
     table.cell(colorTable, 1, 2, str.format("R:{0} G:{1} B:{2}", color.r(macro_line_color), color.g(macro_line_color), color.b(macro_line_color)), text_size=size.small)
     table.cell(colorTable, 2, 2, str.tostring(color.t(macro_line_color)), text_size=size.small)
 
-    table.cell(colorTable, 0, 3, "Manual Filled", text_size=size.small)
-    table.cell(colorTable, 1, 3, str.format("R:{0} G:{1} B:{2}", color.r(manual_filled_color), color.g(manual_filled_color), color.b(manual_filled_color)), text_size=size.small)
-    table.cell(colorTable, 2, 3, str.tostring(color.t(manual_filled_color)), text_size=size.small)
+    table.cell(colorTable, 0, 3, "Session", text_size=size.small)
+    table.cell(colorTable, 1, 3, str.format("R:{0} G:{1} B:{2}", color.r(session_line_color), color.g(session_line_color), color.b(session_line_color)), text_size=size.small)
+    table.cell(colorTable, 2, 3, str.tostring(color.t(session_line_color)), text_size=size.small)
 
     table.cell(colorTable, 0, 4, "BSL Label", text_size=size.small)
     table.cell(colorTable, 1, 4, str.format("R:{0} G:{1} B:{2}", color.r(bsl_text_color), color.g(bsl_text_color), color.b(bsl_text_color)), text_size=size.small)
@@ -1951,53 +1776,14 @@ if show_color_table and barstate.islast
     table.cell(colorTable, 1, 5, str.format("R:{0} G:{1} B:{2}", color.r(ssl_text_color), color.g(ssl_text_color), color.b(ssl_text_color)), text_size=size.small)
     table.cell(colorTable, 2, 5, str.tostring(color.t(ssl_text_color)), text_size=size.small)
 
-    table.cell(colorTable, 0, 6, "HTF Bull Body", text_size=size.small)
-    table.cell(colorTable, 1, 6, str.format("R:{0} G:{1} B:{2}", color.r(htf_bull_body_color), color.g(htf_bull_body_color), color.b(htf_bull_body_color)), text_size=size.small)
-    table.cell(colorTable, 2, 6, str.tostring(color.t(htf_bull_body_color)), text_size=size.small)
+    table.cell(colorTable, 0, 6, "ADR Box", text_size=size.small)
+    table.cell(colorTable, 1, 6, str.format("R:{0} G:{1} B:{2}", color.r(adr_box_color), color.g(adr_box_color), color.b(adr_box_color)), text_size=size.small)
+    table.cell(colorTable, 2, 6, str.tostring(color.t(adr_box_color)), text_size=size.small)
 
-    table.cell(colorTable, 0, 7, "HTF Bull Wick", text_size=size.small)
-    table.cell(colorTable, 1, 7, str.format("R:{0} G:{1} B:{2}", color.r(htf_bull_wick_color), color.g(htf_bull_wick_color), color.b(htf_bull_wick_color)), text_size=size.small)
-    table.cell(colorTable, 2, 7, str.tostring(color.t(htf_bull_wick_color)), text_size=size.small)
+    table.cell(colorTable, 0, 7, "Backtest Fills", text_size=size.small)
+    table.cell(colorTable, 1, 7, str.format("R:{0} G:{1} B:{2}", color.r(backtest_fills_color), color.g(backtest_fills_color), color.b(backtest_fills_color)), text_size=size.small)
+    table.cell(colorTable, 2, 7, str.tostring(color.t(backtest_fills_color)), text_size=size.small)
 
-    table.cell(colorTable, 0, 8, "HTF Bear Body", text_size=size.small)
-    table.cell(colorTable, 1, 8, str.format("R:{0} G:{1} B:{2}", color.r(htf_bear_body_color), color.g(htf_bear_body_color), color.b(htf_bear_body_color)), text_size=size.small)
-    table.cell(colorTable, 2, 8, str.tostring(color.t(htf_bear_body_color)), text_size=size.small)
-
-    table.cell(colorTable, 0, 9, "HTF Bear Wick", text_size=size.small)
-    table.cell(colorTable, 1, 9, str.format("R:{0} G:{1} B:{2}", color.r(htf_bear_wick_color), color.g(htf_bear_wick_color), color.b(htf_bear_wick_color)), text_size=size.small)
-    table.cell(colorTable, 2, 9, str.tostring(color.t(htf_bear_wick_color)), text_size=size.small)
-
-    table.cell(colorTable, 0, 10, "ADR Box", text_size=size.small)
-    table.cell(colorTable, 1, 10, str.format("R:{0} G:{1} B:{2}", color.r(adr_box_color), color.g(adr_box_color), color.b(adr_box_color)), text_size=size.small)
-    table.cell(colorTable, 2, 10, str.tostring(color.t(adr_box_color)), text_size=size.small)
-
-    table.cell(colorTable, 0, 11, "Backtest Fills", text_size=size.small)
-    table.cell(colorTable, 1, 11, str.format("R:{0} G:{1} B:{2}", color.r(backtest_fills_color), color.g(backtest_fills_color), color.b(backtest_fills_color)), text_size=size.small)
-    table.cell(colorTable, 2, 11, str.tostring(color.t(backtest_fills_color)), text_size=size.small)
-
-    table.cell(colorTable, 0, 12, "16:00 Close", text_size=size.small)
-    table.cell(colorTable, 1, 12, str.format("R:{0} G:{1} B:{2}", color.r(close_1600_color), color.g(close_1600_color), color.b(close_1600_color)), text_size=size.small)
-    table.cell(colorTable, 2, 12, str.tostring(color.t(close_1600_color)), text_size=size.small)
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// STATUS TABLE
-// ═══════════════════════════════════════════════════════════════════════════════
-
-if show_status_table and barstate.islast
-    var table status_table = table.new(position.bottom_center, 4, 1, border_width=0)
-
-    string left_pad = status_table_offset < 0 ? "" : str.repeat(" ", status_table_offset * 3)
-    string right_pad = status_table_offset > 0 ? "" : str.repeat(" ", math.abs(status_table_offset) * 3)
-
-    string mode_display = htf_mode == MODE_DYNAMIC ? "d" : "m"
-    string mtf_display = htf_mode == MODE_DYNAMIC and multi_tf_only ? "  mtf" : ""
-    bool adr_applies = htf_mode == MODE_DYNAMIC and adr_filter_enabled and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS
-    string adr_display = adr_applies ? (adr_multiplier == 1.0 ? "  adr" : "  adr " + str.tostring(adr_multiplier, "#.#")) : ""
-    string status_text = mode_display + mtf_display + adr_display
-
-    table.cell(status_table, 0, 0, left_pad, bgcolor=color.new(color.white, 100), text_size=size.tiny)
-    table.cell(status_table, 1, 0, "htf algo •", bgcolor=color.black, text_color=color.white, text_size=size.tiny)
-    table.cell(status_table, 2, 0, status_text, bgcolor=COLOR_STATUS_BG, text_color=color.black, text_size=size.tiny)
-    table.cell(status_table, 3, 0, right_pad, bgcolor=color.new(color.white, 100), text_size=size.tiny)
-
-// htf algo •
+    table.cell(colorTable, 0, 8, "16:00 Close", text_size=size.small)
+    table.cell(colorTable, 1, 8, str.format("R:{0} G:{1} B:{2}", color.r(close_1600_color), color.g(close_1600_color), color.b(close_1600_color)), text_size=size.small)
+    table.cell(colorTable, 2, 8, str.tostring(color.t(close_1600_color)), text_size=size.small)
