@@ -260,8 +260,8 @@ IDX_1845_2203 = 13
 var array<int> BIAS_DISPLAY_SESSIONS = array.from(IDX_PREMARKET, IDX_NY_EARLY)
 
 // Global mitigation display mode
-MIT_MITIGATED = "Mitigated"
-MIT_UNMITIGATED = "Unmitigated"
+SESSION_MITIGATED = "Mitigated"
+SESSION_UNMITIGATED = "Unmitigated"
 
 // Quick filter presets
 FILTER_ALL = "All"
@@ -311,7 +311,7 @@ maxSessions = input.int(1, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_
 // INPUTS - Mitigation
 // ═══════════════════════════════════════════════════════════════════════════
 
-mitigationMode = input.string(MIT_MITIGATED, "Mode", options=[MIT_MITIGATED, MIT_UNMITIGATED], inline="mitigation_mode", group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
+mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], inline="mitigation_mode", group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
 mitigationTodayOnly = input.bool(true, "Same-Day Only", inline="mitigation_mode", group=GROUP_MITIGATION, tooltip="Only track same-day mitigations. Rafael + Asia Open always track.")
 showProximity = input.bool(false, "Show Proximity Levels", group=GROUP_MITIGATION, tooltip="Show dashed lines for unmitigated highs/lows within ATR range of current price")
 
@@ -717,6 +717,24 @@ alwaysTrackMitigation(int idx) =>
         IDX_ASIA_OPEN => true   // 1800 (18:00-21:00)
         IDX_1845_2203 => true   // 2203 (18:45-22:03)
         => false
+
+// Draw confirmed mitigation line - either extend pending line (if provisional) or draw new solid line
+// Returns the mitigation line (either existing pending or newly created solid)
+draw_confirmed_mitigation_line(bool was_provisional, line pending_line, int origin_time, float level, color mit_color) =>
+    line result = na
+    if was_provisional and not na(pending_line)
+        line.set_x2(pending_line, time)
+        result := pending_line
+    else
+        result := line.new(origin_time, level, time, level, color=mit_color, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+    result
+
+// Draw provisional breach lines - solid from origin to breach, dashed pending from breach
+// Returns tuple of [solid_line, pending_line]
+draw_provisional_breach_lines(int origin_time, float level, color mit_color) =>
+    solid_line = line.new(origin_time, level, time, level, color=mit_color, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+    pending_line = line.new(time, level, time, level, color=mit_color, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+    [solid_line, pending_line]
 
 // Convert a bar offset to a time offset (used for xloc.bar_time drawing)
 timeWithOffset(int baseTime, int barOffset) =>
@@ -1408,10 +1426,14 @@ if validTimeframe and array.size(sessions) > 0
             nextDayTimestamp = sess.startTime + 24 * 60 * 60 * 1000
             isOnSessionStartDay = isSameCalendarDay(sess.startTime, time)
             isOnSessionEndDay = sess.crossesMidnight and isSameCalendarDay(nextDayTimestamp, time)
-            isSameTradingDay = not mitigationTodayOnly or alwaysTrackMitigation(sess.sessionIndex) or isOnSessionStartDay or isOnSessionEndDay
+            // For delayed mitigation sessions, overnight window extends to next day's early morning (before 05:00)
+            isInNextDayOvernightWindow = sess.delayedMitigation and isSameCalendarDay(nextDayTimestamp, time) and barMinutes < PREMARKET_START_MIN
+            isOnActualSessionDay = isOnSessionStartDay or isOnSessionEndDay or isInNextDayOvernightWindow
+            isSameTradingDay = not mitigationTodayOnly or alwaysTrackMitigation(sess.sessionIndex) or isOnActualSessionDay
             // For delayed mitigation (Asia Open), only evaluate from 05:00 to 16:00 (excludes overnight evening hours)
             canEvaluateMitigation = isSameTradingDay and (not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN))
-            isInOvernightWindow = sess.delayedMitigation and isSameTradingDay and not canEvaluateMitigation
+            // Overnight window only applies on the actual session day(s), not days later via alwaysTrackMitigation
+            isInOvernightWindow = sess.delayedMitigation and isOnActualSessionDay and not canEvaluateMitigation
 
             // === HIGH MITIGATION LOGIC ===
             if not sess.highMitigated
@@ -1419,33 +1441,29 @@ if validTimeframe and array.size(sessions) > 0
                     // Mitigation confirmed (either normal or after provisional overnight breach)
                     sess.highMitigated := true
                     sess.highMitigationBar := bar_index
-                    if mitigationMode == MIT_MITIGATED
-                        if sess.provisionalHighMitigated
-                            // Had overnight breach - extend dashed line to confirmation point, keep solid at breach
-                            if not na(sess.highPendingLine)
-                                line.set_x2(sess.highPendingLine, time)
-                        else
-                            // Normal mitigation (no overnight breach) - draw solid line
-                            sess.highMitigationLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                    if mitigationMode == SESSION_MITIGATED
+                        sess.highMitigationLine := draw_confirmed_mitigation_line(sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                     if sess.enableAlert
-                        alertMsg = sess.sessionName + ALERT_HIGH_MITIGATED
-                        alert(alertMsg, alert.freq_once_per_bar)
+                        alert(sess.sessionName + ALERT_HIGH_MITIGATED, alert.freq_once_per_bar)
 
                 else if isInOvernightWindow and high >= sess.dominantHigh
                     // Provisional breach during overnight - draw solid to breach, then dashed continuation
                     if not sess.provisionalHighMitigated
                         sess.provisionalHighMitigated := true
                         sess.provisionalHighTime := time
-                        if mitigationMode == MIT_MITIGATED
-                            // Solid line from origin to breach point
-                            sess.highMitigationLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                            // Dashed pending line starts from breach point
-                            sess.highPendingLine := line.new(time, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+                        if mitigationMode == SESSION_MITIGATED
+                            [solid, pending] = draw_provisional_breach_lines(sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                            sess.highMitigationLine := solid
+                            sess.highPendingLine := pending
 
                 else if high >= sess.dominantHigh
-                    // Level taken outside same-day window - track internally but no visual marker
+                    // Level taken outside same-day window (or outside market hours for always-track sessions)
                     sess.highMitigated := true
                     sess.highMitigationBar := bar_index
+                    if alwaysTrackMitigation(sess.sessionIndex) and mitigationMode == SESSION_MITIGATED
+                        sess.highMitigationLine := draw_confirmed_mitigation_line(sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                    if sess.enableAlert
+                        alert(sess.sessionName + ALERT_HIGH_MITIGATED, alert.freq_once_per_bar)
 
                 // Extend pending line during overnight (before 05:00 confirmation window)
                 if sess.provisionalHighMitigated and not na(sess.highPendingLine) and not sess.highMitigated
@@ -1457,33 +1475,29 @@ if validTimeframe and array.size(sessions) > 0
                     // Mitigation confirmed (either normal or after provisional overnight breach)
                     sess.lowMitigated := true
                     sess.lowMitigationBar := bar_index
-                    if mitigationMode == MIT_MITIGATED
-                        if sess.provisionalLowMitigated
-                            // Had overnight breach - extend dashed line to confirmation point, keep solid at breach
-                            if not na(sess.lowPendingLine)
-                                line.set_x2(sess.lowPendingLine, time)
-                        else
-                            // Normal mitigation (no overnight breach) - draw solid line
-                            sess.lowMitigationLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+                    if mitigationMode == SESSION_MITIGATED
+                        sess.lowMitigationLine := draw_confirmed_mitigation_line(sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                     if sess.enableAlert
-                        alertMsg = sess.sessionName + ALERT_LOW_MITIGATED
-                        alert(alertMsg, alert.freq_once_per_bar)
+                        alert(sess.sessionName + ALERT_LOW_MITIGATED, alert.freq_once_per_bar)
 
                 else if isInOvernightWindow and low <= sess.dominantLow
                     // Provisional breach during overnight - draw solid to breach, then dashed continuation
                     if not sess.provisionalLowMitigated
                         sess.provisionalLowMitigated := true
                         sess.provisionalLowTime := time
-                        if mitigationMode == MIT_MITIGATED
-                            // Solid line from origin to breach point
-                            sess.lowMitigationLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                            // Dashed pending line starts from breach point
-                            sess.lowPendingLine := line.new(time, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+                        if mitigationMode == SESSION_MITIGATED
+                            [solid, pending] = draw_provisional_breach_lines(sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                            sess.lowMitigationLine := solid
+                            sess.lowPendingLine := pending
 
                 else if low <= sess.dominantLow
-                    // Level taken outside same-day window - track internally but no visual marker
+                    // Level taken outside same-day window (or outside market hours for always-track sessions)
                     sess.lowMitigated := true
                     sess.lowMitigationBar := bar_index
+                    if alwaysTrackMitigation(sess.sessionIndex) and mitigationMode == SESSION_MITIGATED
+                        sess.lowMitigationLine := draw_confirmed_mitigation_line(sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                    if sess.enableAlert
+                        alert(sess.sessionName + ALERT_LOW_MITIGATED, alert.freq_once_per_bar)
 
                 // Extend pending line during overnight (before 05:00 confirmation window)
                 if sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated
@@ -1512,7 +1526,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
 
             // Unmitigated mode: show persistent lines for unmitigated levels (extends to current time)
-            if mitigationMode == MIT_UNMITIGATED
+            if mitigationMode == SESSION_UNMITIGATED
                 // High unmitigated line and label
                 if not sess.highMitigated
                     if na(sess.highUnmitigatedLine)
@@ -1532,7 +1546,7 @@ if validTimeframe and array.size(sessions) > 0
 
             // Check for 50% mitigation (only after an extreme has been mitigated, only in Mitigated mode)
             // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            if mitigationMode == MIT_MITIGATED and (sess.highMitigated or sess.lowMitigated) and not sess.midMitigated and not na(sess.midLevel)
+            if mitigationMode == SESSION_MITIGATED and (sess.highMitigated or sess.lowMitigated) and not sess.midMitigated and not na(sess.midLevel)
                 // Determine retracement direction: which extreme was mitigated first?
                 bool lowWasFirst = sess.lowMitigated and (not sess.highMitigated or sess.lowMitigationBar < sess.highMitigationBar)
                 firstMitigationBar = lowWasFirst ? nz(sess.lowMitigationBar, 0) : nz(sess.highMitigationBar, 0)
@@ -1550,7 +1564,7 @@ if validTimeframe and array.size(sessions) > 0
 
             // Check for 61.8% mitigation (Rafael's Range only)
             // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            if mitigationMode == MIT_MITIGATED and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
+            if mitigationMode == SESSION_MITIGATED and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
                 // Determine direction: if 61.8% level is above midLevel, LOW was first (retracing UP)
                 bool lowWasFirst618 = sess.retraceLevel618 > sess.midLevel
                 // Get the FIRST mitigation bar (whichever extreme was mitigated first)
