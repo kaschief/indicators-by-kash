@@ -90,9 +90,6 @@ type SessionData
     bool retrace618Mitigated
     line retrace618Line
     label retrace618Label
-    // Proximity tracking (ATR-based)
-    line highProximityLine
-    line lowProximityLine
     // Alerts
     bool enableAlert
     // Delayed mitigation (evaluate only from 05:00 onward)
@@ -218,15 +215,10 @@ MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 1
 MITIGATION_618_LINE_WIDTH = 1
 MITIGATION_PENDING_LINE_WIDTH = 1
-PROXIMITY_LINE_WIDTH = 1
 
 // Mute overnight color
 const color DEFAULT_OVERNIGHT_MUTE_COLOR = color.new(color.white, 20)
 
-// Proximity detection constants
-PROXIMITY_ATR_PERIOD = 15
-PROXIMITY_ATR_MULTIPLIER = 3.5
-PROXIMITY_LOOKBACK = 3
 
 // Tooltips
 TOOLTIP_MAX_SESSIONS = "Max number of sessions to display per opening type"
@@ -311,9 +303,7 @@ maxSessions = input.int(1, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_
 // INPUTS - Mitigation
 // ═══════════════════════════════════════════════════════════════════════════
 
-mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], inline="mitigation_mode", group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
-mitigationTodayOnly = input.bool(true, "Same-Day Only", inline="mitigation_mode", group=GROUP_MITIGATION, tooltip="Only track same-day mitigations. Rafael + Asia Open always track.")
-showProximity = input.bool(false, "Show Proximity Levels", group=GROUP_MITIGATION, tooltip="Show dashed lines for unmitigated highs/lows within ATR range of current price")
+mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Labels
@@ -943,11 +933,6 @@ deleteSession(SessionData sess) =>
         line.delete(sess.highPendingLine)
     if not na(sess.lowPendingLine)
         line.delete(sess.lowPendingLine)
-    // Delete proximity lines
-    if not na(sess.highProximityLine)
-        line.delete(sess.highProximityLine)
-    if not na(sess.lowProximityLine)
-        line.delete(sess.lowProximityLine)
     // Delete unmitigated lines and labels
     if not na(sess.highUnmitigatedLine)
         line.delete(sess.highUnmitigatedLine)
@@ -1239,8 +1224,6 @@ if validTimeframe
                      retrace618Mitigated=false,
                      retrace618Line=na,
                      retrace618Label=na,
-                     highProximityLine=na,
-                     lowProximityLine=na,
                      enableAlert=cfg.alert,
                      delayedMitigation=cfg.delayedMitigation,
                      crossesMidnight=crossesMidnight,
@@ -1414,10 +1397,6 @@ if validTimeframe and array.size(activeSessions) > 0
 // PHASE 4: MITIGATION DETECTION - Check for breaches on completed sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Calculate ATR for proximity detection
-atrValue = ta.atr(PROXIMITY_ATR_PERIOD)
-atrRange = atrValue * PROXIMITY_ATR_MULTIPLIER
-
 if validTimeframe and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
@@ -1429,9 +1408,9 @@ if validTimeframe and array.size(sessions) > 0
             // For delayed mitigation sessions, overnight window extends to next day's early morning (before 05:00)
             isInNextDayOvernightWindow = sess.delayedMitigation and isSameCalendarDay(nextDayTimestamp, time) and barMinutes < PREMARKET_START_MIN
             isOnActualSessionDay = isOnSessionStartDay or isOnSessionEndDay or isInNextDayOvernightWindow
-            isSameTradingDay = not mitigationTodayOnly or alwaysTrackMitigation(sess.sessionIndex) or isOnActualSessionDay
+            shouldTrackMitigation = alwaysTrackMitigation(sess.sessionIndex) or isOnActualSessionDay
             // For delayed mitigation (Asia Open), only evaluate from 05:00 to 16:00 (excludes overnight evening hours)
-            canEvaluateMitigation = isSameTradingDay and (not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN))
+            canEvaluateMitigation = shouldTrackMitigation and (not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN))
             // Overnight window only applies on the actual session day(s), not days later via alwaysTrackMitigation
             isInOvernightWindow = sess.delayedMitigation and isOnActualSessionDay and not canEvaluateMitigation
 
@@ -1594,47 +1573,41 @@ if validTimeframe and array.size(sessions) > 0
                     label.delete(sess.retrace618Label)
                     sess.retrace618Label := na
 
-            // Proximity detection for unmitigated levels
-            if showProximity and not na(atrRange)
-                // High proximity: show dashed line if unmitigated high is within ATR range AND price is approaching
-                if not sess.highMitigated
-                    highDistance = sess.dominantHigh - close
-                    highDistancePrev = sess.dominantHigh - close[PROXIMITY_LOOKBACK]
-                    isApproachingHigh = highDistance < highDistancePrev
-                    if highDistance > 0 and highDistance <= atrRange and isApproachingHigh
-                        if na(sess.highProximityLine)
-                            sess.highProximityLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_dashed, width=PROXIMITY_LINE_WIDTH, xloc=xloc.bar_time)
-                        else
-                            line.set_x2(sess.highProximityLine, time)
-                    else
-                        if not na(sess.highProximityLine)
-                            line.delete(sess.highProximityLine)
-                            sess.highProximityLine := na
-                else
-                    // High was mitigated, delete proximity line if exists
-                    if not na(sess.highProximityLine)
-                        line.delete(sess.highProximityLine)
-                        sess.highProximityLine := na
-
-                // Low proximity: show dashed line if unmitigated low is within ATR range AND price is approaching
-                if not sess.lowMitigated
-                    lowDistance = close - sess.dominantLow
-                    lowDistancePrev = close[PROXIMITY_LOOKBACK] - sess.dominantLow
-                    isApproachingLow = lowDistance < lowDistancePrev
-                    if lowDistance > 0 and lowDistance <= atrRange and isApproachingLow
-                        if na(sess.lowProximityLine)
-                            sess.lowProximityLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_dashed, width=PROXIMITY_LINE_WIDTH, xloc=xloc.bar_time)
-                        else
-                            line.set_x2(sess.lowProximityLine, time)
-                    else
-                        if not na(sess.lowProximityLine)
-                            line.delete(sess.lowProximityLine)
-                            sess.lowProximityLine := na
-                else
-                    // Low was mitigated, delete proximity line if exists
-                    if not na(sess.lowProximityLine)
-                        line.delete(sess.lowProximityLine)
-                        sess.lowProximityLine := na
+    // Combine overlapping unmitigated labels (when multiple sessions share the same price level)
+    if mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
+        LABEL_OVERLAP_PCT = 0.005  // 0.005% of price tolerance
+        // Combine HIGH labels at same price
+        for i = 0 to array.size(sessions) - 2
+            sessA = array.get(sessions, i)
+            if na(sessA.highUnmitigatedLabel) or na(sessA.dominantHigh)
+                continue
+            tolerance = sessA.dominantHigh * LABEL_OVERLAP_PCT / 100
+            for j = i + 1 to array.size(sessions) - 1
+                sessB = array.get(sessions, j)
+                if na(sessB.highUnmitigatedLabel) or na(sessB.dominantHigh)
+                    continue
+                if math.abs(sessA.dominantHigh - sessB.dominantHigh) <= tolerance
+                    existingText = label.get_text(sessA.highUnmitigatedLabel)
+                    newText = existingText + " / " + sessB.chartLabel
+                    label.set_text(sessA.highUnmitigatedLabel, newText)
+                    label.delete(sessB.highUnmitigatedLabel)
+                    sessB.highUnmitigatedLabel := na
+        // Combine LOW labels at same price
+        for i = 0 to array.size(sessions) - 2
+            sessA = array.get(sessions, i)
+            if na(sessA.lowUnmitigatedLabel) or na(sessA.dominantLow)
+                continue
+            tolerance = sessA.dominantLow * LABEL_OVERLAP_PCT / 100
+            for j = i + 1 to array.size(sessions) - 1
+                sessB = array.get(sessions, j)
+                if na(sessB.lowUnmitigatedLabel) or na(sessB.dominantLow)
+                    continue
+                if math.abs(sessA.dominantLow - sessB.dominantLow) <= tolerance
+                    existingText = label.get_text(sessA.lowUnmitigatedLabel)
+                    newText = existingText + " / " + sessB.chartLabel
+                    label.set_text(sessA.lowUnmitigatedLabel, newText)
+                    label.delete(sessB.lowUnmitigatedLabel)
+                    sessB.lowUnmitigatedLabel := na
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 5: DEVIATION GLOW - Darken deviation zones when price touches them
