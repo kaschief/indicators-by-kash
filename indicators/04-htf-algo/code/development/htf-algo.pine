@@ -9,10 +9,10 @@ indicator('htf algo •', overlay=true, max_lines_count=500, max_labels_count=50
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const int CAP_MEDIUM = 200
-
-const int LINE_EXTENSION_BARS = 15
-const int LINE_LOOKBACK_BARS = 15
+const int HTF_LOOKBACK_CANDLES_MAX = 200
+const int PROVISIONAL_LINE_WIDTH = 1
+const int LINE_START_OFFSET = 5
+const int LINE_LENGTH = 20
 
 const string GROUP_FILTER = "Filter"
 const string GROUP_MACRO = "Macro"
@@ -31,9 +31,11 @@ const string SIZE_LARGE = 'Large'
 const int TIER_MACRO_MAX_RANK = 3
 const int TIER_SWING_MAX_RANK = 6
 
+const int TF_15M_SECONDS = 900
 const int TF_4H_SECONDS = 14400
 const int TF_7H_SECONDS = 25200
 const int ADR_FILTER_MAX_TF_SECONDS = TF_7H_SECONDS
+const int TIME_LEVELS_MAX_TF_SECONDS = TF_15M_SECONDS
 
 // Timeframe strings
 const string TF_15M = '15'
@@ -165,10 +167,11 @@ type HtfSlot
 // ═══════════════════════════════════════════════════════════════════════════════
 
 adr_filter_enabled = input.bool(true, 'ADR Filter', group=GROUP_FILTER, inline='adr', tooltip='When ON: only show levels within ADR range\nWhen OFF: show N levels per TF closest to price')
+adr_period = input.int(5, '', minval=1, maxval=20, group=GROUP_FILTER, inline='adr', tooltip='Number of days for ADR calculation')
 adr_multiplier = input.float(1.0, '×', minval=0.4, maxval=2.0, step=0.1, group=GROUP_FILTER, inline='adr', tooltip='1.0 = exact ADR, 1.5 = extended range')
 show_adr_lines = input.bool(true, 'ADR Lines', group=GROUP_FILTER, inline='adr_lines', tooltip='Show solid lines at ADR+ and ADR- levels')
 adr_lines_color = input.color(color.rgb(0, 0, 0), '', group=GROUP_FILTER, inline='adr_lines')
-open_lines_count = input.int(1, 'Max Levels', minval=1, maxval=20, group=GROUP_FILTER, inline='opts', tooltip='Max open levels per TF (when ADR filter OFF)')
+open_lines_count = input.int(1, 'Max Non-ADR Open Levels', minval=1, maxval=20, group=GROUP_FILTER, inline='opts', tooltip='Max open levels per TF (when ADR filter OFF)')
 multi_type_only = input.bool(false, 'Multi-Type', group=GROUP_FILTER, inline='opts2', tooltip='Macro always shows; Swing/Intra only if 2+ types align (HTFs, sessions, time levels)')
 highlight_nearest = input.bool(false, 'Nearest', group=GROUP_FILTER, inline='opts2', tooltip='Bump size of nearest BSL/SSL')
 show_price_on_label = input.bool(false, 'Price', group=GROUP_FILTER, inline='opts2', tooltip='Append price to label')
@@ -206,6 +209,7 @@ time_level_mitigation_window = input.string(MITIGATION_WINDOW_MARKET_HOURS, "Mit
 show_asia_open = input.bool(true, "Asia Open", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Asia Open (18:00-21:00) high and low")
 show_evening = input.bool(true, "Evening", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Evening Range (18:45-22:03) high and low")
 show_rafael = input.bool(true, "Rafael", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Rafael's Range (21:30-01:29) high and low")
+show_session_provisional = input.bool(true, "Show Provisional", group=GROUP_SESSION_LEVELS, tooltip="Show dashed lines when a level is touched overnight but not yet confirmed (before 05:00)")
 
 line_color = input.color(color.rgb(0, 151, 0), 'Line', group=GROUP_LINE_STYLES, inline='line_colors')
 macro_line_color = input.color(color.rgb(247, 11, 241), 'Macro', group=GROUP_LINE_STYLES, inline='line_colors')
@@ -228,6 +232,7 @@ show_color_table = input.bool(false, 'Color Reference Table', group=GROUP_DEV)
 
 chart_tf_seconds = timeframe.in_seconds(timeframe.period)
 chart_tf_minutes = chart_tf_seconds / 60
+time_levels_tf_valid = chart_tf_seconds <= TIME_LEVELS_MAX_TF_SECONDS
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA STRUCTURES
@@ -695,24 +700,24 @@ process_htf(float prev_h, float prev_l, float prev_c, int prev_t,
                 array<int> ssl_detect_times, array<int> ssl_fill_times,
                 array<int> eligible_high_ticks, array<int> eligible_low_ticks,
                 array<int> eligible_high_times, array<int> eligible_low_times,
-                bool has_history, int ref_cap) =>
+                bool has_history, int HTF_LOOKBACK_CANDLES_MAX) =>
     result = has_history
     if not na(prev_h)
         if has_history
             detect_bsl(prev_h, prev_l, prev_c, prev_t, bsl_targets, bsl_open, bsl_detect_times, bsl_fill_times, eligible_low_ticks, eligible_low_times)
             detect_ssl(prev_h, prev_l, prev_c, prev_t, ssl_targets, ssl_open, ssl_detect_times, ssl_fill_times, eligible_high_ticks, eligible_high_times)
             remove_broken(prev_h, prev_l, eligible_high_ticks, eligible_high_times, eligible_low_ticks, eligible_low_times)
-        track_candle(prev_h, prev_l, prev_t, ref_cap, eligible_high_ticks, eligible_low_ticks, eligible_high_times, eligible_low_times)
+        track_candle(prev_h, prev_l, prev_t, HTF_LOOKBACK_CANDLES_MAX, eligible_high_ticks, eligible_low_ticks, eligible_high_times, eligible_low_times)
         result := true
     result
 
-slot_process_htf(float prev_h, float prev_l, float prev_c, int prev_t, HtfSlot slot, int ref_cap) =>
+slot_process_htf(float prev_h, float prev_l, float prev_c, int prev_t, HtfSlot slot, int HTF_LOOKBACK_CANDLES_MAX) =>
     if not na(prev_h)
         if slot.has_history
             detect_bsl(prev_h, prev_l, prev_c, prev_t, slot.bsl_targets, slot.bsl_open, slot.bsl_detect_times, slot.bsl_fill_times, slot.eligible_low_ticks, slot.eligible_low_times)
             detect_ssl(prev_h, prev_l, prev_c, prev_t, slot.ssl_targets, slot.ssl_open, slot.ssl_detect_times, slot.ssl_fill_times, slot.eligible_high_ticks, slot.eligible_high_times)
             remove_broken(prev_h, prev_l, slot.eligible_high_ticks, slot.eligible_high_times, slot.eligible_low_ticks, slot.eligible_low_times)
-        track_candle(prev_h, prev_l, prev_t, ref_cap, slot.eligible_high_ticks, slot.eligible_low_ticks, slot.eligible_high_times, slot.eligible_low_times)
+        track_candle(prev_h, prev_l, prev_t, HTF_LOOKBACK_CANDLES_MAX, slot.eligible_high_ticks, slot.eligible_low_ticks, slot.eligible_high_times, slot.eligible_low_times)
         slot.has_history := true
 
 slot_check_fills(float current_high, float current_low, int current_time, HtfSlot slot) =>
@@ -841,11 +846,17 @@ collect_levels(array<float> bsl_targets, array<bool> bsl_open,
 slot_collect_levels(HtfSlot slot, float lower_band, float upper_band, string htf_tag, bool use_adr, int max_levels, float current_price, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
     collect_levels(slot.bsl_targets, slot.bsl_open, slot.ssl_targets, slot.ssl_open, lower_band, upper_band, htf_tag, slot.rank, use_adr, max_levels, current_price, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
 
-// Format time level label with date (e.g., "16:00 Jan 2")
+// Format time level label with date (e.g., "16:00 Yesterday" or "16:00 Jan 28")
 format_time_level_label(string base_text, int level_time) =>
-    string month_str = str.format("{0,date,MMM}", level_time)
-    string day_str = str.format("{0,date,d}", level_time)
-    base_text + " " + month_str + " " + day_str
+    int today_start = timestamp(year, month, dayofmonth, 0, 0, 0)
+    int yesterday_start = today_start - 24 * 60 * 60 * 1000
+    bool is_yesterday = level_time >= yesterday_start and level_time < today_start
+    if is_yesterday
+        base_text + " Yesterday"
+    else
+        string month_str = str.format("{0,date,MMM}", level_time)
+        string day_str = str.format("{0,date,d}", level_time)
+        base_text + " " + month_str + " " + day_str
 
 // Find tick index in array, returns -1 if not found (exact match)
 find_tick_index(int tick, array<int> ticks) =>
@@ -930,22 +941,72 @@ collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bo
                         if most_recent_only
                             break  // Only show the most recent stored level
 
+// Draw provisional session levels with solid+dashed split (like deviations)
+// Solid from session origin to breach time, dashed from breach time to current
+draw_session_provisional_lines(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter,
+                                color line_color, int end_bar,
+                                array<line> lines_arr, array<label> labels_arr,
+                                color bsl_col, color ssl_col, float current_price, string label_size) =>
+    if not level.in_session
+        int tf_ms = timeframe.in_seconds(timeframe.period) * 1000
+
+        // HIGH: if provisional but not mitigated, draw solid to breach + dashed after
+        if not na(level.current_high) and not level.high_mitigated and level.provisional_high_mitigated
+            bool in_range = use_adr_filter ? (level.current_high >= lower_band and level.current_high <= upper_band) : true
+            if in_range
+                int origin_bar = bar_index - int((time - level.current_high_time) / tf_ms)
+                int breach_bar = bar_index - int((time - level.provisional_high_time) / tf_ms)
+                origin_bar := math.max(0, origin_bar)
+                breach_bar := math.max(origin_bar, breach_bar)
+                // Solid from origin to breach
+                ln_solid = line.new(origin_bar, level.current_high, breach_bar, level.current_high, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_solid)
+                array.push(lines_arr, ln_solid)
+                // Dashed from breach to end
+                ln_dashed = line.new(breach_bar, level.current_high, end_bar, level.current_high, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_dashed)
+                array.push(lines_arr, ln_dashed)
+                // Label
+                lbl_col = level.current_high > current_price ? bsl_col : ssl_col
+                lb = label.new(end_bar, level.current_high, level.label_text, style=label.style_label_left, textcolor=lbl_col, size=get_size(label_size, false), color=color.new(color.white, 100))
+                array.push(labels_arr, lb)
+
+        // LOW: if provisional but not mitigated, draw solid to breach + dashed after
+        if not na(level.current_low) and not level.low_mitigated and level.provisional_low_mitigated
+            bool in_range = use_adr_filter ? (level.current_low >= lower_band and level.current_low <= upper_band) : true
+            if in_range
+                int origin_bar = bar_index - int((time - level.current_low_time) / tf_ms)
+                int breach_bar = bar_index - int((time - level.provisional_low_time) / tf_ms)
+                origin_bar := math.max(0, origin_bar)
+                breach_bar := math.max(origin_bar, breach_bar)
+                // Solid from origin to breach
+                ln_solid = line.new(origin_bar, level.current_low, breach_bar, level.current_low, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_solid)
+                array.push(lines_arr, ln_solid)
+                // Dashed from breach to end
+                ln_dashed = line.new(breach_bar, level.current_low, end_bar, level.current_low, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_dashed)
+                array.push(lines_arr, ln_dashed)
+                // Label
+                lbl_col = level.current_low > current_price ? bsl_col : ssl_col
+                lb = label.new(end_bar, level.current_low, level.label_text, style=label.style_label_left, textcolor=lbl_col, size=get_size(label_size, false), color=color.new(color.white, 100))
+                array.push(labels_arr, lb)
+
 // Collect unmitigated session range levels (high and low) within ADR range
-collect_session_range_levels(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter, bool most_recent_only,
+// When skip_provisional is true, provisional levels are not added (they're drawn separately with dashed lines)
+collect_session_range_levels(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter, bool most_recent_only, bool skip_provisional,
                              array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
     bool high_added = false
     bool low_added = false
 
-    // Current session high (unmitigated)
-    if not na(level.current_high) and not level.high_mitigated and not level.in_session
+    // Current session high (unmitigated) - skip if provisional and skip_provisional is true
+    bool skip_high = skip_provisional and level.provisional_high_mitigated
+    if not na(level.current_high) and not level.high_mitigated and not level.in_session and not skip_high
         bool in_range = use_adr_filter ? (level.current_high >= lower_band and level.current_high <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_high)
             add_or_merge_open_level(tick, level.label_text, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts)
             high_added := true
 
-    // Current session low (unmitigated)
-    if not na(level.current_low) and not level.low_mitigated and not level.in_session
+    // Current session low (unmitigated) - skip if provisional and skip_provisional is true
+    bool skip_low = skip_provisional and level.provisional_low_mitigated
+    if not na(level.current_low) and not level.low_mitigated and not level.in_session and not skip_low
         bool in_range = use_adr_filter ? (level.current_low >= lower_band and level.current_low <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_low)
@@ -1017,7 +1078,7 @@ draw_consolidated(array<int> ticks, array<bool> is_bsl, array<string> tags, arra
             lbl_col = is_macro ? macro_col : (is_above_price ? bsl_col : ssl_col)
             lbl_text = format_level_label(htf_tags, sess_tags)
             lbl_text += show_price ? " • " + str.tostring(price, format.mintick) : ""
-            ln = line.new(end_bar - LINE_LOOKBACK_BARS, price, end_bar, price, color=ln_col, width=line_w, style=line.style_solid)
+            ln = line.new(end_bar - LINE_LENGTH, price, end_bar, price, color=ln_col, width=line_w, style=line.style_solid)
             lb = label.new(end_bar, price, lbl_text, style=label.style_label_left, textcolor=lbl_col, size=lbl_sz, color=color.new(color.white, 100))
             array.push(lines_arr, ln)
             array.push(labels_arr, lb)
@@ -1210,7 +1271,7 @@ calc_adr(array<float> ranges, int lookback) =>
     else
         float(na)
 
-current_adr := calc_adr(adr_daily_ranges, 5)
+current_adr := calc_adr(adr_daily_ranges, adr_period)
 
 // ADR band for relevance filtering (matches ADR indicator: anchor = day's open, full ADR each direction)
 float adr_range = nz(current_adr, 0) * adr_multiplier
@@ -1221,25 +1282,22 @@ float adr_lower = adr_current_open - adr_range
 // DYNAMIC MODE - DETECTION LOGIC (using parameterized functions)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Reference level cap for Dynamic mode
-int ref_cap = CAP_MEDIUM
-
 if valid_1mo and changed_1mo
-    slot_process_htf(sec_1mo_high[1], sec_1mo_low[1], sec_1mo_close[1], int(sec_1mo_time[1]), slot_1mo, ref_cap)
+    slot_process_htf(sec_1mo_high[1], sec_1mo_low[1], sec_1mo_close[1], int(sec_1mo_time[1]), slot_1mo, HTF_LOOKBACK_CANDLES_MAX)
 if valid_1w and changed_1w
-    slot_process_htf(sec_1w_high[1], sec_1w_low[1], sec_1w_close[1], int(sec_1w_time[1]), slot_1w, ref_cap)
+    slot_process_htf(sec_1w_high[1], sec_1w_low[1], sec_1w_close[1], int(sec_1w_time[1]), slot_1w, HTF_LOOKBACK_CANDLES_MAX)
 if valid_1d and changed_1d
-    slot_process_htf(sec_1d_high[1], sec_1d_low[1], sec_1d_close[1], int(sec_1d_time[1]), slot_1d, ref_cap)
+    slot_process_htf(sec_1d_high[1], sec_1d_low[1], sec_1d_close[1], int(sec_1d_time[1]), slot_1d, HTF_LOOKBACK_CANDLES_MAX)
 if valid_12h and changed_12h
-    slot_process_htf(sec_12h_high[1], sec_12h_low[1], sec_12h_close[1], int(sec_12h_time[1]), slot_12h, ref_cap)
+    slot_process_htf(sec_12h_high[1], sec_12h_low[1], sec_12h_close[1], int(sec_12h_time[1]), slot_12h, HTF_LOOKBACK_CANDLES_MAX)
 if valid_8h and changed_8h
-    slot_process_htf(sec_8h_high[1], sec_8h_low[1], sec_8h_close[1], int(sec_8h_time[1]), slot_8h, ref_cap)
+    slot_process_htf(sec_8h_high[1], sec_8h_low[1], sec_8h_close[1], int(sec_8h_time[1]), slot_8h, HTF_LOOKBACK_CANDLES_MAX)
 if valid_7h and changed_7h
-    slot_process_htf(sec_7h_high[1], sec_7h_low[1], sec_7h_close[1], int(sec_7h_time[1]), slot_7h, ref_cap)
+    slot_process_htf(sec_7h_high[1], sec_7h_low[1], sec_7h_close[1], int(sec_7h_time[1]), slot_7h, HTF_LOOKBACK_CANDLES_MAX)
 if valid_4h and changed_4h
-    slot_process_htf(sec_4h_high[1], sec_4h_low[1], sec_4h_close[1], int(sec_4h_time[1]), slot_4h, ref_cap)
+    slot_process_htf(sec_4h_high[1], sec_4h_low[1], sec_4h_close[1], int(sec_4h_time[1]), slot_4h, HTF_LOOKBACK_CANDLES_MAX)
 if valid_1h and changed_1h
-    slot_process_htf(sec_1h_high[1], sec_1h_low[1], sec_1h_close[1], int(sec_1h_time[1]), slot_1h, ref_cap)
+    slot_process_htf(sec_1h_high[1], sec_1h_low[1], sec_1h_close[1], int(sec_1h_time[1]), slot_1h, HTF_LOOKBACK_CANDLES_MAX)
 
 // Fill Detection (only for enabled HTFs)
 if enabled_1mo
@@ -1264,7 +1322,7 @@ if enabled_1h
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Time-based price level capture and mitigation
-if show_1600_close
+if show_1600_close and time_levels_tf_valid
     int current_hour_ny = hour(time, NY_TIMEZONE)
     int current_minute_ny = minute(time, NY_TIMEZONE)
     bool is_target_bar = current_hour_ny == level_1600.target_hour and current_minute_ny == level_1600.target_minute
@@ -1311,13 +1369,13 @@ if show_1600_close
 int session_hour_ny = hour(time, NY_TIMEZONE)
 int session_minute_ny = minute(time, NY_TIMEZONE)
 
-if show_asia_open
+if show_asia_open and time_levels_tf_valid
     track_session_range_level(level_asia_open, session_hour_ny, session_minute_ny, high, low, int(time))
 
-if show_evening
+if show_evening and time_levels_tf_valid
     track_session_range_level(level_evening, session_hour_ny, session_minute_ny, high, low, int(time))
 
-if show_rafael
+if show_rafael and time_levels_tf_valid
     track_session_range_level(level_rafael, session_hour_ny, session_minute_ny, high, low, int(time))
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1334,8 +1392,8 @@ if barstate.islast
     array.clear(level_lines)
     array.clear(level_labels)
 
-    // Line end (start is calculated per-level to avoid crossing candles)
-    int line_end_bar = bar_index + LINE_EXTENSION_BARS
+    // Line positioning: offset slides both start and end together
+    int line_end_bar = bar_index + LINE_START_OFFSET + LINE_LENGTH
 
     // Temporary arrays for consolidation
     var array<int> cons_ticks = array.new_int()
@@ -1376,15 +1434,15 @@ if barstate.islast
     if valid_1h
         slot_collect_levels(slot_1h, adr_lower, adr_upper, get_htf_tag_for_tf(htf_1h), use_adr, cap_intra, close, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
 
-    // Collect time-based levels
-    if show_1600_close
+    // Collect time-based levels (only on 15m or lower)
+    if show_1600_close and time_levels_tf_valid
         collect_time_levels(level_1600, adr_lower, adr_upper, use_adr, time_level_most_recent_only, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
-    if show_asia_open
-        collect_session_range_levels(level_asia_open, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
-    if show_evening
-        collect_session_range_levels(level_evening, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
-    if show_rafael
-        collect_session_range_levels(level_rafael, adr_lower, adr_upper, use_adr, false, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_asia_open and time_levels_tf_valid
+        collect_session_range_levels(level_asia_open, adr_lower, adr_upper, use_adr, false, show_session_provisional, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_evening and time_levels_tf_valid
+        collect_session_range_levels(level_evening, adr_lower, adr_upper, use_adr, false, show_session_provisional, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
+    if show_rafael and time_levels_tf_valid
+        collect_session_range_levels(level_rafael, adr_lower, adr_upper, use_adr, false, show_session_provisional, cons_ticks, cons_is_bsl, cons_tags, cons_session_tags, cons_ranks, cons_source_counts)
 
     // Find nearest BSL (above price) and SSL (below price) for highlighting
     int nearest_bsl_tick = na
@@ -1436,6 +1494,15 @@ if barstate.islast
         size_macro, size_swing, size_intra, multi_type_only,
         highlight_nearest, nearest_bsl_tick, nearest_ssl_tick, show_price_on_label)
 
+    // Draw provisional session levels with solid+dashed split (only on 15m or lower)
+    if show_session_provisional and time_levels_tf_valid
+        if show_asia_open
+            draw_session_provisional_lines(level_asia_open, adr_lower, adr_upper, use_adr, session_line_color, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+        if show_evening
+            draw_session_provisional_lines(level_evening, adr_lower, adr_upper, use_adr, session_line_color, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+        if show_rafael
+            draw_session_provisional_lines(level_rafael, adr_lower, adr_upper, use_adr, session_line_color, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+
     // Draw ADR lines at same position as algo levels (only if not merged with existing level)
     if show_adr_lines and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and not na(current_adr)
         line.delete(adr_upper_line)
@@ -1443,10 +1510,10 @@ if barstate.islast
         label.delete(adr_upper_label)
         label.delete(adr_lower_label)
         if not adr_upper_merged
-            adr_upper_line := line.new(bar_index, adr_upper, line_end_bar, adr_upper, color=adr_lines_color, style=line.style_solid, width=1)
+            adr_upper_line := line.new(bar_index + LINE_START_OFFSET, adr_upper, line_end_bar, adr_upper, color=adr_lines_color, style=line.style_solid, width=1)
             adr_upper_label := label.new(line_end_bar, adr_upper, "ADR+", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
         if not adr_lower_merged
-            adr_lower_line := line.new(bar_index, adr_lower, line_end_bar, adr_lower, color=adr_lines_color, style=line.style_solid, width=1)
+            adr_lower_line := line.new(bar_index + LINE_START_OFFSET, adr_lower, line_end_bar, adr_lower, color=adr_lines_color, style=line.style_solid, width=1)
             adr_lower_label := label.new(line_end_bar, adr_lower, "ADR-", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
 
 
