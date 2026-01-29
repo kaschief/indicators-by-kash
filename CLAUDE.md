@@ -211,6 +211,41 @@ When renaming a color variable:
 
 The color reference table is a debugging and documentation tool. If it doesn't match the actual colors in the indicator, it becomes useless and misleading.
 
+### Color Reference Table Design
+
+The color reference table must follow this standard format:
+
+```pine
+// Helper function for DRY code
+addColorRow(table tbl, int row, string name, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
+if show_color_table and barstate.islast
+    var table color_table = table.new(position.top_right, 3, ROW_COUNT, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+    // Header row
+    table.cell(color_table, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(color_table, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(color_table, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+    // Data rows using counter (no magic numbers)
+    int row = 1
+    addColorRow(color_table, row, "Color Name", color_variable)
+    row += 1
+    // ... more rows
+```
+
+**Key requirements:**
+
+1. **Helper function** - Use `addColorRow()` for DRY code
+2. **White background** - `bgcolor=color.white` on the table
+3. **Header text** - Use "Setting" (not "Color") as the first column header
+4. **RGB format** - Use `R:{0} G:{1} B:{2}` format with `int()` to round values
+5. **Row counter** - Use a `row` variable and increment it (no magic numbers like 1, 2, 3)
+6. **Transparency** - Use `int(color.t(clr))` to round transparency values
+
 # Git Command Rules
 
 ## Core Rule

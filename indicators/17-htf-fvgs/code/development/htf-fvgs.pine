@@ -1,0 +1,597 @@
+//@version=6
+indicator('htf fvgs •', overlay=true, max_bars_back=5000, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Input Groups
+const string GROUP_FILTER = "Filter"
+const string GROUP_HTF = "Higher Timeframes"
+const string GROUP_DISPLAY = "Display"
+const string GROUP_LABELS = "Labels"
+const string GROUP_MITIGATION = "Mitigation"
+const string GROUP_DEV = "Development"
+
+// Mitigation Types
+const string MIT_NONE = 'None'
+const string MIT_TOUCHED = 'Touched'
+const string MIT_WICK = 'Wick filled'
+const string MIT_BODY = 'Body filled'
+const string MIT_WICK_HALF = 'Wick filled half'
+const string MIT_BODY_HALF = 'Body filled half'
+
+// Timeframe Defaults
+const string TF_5M = '5'
+const string TF_15M = '15'
+const string TF_1H = '60'
+const string TF_4H = '240'
+const string TF_1D = '1D'
+const string TF_1W = '1W'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type FvgBox
+    line open_line
+    line close_line
+    line ce_line
+    line link_line
+    linefill fill
+    label lbl
+
+type Fvg
+    int open_time
+    int close_time
+    float open_price
+    float middle
+    float close_price
+    bool mitigated
+    bool is_bullish
+    FvgBox drawing
+
+type HtfSettings
+    bool show
+    string htf
+    color color_bull
+    color color_bear
+    int max_count
+
+type FvgStore
+    array<Fvg> fvgs
+    HtfSettings settings
+    int order = 1
+    int step = 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Filter
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool auto_pair = input.bool(false, 'Auto-Pair HTFs', group=GROUP_FILTER, tooltip='Automatically show relevant HTFs based on chart timeframe:\n1m → 5m, 15m, 1H\n3m → 15m, 1H, 4H\n5m → 15m, 1H, 4H\n15m → 1H, 4H, 1D\n30m → 1H, 4H, 1D\n1H → 4H, 1D, 1W\n4H → 1D, 1W\n1D → 1W, 1M')
+bool adr_filter_enabled = input.bool(true, 'ADR Filter', group=GROUP_FILTER, inline='adr', tooltip='Only show FVGs within ADR range from NY open')
+int adr_period = input.int(5, '', minval=1, maxval=20, group=GROUP_FILTER, inline='adr')
+float adr_multiplier = input.float(1.0, '×', minval=0.5, maxval=3.0, step=0.1, group=GROUP_FILTER, inline='adr')
+bool show_adr_lines = input.bool(false, 'ADR Lines', group=GROUP_FILTER, inline='adr_lines')
+color adr_lines_color = input.color(color.rgb(0, 0, 0), '', group=GROUP_FILTER, inline='adr_lines')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Higher Timeframes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string htf_tooltip = 'Show/Hide | Timeframe | Bull Color | Bear Color | Max Count'
+
+bool htf1_show = input.bool(true, '', group=GROUP_HTF, inline='htf1')
+string htf1_tf = input.timeframe(TF_5M, '', group=GROUP_HTF, inline='htf1')
+color htf1_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf1')
+color htf1_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf1')
+int htf1_max = input.int(5, '', group=GROUP_HTF, inline='htf1', tooltip=htf_tooltip)
+
+bool htf2_show = input.bool(true, '', group=GROUP_HTF, inline='htf2')
+string htf2_tf = input.timeframe(TF_15M, '', group=GROUP_HTF, inline='htf2')
+color htf2_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf2')
+color htf2_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf2')
+int htf2_max = input.int(5, '', group=GROUP_HTF, inline='htf2', tooltip=htf_tooltip)
+
+bool htf3_show = input.bool(true, '', group=GROUP_HTF, inline='htf3')
+string htf3_tf = input.timeframe(TF_1H, '', group=GROUP_HTF, inline='htf3')
+color htf3_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf3')
+color htf3_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf3')
+int htf3_max = input.int(5, '', group=GROUP_HTF, inline='htf3', tooltip=htf_tooltip)
+
+bool htf4_show = input.bool(true, '', group=GROUP_HTF, inline='htf4')
+string htf4_tf = input.timeframe(TF_4H, '', group=GROUP_HTF, inline='htf4')
+color htf4_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf4')
+color htf4_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf4')
+int htf4_max = input.int(5, '', group=GROUP_HTF, inline='htf4', tooltip=htf_tooltip)
+
+bool htf5_show = input.bool(true, '', group=GROUP_HTF, inline='htf5')
+string htf5_tf = input.timeframe(TF_1D, '', group=GROUP_HTF, inline='htf5')
+color htf5_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf5')
+color htf5_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf5')
+int htf5_max = input.int(2, '', group=GROUP_HTF, inline='htf5', tooltip=htf_tooltip)
+
+bool htf6_show = input.bool(true, '', group=GROUP_HTF, inline='htf6')
+string htf6_tf = input.timeframe(TF_1W, '', group=GROUP_HTF, inline='htf6')
+color htf6_bull = input.color(color.rgb(0, 128, 0), '', group=GROUP_HTF, inline='htf6')
+color htf6_bear = input.color(color.rgb(255, 0, 0), '', group=GROUP_HTF, inline='htf6')
+int htf6_max = input.int(2, '', group=GROUP_HTF, inline='htf6', tooltip=htf_tooltip)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Display
+// ═══════════════════════════════════════════════════════════════════════════════
+
+color ce_color = input.color(color.new(color.rgb(184, 184, 184), 10), 'C.E.', group=GROUP_DISPLAY)
+int extend_distance = input.int(4, 'Extend Distance', minval=0, group=GROUP_DISPLAY)
+int htf_buffer = input.int(25, 'HTF Spacing', minval=0, group=GROUP_DISPLAY)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Mitigation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string mit_tooltip = 'Mitigation checks both HTF candle body AND current TF price action in real-time'
+
+bool show_mitigated = input.bool(false, 'Show Mitigated', group=GROUP_MITIGATION, inline='mit')
+color mit_color = input.color(color.new(color.rgb(120, 123, 134), 50), '', group=GROUP_MITIGATION, inline='mit')
+string mit_type = input.string(MIT_WICK, 'Type', options=[MIT_NONE, MIT_TOUCHED, MIT_WICK, MIT_BODY, MIT_WICK_HALF, MIT_BODY_HALF], group=GROUP_MITIGATION, tooltip=mit_tooltip)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Labels
+// ═══════════════════════════════════════════════════════════════════════════════
+
+color label_bull_color = input.color(color.new(color.rgb(16, 110, 237), 10), 'Bull', group=GROUP_LABELS, inline='label')
+color label_bear_color = input.color(color.new(color.rgb(247, 11, 241), 10), 'Bear', group=GROUP_LABELS, inline='label')
+color label_mit_color = input.color(color.new(color.rgb(99, 99, 99), 30), 'Mit', group=GROUP_LABELS, inline='label')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS - Development
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool show_color_table = input.bool(false, 'Color Reference Table', group=GROUP_DEV)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DERIVED VALUES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int chart_tf_seconds = timeframe.in_seconds()
+int bar_spacing = chart_tf_seconds * 1000
+
+// HTF Settings
+HtfSettings htf1_settings = HtfSettings.new(htf1_show, htf1_tf, htf1_bull, htf1_bear, htf1_max)
+HtfSettings htf2_settings = HtfSettings.new(htf2_show, htf2_tf, htf2_bull, htf2_bear, htf2_max)
+HtfSettings htf3_settings = HtfSettings.new(htf3_show, htf3_tf, htf3_bull, htf3_bear, htf3_max)
+HtfSettings htf4_settings = HtfSettings.new(htf4_show, htf4_tf, htf4_bull, htf4_bear, htf4_max)
+HtfSettings htf5_settings = HtfSettings.new(htf5_show, htf5_tf, htf5_bull, htf5_bear, htf5_max)
+HtfSettings htf6_settings = HtfSettings.new(htf6_show, htf6_tf, htf6_bull, htf6_bear, htf6_max)
+
+// FVG Storage
+var FvgStore store1 = FvgStore.new(array.new<Fvg>(), htf1_settings)
+var FvgStore store2 = FvgStore.new(array.new<Fvg>(), htf2_settings)
+var FvgStore store3 = FvgStore.new(array.new<Fvg>(), htf3_settings)
+var FvgStore store4 = FvgStore.new(array.new<Fvg>(), htf4_settings)
+var FvgStore store5 = FvgStore.new(array.new<Fvg>(), htf5_settings)
+var FvgStore store6 = FvgStore.new(array.new<Fvg>(), htf6_settings)
+
+// Update settings references on each bar
+store1.settings := htf1_settings
+store2.settings := htf2_settings
+store3.settings := htf3_settings
+store4.settings := htf4_settings
+store5.settings := htf5_settings
+store6.settings := htf6_settings
+
+// HTF real-time OHLC (for accurate body vs wick mitigation)
+// lookahead_off gives us the CURRENT forming candle's values
+[sec1_o, sec1_h, sec1_l, sec1_c] = request.security(syminfo.tickerid, htf1_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[sec2_o, sec2_h, sec2_l, sec2_c] = request.security(syminfo.tickerid, htf2_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[sec3_o, sec3_h, sec3_l, sec3_c] = request.security(syminfo.tickerid, htf3_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[sec4_o, sec4_h, sec4_l, sec4_c] = request.security(syminfo.tickerid, htf4_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[sec5_o, sec5_h, sec5_l, sec5_c] = request.security(syminfo.tickerid, htf5_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[sec6_o, sec6_h, sec6_l, sec6_c] = request.security(syminfo.tickerid, htf6_tf, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADR CALCULATION (matches ADR indicator exactly)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+calc_adr(array<float> ranges, int lookback) =>
+    int count = math.min(lookback, array.size(ranges))
+    if count > 0
+        float sum = 0.0
+        for i = 0 to count - 1
+            sum += array.get(ranges, i)
+        sum / count
+    else
+        float(na)
+
+int ny_hour = hour(time, "America/New_York")
+int prev_ny_hour = hour(time[1], "America/New_York")
+bool is_new_ny_day = ny_hour == 0 and prev_ny_hour == 23
+
+var array<float> adr_daily_ranges = array.new_float()
+var float adr_day_high = high
+var float adr_day_low = low
+var float adr_day_open = open
+var float current_adr = na
+
+if is_new_ny_day
+    float completed_range = adr_day_high - adr_day_low
+    if completed_range > 0
+        array.unshift(adr_daily_ranges, completed_range)
+        if array.size(adr_daily_ranges) > 20
+            array.pop(adr_daily_ranges)
+    current_adr := calc_adr(adr_daily_ranges, adr_period)
+    adr_day_high := high
+    adr_day_low := low
+    adr_day_open := open
+else
+    adr_day_high := math.max(adr_day_high, high)
+    adr_day_low := math.min(adr_day_low, low)
+
+float adr_range = nz(current_adr, 0) * adr_multiplier
+float adr_upper = adr_day_open + adr_range
+float adr_lower = adr_day_open - adr_range
+
+is_in_adr_range(float price) =>
+    not adr_filter_enabled or na(current_adr) or (price >= adr_lower and price <= adr_upper)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+is_valid_htf(string tf) =>
+    int tf_seconds = timeframe.in_seconds(tf)
+    chart_tf_seconds < tf_seconds
+
+// Auto-pair HTFs based on chart timeframe
+// | Chart  | HTF1 | HTF2 | HTF3 |
+// |--------|------|------|------|
+// | 1m     | 5m   | 15m  | 1H   |
+// | 3m     | 15m  | 1H   | 4H   |
+// | 5m     | 15m  | 1H   | 4H   |
+// | 15m    | 1H   | 4H   | 1D   |
+// | 30m    | 1H   | 4H   | 1D   |
+// | 1H     | 4H   | 1D   | 1W   |
+// | 4H     | 1D   | 1W   | -    |
+// | 1D     | 1W   | 1M   | -    |
+should_show_htf(string htf) =>
+    int htf_sec = timeframe.in_seconds(htf)
+    int SEC_5M = 300, SEC_15M = 900, SEC_30M = 1800
+    int SEC_1H = 3600, SEC_4H = 14400
+    int SEC_1D = 86400, SEC_1W = 604800, SEC_1M = 2592000
+
+    switch
+        chart_tf_seconds <= 60 => htf_sec == SEC_5M or htf_sec == SEC_15M or htf_sec == SEC_1H
+        chart_tf_seconds <= 180 => htf_sec == SEC_15M or htf_sec == SEC_1H or htf_sec == SEC_4H
+        chart_tf_seconds <= SEC_5M => htf_sec == SEC_15M or htf_sec == SEC_1H or htf_sec == SEC_4H
+        chart_tf_seconds <= SEC_15M => htf_sec == SEC_1H or htf_sec == SEC_4H or htf_sec == SEC_1D
+        chart_tf_seconds <= SEC_30M => htf_sec == SEC_1H or htf_sec == SEC_4H or htf_sec == SEC_1D
+        chart_tf_seconds <= SEC_1H => htf_sec == SEC_4H or htf_sec == SEC_1D or htf_sec == SEC_1W
+        chart_tf_seconds <= SEC_4H => htf_sec == SEC_1D or htf_sec == SEC_1W
+        chart_tf_seconds <= SEC_1D => htf_sec == SEC_1W or htf_sec == SEC_1M
+        => false
+
+format_timeframe(string htf) =>
+    int seconds = timeframe.in_seconds(htf)
+    if seconds < 60
+        str.tostring(seconds) + 's'
+    else if seconds / 60 < 60
+        str.tostring(seconds / 60) + 'm'
+    else if seconds / 60 / 60 < 24
+        str.tostring(seconds / 60 / 60) + 'H'
+    else
+        htf
+
+find_bar_at_price(float price, int start_time, int default_time, bool inverse, bool use_low) =>
+    int result = default_time
+    int x = inverse ? 0 : (time - start_time) / bar_spacing
+    int y = inverse ? (time - start_time) / bar_spacing : 0
+    if x < 10000 and y < 10000
+        for i = x to y by 1
+            float bar_price = use_low ? low[i] : high[i]
+            if bar_price == price
+                result := time[i]
+                break
+    result
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FVG METHODS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+method clear_drawing(Fvg fvg) =>
+    if not na(fvg.drawing)
+        line.delete(fvg.drawing.open_line)
+        line.delete(fvg.drawing.close_line)
+        line.delete(fvg.drawing.ce_line)
+        line.delete(fvg.drawing.link_line)
+        linefill.delete(fvg.drawing.fill)
+        label.delete(fvg.drawing.lbl)
+        fvg.drawing := na
+        true
+    else
+        true
+
+method create_drawing(FvgStore store, Fvg fvg, int step) =>
+    if not store.settings.show
+        false
+    else if fvg.mitigated and not show_mitigated
+        fvg.clear_drawing()
+        false
+    else if not is_in_adr_range(fvg.middle)
+        fvg.clear_drawing()
+        false
+    else if na(fvg.drawing)
+        int buffer = time + (time - time[1]) * (extend_distance + 1 + htf_buffer * (step - 1))
+        color c = fvg.is_bullish ? store.settings.color_bull : store.settings.color_bear
+        color lbl_color = fvg.is_bullish ? label_bull_color : label_bear_color
+
+        fvg.drawing := FvgBox.new()
+        fvg.drawing.open_line := line.new(fvg.open_time, fvg.open_price, buffer, fvg.open_price, xloc=xloc.bar_time, style=line.style_dotted, color=color.new(c, 50), width=1)
+        fvg.drawing.close_line := line.new(fvg.close_time, fvg.close_price, buffer, fvg.close_price, xloc=xloc.bar_time, style=line.style_dotted, color=color.new(c, 50), width=1)
+        fvg.drawing.link_line := line.new(buffer, fvg.open_price, buffer, fvg.close_price, xloc=xloc.bar_time, style=line.style_solid, color=color.new(c, 75), width=1)
+        fvg.drawing.ce_line := line.new((fvg.open_time + fvg.close_time) / 2, fvg.middle, buffer, fvg.middle, xloc=xloc.bar_time, style=line.style_dotted, color=ce_color, width=1)
+        fvg.drawing.fill := linefill.new(fvg.drawing.open_line, fvg.drawing.close_line, color.new(c, 99))
+        fvg.drawing.lbl := label.new(buffer, fvg.middle, text=format_timeframe(store.settings.htf), xloc=xloc.bar_time, textcolor=lbl_color, style=label.style_label_left, color=color.new(color.white, 100), size=size.tiny)
+        true
+    else
+        true
+
+update_visible_steps() =>
+    int step = 1
+    for fvg in store1.fvgs
+        if not na(fvg.drawing)
+            store1.step := step
+            step += 1
+            break
+    for fvg in store2.fvgs
+        if not na(fvg.drawing)
+            store2.step := step
+            step += 1
+            break
+    for fvg in store3.fvgs
+        if not na(fvg.drawing)
+            store3.step := step
+            step += 1
+            break
+    for fvg in store4.fvgs
+        if not na(fvg.drawing)
+            store4.step := step
+            step += 1
+            break
+    for fvg in store5.fvgs
+        if not na(fvg.drawing)
+            store5.step := step
+            step += 1
+            break
+    for fvg in store6.fvgs
+        if not na(fvg.drawing)
+            store6.step := step
+            step += 1
+            break
+    step
+
+method update_zones(FvgStore store) =>
+    if barstate.islast
+        update_visible_steps()
+        int level = store.step
+        int unmitigated_count = 0
+
+        for fvg in store.fvgs
+            bool in_adr = is_in_adr_range(fvg.middle)
+
+            // Count unmitigated toward limit (mitigated have no limit)
+            if in_adr and not fvg.mitigated
+                unmitigated_count += 1
+
+            // Unmitigated FVGs have a limit, mitigated show all in range
+            bool exceeds_limit = not fvg.mitigated and unmitigated_count > store.settings.max_count
+
+            // Hide if outside ADR, exceeds limit, or mitigated when not showing mitigated
+            if not in_adr or exceeds_limit or (fvg.mitigated and not show_mitigated)
+                fvg.clear_drawing()
+            else if na(fvg.drawing)
+                store.create_drawing(fvg, store.order)
+            else if not na(fvg.drawing)
+                int buffer = 0
+                if fvg.mitigated
+                    buffer := fvg.close_time + bar_spacing * 50
+                    line.set_color(fvg.drawing.open_line, color.new(mit_color, 50))
+                    line.set_color(fvg.drawing.close_line, color.new(mit_color, 50))
+                    line.set_color(fvg.drawing.ce_line, mit_color)
+                    line.set_color(fvg.drawing.link_line, color.new(mit_color, 75))
+                    linefill.set_color(fvg.drawing.fill, color.new(mit_color, 99))
+                    label.set_textcolor(fvg.drawing.lbl, label_mit_color)
+                else
+                    buffer := time + bar_spacing * (extend_distance + 1 + (level - 1) * htf_buffer)
+
+                line.set_x2(fvg.drawing.open_line, buffer)
+                line.set_x2(fvg.drawing.close_line, buffer)
+                line.set_x1(fvg.drawing.link_line, buffer)
+                line.set_x2(fvg.drawing.link_line, buffer)
+                line.set_x2(fvg.drawing.ce_line, buffer)
+                label.set_x(fvg.drawing.lbl, buffer)
+    store
+
+// Storage limit - keep enough FVGs to handle ADR range changes
+const int STORAGE_LIMIT = 20
+
+method add_fvg(FvgStore store, float o, float c, int o_time, int c_time) =>
+    Fvg fvg = Fvg.new()
+    fvg.open_time := find_bar_at_price(o, o_time, o_time, false, o >= c)
+    fvg.close_time := find_bar_at_price(c, o_time, c_time, true, o < c)
+    fvg.open_price := o
+    fvg.middle := (o + c) / 2
+    fvg.close_price := c
+    fvg.is_bullish := o < c
+    store.fvgs.unshift(fvg)
+
+    // Remove oldest FVG if we exceed storage limit (not display limit)
+    if store.fvgs.size() > STORAGE_LIMIT
+        Fvg old = store.fvgs.pop()
+        old.clear_drawing()
+    store
+
+// Check mitigation using HTF candle OHLC:
+// - o = HTF candle open (fixed when candle starts)
+// - h/l = HTF candle running high/low (extremes since candle started)
+// - c = current close (real-time HTF candle close)
+// Body-based checks use HTF open vs real-time close, not CTF body
+method check_mitigation(FvgStore store, float o, float h, float l, float c) =>
+    if store.fvgs.size() > 0
+        for i = store.fvgs.size() - 1 to 0 by 1
+            Fvg fvg = store.fvgs.get(i)
+            if not fvg.mitigated
+                bool now_mitigated = switch mit_type
+                    MIT_NONE => false
+                    MIT_TOUCHED => fvg.is_bullish ? l < fvg.close_price : h > fvg.close_price
+                    MIT_WICK => fvg.is_bullish ? l <= fvg.open_price : h >= fvg.open_price
+                    MIT_BODY => fvg.is_bullish ? math.min(o, c) <= fvg.open_price : math.max(o, c) >= fvg.open_price
+                    MIT_WICK_HALF => fvg.is_bullish ? l <= fvg.middle : h >= fvg.middle
+                    MIT_BODY_HALF => fvg.is_bullish ? math.min(o, c) <= fvg.middle : math.max(o, c) >= fvg.middle
+                    => false
+
+                if now_mitigated
+                    fvg.mitigated := true
+                    if not show_mitigated
+                        fvg.clear_drawing()
+                        store.fvgs.remove(i)
+
+    // Mitigated FVGs stay in storage - display limit handled by update_zones
+    store
+
+method apply_adr_filter(FvgStore store) =>
+    if store.fvgs.size() > 0
+        for fvg in store.fvgs
+            store.create_drawing(fvg, store.order)
+    store
+
+method find_fvgs(FvgStore store, float o, float h, float l, float c, int t, float o1, float h1, float l1, float c1, int t1, float o2, float h2, float l2, float c2, int t2) =>
+    if store.settings.show
+        if h < l2 and h > l1 and l2 < h1
+            store.add_fvg(l2, h, t2, t)
+        if l > h2 and l < h1 and h2 > l1
+            store.add_fvg(h2, l, t2, t)
+    store
+
+get_htf_ohlct(string htf, int offset) =>
+    [open[offset], high[offset], low[offset], close[offset], time[offset]]
+
+method process(FvgStore store, string htf, float htf_o, float htf_h, float htf_l, float htf_c) =>
+    bool new_candle = bool(ta.change(time(htf, "america/New_York")))
+
+    if new_candle
+        // Get PREVIOUS closed candles for FVG detection
+        int inc = 1
+        [o, h, l, c, t] = request.security(syminfo.tickerid, htf, get_htf_ohlct(htf, inc), lookahead=barmerge.lookahead_on)
+        [o1, h1, l1, c1, t1] = request.security(syminfo.tickerid, htf, get_htf_ohlct(htf, inc + 1), lookahead=barmerge.lookahead_on)
+        [o2, h2, l2, c2, t2] = request.security(syminfo.tickerid, htf, get_htf_ohlct(htf, inc + 2), lookahead=barmerge.lookahead_on)
+        if not na(o)
+            if is_valid_htf(htf)
+                store.find_fvgs(o, h, l, c, t, o1, h1, l1, c1, t1, o2, h2, l2, c2, t2)
+            store.apply_adr_filter()
+            // Check mitigation with PREVIOUS closed HTF candle
+            store.check_mitigation(o, h, l, c)
+
+    // Check mitigation using CURRENT HTF candle's real-time OHLC from request.security
+    // htf_o = HTF candle open (fixed), htf_h/l = running extremes, htf_c = real-time close
+    if not na(htf_o)
+        store.check_mitigation(htf_o, htf_h, htf_l, htf_c)
+    store.update_zones()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN EXECUTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int cnt = 0
+
+bool show1 = auto_pair ? should_show_htf(htf1_tf) : store1.settings.show
+bool show2 = auto_pair ? should_show_htf(htf2_tf) : store2.settings.show
+bool show3 = auto_pair ? should_show_htf(htf3_tf) : store3.settings.show
+bool show4 = auto_pair ? should_show_htf(htf4_tf) : store4.settings.show
+bool show5 = auto_pair ? should_show_htf(htf5_tf) : store5.settings.show
+bool show6 = auto_pair ? should_show_htf(htf6_tf) : store6.settings.show
+
+if show1 and is_valid_htf(htf1_tf)
+    cnt += 1
+    store1.order := cnt
+    store1.process(htf1_tf, sec1_o, sec1_h, sec1_l, sec1_c)
+
+if show2 and is_valid_htf(htf2_tf)
+    cnt += 1
+    store2.order := cnt
+    store2.process(htf2_tf, sec2_o, sec2_h, sec2_l, sec2_c)
+
+if show3 and is_valid_htf(htf3_tf)
+    cnt += 1
+    store3.order := cnt
+    store3.process(htf3_tf, sec3_o, sec3_h, sec3_l, sec3_c)
+
+if show4 and is_valid_htf(htf4_tf)
+    cnt += 1
+    store4.order := cnt
+    store4.process(htf4_tf, sec4_o, sec4_h, sec4_l, sec4_c)
+
+if show5 and is_valid_htf(htf5_tf)
+    cnt += 1
+    store5.order := cnt
+    store5.process(htf5_tf, sec5_o, sec5_h, sec5_l, sec5_c)
+
+if show6 and is_valid_htf(htf6_tf)
+    cnt += 1
+    store6.order := cnt
+    store6.process(htf6_tf, sec6_o, sec6_h, sec6_l, sec6_c)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADR LINES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var line adr_upper_line = na
+var line adr_lower_line = na
+var label adr_upper_label = na
+var label adr_lower_label = na
+
+if barstate.islast
+    line.delete(adr_upper_line)
+    line.delete(adr_lower_line)
+    label.delete(adr_upper_label)
+    label.delete(adr_lower_label)
+
+    if show_adr_lines and not na(current_adr)
+        string mult_text = adr_multiplier == 1.0 ? "" : " " + str.tostring(adr_multiplier, "#.#")
+        int line_end = bar_index + extend_distance + 5
+        adr_upper_line := line.new(bar_index - 20, adr_upper, line_end, adr_upper, color=adr_lines_color, style=line.style_solid, width=1)
+        adr_lower_line := line.new(bar_index - 20, adr_lower, line_end, adr_lower, color=adr_lines_color, style=line.style_solid, width=1)
+        adr_upper_label := label.new(line_end, adr_upper, "ADR+" + mult_text, style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
+        adr_lower_label := label.new(line_end, adr_lower, "ADR-" + mult_text, style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+addColorRow(table tbl, int row, string name, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
+if show_color_table and barstate.islast
+    var table color_table = table.new(position.top_right, 3, 9, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+    table.cell(color_table, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(color_table, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(color_table, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+    int row = 1
+    addColorRow(color_table, row, "HTF1 Bull", htf1_bull)
+    row += 1
+    addColorRow(color_table, row, "HTF1 Bear", htf1_bear)
+    row += 1
+    addColorRow(color_table, row, "C.E.", ce_color)
+    row += 1
+    addColorRow(color_table, row, "Mitigated", mit_color)
+    row += 1
+    addColorRow(color_table, row, "Label Bull", label_bull_color)
+    row += 1
+    addColorRow(color_table, row, "Label Bear", label_bear_color)
+    row += 1
+    addColorRow(color_table, row, "Label Mit", label_mit_color)
+    row += 1
+    addColorRow(color_table, row, "ADR Lines", adr_lines_color)
