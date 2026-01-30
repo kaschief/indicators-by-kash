@@ -14,6 +14,7 @@ const string GROUP_MITIGATION = "Mitigation"
 const string GROUP_DEV = "Development"
 
 // Mitigation Types
+const string MIT_NONE = 'None'
 const string MIT_WICK = 'Wick'
 const string MIT_BODY = 'Body'
 const string MIT_BODY_HALF = 'Body Half'
@@ -59,6 +60,9 @@ type Fvg
     float middle
     float close_price
     bool mitigated
+    int mitigation_time
+    bool wicked
+    float max_body_fill
     bool is_bullish
     FvgBox drawing
 
@@ -132,7 +136,7 @@ int htf6_max = input.int(2, '', group=GROUP_HTF, inline='htf6', tooltip=htf_tool
 // INPUTS - Display
 // ═══════════════════════════════════════════════════════════════════════════════
 
-color ce_color = input.color(color.new(color.rgb(219, 219, 219), 10), 'C.E.', group=GROUP_DISPLAY)
+color ce_color = input.color(color.new(color.rgb(219, 219, 219), 50), 'C.E.', group=GROUP_DISPLAY)
 int extend_distance = input.int(4, 'Extend Distance', minval=0, group=GROUP_DISPLAY)
 int htf_buffer = input.int(25, 'HTF Spacing', minval=0, group=GROUP_DISPLAY)
 
@@ -144,7 +148,7 @@ string mit_tooltip = 'Mitigation checks both HTF candle body AND current TF pric
 
 bool show_mitigated = input.bool(false, 'Show Mitigated', group=GROUP_MITIGATION, inline='mit')
 color mit_color = input.color(color.new(color.rgb(120, 123, 134), 50), '', group=GROUP_MITIGATION, inline='mit')
-string mit_type = input.string(MIT_BODY, 'Type', options=[MIT_WICK, MIT_BODY, MIT_BODY_HALF, MIT_BODY_CUSTOM], group=GROUP_MITIGATION, tooltip=mit_tooltip)
+string mit_type = input.string(MIT_BODY, 'Type', options=[MIT_NONE, MIT_WICK, MIT_BODY, MIT_BODY_HALF, MIT_BODY_CUSTOM], group=GROUP_MITIGATION, tooltip=mit_tooltip)
 int mit_custom_pct = input.int(85, 'Custom Body Fill', minval=1, maxval=99, group=GROUP_MITIGATION, tooltip='Percentage of gap that must be filled for custom mitigation types')
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -154,6 +158,7 @@ int mit_custom_pct = input.int(85, 'Custom Body Fill', minval=1, maxval=99, grou
 color label_bull_color = input.color(color.new(color.rgb(16, 110, 237), 10), 'Bull', group=GROUP_LABELS, inline='label')
 color label_bear_color = input.color(color.new(color.rgb(247, 11, 241), 10), 'Bear', group=GROUP_LABELS, inline='label')
 color label_mit_color = input.color(color.new(color.rgb(99, 99, 99), 30), 'Mit', group=GROUP_LABELS, inline='label')
+bool show_fill_status = input.bool(true, 'Show Fill Status', group=GROUP_LABELS, tooltip='Show fill % for body penetration, ⋄ for wick-only touch')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS - Development
@@ -417,16 +422,29 @@ method update_zones(FvgStore store) =>
                 store.create_drawing(fvg, store.order)
             else if not na(fvg.drawing)
                 int buffer = 0
+                string tf_label = format_timeframe(store.settings.htf)
                 if fvg.mitigated
-                    buffer := fvg.close_time + bar_spacing * MITIGATED_BUFFER_BARS
+                    buffer := fvg.mitigation_time
                     line.set_color(fvg.drawing.open_line, color.new(mit_color, NORMAL_BORDER_TRANSPARENCY))
                     line.set_color(fvg.drawing.close_line, color.new(mit_color, NORMAL_BORDER_TRANSPARENCY))
                     line.set_color(fvg.drawing.ce_line, mit_color)
                     line.set_color(fvg.drawing.link_line, color.new(mit_color, NORMAL_LINK_TRANSPARENCY))
                     linefill.set_color(fvg.drawing.fill, color.new(mit_color, NORMAL_FILL_TRANSPARENCY))
                     label.set_textcolor(fvg.drawing.lbl, label_mit_color)
+                    label.set_text(fvg.drawing.lbl, tf_label)
                 else
                     buffer := time + bar_spacing * (extend_distance + 1 + (level - 1) * htf_buffer)
+                    // Build label with fill status
+                    string lbl_text = tf_label
+                    if show_fill_status
+                        float gap_size = math.abs(fvg.close_price - fvg.open_price)
+                        float filled = not na(fvg.max_body_fill) ? math.abs(fvg.close_price - fvg.max_body_fill) : 0
+                        int fill_pct = gap_size > 0 ? int(filled / gap_size * 100) : 0
+                        if fill_pct > 0
+                            lbl_text := tf_label + " (" + str.tostring(fill_pct) + "%)"
+                        else if fvg.wicked
+                            lbl_text := tf_label + " ›"
+                    label.set_text(fvg.drawing.lbl, lbl_text)
 
                 line.set_x2(fvg.drawing.open_line, buffer)
                 line.set_x2(fvg.drawing.close_line, buffer)
@@ -447,6 +465,7 @@ method add_fvg(FvgStore store, float o, float c, int o_time, int c_time) =>
     fvg.middle := (o + c) / 2
     fvg.close_price := c
     fvg.is_bullish := o < c
+    fvg.max_body_fill := c
     store.fvgs.unshift(fvg)
 
     // Remove oldest FVG if we exceed storage limit (not display limit)
@@ -465,8 +484,24 @@ method check_mitigation(FvgStore store, float o, float h, float l, float c) =>
         for i = store.fvgs.size() - 1 to 0 by 1
             Fvg fvg = store.fvgs.get(i)
             if not fvg.mitigated
+                // Track wick penetration
+                bool wick_entered = fvg.is_bullish ? l < fvg.close_price : h > fvg.close_price
+                if wick_entered and not fvg.wicked
+                    fvg.wicked := true
+
+                // Track deepest body fill
+                float body_low = math.min(o, c)
+                float body_high = math.max(o, c)
+                if na(fvg.max_body_fill)
+                    fvg.max_body_fill := fvg.close_price
+                if fvg.is_bullish and body_low < fvg.max_body_fill
+                    fvg.max_body_fill := math.max(body_low, fvg.open_price)
+                else if not fvg.is_bullish and body_high > fvg.max_body_fill
+                    fvg.max_body_fill := math.min(body_high, fvg.open_price)
+
                 float custom_target = fvg.open_price + (fvg.close_price - fvg.open_price) * (1 - mit_custom_pct / 100.0)
                 bool now_mitigated = switch mit_type
+                    MIT_NONE => false
                     MIT_WICK => fvg.is_bullish ? l <= fvg.open_price : h >= fvg.open_price
                     MIT_BODY => fvg.is_bullish ? math.min(o, c) <= fvg.open_price : math.max(o, c) >= fvg.open_price
                     MIT_BODY_HALF => fvg.is_bullish ? math.min(o, c) <= fvg.middle : math.max(o, c) >= fvg.middle
@@ -475,6 +510,7 @@ method check_mitigation(FvgStore store, float o, float h, float l, float c) =>
 
                 if now_mitigated
                     fvg.mitigated := true
+                    fvg.mitigation_time := time
                     if not show_mitigated
                         fvg.clear_drawing()
                         store.fvgs.remove(i)
