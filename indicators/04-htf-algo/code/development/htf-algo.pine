@@ -87,8 +87,8 @@ const string SESSION_NAME_RAFAEL = "Rafael Range"
 const int PREMARKET_START_MIN = 5 * 60    // 05:00 NY = 300 minutes
 const int CLOSE_1600_MIN = 16 * 60        // 16:00 NY = 960 minutes
 
-// Level merge tolerance (0.005% of price - levels within this range are combined)
-const float LEVEL_MERGE_PCT = 0.005
+// Level merge tolerance: 0.005% of price (levels within this range are combined)
+const float LEVEL_MERGE_PCT = 0.005 / 100
 
 // Time-based price level type
 type TimePriceLevel
@@ -896,7 +896,7 @@ merge_tag_at_index(int idx, string new_tag, array<string> tags) =>
 add_or_merge_open_level(int tick, string session_tag, array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts) =>
     // Calculate tolerance in ticks based on price (0.005% of price)
     float price = from_tick(tick)
-    float tolerance_price = price * LEVEL_MERGE_PCT / 100
+    float tolerance_price = price * LEVEL_MERGE_PCT
     int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
 
     int found_idx = find_nearby_tick_index(tick, out_ticks, tolerance_ticks)
@@ -940,31 +940,54 @@ collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bo
                         if most_recent_only
                             break  // Only show the most recent stored level
 
-// Draw provisional session levels as dashed lines (same position as other lines)
-draw_session_provisional_lines(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter,
-                                color line_color, int start_bar, int end_bar,
-                                array<line> lines_arr, array<label> labels_arr,
-                                color bsl_col, color ssl_col, float current_price, string label_size) =>
+// Collect provisional session level into merged arrays (uses same tolerance as regular levels)
+collect_provisional_level(SessionRangeLevel level, float lower_band, float upper_band, bool use_adr_filter,
+                          array<int> out_ticks, array<string> out_labels) =>
     if not level.in_session
-        // HIGH: if provisional but not mitigated, draw dashed line
+        // HIGH: if provisional but not mitigated
         if not na(level.current_high) and not level.high_mitigated and level.provisional_high_mitigated
             bool in_range = use_adr_filter ? (level.current_high >= lower_band and level.current_high <= upper_band) : true
             if in_range
-                ln = line.new(start_bar, level.current_high, end_bar, level.current_high, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_dashed)
-                array.push(lines_arr, ln)
-                lbl_col = level.current_high > current_price ? bsl_col : ssl_col
-                lb = label.new(end_bar, level.current_high, level.label_text, style=label.style_label_left, textcolor=lbl_col, size=get_size(label_size, false), color=color.new(color.white, 100))
-                array.push(labels_arr, lb)
+                int tick = to_tick(level.current_high)
+                float price = level.current_high
+                float tolerance_price = price * LEVEL_MERGE_PCT
+                int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
+                int found_idx = find_nearby_tick_index(tick, out_ticks, tolerance_ticks)
+                if found_idx >= 0
+                    merge_tag_at_index(found_idx, level.label_text, out_labels)
+                else
+                    array.push(out_ticks, tick)
+                    array.push(out_labels, level.label_text)
 
-        // LOW: if provisional but not mitigated, draw dashed line
+        // LOW: if provisional but not mitigated
         if not na(level.current_low) and not level.low_mitigated and level.provisional_low_mitigated
             bool in_range = use_adr_filter ? (level.current_low >= lower_band and level.current_low <= upper_band) : true
             if in_range
-                ln = line.new(start_bar, level.current_low, end_bar, level.current_low, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_dashed)
-                array.push(lines_arr, ln)
-                lbl_col = level.current_low > current_price ? bsl_col : ssl_col
-                lb = label.new(end_bar, level.current_low, level.label_text, style=label.style_label_left, textcolor=lbl_col, size=get_size(label_size, false), color=color.new(color.white, 100))
-                array.push(labels_arr, lb)
+                int tick = to_tick(level.current_low)
+                float price = level.current_low
+                float tolerance_price = price * LEVEL_MERGE_PCT
+                int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
+                int found_idx = find_nearby_tick_index(tick, out_ticks, tolerance_ticks)
+                if found_idx >= 0
+                    merge_tag_at_index(found_idx, level.label_text, out_labels)
+                else
+                    array.push(out_ticks, tick)
+                    array.push(out_labels, level.label_text)
+
+// Draw merged provisional levels as dashed lines
+draw_provisional_levels(array<int> ticks, array<string> labels, color line_color, int start_bar, int end_bar,
+                        array<line> lines_arr, array<label> labels_arr,
+                        color bsl_col, color ssl_col, float current_price, string label_size) =>
+    int count = array.size(ticks)
+    if count > 0
+        for i = 0 to count - 1
+            float price = from_tick(array.get(ticks, i))
+            string lbl_text = array.get(labels, i)
+            ln = line.new(start_bar, price, end_bar, price, color=line_color, width=PROVISIONAL_LINE_WIDTH, style=line.style_dashed)
+            array.push(lines_arr, ln)
+            lbl_col = price > current_price ? bsl_col : ssl_col
+            lb = label.new(end_bar, price, lbl_text, style=label.style_label_left, textcolor=lbl_col, size=get_size(label_size, false), color=color.new(color.white, 100))
+            array.push(labels_arr, lb)
 
 // Collect unmitigated session range levels (high and low) within ADR range
 // Provisional levels are skipped here - they're drawn separately with solid+dashed lines
@@ -1435,21 +1458,22 @@ if barstate.islast
     // Merge ADR labels into nearby levels (if ADR lines enabled and at same price)
     bool adr_upper_merged = false
     bool adr_lower_merged = false
+    string adr_mult_text = adr_multiplier == 1.0 ? "" : " " + str.tostring(adr_multiplier, "#.#")
     if show_adr_lines and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and not na(current_adr)
         int adr_upper_tick = to_tick(adr_upper)
         int adr_lower_tick = to_tick(adr_lower)
-        float tolerance_price = adr_upper * LEVEL_MERGE_PCT / 100
+        float tolerance_price = adr_upper * LEVEL_MERGE_PCT
         int tolerance_ticks = math.max(1, int(math.round(tolerance_price / syminfo.mintick)))
 
         for i = 0 to array.size(cons_ticks) - 1
             int lvl_tick = array.get(cons_ticks, i)
             if not adr_upper_merged and math.abs(lvl_tick - adr_upper_tick) <= tolerance_ticks
                 string existing = array.get(cons_session_tags, i)
-                array.set(cons_session_tags, i, existing == "" ? "ADR+" : existing + LABEL_SESSION_SEPARATOR + "ADR+")
+                array.set(cons_session_tags, i, existing == "" ? "ADR+" + adr_mult_text : existing + LABEL_SESSION_SEPARATOR + "ADR+" + adr_mult_text)
                 adr_upper_merged := true
             if not adr_lower_merged and math.abs(lvl_tick - adr_lower_tick) <= tolerance_ticks
                 string existing = array.get(cons_session_tags, i)
-                array.set(cons_session_tags, i, existing == "" ? "ADR-" : existing + LABEL_SESSION_SEPARATOR + "ADR-")
+                array.set(cons_session_tags, i, existing == "" ? "ADR-" + adr_mult_text : existing + LABEL_SESSION_SEPARATOR + "ADR-" + adr_mult_text)
                 adr_lower_merged := true
 
     // Draw consolidated levels (one line per unique price, highest HTF label with TF context)
@@ -1461,13 +1485,21 @@ if barstate.islast
         highlight_nearest, nearest_bsl_tick, nearest_ssl_tick, show_price_on_label)
 
     // Draw provisional session levels as dashed lines (only on 15m or lower)
+    // Collect all provisional levels first, then merge overlapping ones before drawing
     if time_levels_tf_valid
+        var array<int> prov_ticks = array.new_int()
+        var array<string> prov_labels = array.new_string()
+        array.clear(prov_ticks)
+        array.clear(prov_labels)
+
         if show_asia_open
-            draw_session_provisional_lines(level_asia_open, adr_lower, adr_upper, use_adr, session_line_color, line_start_bar, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+            collect_provisional_level(level_asia_open, adr_lower, adr_upper, use_adr, prov_ticks, prov_labels)
         if show_evening
-            draw_session_provisional_lines(level_evening, adr_lower, adr_upper, use_adr, session_line_color, line_start_bar, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+            collect_provisional_level(level_evening, adr_lower, adr_upper, use_adr, prov_ticks, prov_labels)
         if show_rafael
-            draw_session_provisional_lines(level_rafael, adr_lower, adr_upper, use_adr, session_line_color, line_start_bar, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
+            collect_provisional_level(level_rafael, adr_lower, adr_upper, use_adr, prov_ticks, prov_labels)
+
+        draw_provisional_levels(prov_ticks, prov_labels, session_line_color, line_start_bar, line_end_bar, level_lines, level_labels, bsl_text_color, ssl_text_color, close, size_swing)
 
     // Draw ADR lines at same position as algo levels (only if not merged with existing level)
     if show_adr_lines and chart_tf_seconds < ADR_FILTER_MAX_TF_SECONDS and not na(current_adr)
@@ -1477,10 +1509,10 @@ if barstate.islast
         label.delete(adr_lower_label)
         if not adr_upper_merged
             adr_upper_line := line.new(bar_index + LINE_START_OFFSET, adr_upper, line_end_bar, adr_upper, color=adr_lines_color, style=line.style_solid, width=1)
-            adr_upper_label := label.new(line_end_bar, adr_upper, "ADR+", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
+            adr_upper_label := label.new(line_end_bar, adr_upper, "ADR+" + adr_mult_text, style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
         if not adr_lower_merged
             adr_lower_line := line.new(bar_index + LINE_START_OFFSET, adr_lower, line_end_bar, adr_lower, color=adr_lines_color, style=line.style_solid, width=1)
-            adr_lower_label := label.new(line_end_bar, adr_lower, "ADR-", style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
+            adr_lower_label := label.new(line_end_bar, adr_lower, "ADR-" + adr_mult_text, style=label.style_label_left, textcolor=adr_lines_color, size=size.tiny, color=color.new(color.white, 100))
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1820,3 +1852,5 @@ if show_color_table and barstate.islast
     table.cell(colorTable, 0, 8, "16:00 Close", text_size=size.small)
     table.cell(colorTable, 1, 8, str.format("R:{0} G:{1} B:{2}", color.r(close_1600_color), color.g(close_1600_color), color.b(close_1600_color)), text_size=size.small)
     table.cell(colorTable, 2, 8, str.tostring(color.t(close_1600_color)), text_size=size.small)
+
+// htf algo •
