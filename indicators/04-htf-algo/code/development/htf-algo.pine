@@ -73,10 +73,9 @@ color COLOR_TRANSPARENT = color.new(color.white, 100)
 const string NY_TIMEZONE = "America/New_York"
 const int MITIGATION_DELAY_MS = 13 * 60 * 60 * 1000
 const int TIME_LEVEL_RANK = 0
-const string MITIGATION_WINDOW_ANYTIME = "Anytime"
-const string MITIGATION_WINDOW_MARKET_HOURS = "Market-Hours"
 const string GROUP_TIME_LEVELS = "Time Levels"
 const int MAX_STORED_LEVELS = 50
+const int TIME_LEVEL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000  // 30 days in milliseconds
 
 // Session level name constants
 const string SESSION_NAME_ASIA_OPEN = "ASIA OPEN: 1800"
@@ -178,7 +177,7 @@ adr_lines_color = input.color(color.rgb(0, 0, 0), '', group=GROUP_FILTER, inline
 open_lines_count = input.int(1, 'Max Non-ADR Open Levels', minval=1, maxval=20, group=GROUP_FILTER, inline='opts', tooltip='Max open levels per TF (when ADR filter OFF)')
 multi_type_only = input.bool(false, 'Multi-Type', group=GROUP_FILTER, inline='opts2', tooltip='Macro always shows; Swing/Intra only if 2+ types align (HTFs, sessions, time levels)')
 highlight_nearest = input.bool(false, 'Nearest', group=GROUP_FILTER, inline='opts2', tooltip='Bump size of nearest BSL/SSL')
-show_price_on_label = input.bool(false, 'Price', group=GROUP_FILTER, inline='opts2', tooltip='Append price to label')
+show_price_on_label = input.bool(true, 'Price', group=GROUP_FILTER, inline='opts2', tooltip='Append price to label')
 
 enabled_1mo = input.bool(true, 'M', group=GROUP_MACRO, inline='tf')
 enabled_1w = input.bool(true, 'W', group=GROUP_MACRO, inline='tf')
@@ -208,7 +207,6 @@ htf_1h = TF_1H
 
 show_1600_close = input.bool(true, "16:00 Close", group=GROUP_TIME_LEVELS, inline='1600', tooltip="Show untapped 16:00 close levels as algo draw within ADR zone")
 time_level_most_recent_only = input.bool(true, "Most Recent Only", group=GROUP_TIME_LEVELS, inline='recent', tooltip="Only show the most recent unmitigated 16:00 level. Older levels become visible once the newest is taken out.")
-time_level_mitigation_window = input.string(MITIGATION_WINDOW_MARKET_HOURS, "Mitigation", options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], group=GROUP_TIME_LEVELS, inline='mit', tooltip="Anytime: Mitigation any hour after 13h delay\nMarket-Hours: Only 05:00-16:00 NY")
 
 show_asia_open = input.bool(true, "Asia Open", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Asia Open (18:00-21:00) high and low")
 show_evening = input.bool(true, "Evening", group=GROUP_SESSION_LEVELS, inline='sess', tooltip="Show untapped Evening Range (18:45-22:03) high and low")
@@ -502,9 +500,7 @@ track_session_range_level(SessionRangeLevel level, int hour_ny, int minute_ny, f
     // Check stored levels mitigation
     int stored_highs = array.size(level.highs)
     if stored_highs > 0
-        int scan_size = math.min(stored_highs, 20)
-        int start_index = math.max(0, stored_highs - scan_size)
-        for i = start_index to stored_highs - 1
+        for i = 0 to stored_highs - 1
             if not array.get(level.highs_mitigated, i)
                 if bar_high >= array.get(level.highs, i)
                     array.set(level.highs_mitigated, i, true)
@@ -513,9 +509,7 @@ track_session_range_level(SessionRangeLevel level, int hour_ny, int minute_ny, f
 
     int stored_lows = array.size(level.lows)
     if stored_lows > 0
-        int scan_size = math.min(stored_lows, 20)
-        int start_index = math.max(0, stored_lows - scan_size)
-        for i = start_index to stored_lows - 1
+        for i = 0 to stored_lows - 1
             if not array.get(level.lows_mitigated, i)
                 if bar_low <= array.get(level.lows, i)
                     array.set(level.lows_mitigated, i, true)
@@ -973,7 +967,7 @@ add_or_merge_open_level(int tick, string session_tag, int detect_time, array<int
 collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bool use_adr_filter, bool most_recent_only,
                     array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts, array<int> out_detect_times) =>
     bool current_added = false
-    if not na(level.current_price) and not level.current_mitigated
+    if not na(level.current_price) and not level.current_mitigated and (time - level.current_time <= TIME_LEVEL_MAX_AGE_MS)
         bool in_range = use_adr_filter ? (level.current_price >= lower_band and level.current_price <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_price)
@@ -987,11 +981,13 @@ collect_time_levels(TimePriceLevel level, float lower_band, float upper_band, bo
         if stored_size > 0
             for i = 0 to stored_size - 1
                 if not array.get(level.mitigated, i)
+                    int lvl_time = array.get(level.times, i)
+                    if time - lvl_time > TIME_LEVEL_MAX_AGE_MS
+                        continue
                     float lvl = array.get(level.prices, i)
                     bool in_range = use_adr_filter ? (lvl >= lower_band and lvl <= upper_band) : true
                     if in_range
                         int tick = to_tick(lvl)
-                        int lvl_time = array.get(level.times, i)
                         string time_tag = format_time_level_label(level.label_text, lvl_time)
                         add_or_merge_open_level(tick, time_tag, lvl_time, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts, out_detect_times)
                         if most_recent_only
@@ -1052,7 +1048,7 @@ collect_session_range_levels(SessionRangeLevel level, float lower_band, float up
                              array<int> out_ticks, array<bool> out_is_bsl, array<string> out_tags, array<string> out_session_tags, array<int> out_ranks, array<int> out_source_counts, array<int> out_detect_times) =>
     // Current session high (unmitigated) - skip if provisional (drawn separately)
     // This is the most recent session, so add "Yesterday" if applicable
-    if not na(level.current_high) and not level.high_mitigated and not level.in_session and not level.provisional_high_mitigated
+    if not na(level.current_high) and not level.high_mitigated and not level.in_session and not level.provisional_high_mitigated and (time - level.current_session_start <= TIME_LEVEL_MAX_AGE_MS)
         bool in_range = use_adr_filter ? (level.current_high >= lower_band and level.current_high <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_high)
@@ -1060,7 +1056,7 @@ collect_session_range_levels(SessionRangeLevel level, float lower_band, float up
             add_or_merge_open_level(tick, session_tag, level.current_high_time, out_ticks, out_is_bsl, out_tags, out_session_tags, out_ranks, out_source_counts, out_detect_times)
 
     // Current session low (unmitigated) - skip if provisional (drawn separately)
-    if not na(level.current_low) and not level.low_mitigated and not level.in_session and not level.provisional_low_mitigated
+    if not na(level.current_low) and not level.low_mitigated and not level.in_session and not level.provisional_low_mitigated and (time - level.current_session_start <= TIME_LEVEL_MAX_AGE_MS)
         bool in_range = use_adr_filter ? (level.current_low >= lower_band and level.current_low <= upper_band) : true
         if in_range
             int tick = to_tick(level.current_low)
@@ -1072,6 +1068,9 @@ collect_session_range_levels(SessionRangeLevel level, float lower_band, float up
     if stored_highs > 0
         for i = 0 to stored_highs - 1
             if not array.get(level.highs_mitigated, i)
+                int session_start = array.get(level.session_starts, i)
+                if time - session_start > TIME_LEVEL_MAX_AGE_MS
+                    continue
                 float lvl = array.get(level.highs, i)
                 bool in_range = use_adr_filter ? (lvl >= lower_band and lvl <= upper_band) : true
                 if in_range
@@ -1084,6 +1083,9 @@ collect_session_range_levels(SessionRangeLevel level, float lower_band, float up
     if stored_lows > 0
         for i = 0 to stored_lows - 1
             if not array.get(level.lows_mitigated, i)
+                int session_start = array.get(level.session_starts, i)
+                if time - session_start > TIME_LEVEL_MAX_AGE_MS
+                    continue
                 float lvl = array.get(level.lows, i)
                 bool in_range = use_adr_filter ? (lvl >= lower_band and lvl <= upper_band) : true
                 if in_range
@@ -1181,25 +1183,11 @@ chart_tf_changed = current_chart_tf != last_chart_tf
 
 needs_reset = symbol_changed or chart_tf_changed
 
-if needs_reset
-    initialized := true
-    last_ticker := current_ticker
-    last_chart_tf := current_chart_tf
-    clear_time_level(level_1600)
-    clear_session_range_level(level_asia_open)
-    clear_session_range_level(level_evening)
-    clear_session_range_level(level_rafael)
-    clear_htf_slot(slot_1mo)
-    clear_htf_slot(slot_1w)
-    clear_htf_slot(slot_1d)
-    clear_htf_slot(slot_12h)
-    clear_htf_slot(slot_8h)
-    clear_htf_slot(slot_7h)
-    clear_htf_slot(slot_4h)
-    clear_htf_slot(slot_1h)
-
-// Clear state on first bar (handles replay mode)
-if barstate.isfirst
+if needs_reset or barstate.isfirst
+    if needs_reset
+        initialized := true
+        last_ticker := current_ticker
+        last_chart_tf := current_chart_tf
     clear_time_level(level_1600)
     clear_session_range_level(level_asia_open)
     clear_session_range_level(level_evening)
@@ -1400,23 +1388,19 @@ if show_1600_close and time_levels_tf_valid
         level_1600.current_mitigated := false
         level_1600.current_mitigation_time := na
 
-    bool is_in_mitigation_window = time_level_mitigation_window == MITIGATION_WINDOW_ANYTIME or (current_hour_ny >= 5 and current_hour_ny < 16)
-
     if not na(level_1600.current_price) and not level_1600.current_mitigated
-        if (time >= level_1600.current_time + MITIGATION_DELAY_MS) and is_in_mitigation_window
+        if time >= level_1600.current_time + MITIGATION_DELAY_MS
             if (high >= level_1600.current_price and low <= level_1600.current_price) or close == level_1600.current_price
                 level_1600.current_mitigated := true
                 level_1600.current_mitigation_time := time
 
     int stored_size = array.size(level_1600.prices)
     if stored_size > 0
-        int scan_size = math.min(stored_size, 20)
-        int start_index = math.max(0, stored_size - scan_size)
-        for i = start_index to stored_size - 1
+        for i = 0 to stored_size - 1
             if not array.get(level_1600.mitigated, i)
                 float lvl = array.get(level_1600.prices, i)
                 int lvl_time = array.get(level_1600.times, i)
-                if (time >= lvl_time + MITIGATION_DELAY_MS) and is_in_mitigation_window
+                if time >= lvl_time + MITIGATION_DELAY_MS
                     if (high >= lvl and low <= lvl) or close == lvl
                         array.set(level_1600.mitigated, i, true)
                         array.set(level_1600.mitigation_times, i, time)
