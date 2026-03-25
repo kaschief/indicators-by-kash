@@ -61,7 +61,7 @@ const string STATUS_DISPLAY_ALL = "all"
 const string STATUS_DISPLAY_FVG = "fvg"
 const string STATUS_DISPLAY_IMP = "imp"
 const string STATUS_DISPLAY_VOL = "vol"
-const string STATUS_DISPLAY_REF_WICK = "⁺ʷ"
+const string STATUS_DISPLAY_WICK_EXT = "⁺ʷ"
 
 // Invalidation threshold display
 const string STATUS_DISPLAY_MBZ_STD = "[std 100]"
@@ -313,7 +313,7 @@ show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_ZONE_DI
 
 // ─── 🎯 MBZ Settings ───
 GROUP_MBZ        = "🎯 MBZ Settings"
-extend_to_reference_wick = input.bool(true, "Extend to Reference Wick", group=GROUP_MBZ)
+extend_to_wick = input.bool(true, "Extend to Wick", group=GROUP_MBZ, tooltip='Extend zone boundary to the furthest wick (own candle or reference candle)')
 same_source_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, "Same-Source MBZ", options=[SAME_SOURCE_FILTER_ALL_TOUCHES, SAME_SOURCE_FILTER_FIRST_TOUCH, SAME_SOURCE_FILTER_LATEST_TOUCH], group=GROUP_MBZ)
 invalidation_mode = input.string(MBZ_INVALIDATION_STRICT, "MBZ Invalidation", options=[MBZ_INVALIDATION_STANDARD, MBZ_INVALIDATION_CONSERVATIVE, MBZ_INVALIDATION_STRICT, MBZ_INVALIDATION_CUSTOM], group=GROUP_MBZ, inline="mbz_inv")
 custom_threshold_percent = input.float(50, "Custom %", minval=1, maxval=100, step=1, group=GROUP_MBZ, inline="mbz_inv")
@@ -629,75 +629,62 @@ detect_zone_subtype(float candle_open, float candle_close, float candle_high, fl
 // Calculates zone top/bottom from candle geometry based on subtype
 // ref_high/ref_low used for MBZ wick extension (set to na for SIF)
 // Returns [zone_top, zone_bottom, is_extended]
-calculate_zone_boundaries(float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, string subtype, float ref_high, float ref_low, bool allow_wick_extension) =>
+calculate_zone_boundaries(float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, string subtype, float ref_high, float ref_low, bool use_wick_ext) =>
     float body_top = math.max(candle_open, candle_close)
     float body_bot = math.min(candle_open, candle_close)
     bool is_extended = false
 
+    // Step 1: Compute base zone boundaries per subtype
+    float base_top = body_top
+    float base_bot = body_bot
     if subtype == SUBTYPE_INCLUSION
-        // Inclusion: Close to dominant wick
         if is_bullish
-            // Bullish inclusion: lower boundary may extend to reference low
-            if allow_wick_extension and not na(ref_low) and ref_low < candle_low
-                is_extended := true
-                [candle_close, ref_low, is_extended]
-            else
-                [candle_close, candle_low, is_extended]
+            base_top := candle_close
+            base_bot := candle_low
         else
-            // Bearish inclusion: upper boundary may extend to reference high
-            if allow_wick_extension and not na(ref_high) and ref_high > candle_high
-                is_extended := true
-                [ref_high, candle_close, is_extended]
-            else
-                [candle_high, candle_close, is_extended]
+            base_top := candle_high
+            base_bot := candle_close
     else if subtype == SUBTYPE_REFLECTION
-        // Reflection: Mirror wick distance from open, projected from close
         if is_bullish
             float wick_range = math.abs(candle_high - candle_open)
-            // Bullish reflection: lower boundary may extend to reference low
-            if allow_wick_extension and not na(ref_low) and ref_low < candle_low
-                is_extended := true
-                [candle_close, ref_low, is_extended]
-            else
-                [candle_close, candle_close - wick_range, is_extended]
+            base_top := candle_close
+            base_bot := candle_close - wick_range
         else
             float wick_range = math.abs(candle_low - candle_open)
-            // Bearish reflection: upper boundary may extend to reference high
-            if allow_wick_extension and not na(ref_high) and ref_high > candle_high
+            base_top := candle_close + wick_range
+            base_bot := candle_close
+
+    // Step 2: Extend to furthest wick (own or reference)
+    float zone_top = base_top
+    float zone_bot = base_bot
+    if use_wick_ext
+        if is_bullish
+            float furthest_low = candle_low
+            if not na(ref_low) and ref_low < furthest_low
+                furthest_low := ref_low
+            if furthest_low < zone_bot
+                zone_bot := furthest_low
                 is_extended := true
-                [ref_high, candle_close, is_extended]
-            else
-                [candle_close + wick_range, candle_close, is_extended]
-    else
-        // Standard: Body only, with optional reference wick extension
-        if allow_wick_extension
-            if is_bullish
-                // Bullish: extend lower boundary to reference low if lower
-                if not na(ref_low) and ref_low < candle_low
-                    is_extended := true
-                    [body_top, ref_low, is_extended]
-                else
-                    [body_top, body_bot, is_extended]
-            else
-                // Bearish: extend upper boundary to reference high if higher
-                if not na(ref_high) and ref_high > candle_high
-                    is_extended := true
-                    [ref_high, body_bot, is_extended]
-                else
-                    [body_top, body_bot, is_extended]
         else
-            [body_top, body_bot, is_extended]
+            float furthest_high = candle_high
+            if not na(ref_high) and ref_high > furthest_high
+                furthest_high := ref_high
+            if furthest_high > zone_top
+                zone_top := furthest_high
+                is_extended := true
+
+    [zone_top, zone_bot, is_extended]
 
 // Factory function to create a CandleZone from formation candle data
 // has_mbz/has_sif: which engine(s) validated this zone
 // For MBZ: provide ref_high/ref_low for wick extension
 // For SIF: is_immediate_sif indicates immediate SIF
-create_candle_zone(int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, array<int> gap_ids, array<string> gap_types, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, bool is_immediate_sif, string htf_label_param) =>
+create_candle_zone(int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, array<int> gap_ids, array<string> gap_types, float ref_high, float ref_low, bool use_wick_ext, bool has_mbz, bool has_sif, bool is_immediate_sif, string htf_label_param) =>
     // Detect subtype from candle shape
     [subtype, _has_dominant] = detect_zone_subtype(candle_open, candle_close, candle_high, candle_low)
 
     // Calculate zone boundaries
-    [zone_top, zone_bottom, is_extended] = calculate_zone_boundaries(candle_open, candle_close, candle_high, candle_low, is_bullish, subtype, ref_high, ref_low, allow_wick_extension)
+    [zone_top, zone_bottom, is_extended] = calculate_zone_boundaries(candle_open, candle_close, candle_high, candle_low, is_bullish, subtype, ref_high, ref_low, use_wick_ext)
 
     // Create zone record
     CandleZone zone = CandleZone.new()
@@ -744,7 +731,7 @@ find_zone_index_for_candle(array<CandleZone> zone_arr, int formation_time) =>
 // If zone exists, returns it for updating
 // If not, creates new zone and adds to array
 // Note: Caller must update the zone and call array.set() after modifications
-get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension, string htf_label_param) =>
+get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool use_wick_ext, string htf_label_param) =>
     int existing_idx = find_zone_index_for_candle(zone_arr, formation_time)
 
     if existing_idx >= 0
@@ -755,7 +742,7 @@ get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int form
         array<int> gap_ids = array.new<int>()
         array<string> gap_types = array.new<string>()
 
-        CandleZone new_zone = create_candle_zone(formation_bar_index, formation_time, candle_open, candle_close, candle_high, candle_low, is_bullish, gap_ids, gap_types, ref_high, ref_low, allow_wick_extension, false, false, false, htf_label_param)
+        CandleZone new_zone = create_candle_zone(formation_bar_index, formation_time, candle_open, candle_close, candle_high, candle_low, is_bullish, gap_ids, gap_types, ref_high, ref_low, use_wick_ext, false, false, false, htf_label_param)
 
         array.unshift(zone_arr, new_zone)
         [new_zone, 0, true]
@@ -948,53 +935,44 @@ get_mbz_zone(float mbz_open, float mbz_high, float mbz_low, float mbz_close, boo
     float body_top = math.max(mbz_open, mbz_close)
     float body_bot = math.min(mbz_open, mbz_close)
 
+    // Step 1: Compute base zone boundaries per subtype
+    float base_top = body_top
+    float base_bot = body_bot
     if subtype == SUBTYPE_INCLUSION
-        // Inclusion: Close to dominant wick
         if is_bullish
-            // Bullish inclusion: lower boundary may extend to reference low
-            if extend_to_reference_wick and ref_low < mbz_low
-                [mbz_close, ref_low]
-            else
-                [mbz_close, mbz_low]
+            base_top := mbz_close
+            base_bot := mbz_low
         else
-            // Bearish inclusion: upper boundary may extend to reference high
-            if extend_to_reference_wick and ref_high > mbz_high
-                [ref_high, mbz_close]
-            else
-                [mbz_high, mbz_close]
+            base_top := mbz_high
+            base_bot := mbz_close
     else if subtype == SUBTYPE_REFLECTION
-        // Reflection: Mirror wick distance from open, projected from close
         if is_bullish
             float wick_range = math.abs(mbz_high - mbz_open)
-            // Bullish reflection: lower boundary may extend to reference low
-            if extend_to_reference_wick and ref_low < mbz_low
-                [mbz_close, ref_low]
-            else
-                [mbz_close, mbz_close - wick_range]
+            base_top := mbz_close
+            base_bot := mbz_close - wick_range
         else
             float wick_range = math.abs(mbz_low - mbz_open)
-            // Bearish reflection: upper boundary may extend to reference high
-            if extend_to_reference_wick and ref_high > mbz_high
-                [ref_high, mbz_close]
-            else
-                [mbz_close + wick_range, mbz_close]
-    else
-        // Standard: Body only, with optional reference wick extension
-        if extend_to_reference_wick
-            if is_bullish
-                // Bullish: extend lower boundary to reference low if lower
-                if ref_low < mbz_low
-                    [body_top, ref_low]
-                else
-                    [body_top, body_bot]
-            else
-                // Bearish: extend upper boundary to reference high if higher
-                if ref_high > mbz_high
-                    [ref_high, body_bot]
-                else
-                    [body_top, body_bot]
+            base_top := mbz_close + wick_range
+            base_bot := mbz_close
+
+    // Extend to furthest wick (own or reference) if enabled
+    float zone_top = base_top
+    float zone_bot = base_bot
+    if extend_to_wick
+        if is_bullish
+            float furthest_low = mbz_low
+            if ref_low < furthest_low
+                furthest_low := ref_low
+            if furthest_low < zone_bot
+                zone_bot := furthest_low
         else
-            [body_top, body_bot]
+            float furthest_high = mbz_high
+            if ref_high > furthest_high
+                furthest_high := ref_high
+            if furthest_high > zone_top
+                zone_top := furthest_high
+
+    [zone_top, zone_bot]
 
 // Build MBZ label text
 // Format: "MBZ⁺" or "MBZ⁻" with optional subtype
@@ -1720,12 +1698,12 @@ cleanup_preview_zones() =>
 
 // Create and render a preview zone
 // Returns the created zone (also adds to preview_zone_array)
-create_preview_zone(int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool allow_wick_extension, bool has_mbz, bool has_sif, array<int> gap_ids, array<string> gap_types, color zone_color_bull, color zone_color_bear, int zone_extension_width, string htf_label_param) =>
+create_preview_zone(int formation_time, float candle_open, float candle_close, float candle_high, float candle_low, bool is_bullish, float ref_high, float ref_low, bool use_wick_ext, bool has_mbz, bool has_sif, array<int> gap_ids, array<string> gap_types, color zone_color_bull, color zone_color_bear, int zone_extension_width, string htf_label_param) =>
     // Detect subtype from candle shape
     [subtype, _has_dominant] = detect_zone_subtype(candle_open, candle_close, candle_high, candle_low)
 
     // Calculate zone boundaries
-    [zone_top, zone_bottom, is_extended] = calculate_zone_boundaries(candle_open, candle_close, candle_high, candle_low, is_bullish, subtype, ref_high, ref_low, allow_wick_extension)
+    [zone_top, zone_bottom, is_extended] = calculate_zone_boundaries(candle_open, candle_close, candle_high, candle_low, is_bullish, subtype, ref_high, ref_low, use_wick_ext)
 
     // Create zone record
     CandleZone zone = CandleZone.new()
@@ -2190,15 +2168,15 @@ process_htf_close(HTFContext ctx, float htf_close, float breakaway_upper, float 
                         consolidated_zone_bottom := math.min(consolidated_zone_bottom, match_zone_bot)
 
                 // Register MBZ in unified zone_array
-                [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_reference_wick, ctx.htf_label)
+                [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_wick, ctx.htf_label)
 
                 zone.has_mbz := true
                 zone.ref_candle_high := ctx.h2
                 zone.ref_candle_low := ctx.l2
 
                 // If existing zone and wick extension enabled but not applied, recalculate
-                if not is_new and extend_to_reference_wick and not zone.is_wick_extended
-                    [new_top, new_bottom, now_extended] = calculate_zone_boundaries(ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, zone.zone_subtype, ctx.h2, ctx.l2, true)
+                if not is_new and extend_to_wick and not zone.is_wick_extended
+                    [new_top, new_bottom, now_extended] = calculate_zone_boundaries(ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, zone.zone_subtype, ctx.h2, ctx.l2, extend_to_wick)
                     zone.zone_top := new_top
                     zone.zone_bottom := new_bottom
                     zone.is_wick_extended := now_extended
@@ -2332,7 +2310,7 @@ if IS_VALID
                         array.push(mbz_gap_types, match.source_gap_type)
 
                     // Create preview zone (MBZ uses reference wick extension from htf_*1)
-                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_reference_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width, HTF_LABEL)
+                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_wick, true, false, mbz_gap_ids, mbz_gap_types, preview_color_bull, preview_color_bear, preview_extension_width, HTF_LABEL)
 
         // Preview SIF: Check if forming candle would create immediate SIF
         if enable_sif_engine
@@ -2625,7 +2603,7 @@ if IS_VALID and show_status_table and barstate.islast
         if enable_volume
             array.push(gap_parts, STATUS_DISPLAY_VOL)
         gap_type_display := array.size(gap_parts) > 0 ? array.join(gap_parts, "·") : "none"
-    string ref_wick_display = extend_to_reference_wick ? "  " + STATUS_DISPLAY_REF_WICK : ""
+    string wick_ext_display = extend_to_wick ? "  " + STATUS_DISPLAY_WICK_EXT : ""
     string workspace_display = workspace_active ? "  WS" : ""
 
     // Build invalidation threshold display
@@ -2649,7 +2627,7 @@ if IS_VALID and show_status_table and barstate.islast
     else
         tf_display := LTF_LABEL + " → " + HTF_LABEL
 
-    string status_text = tf_display + "  " + gap_type_display + inv_display + ref_wick_display + workspace_display
+    string status_text = tf_display + "  " + gap_type_display + inv_display + wick_ext_display + workspace_display
     table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
 
     // Right padding cell

@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='mbz core •'
-SHORT_TITLE="mbz core • development"
+SHORT_TITLE="mbz core •"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -326,7 +326,7 @@ source_gap_text_color = input.color(DEFAULT_SOURCE_GAP_TEXT_COLOR, INPUT_LABEL_L
 // === ✨ MBZ EXTENSION ===
 extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, INPUT_LABEL_MBZ_PLUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁺ highlights and extensions')
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INPUT_LABEL_MBZ_MINUS, group=GROUP_MBZ_EXTENSION, inline='ext1', tooltip='Color for MBZ⁻ highlights and extensions')
-extend_to_reference_wick = input.bool(true, 'Extend to Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Extend zone boundary to reference candle wick:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high')
+extend_to_wick = input.bool(true, 'Extend to Wick', group=GROUP_MBZ_EXTENSION, tooltip='Extend zone boundary to the furthest wick (own candle or reference candle)')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
 extension_fill_opacity = input.int(DEFAULT_EXTENSION_FILL_OPACITY, 'Fill Opacity', minval=0, maxval=100, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Base opacity for extension box fill (0=solid, 100=invisible)\n\nThis is the base transparency before distance-based fading is applied')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
@@ -1076,49 +1076,44 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_gap_type) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 get_mbz_subtype_zone(mbz_record) =>
+    // Step 1: Compute base zone boundaries per subtype
+    float base_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
+    float base_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
     if str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
         if mbz_record.is_bullish
-            if extend_to_reference_wick and mbz_record.ref_candle_low < mbz_record.low_price
-                [mbz_record.mbz_close, mbz_record.ref_candle_low]
-            else
-                [mbz_record.mbz_close, mbz_record.low_price]
+            base_top := mbz_record.mbz_close
+            base_bot := mbz_record.low_price
         else
-            if extend_to_reference_wick and mbz_record.ref_candle_high > mbz_record.high_price
-                [mbz_record.ref_candle_high, mbz_record.mbz_close]
-            else
-                [mbz_record.high_price, mbz_record.mbz_close]
+            base_top := mbz_record.high_price
+            base_bot := mbz_record.mbz_close
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
         if mbz_record.is_bullish
             wick_range = math.abs(mbz_record.high_price - mbz_record.mbz_open)
-            zone_bottom = mbz_record.mbz_close - wick_range
-            if extend_to_reference_wick and mbz_record.ref_candle_low < mbz_record.low_price
-                [mbz_record.mbz_close, mbz_record.ref_candle_low]
-            else
-                [mbz_record.mbz_close, zone_bottom]
+            base_top := mbz_record.mbz_close
+            base_bot := mbz_record.mbz_close - wick_range
         else
             wick_range = math.abs(mbz_record.low_price - mbz_record.mbz_open)
-            zone_top = mbz_record.mbz_close + wick_range
-            if extend_to_reference_wick and mbz_record.ref_candle_high > mbz_record.high_price
-                [mbz_record.ref_candle_high, mbz_record.mbz_close]
-            else
-                [zone_top, mbz_record.mbz_close]
-    else
-        body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
-        body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
+            base_top := mbz_record.mbz_close + wick_range
+            base_bot := mbz_record.mbz_close
 
-        if extend_to_reference_wick
-            if mbz_record.is_bullish
-                if mbz_record.ref_candle_low < mbz_record.low_price
-                    [body_top, mbz_record.ref_candle_low]
-                else
-                    [body_top, body_bottom]
-            else
-                if mbz_record.ref_candle_high > mbz_record.high_price
-                    [mbz_record.ref_candle_high, body_bottom]
-                else
-                    [body_top, body_bottom]
+    // Extend to furthest wick (own or reference) if enabled
+    float zone_top = base_top
+    float zone_bot = base_bot
+    if extend_to_wick
+        if mbz_record.is_bullish
+            float furthest_low = mbz_record.low_price
+            if mbz_record.ref_candle_low < furthest_low
+                furthest_low := mbz_record.ref_candle_low
+            if furthest_low < zone_bot
+                zone_bot := furthest_low
         else
-            [body_top, body_bottom]
+            float furthest_high = mbz_record.high_price
+            if mbz_record.ref_candle_high > furthest_high
+                furthest_high := mbz_record.ref_candle_high
+            if furthest_high > zone_top
+                zone_top := furthest_high
+
+    [zone_top, zone_bot]
 
 get_mbz_invalidation_boundaries(mbz_record) =>
     is_inclusion = str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
@@ -1126,19 +1121,9 @@ get_mbz_invalidation_boundaries(mbz_record) =>
     is_standard = not is_inclusion and not is_reflection
 
     if is_standard and invalidation_boundary == INVALIDATION_BOUNDARY_EXTREMES
-        if extend_to_reference_wick
-            body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
-            body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
-            if mbz_record.is_bullish
-                if mbz_record.ref_candle_low < mbz_record.low_price
-                    [body_top, mbz_record.ref_candle_low]
-                else
-                    [body_top, body_bottom]
-            else
-                if mbz_record.ref_candle_high > mbz_record.high_price
-                    [mbz_record.ref_candle_high, body_bottom]
-                else
-                    [body_top, body_bottom]
+        if extend_to_wick
+            // When wick extension is active, use zone boundaries (which include wick extension)
+            get_mbz_subtype_zone(mbz_record)
         else
             [mbz_record.high_price, mbz_record.low_price]
     else
@@ -1265,7 +1250,10 @@ should_mbz_be_invalidated(mbz_record, confirmed_close_price) =>
 cache_mbz_data(mbz_record) =>
     [cached_zone_top, cached_zone_bottom] = get_mbz_subtype_zone(mbz_record)
 
-    was_extended = extend_to_reference_wick and (mbz_record.is_bullish ? mbz_record.ref_candle_low < mbz_record.low_price : mbz_record.ref_candle_high > mbz_record.high_price)
+    // Zone is extended if boundaries differ from base body
+    body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
+    body_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
+    was_extended = cached_zone_top != body_top or cached_zone_bottom != body_bot
 
     MBZRecord.new(
          mbz_record.bar_index,
@@ -2443,7 +2431,7 @@ if show_status_table and barstate.islast
     // Build status text (WS only shown if active, capacity only if boosted)
     status_text = workspace_active ? STATUS_DISPLAY_WS + "  " + gaps_text : gaps_text
     // Add ref wick symbol if enabled
-    status_text := extend_to_reference_wick ? status_text + "  " + SUBTYPE_EXT_DISPLAY : status_text
+    status_text := extend_to_wick ? status_text + "  " + SUBTYPE_EXT_DISPLAY : status_text
     // Add invalidation threshold
     status_text := status_text + "  " + inv_display
     // Add capacity mode (only if boosted)
