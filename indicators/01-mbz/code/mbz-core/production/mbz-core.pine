@@ -21,6 +21,7 @@ var array<string> mbz_alert_parts = array.new<string>()
 // ═══════════════════════════════════════════════════════════════════════════════
 
 GAP_TYPE_FVG = "fvg"
+GAP_TYPE_FVG_VI = "fvg·vi"
 GAP_TYPE_IMPLIED = "implied"
 GAP_TYPE_VOLUME = "volume"
 GAP_TYPE_TRUE = "true"
@@ -47,6 +48,7 @@ SUBTYPE_REFLECTION = "reflection"
 SUBTYPE_INCLUSION_TIE = "inclusion-tie"
 SUBTYPE_IMPLIED = "implied"
 SUBTYPE_VOLUME = "volume"
+SUBTYPE_FVG_VI = "fvg·vi"
 SUBTYPE_TRUE = "true"
 SUBTYPE_RDRB = "rdrb"
 
@@ -187,6 +189,7 @@ AUTO_WS_END_HOUR = 13    // NY time
 
 // Display text & abbreviation constants
 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
+GAP_SOURCE_FVG_VI_DISPLAY = "fvg·vi"
 GAP_SOURCE_IMPLIED_DISPLAY = "imp"
 GAP_SOURCE_VOLUME_DISPLAY = "vol"
 GAP_SOURCE_TRUE_DISPLAY = "gap"
@@ -210,6 +213,8 @@ GAP_LABEL_VOLUME_BULLISH = "Vol Imb⁺ for "
 GAP_LABEL_VOLUME_BEARISH = "Vol Imb⁻ for "
 GAP_LABEL_TRUE_BULLISH = "True Gap⁺ for "
 GAP_LABEL_TRUE_BEARISH = "True Gap⁻ for "
+GAP_LABEL_FVG_VI_BULLISH = "FVG·VI⁺ for "
+GAP_LABEL_FVG_VI_BEARISH = "FVG·VI⁻ for "
 // RDRB gap label text constants for parity
 GAP_LABEL_RDRB_BULLISH = "RDRB⁺ for "
 GAP_LABEL_RDRB_BEARISH = "RDRB⁻ for "
@@ -314,6 +319,7 @@ enable_fair_value_gaps = input.bool(true, INPUT_LABEL_FAIR_VALUE_GAPS, group=GRO
 fvg_type_filter = input.string(FVG_FILTER_ALL, "", options=[FVG_FILTER_ALL, FVG_FILTER_BREAKAWAY_ONLY, FVG_FILTER_STANDARD_ONLY], group=GROUP_GAP_SOURCES, inline='sources1', tooltip='FVG Detection Filter:\n• All: Detect all FVGs (both breakaway and standard)\n• Breakaway-Only: Only detect breakaway FVGs\n• Standard-Only: Only detect standard FVGs')
 enable_implied = input.bool(true, INPUT_LABEL_IMPLIED_FVGS, group=GROUP_GAP_SOURCES, inline='sources2')
 enable_volume_imbalance = input.bool(true, INPUT_LABEL_VOLUME_IMBALANCES, group=GROUP_GAP_SOURCES, inline='sources2', tooltip='GAP SOURCES (continued):\n• Volume Imbalances: 2-candle retail body gaps\n• True Gaps: Classic price gaps between candle ranges')
+enable_fvg_vi = input.bool(true, 'Include VI Extension', group=GROUP_GAP_SOURCES, inline='sources2', tooltip='When enabled, FVGs that also have a Volume Imbalance on the same displacement candle are combined into a single fvg·vi gap with an extended range. The individual VIB is absorbed into the combo.')
 enable_true_gaps = input.bool(true, INPUT_LABEL_TRUE_GAPS, group=GROUP_GAP_SOURCES, inline='sources3')
 enable_rdrb = input.bool(true, 'Rebalanced Redistributed Gaps', group=GROUP_GAP_SOURCES, inline='sources3', tooltip='Rebalanced Redistributed (RDRB):\n• Middle candle\'s body stays fully inside the previous candle\'s wick\n• The next candle takes (breaks) that middle candle\'s high/low\n• The remaining portion inside that wick becomes the tradable zone')
 
@@ -428,6 +434,7 @@ type SourceTypeStats
     int group_size
     int distinct_types
     int fvg_count
+    int fvg_vi_count
     int imp_count
     int vol_count
     int true_count
@@ -542,7 +549,7 @@ var bool initialized = false
 // @details
 //   • Condition: high[2] < low (complete range separation between C1 and C3)
 //   • C1 = 2 bars ago (establishes lower boundary), C2 = transition, C3 = current (establishes upper boundary)
-//   • Gap coordinates: bottom = low (current), top = high[2] (C1 high)
+//   • Gap coordinates: top = low (current C3), bottom = high[2] (C1 high)
 //   • Institutional priority: Always detected, never suppressed by other gap types
 is_bullish_fvg() => low > high[2]
 
@@ -626,6 +633,7 @@ get_mbz_invalidation_threshold() =>
 get_gap_source_display(gap_type) =>
     switch gap_type
         GAP_TYPE_FVG => GAP_SOURCE_FVG_BREAKDOWN_DISPLAY  // FVG abbreviation for breakdown
+        GAP_TYPE_FVG_VI => GAP_SOURCE_FVG_VI_DISPLAY
         GAP_TYPE_IMPLIED => GAP_SOURCE_IMPLIED_DISPLAY
         GAP_TYPE_VOLUME => GAP_SOURCE_VOLUME_DISPLAY
         GAP_TYPE_TRUE => GAP_SOURCE_TRUE_DISPLAY
@@ -782,9 +790,9 @@ is_vi_suppressed_by_gaps(vi_top, vi_bottom, is_vi_bullish) =>
             // Temporal constraint: only suppress if gap formed within SUPPRESSION_TEMPORAL_WINDOW bars (same formation context)
             bars_since_gap = bar_index - gap.creation_bar
 
-            // Gap hierarchy filter: FVG, Implied FVG, RDRB, and True Gap can suppress VI
+            // Gap hierarchy filter: FVG, FVG·VI, Implied FVG, RDRB, and True Gap can suppress VI
             if bars_since_gap <= SUPPRESSION_TEMPORAL_WINDOW and
-               (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED or gap.gap_type == GAP_TYPE_RDRB or gap.gap_type == GAP_TYPE_TRUE) and
+               (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_FVG_VI or gap.gap_type == GAP_TYPE_IMPLIED or gap.gap_type == GAP_TYPE_RDRB or gap.gap_type == GAP_TYPE_TRUE) and
                gap.is_bullish == is_vi_bullish and  // Same direction only
                not gap.is_closed_through            // Active (unfilled) gaps only
 
@@ -1004,6 +1012,8 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_gap_type) =>
             base_classification := SUBTYPE_TRUE
         else if source_gap_type == GAP_TYPE_IMPLIED and enable_implied
             base_classification := SUBTYPE_IMPLIED
+        else if source_gap_type == GAP_TYPE_FVG_VI and enable_fair_value_gaps
+            base_classification := SUBTYPE_FVG_VI
         else if source_gap_type == GAP_TYPE_VOLUME and enable_volume_imbalance
             base_classification := SUBTYPE_VOLUME
         else if source_gap_type == GAP_TYPE_RDRB and enable_rdrb
@@ -1061,6 +1071,8 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_gap_type) =>
                     final_subtype := SUBTYPE_TRUE + "_" + wick_pattern
                 else if base_classification == SUBTYPE_IMPLIED
                     final_subtype := SUBTYPE_IMPLIED + "_" + wick_pattern
+                else if base_classification == SUBTYPE_FVG_VI
+                    final_subtype := SUBTYPE_FVG_VI + "_" + wick_pattern
                 else if base_classification == SUBTYPE_VOLUME
                     final_subtype := SUBTYPE_VOLUME + "_" + wick_pattern
                 else if base_classification == SUBTYPE_RDRB
@@ -1400,7 +1412,7 @@ determine_consolidated_status(consolidated_mbz) =>
 
 // Build source type statistics for consolidated MBZ groups
 get_source_type_stats(mbz_group) =>
-    stats = SourceTypeStats.new(0, 0, 0, 0, 0, 0, 0)
+    stats = SourceTypeStats.new(0, 0, 0, 0, 0, 0, 0, 0)
     stats.group_size := array.size(mbz_group)
 
     for i = 0 to stats.group_size - 1
@@ -1409,6 +1421,9 @@ get_source_type_stats(mbz_group) =>
         if str.contains(mbz_record.mbz_subtype, SUBTYPE_IMPLIED)
             if enable_implied
                 stats.imp_count += 1
+        else if str.contains(mbz_record.mbz_subtype, SUBTYPE_FVG_VI)
+            if enable_fair_value_gaps
+                stats.fvg_vi_count += 1
         else if str.contains(mbz_record.mbz_subtype, SUBTYPE_VOLUME)
             if enable_volume_imbalance
                 stats.vol_count += 1
@@ -1421,30 +1436,36 @@ get_source_type_stats(mbz_group) =>
         else if enable_fair_value_gaps
             stats.fvg_count += 1
 
-    stats.distinct_types := (stats.fvg_count > 0 ? 1 : 0) + (stats.imp_count > 0 ? 1 : 0) + (stats.vol_count > 0 ? 1 : 0) + (stats.true_count > 0 ? 1 : 0) + (stats.rdrb_count > 0 ? 1 : 0)
+    stats.distinct_types := (stats.fvg_count > 0 or stats.fvg_vi_count > 0 ? 1 : 0) + (stats.imp_count > 0 ? 1 : 0) + (stats.vol_count > 0 ? 1 : 0) + (stats.true_count > 0 ? 1 : 0) + (stats.rdrb_count > 0 ? 1 : 0)
     stats
 
 // Count source types for consolidated display (compatibility helper)
 count_source_types(mbz_group) =>
     stats = get_source_type_stats(mbz_group)
-    [stats.fvg_count, stats.imp_count, stats.vol_count, stats.true_count, stats.rdrb_count]
+    [stats.fvg_count, stats.fvg_vi_count, stats.imp_count, stats.vol_count, stats.true_count, stats.rdrb_count]
 
 // Build source breakdown with counts - USED for extension label logic
 build_source_breakdown(mbz_group) =>
-    [fvg_count, imp_count, vol_count, true_count, rdrb_count] = count_source_types(mbz_group)
+    [fvg_count, fvg_vi_count, imp_count, vol_count, true_count, rdrb_count] = count_source_types(mbz_group)
 
     parts = array.new<string>()
 
     // SPECIAL FVG LOGIC: FVGs are invisible when alone, visible when mixed with others
     // This creates clean labels like "MBZ⁺" instead of "MBZ⁺ (fvg)" for single FVG cases
     if fvg_count > 0
-        types_present_count = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0) + (true_count > 0 ? 1 : 0) + (rdrb_count > 0 ? 1 : 0)
-        if fvg_count == 1 and types_present_count == 1
+        types_present_count = (fvg_count > 0 or fvg_vi_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0) + (true_count > 0 ? 1 : 0) + (rdrb_count > 0 ? 1 : 0)
+        if fvg_count == 1 and fvg_vi_count == 0 and types_present_count == 1
             na
         else if fvg_count == 1
             array.push(parts, GAP_SOURCE_FVG_BREAKDOWN_DISPLAY)
         else
             array.push(parts, GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+
+    if fvg_vi_count > 0
+        if fvg_vi_count == 1
+            array.push(parts, GAP_SOURCE_FVG_VI_DISPLAY)
+        else
+            array.push(parts, GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
 
     if imp_count > 0
         if imp_count == 1
@@ -1482,11 +1503,22 @@ build_source_breakdown_extension_from_stats(stats) =>
     if stats.group_size == 0
         ""
     else if stats.distinct_types == 1
-        if stats.fvg_count > 0
+        if stats.fvg_count > 0 and stats.fvg_vi_count == 0
             if stats.fvg_count == 1
                 ""
             else
                 GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_count)
+        else if stats.fvg_vi_count > 0 and stats.fvg_count == 0
+            if stats.fvg_vi_count == 1
+                GAP_SOURCE_FVG_VI_DISPLAY
+            else
+                GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_vi_count)
+        else if stats.fvg_count > 0 and stats.fvg_vi_count > 0
+            // Mixed fvg + fvg·vi in same type family
+            parts_mixed = array.new<string>()
+            array.push(parts_mixed, stats.fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_count))
+            array.push(parts_mixed, stats.fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_vi_count))
+            array.join(parts_mixed, BREAKDOWN_SEPARATOR)
         else if stats.imp_count > 0
             if stats.imp_count == 1
                 GAP_SOURCE_IMPLIED_DISPLAY
@@ -1514,6 +1546,9 @@ build_source_breakdown_extension_from_stats(stats) =>
 
         if stats.fvg_count > 0
             array.push(parts, stats.fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_count))
+
+        if stats.fvg_vi_count > 0
+            array.push(parts, stats.fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.fvg_vi_count))
 
         if stats.imp_count > 0
             array.push(parts, stats.imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(stats.imp_count))
@@ -1574,6 +1609,8 @@ create_consolidated_extension_label(consolidated_mbz) =>
         single_mbz = array.get(consolidated_mbz.mbz_group, 0)
         if str.contains(single_mbz.mbz_subtype, SUBTYPE_IMPLIED)
             source_type_text := GAP_SOURCE_IMPLIED_DISPLAY
+        else if str.contains(single_mbz.mbz_subtype, SUBTYPE_FVG_VI)
+            source_type_text := GAP_SOURCE_FVG_VI_DISPLAY
         else if str.contains(single_mbz.mbz_subtype, SUBTYPE_VOLUME)
             source_type_text := GAP_SOURCE_VOLUME_DISPLAY
         else if str.contains(single_mbz.mbz_subtype, SUBTYPE_RDRB)
@@ -1632,6 +1669,8 @@ build_alert_message_from_consolidated(consolidated_mbz) =>
         source_token = ""
         if str.contains(single_mbz.mbz_subtype, SUBTYPE_IMPLIED)
             source_token := GAP_SOURCE_IMPLIED_DISPLAY
+        else if str.contains(single_mbz.mbz_subtype, SUBTYPE_FVG_VI)
+            source_token := GAP_SOURCE_FVG_VI_DISPLAY
         else if str.contains(single_mbz.mbz_subtype, SUBTYPE_VOLUME)
             source_token := GAP_SOURCE_VOLUME_DISPLAY
         else if str.contains(single_mbz.mbz_subtype, SUBTYPE_TRUE)
@@ -1712,11 +1751,13 @@ should_display_mbz(mbz_record) =>
         false  // Hide True Gap MBZs when source disabled
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_IMPLIED) and not enable_implied
         false  // Hide Implied MBZs when source disabled
+    else if str.contains(mbz_record.mbz_subtype, SUBTYPE_FVG_VI) and not enable_fair_value_gaps
+        false  // Hide FVG·VI MBZs when FVG source disabled
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_VOLUME) and not enable_volume_imbalance
         false  // Hide Volume MBZs when source disabled
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_RDRB) and not enable_rdrb
         false  // Hide RDRB MBZs when source disabled
-    else if not str.contains(mbz_record.mbz_subtype, SUBTYPE_TRUE) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_IMPLIED) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_VOLUME) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_RDRB) and not enable_fair_value_gaps
+    else if not str.contains(mbz_record.mbz_subtype, SUBTYPE_TRUE) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_IMPLIED) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_FVG_VI) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_VOLUME) and not str.contains(mbz_record.mbz_subtype, SUBTYPE_RDRB) and not enable_fair_value_gaps
         false  // Hide FVG MBZs when source disabled (detected by exclusion)
     else
         true
@@ -2055,6 +2096,8 @@ manage_consolidated_mbz_display() =>
                         breakaway_prefix = (mark_breakaway_mbzs and current_mbz_in_group.is_breakaway_mbz) ? BREAKAWAY_SOURCE_PREFIX : ""
                         if current_mbz_in_group.source_gap_type == GAP_TYPE_IMPLIED
                             source_gap_label_text := breakaway_prefix + (current_mbz_in_group.is_bullish ? GAP_LABEL_IMPLIED_BULLISH + individual_mbz_label : GAP_LABEL_IMPLIED_BEARISH + individual_mbz_label)
+                        else if current_mbz_in_group.source_gap_type == GAP_TYPE_FVG_VI
+                            source_gap_label_text := breakaway_prefix + (current_mbz_in_group.is_bullish ? GAP_LABEL_FVG_VI_BULLISH + individual_mbz_label : GAP_LABEL_FVG_VI_BEARISH + individual_mbz_label)
                         else if current_mbz_in_group.source_gap_type == GAP_TYPE_VOLUME
                             source_gap_label_text := breakaway_prefix + (current_mbz_in_group.is_bullish ? GAP_LABEL_VOLUME_BULLISH + individual_mbz_label : GAP_LABEL_VOLUME_BEARISH + individual_mbz_label)
                         else if current_mbz_in_group.source_gap_type == GAP_TYPE_TRUE
@@ -2106,22 +2149,52 @@ else if not initialized
     // Skip historical processing - start fresh for instant loading
     initialized := true
 
+// Track whether FVG+VI combo absorbed the VIB on this bar
+bool bullish_fvg_vi_created = false
+bool bearish_fvg_vi_created = false
+
 // Track new regular FVGs with correct anchoring (3-candle structure: anchor from C1)
 if enable_fair_value_gaps and barstate.isconfirmed and is_bullish_fvg()
     is_breakaway = low > breakaway_upper[2]
     should_create = (is_breakaway and filter_allows_breakaway) or (not is_breakaway and filter_allows_standard)
     if should_create
-        gap_data = GapData.new(bar_index - 2, low, high[2], true, false, bar_index, next_gap_id, GAP_TYPE_FVG, is_breakaway)
-        array.push(active_gaps, gap_data)
-        next_gap_id += 1
+        // Check for FVG+VI combo: VIB on either side of displacement candle [1]
+        float c0_body_bot = math.min(open, close)
+        float c2_body_top = math.max(open[2], close[2])
+        bool vib_after  = c0_body_bot > math.max(open[1], close[1]) and low <= high[1]
+        bool vib_before = math.min(open[1], close[1]) > c2_body_top and low[1] <= high[2]
+        if enable_fvg_vi and (vib_after or vib_before)
+            float combo_top    = vib_after  ? c0_body_bot : low
+            float combo_bottom = vib_before ? c2_body_top : high[2]
+            gap_data = GapData.new(bar_index - 2, combo_top, combo_bottom, true, false, bar_index, next_gap_id, GAP_TYPE_FVG_VI, is_breakaway)
+            array.push(active_gaps, gap_data)
+            next_gap_id += 1
+            bullish_fvg_vi_created := true
+        else
+            gap_data = GapData.new(bar_index - 2, low, high[2], true, false, bar_index, next_gap_id, GAP_TYPE_FVG, is_breakaway)
+            array.push(active_gaps, gap_data)
+            next_gap_id += 1
 
 if enable_fair_value_gaps and barstate.isconfirmed and is_bearish_fvg()
     is_breakaway = high < breakaway_lower[2]
     should_create = (is_breakaway and filter_allows_breakaway) or (not is_breakaway and filter_allows_standard)
     if should_create
-        gap_data = GapData.new(bar_index - 2, low[2], high, false, false, bar_index, next_gap_id, GAP_TYPE_FVG, is_breakaway)
-        array.push(active_gaps, gap_data)
-        next_gap_id += 1
+        // Check for FVG+VI combo: VIB on either side of displacement candle [1]
+        float c0_body_top = math.max(open, close)
+        float c2_body_bot = math.min(open[2], close[2])
+        bool vib_after  = c0_body_top < math.min(open[1], close[1]) and high >= low[1]
+        bool vib_before = math.max(open[1], close[1]) < c2_body_bot and high[1] >= low[2]
+        if enable_fvg_vi and (vib_after or vib_before)
+            float combo_top    = vib_before ? c2_body_bot : low[2]
+            float combo_bottom = vib_after  ? c0_body_top : high
+            gap_data = GapData.new(bar_index - 2, combo_top, combo_bottom, false, false, bar_index, next_gap_id, GAP_TYPE_FVG_VI, is_breakaway)
+            array.push(active_gaps, gap_data)
+            next_gap_id += 1
+            bearish_fvg_vi_created := true
+        else
+            gap_data = GapData.new(bar_index - 2, low[2], high, false, false, bar_index, next_gap_id, GAP_TYPE_FVG, is_breakaway)
+            array.push(active_gaps, gap_data)
+            next_gap_id += 1
 
 // Track new Implied FVGs with correct anchoring (3-candle structure: anchor from C1)
 if enable_implied and barstate.isconfirmed
@@ -2133,16 +2206,16 @@ if enable_implied and barstate.isconfirmed
 
 // Track Volume Imbalances with correct anchoring (2-candle structure: anchor from C1)
 if enable_volume_imbalance and barstate.isconfirmed
-    // Check for bullish VI
-    if is_bullish_vi()
+    // Check for bullish VI (skip if absorbed into fvg·vi combo)
+    if is_bullish_vi() and not bullish_fvg_vi_created
         [vi_top, vi_bottom] = get_vi_coordinates(true)
         if not is_vi_suppressed_by_gaps(vi_top, vi_bottom, true)
             vi_data = GapData.new(bar_index - 1, vi_top, vi_bottom, true, false, bar_index, next_gap_id, GAP_TYPE_VOLUME, false)
             array.push(active_gaps, vi_data)
             next_gap_id += 1
 
-    // Check for bearish VI
-    if is_bearish_vi()
+    // Check for bearish VI (skip if absorbed into fvg·vi combo)
+    if is_bearish_vi() and not bearish_fvg_vi_created
         [vi_top, vi_bottom] = get_vi_coordinates(false)
         if not is_vi_suppressed_by_gaps(vi_top, vi_bottom, false)
             vi_data = GapData.new(bar_index - 1, vi_top, vi_bottom, false, false, bar_index, next_gap_id, GAP_TYPE_VOLUME, false)
