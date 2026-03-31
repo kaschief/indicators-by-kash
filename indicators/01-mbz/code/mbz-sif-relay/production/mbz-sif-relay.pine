@@ -14,7 +14,7 @@
 //   4H  chart → D   HTF
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="relay • development", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -364,6 +364,16 @@ po3_bear_wick         = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_P
 po3_label_color       = input.color(color.rgb(0, 0, 0), "Label Color", group=GROUP_PO3, inline="po3_lbl")
 po3_label_size_input  = input.string("Large", "Size", options=["Tiny", "Small", "Normal", "Large"], group=GROUP_PO3, inline="po3_lbl")
 
+// MBZ candle highlights
+show_po3_mbz_highlight = input.bool(true, "Highlight MBZ Candles", group=GROUP_PO3, inline="po3_mbz_hl")
+po3_mbz_bull_highlight = input.color(color.rgb(77, 208, 225), "+", group=GROUP_PO3, inline="po3_mbz_hl")
+po3_mbz_bear_highlight = input.color(color.rgb(249, 121, 246), "-", group=GROUP_PO3, inline="po3_mbz_hl")
+
+// MBZ zone on PO3
+po3_mbz_zone_color     = input.color(color.new(color.gray, 80), "Zone Background", group=GROUP_PO3, inline="po3_mbz_zone")
+po3_mbz_midline_color  = input.color(color.new(color.rgb(184, 184, 184), 50), "Midline", group=GROUP_PO3, inline="po3_mbz_mid")
+po3_mbz_midline_style  = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3, inline="po3_mbz_mid")
+
 // HTF divider lines
 show_po3_dividers     = input.bool(false, "Show HTF Dividers", group=GROUP_PO3, inline="po3_div")
 po3_divider_color     = input.color(color.new(color.rgb(184, 184, 184), 40), "", group=GROUP_PO3, inline="po3_div")
@@ -464,12 +474,22 @@ type PO3Chart
     bool   show_dividers
     color  divider_color
     string divider_style
+    bool   show_mbz_highlight
+    color  mbz_bull_highlight
+    color  mbz_bear_highlight
+    color  mbz_zone_color
+    color  mbz_midline_color
+    string mbz_midline_style
     // ─── Data ───
     array<PO3CandleData> data
     // ─── Visual state ───
     array<box>           bodies
     array<line>          wicks
     array<line>          dividers
+    array<box>           highlights      // MBZ candle highlights
+    array<box>           zone_boxes      // MBZ zone boxes on PO3
+    array<line>          zone_midlines   // MBZ zone 50% midlines on PO3
+    array<label>         zone_labels     // MBZ labels on PO3
     box                  forming_body
     line                 forming_wick
     label                tf_label
@@ -902,6 +922,12 @@ string po3_label_size_resolved = switch po3_label_size_input
     "Large"  => size.large
     => size.small
 
+// Resolve PO3 midline style
+string po3_mbz_midline_style_resolved = switch po3_mbz_midline_style
+    "----" => line.style_dashed
+    "····" => line.style_dotted
+    => line.style_solid
+
 // Resolve PO3 divider line style
 string po3_divider_style_resolved = switch po3_divider_style_in
     "----" => line.style_dashed
@@ -926,10 +952,20 @@ var PO3Chart po3_primary = PO3Chart.new(
     show_dividers  = show_po3_dividers,
     divider_color  = po3_divider_color,
     divider_style  = po3_divider_style_resolved,
+    show_mbz_highlight = show_po3_mbz_highlight,
+    mbz_bull_highlight = po3_mbz_bull_highlight,
+    mbz_bear_highlight = po3_mbz_bear_highlight,
+    mbz_zone_color     = po3_mbz_zone_color,
+    mbz_midline_color  = po3_mbz_midline_color,
+    mbz_midline_style  = po3_mbz_midline_style_resolved,
     data           = array.new<PO3CandleData>(),
     bodies         = array.new<box>(),
     wicks          = array.new<line>(),
     dividers       = array.new<line>(),
+    highlights     = array.new<box>(),
+    zone_boxes     = array.new<box>(),
+    zone_midlines  = array.new<line>(),
+    zone_labels    = array.new<label>(),
     forming_body   = na,
     forming_wick   = na,
     tf_label       = na
@@ -1790,11 +1826,23 @@ cleanup_tap_highlights() =>
 // PO3 MINI CHART FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Clear a line array (shared helper)
+// Clear drawing arrays (shared helpers)
 po3_clear_lines(array<line> arr) =>
     if array.size(arr) > 0
         for i = 0 to array.size(arr) - 1
             line.delete(array.get(arr, i))
+        array.clear(arr)
+
+po3_clear_boxes(array<box> arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            box.delete(array.get(arr, i))
+        array.clear(arr)
+
+po3_clear_labels(array<label> arr) =>
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            label.delete(array.get(arr, i))
         array.clear(arr)
 
 // Collect a confirmed candle into a PO3Chart's data array
@@ -1805,10 +1853,11 @@ po3_collect(PO3Chart chart, float o, float h, float l, float c, int t) =>
 
 // Clean up all visual elements for a PO3Chart
 po3_cleanup(PO3Chart chart) =>
-    if array.size(chart.bodies) > 0
-        for i = 0 to array.size(chart.bodies) - 1
-            box.delete(array.get(chart.bodies, i))
-        array.clear(chart.bodies)
+    po3_clear_boxes(chart.bodies)
+    po3_clear_boxes(chart.highlights)
+    po3_clear_boxes(chart.zone_boxes)
+    po3_clear_lines(chart.zone_midlines)
+    po3_clear_labels(chart.zone_labels)
     po3_clear_lines(chart.wicks)
     po3_clear_lines(chart.dividers)
     label.delete(chart.tf_label)
@@ -1878,6 +1927,62 @@ po3_draw_dividers(PO3Chart chart, int curr_candle_time) =>
             PO3CandleData candle = array.get(chart.data, i)
             line div = line.new(candle.t, high, candle.t, low, xloc=xloc.bar_time, color=chart.divider_color, width=1, style=chart.divider_style, extend=extend.both)
             array.push(chart.dividers, div)
+
+// Highlight PO3 candles that have MBZ zones: recolor body + draw zone box + label
+po3_highlight_mbz(PO3Chart chart, array<CandleZone> zone_arr) =>
+    int confirmed_count = array.size(chart.data)
+    int zone_count = array.size(zone_arr)
+    if confirmed_count > 0 and zone_count > 0
+        int base_x = bar_index + chart.offset
+
+        // For each PO3 candle, check if any zone matches its time
+        for i = 0 to confirmed_count - 1
+            int data_idx = confirmed_count - 1 - i
+            PO3CandleData candle = array.get(chart.data, data_idx)
+            int x_center = base_x + (i * chart.spacing)
+
+            for z_idx = 0 to zone_count - 1
+                CandleZone zone = array.get(zone_arr, z_idx)
+                if zone.has_mbz and not zone.is_invalidated and zone.formation_time == candle.t
+                    color hl_color = zone.is_bullish ? chart.mbz_bull_highlight : chart.mbz_bear_highlight
+
+                    // Recolor candle body (keep original border) + split wick so body opacity works
+                    if i < array.size(chart.bodies) and i < array.size(chart.wicks)
+                        box.set_bgcolor(array.get(chart.bodies, i), hl_color)
+
+                        float body_t = math.max(candle.o, candle.c)
+                        float body_b = math.min(candle.o, candle.c)
+                        color wk = candle.c >= candle.o ? chart.bull_wick : chart.bear_wick
+                        line.delete(array.get(chart.wicks, i))
+                        array.set(chart.wicks, i, line.new(x_center, candle.h, x_center, body_t, color=wk, width=1))
+                        array.push(chart.wicks, line.new(x_center, body_b, x_center, candle.l, color=wk, width=1))
+
+                    // Zone box: extends left only if REFERENCE candle's wick defined the boundary
+                    // Bullish: ref pushed zone_bottom if ref_low < candle_low
+                    // Bearish: ref pushed zone_top if ref_high > candle_high
+                    bool ref_pushed = false
+                    if zone.is_wick_extended and not na(zone.ref_candle_high) and not na(zone.ref_candle_low)
+                        if zone.is_bullish and zone.ref_candle_low < zone.candle_low
+                            ref_pushed := true
+                        else if not zone.is_bullish and zone.ref_candle_high > zone.candle_high
+                            ref_pushed := true
+                    int zone_left  = ref_pushed ? x_center - chart.spacing : x_center
+                    int zone_right = x_center + chart.spacing + 1
+                    box zb = box.new(zone_left, zone.zone_top, zone_right, zone.zone_bottom, border_color=color.new(color.white, 100), bgcolor=chart.mbz_zone_color, border_width=0)
+                    array.push(chart.zone_boxes, zb)
+
+                    // 50% midline
+                    float midpoint = (zone.zone_top + zone.zone_bottom) / 2
+                    line ml = line.new(zone_left, midpoint, zone_right, midpoint, color=chart.mbz_midline_color, width=1, style=chart.mbz_midline_style)
+                    array.push(chart.zone_midlines, ml)
+
+                    // MBZ label: above for bearish, below for bullish (avoid occluding candle)
+                    string dir = zone.is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX
+                    float label_y = zone.is_bullish ? zone.zone_bottom : zone.zone_top
+                    string label_style = zone.is_bullish ? label.style_label_up : label.style_label_down
+                    color label_clr = zone.is_bullish ? zone_bull_color : zone_bear_color
+                    label lbl = label.new(x_center, label_y, "MBZ" + dir, style=label_style, color=color.new(color.white, 100), textcolor=label_clr, size=size.tiny)
+                    array.push(chart.zone_labels, lbl)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PREVIEW ZONE FUNCTIONS (for forming HTF candle)
@@ -2779,6 +2884,8 @@ if IS_VALID
 
 if IS_VALID and show_po3_chart and barstate.islast and htf1.curr_open > 0
     po3_render(po3_primary, htf1.curr_open, htf1.curr_high, htf1.curr_low, close)
+    if po3_primary.show_mbz_highlight
+        po3_highlight_mbz(po3_primary, htf1.zone_array)
     if po3_primary.show_dividers
         po3_draw_dividers(po3_primary, htf1.curr_time)
 
@@ -2854,7 +2961,7 @@ addColorRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 3, 12, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 3, 16, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     table.cell(color_table, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(color_table, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -2882,5 +2989,13 @@ if show_color_table and barstate.islast
     addColorRow(color_table, row, "PO3 Label", po3_label_color)
     row += 1
     addColorRow(color_table, row, "PO3 Divider", po3_divider_color)
+    row += 1
+    addColorRow(color_table, row, "PO3 MBZ +", po3_mbz_bull_highlight)
+    row += 1
+    addColorRow(color_table, row, "PO3 MBZ −", po3_mbz_bear_highlight)
+    row += 1
+    addColorRow(color_table, row, "PO3 Zone BG", po3_mbz_zone_color)
+    row += 1
+    addColorRow(color_table, row, "PO3 Midline", po3_mbz_midline_color)
 
 // relay •
