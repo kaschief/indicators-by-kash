@@ -53,6 +53,7 @@ const int STAGGER_PRICE_MULTIPLIER = 100
 
 // Gap type constants
 const string GAP_TYPE_FVG     = "fvg"
+const string GAP_TYPE_FVG_VI  = "fvg·vi"
 const string GAP_TYPE_IMPLIED = "implied"
 const string GAP_TYPE_VOLUME  = "volume"
 
@@ -91,6 +92,7 @@ const string SIF_LABEL             = "SIF"
 
 // Gap source display text for labels
 const string GAP_SOURCE_FVG_BREAKDOWN_DISPLAY = "fvg"
+const string GAP_SOURCE_FVG_VI_DISPLAY = "fvg·vi"
 const string GAP_SOURCE_IMPLIED_DISPLAY = "imp"
 const string GAP_SOURCE_VOLUME_DISPLAY  = "vol"
 
@@ -232,7 +234,7 @@ po3_bear_wick          = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_
 show_po3_label         = input.bool(true, "Label", group=GROUP_PO3_CHART, inline="po3_lbl")
 po3_label_color        = input.color(color.rgb(0, 0, 0), "", group=GROUP_PO3_CHART, inline="po3_lbl")
 po3_label_size_input   = input.string("Large", "", options=["Tiny", "Small", "Normal", "Large"], group=GROUP_PO3_CHART, inline="po3_lbl")
-show_po3_dividers      = input.bool(false, "Dividers", group=GROUP_PO3_CHART, inline="po3_div")
+show_po3_dividers      = input.bool(true, "Dividers", group=GROUP_PO3_CHART, inline="po3_div")
 po3_divider_color      = input.color(color.new(color.rgb(184, 184, 184), 40), "", group=GROUP_PO3_CHART, inline="po3_div")
 po3_divider_style_in   = input.string("····", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3_CHART, inline="po3_div")
 
@@ -264,8 +266,8 @@ zone_border_width  = input.int(3, "Width", minval=0, maxval=5, group=GROUP_CHART
 zone_extension_bars = input.int(4, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_CHART_ZONES)
 zone_label_color   = input.color(DEFAULT_ZONE_LABEL_COLOR, "Label", group=GROUP_CHART_ZONES, inline="lbl")
 zone_label_size    = input.string("Large", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_CHART_ZONES, inline="lbl")
-show_zone_midline  = input.bool(false, "Midline", group=GROUP_CHART_ZONES, inline="zone_mid")
-zone_midline_color = input.color(color.new(color.rgb(0, 0, 0), 50), "", group=GROUP_CHART_ZONES, inline="zone_mid")
+show_zone_midline  = input.bool(true, "Midline", group=GROUP_CHART_ZONES, inline="zone_mid")
+zone_midline_color = input.color(color.new(color.rgb(99, 99, 99), 50), "", group=GROUP_CHART_ZONES, inline="zone_mid")
 zone_midline_style_in = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_CHART_ZONES, inline="zone_mid")
 show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_CHART_ZONES)
 
@@ -288,6 +290,7 @@ enable_invalidation = input.bool(true, "Enable Invalidation", group=GROUP_INVALI
 
 // ─── 🔍 Detection ───
 enable_fvg      = input.bool(true, "Fair Value Gaps", group=GROUP_DETECTION, inline="src1")
+enable_fvg_vi   = input.bool(true, "Include VI Extension", group=GROUP_DETECTION, inline="src1")
 enable_implied  = input.bool(false, "Implied FVG", group=GROUP_DETECTION, inline="src2")
 enable_volume   = input.bool(false, "Volume Imbalance", group=GROUP_DETECTION, inline="src3")
 max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_DETECTION)
@@ -995,6 +998,7 @@ build_mbz_box_label(bool is_bullish, array<string> source_gap_types) =>
     else
         // Count each type
         int fvg_count = 0
+        int fvg_vi_count = 0
         int imp_count = 0
         int vol_count = 0
 
@@ -1002,31 +1006,43 @@ build_mbz_box_label(bool is_bullish, array<string> source_gap_types) =>
             string src = array.get(source_gap_types, i)
             if src == GAP_TYPE_FVG
                 fvg_count += 1
+            else if src == GAP_TYPE_FVG_VI
+                fvg_vi_count += 1
             else if src == GAP_TYPE_IMPLIED
                 imp_count += 1
             else if src == GAP_TYPE_VOLUME
                 vol_count += 1
 
-        // Count distinct types
-        int distinct_types = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
+        // Count distinct types (fvg and fvg·vi grouped as one type family)
+        int distinct_types = (fvg_count > 0 or fvg_vi_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
 
         string source_type_text = ""
 
         if distinct_types == 1
             // Single type: show type with multiplier if count > 1 (FVG shows nothing if count == 1)
-            if fvg_count > 0
+            if fvg_count > 0 and fvg_vi_count == 0
                 if fvg_count == 1
                     source_type_text := ""
                 else
                     source_type_text := GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count)
+            else if fvg_vi_count > 0 and fvg_count == 0
+                if fvg_vi_count == 1
+                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY
+                else
+                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count)
+            else if fvg_count > 0 and fvg_vi_count > 0
+                array<string> fvg_parts = array.new<string>()
+                array.push(fvg_parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+                array.push(fvg_parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
+                source_type_text := str.tostring(fvg_count + fvg_vi_count) + COUNT_SEPARATOR + array.join(fvg_parts, BREAKDOWN_SEPARATOR)
             else if imp_count > 0
                 if imp_count == 1
-                    source_type_text := "ⁱᵐᵖ"  // Superscript for single implied
+                    source_type_text := "ⁱᵐᵖ"
                 else
                     source_type_text := GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count)
             else if vol_count > 0
                 if vol_count == 1
-                    source_type_text := "ᵛᵒˡ"  // Superscript for single volume
+                    source_type_text := "ᵛᵒˡ"
                 else
                     source_type_text := GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count)
         else
@@ -1035,6 +1051,8 @@ build_mbz_box_label(bool is_bullish, array<string> source_gap_types) =>
 
             if fvg_count > 0
                 array.push(parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+            if fvg_vi_count > 0
+                array.push(parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
             if imp_count > 0
                 array.push(parts, imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count))
             if vol_count > 0
@@ -1123,6 +1141,7 @@ build_source_breakdown(array<string> source_gap_types) =>
     else
         // Count each type
         int fvg_count = 0
+        int fvg_vi_count = 0
         int imp_count = 0
         int vol_count = 0
 
@@ -1130,31 +1149,43 @@ build_source_breakdown(array<string> source_gap_types) =>
             string src = array.get(source_gap_types, i)
             if src == GAP_TYPE_FVG
                 fvg_count += 1
+            else if src == GAP_TYPE_FVG_VI
+                fvg_vi_count += 1
             else if src == GAP_TYPE_IMPLIED
                 imp_count += 1
             else if src == GAP_TYPE_VOLUME
                 vol_count += 1
 
-        // Count distinct types
-        int distinct_types = (fvg_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
+        // Count distinct types (fvg and fvg·vi grouped as one type family)
+        int distinct_types = (fvg_count > 0 or fvg_vi_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
 
         string source_type_text = ""
 
         if distinct_types == 1
             // Single type: show type with multiplier if count > 1 (FVG shows nothing if count == 1)
-            if fvg_count > 0
+            if fvg_count > 0 and fvg_vi_count == 0
                 if fvg_count == 1
                     source_type_text := ""
                 else
                     source_type_text := GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count)
+            else if fvg_vi_count > 0 and fvg_count == 0
+                if fvg_vi_count == 1
+                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY
+                else
+                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count)
+            else if fvg_count > 0 and fvg_vi_count > 0
+                array<string> fvg_parts = array.new<string>()
+                array.push(fvg_parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+                array.push(fvg_parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
+                source_type_text := str.tostring(fvg_count + fvg_vi_count) + COUNT_SEPARATOR + array.join(fvg_parts, BREAKDOWN_SEPARATOR)
             else if imp_count > 0
                 if imp_count == 1
-                    source_type_text := "ⁱᵐᵖ"  // Superscript for single implied
+                    source_type_text := "ⁱᵐᵖ"
                 else
                     source_type_text := GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count)
             else if vol_count > 0
                 if vol_count == 1
-                    source_type_text := "ᵛᵒˡ"  // Superscript for single volume
+                    source_type_text := "ᵛᵒˡ"
                 else
                     source_type_text := GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count)
         else
@@ -1163,6 +1194,8 @@ build_source_breakdown(array<string> source_gap_types) =>
 
             if fvg_count > 0
                 array.push(parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+            if fvg_vi_count > 0
+                array.push(parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
             if imp_count > 0
                 array.push(parts, imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count))
             if vol_count > 0
@@ -1325,7 +1358,7 @@ is_htf_vi_suppressed_by_gaps(array<GapData> gap_arr, float vi_top, float vi_bott
 
             // Check for both FVG AND Implied FVG (not volume) - institutional gap hierarchy
             // Matches SIF-Core: (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED)
-            bool is_higher_priority = gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_IMPLIED
+            bool is_higher_priority = gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_FVG_VI or gap.gap_type == GAP_TYPE_IMPLIED
             bool same_direction = gap.is_bullish == is_vi_bullish
             bool is_open = not gap.is_inverted  // Inverted = closed, cannot suppress
 
@@ -1418,17 +1451,42 @@ detect_htf_gaps(HTFContext ctx, int window_start) =>
     if ctx.h3 > 0  // Ensure we have 3 candles of history
         bool gap_in_window = ctx.t3 >= window_start or window_start == 0
 
+        // Track whether FVG+VI combo absorbed a VIB on this bar
+        bool bull_fvg_vi_created = false
+        bool bear_fvg_vi_created = false
+
         // ─── Standard FVG Detection (Bullish) ───
         if enable_fvg and gap_in_window
             if ctx.l1 > ctx.h3
                 bool is_breakaway = not na(ctx.breakaway_upper_3) and ctx.l1 > ctx.breakaway_upper_3
-                create_htf_gap(ctx, GAP_TYPE_FVG, true, ctx.l1, ctx.h3, ctx.t3, ctx.t1, is_breakaway, "")
+                // Check for FVG+VI combo: VIB on either side of displacement candle [2]
+                float c1_body_bot = htf_body_bot(ctx.o1, ctx.c1)
+                float c3_body_top = htf_body_top(ctx.o3, ctx.c3)
+                bool vib_after  = c1_body_bot > htf_body_top(ctx.o2, ctx.c2) and ctx.l1 <= ctx.h2
+                bool vib_before = htf_body_bot(ctx.o2, ctx.c2) > c3_body_top and ctx.l2 <= ctx.h3
+                if enable_fvg_vi and (vib_after or vib_before)
+                    float combo_top = vib_after ? c1_body_bot : ctx.l1
+                    float combo_bot = vib_before ? c3_body_top : ctx.h3
+                    create_htf_gap(ctx, GAP_TYPE_FVG_VI, true, combo_top, combo_bot, ctx.t3, ctx.t1, is_breakaway, " fvg·vi")
+                    bull_fvg_vi_created := true
+                else
+                    create_htf_gap(ctx, GAP_TYPE_FVG, true, ctx.l1, ctx.h3, ctx.t3, ctx.t1, is_breakaway, "")
 
         // ─── Standard FVG Detection (Bearish) ───
         if enable_fvg and gap_in_window
             if ctx.h1 < ctx.l3
                 bool is_breakaway = not na(ctx.breakaway_lower_3) and ctx.h1 < ctx.breakaway_lower_3
-                create_htf_gap(ctx, GAP_TYPE_FVG, false, ctx.l3, ctx.h1, ctx.t3, ctx.t1, is_breakaway, "")
+                float c1_body_top = htf_body_top(ctx.o1, ctx.c1)
+                float c3_body_bot = htf_body_bot(ctx.o3, ctx.c3)
+                bool vib_after  = c1_body_top < htf_body_bot(ctx.o2, ctx.c2) and ctx.h1 >= ctx.l2
+                bool vib_before = htf_body_top(ctx.o2, ctx.c2) < c3_body_bot and ctx.h2 >= ctx.l3
+                if enable_fvg_vi and (vib_after or vib_before)
+                    float combo_top = vib_before ? c3_body_bot : ctx.l3
+                    float combo_bot = vib_after ? c1_body_top : ctx.h1
+                    create_htf_gap(ctx, GAP_TYPE_FVG_VI, false, combo_top, combo_bot, ctx.t3, ctx.t1, is_breakaway, " fvg·vi")
+                    bear_fvg_vi_created := true
+                else
+                    create_htf_gap(ctx, GAP_TYPE_FVG, false, ctx.l3, ctx.h1, ctx.t3, ctx.t1, is_breakaway, "")
 
         // ─── Implied FVG Detection ───
         if enable_implied and gap_in_window
@@ -1437,7 +1495,7 @@ detect_htf_gaps(HTFContext ctx, int window_start) =>
                 create_htf_gap(ctx, GAP_TYPE_IMPLIED, impl_bull, impl_top, impl_bot, ctx.t3, ctx.t1, false, " imp")
 
         // ─── Volume Imbalance Detection (Bullish) ───
-        if enable_volume and ctx.h2 > 0
+        if enable_volume and ctx.h2 > 0 and not bull_fvg_vi_created
             bool vi_in_window = ctx.t2 >= window_start or window_start == 0
             if vi_in_window and is_htf_bullish_vi(ctx)
                 [vi_top, vi_bot] = get_htf_vi_coordinates(ctx, true)
@@ -1446,7 +1504,7 @@ detect_htf_gaps(HTFContext ctx, int window_start) =>
                     create_htf_gap(ctx, GAP_TYPE_VOLUME, true, vi_top, vi_bot, ctx.t2, ctx.t1, false, " vol")
 
         // ─── Volume Imbalance Detection (Bearish) ───
-        if enable_volume and ctx.h2 > 0
+        if enable_volume and ctx.h2 > 0 and not bear_fvg_vi_created
             bool vi_in_window = ctx.t2 >= window_start or window_start == 0
             if vi_in_window and is_htf_bearish_vi(ctx)
                 [vi_top, vi_bot] = get_htf_vi_coordinates(ctx, false)
@@ -1502,6 +1560,9 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
             if is_gap_forming_candle
                 continue
 
+            // fvg·vi gaps are MBZ-only (no SIF tap/inversion)
+            bool is_fvg_vi = gap.gap_type == GAP_TYPE_FVG_VI
+
             // Determine if this candle taps and/or inverts THIS gap
             bool is_first_tap = false
             bool is_inversion = false
@@ -1535,8 +1596,8 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
                 if candle_closes_through
                     is_inversion := true
 
-            // Record first tapper if this is the first tap
-            if is_first_tap
+            // Record first tapper if this is the first tap (fvg·vi excluded from SIF)
+            if is_first_tap and not is_fvg_vi
                 TapCandidate tapper = TapCandidate.new()
                 tapper.bar_index := bar_index
                 tapper.bar_time := htf_candle_time
@@ -1545,15 +1606,16 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
                 tapper.is_bullish := is_candle_bullish
                 gap.sif_body_tapper := tapper
 
-            // Record inversion
+            // Record inversion (is_inverted always set for gap display; SIF tracking excludes fvg·vi)
             if is_inversion
                 gap.is_inverted := true
                 gap.inverted_time := time
 
-                // Track this gap as SIF source (inversion = SIF)
-                array.push(sif_gap_ids, gap.gap_id)
-                array.push(sif_gap_types, gap.gap_type)
-                array.push(sif_gap_breakaways, gap.is_breakaway)
+                // Track this gap as SIF source (fvg·vi excluded)
+                if not is_fvg_vi
+                    array.push(sif_gap_ids, gap.gap_id)
+                    array.push(sif_gap_types, gap.gap_type)
+                    array.push(sif_gap_breakaways, gap.is_breakaway)
 
             // Update gap if anything changed
             if is_first_tap or is_inversion
@@ -1563,22 +1625,23 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
             color tap_color = gap.is_bullish ? TAP_BEARISH_CANDLE_COLOR : TAP_BULLISH_CANDLE_COLOR
             color inv_color = gap.is_bullish ? INVERSION_BEARISH_CANDLE_COLOR : INVERSION_BULLISH_CANDLE_COLOR
 
-            // Track highest priority interaction type
-            if is_first_tap and is_inversion
-                // Immediate SIF (highest priority)
-                has_immediate_sif := true
-                if na(immediate_sif_color)
-                    immediate_sif_color := inv_color
-            else if is_inversion
-                // Delayed inversion (second priority)
-                has_delayed_inversion := true
-                if na(delayed_inv_color)
-                    delayed_inv_color := inv_color
-            else if is_first_tap
-                // First tap only (third priority)
-                has_first_tap_only := true
-                if na(first_tap_color)
-                    first_tap_color := tap_color
+            // Track highest priority interaction type (fvg·vi excluded from SIF)
+            if not is_fvg_vi
+                if is_first_tap and is_inversion
+                    // Immediate SIF (highest priority)
+                    has_immediate_sif := true
+                    if na(immediate_sif_color)
+                        immediate_sif_color := inv_color
+                else if is_inversion
+                    // Delayed inversion (second priority)
+                    has_delayed_inversion := true
+                    if na(delayed_inv_color)
+                        delayed_inv_color := inv_color
+                else if is_first_tap
+                    // First tap only (third priority)
+                    has_first_tap_only := true
+                    if na(first_tap_color)
+                        first_tap_color := tap_color
 
         // PASS 2: Register SIF zone ONLY for immediate SIF (first tap + inversion same candle)
         // Delayed inversions don't create zones - they're just gap closures, not SIF formations
@@ -1739,12 +1802,13 @@ update_gap_positions(array<GapData> gap_arr, array<CandleZone> zone_arr) =>
             label.set_x(gap.tf_label, right_edge)
 
             // Check if this gap led to an MBZ and passes filters (must have MBZ engine enabled)
-            bool type_ok = (enable_fvg and gap.gap_type == GAP_TYPE_FVG) or (enable_implied and gap.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and gap.gap_type == GAP_TYPE_VOLUME)
+            bool type_ok = (enable_fvg and (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_FVG_VI)) or (enable_implied and gap.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and gap.gap_type == GAP_TYPE_VOLUME)
             bool dir_ok = mbz_direction_filter == DIR_BOTH or (gap.mbz_is_bullish and mbz_direction_filter == DIR_BULLISH) or (not gap.mbz_is_bullish and mbz_direction_filter == DIR_BEARISH)
             bool is_mbz_source = enable_mbz_engine and gap.mbz_ref_time > 0 and dir_ok and type_ok
             // Check if this gap was inverted (became a SIF source, must have SIF engine enabled)
             bool sif_dir_ok = mbz_direction_filter == DIR_BOTH or (gap.is_bullish and mbz_direction_filter == DIR_BEARISH) or (not gap.is_bullish and mbz_direction_filter == DIR_BULLISH)
-            bool is_sif_source = enable_sif_engine and gap.is_inverted and sif_dir_ok and type_ok
+            bool sif_type_ok = (enable_fvg and gap.gap_type == GAP_TYPE_FVG) or (enable_implied and gap.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and gap.gap_type == GAP_TYPE_VOLUME)
+            bool is_sif_source = enable_sif_engine and gap.is_inverted and sif_dir_ok and sif_type_ok
 
             // Check zone validity using O(1) map lookup
             bool mbz_zone_active = map.contains(active_mbz_gap_ids, gap.gap_id)
@@ -2161,6 +2225,10 @@ check_preview_sif_formation(array<GapData> gap_arr, float forming_o, float formi
 
             // Skip if this would be the gap-forming candle
             if forming_time == gap.formation_end_time
+                continue
+
+            // fvg·vi gaps are MBZ-only, skip for SIF
+            if gap.gap_type == GAP_TYPE_FVG_VI
                 continue
 
             bool is_first_tap = false
