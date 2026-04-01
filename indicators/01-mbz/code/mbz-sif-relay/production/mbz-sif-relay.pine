@@ -3,15 +3,9 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // MBZ SIF RELAY
 // ═══════════════════════════════════════════════════════════════════════════════
-// Multi-timeframe MBZ + SIF detection with automatic timeframe pairing:
-//   30s chart → 5m  HTF
-//   1m  chart → 15m HTF
-//   2m  chart → 30m HTF
-//   3m  chart → 30m HTF
-//   5m  chart → 1H  HTF
-//   15m chart → 4H  HTF
-//   1H  chart → D   HTF
-//   4H  chart → D   HTF
+// Multi-timeframe MBZ + SIF detection with 3-tier HTF system:
+//   Main (primary), Support A, Support B each run full detection.
+//   Chart Zone Source selector controls which tier renders on the main chart.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
@@ -34,9 +28,8 @@ const int TF_30M_MS = 1800000
 const int TF_1H_MS  = 3600000
 const int TF_4H_MS  = 14400000
 const int TF_D_MS   = 86400000
-
-// Secondary extension scaling
-const float SECONDARY_4H_EXTENSION_SCALE = 1.8
+const int TF_1M_MS  = 60000
+const int TF_W_MS   = 604800000
 
 // Stagger configuration
 const int STAGGER_MODULO  = 7
@@ -144,51 +137,89 @@ const color DEFAULT_ZONE_LABEL_COLOR = color.new(color.rgb(156, 156, 156), 20)
 // ═══════════════════════════════════════════════════════════════════════════════
 // TIMEFRAME CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
-// Centralized pairing definition - strict 1:1 LTF→HTF mapping
+// Centralized pairing definition - 3-tier LTF→HTF mapping
 // Returns: [is_valid, htf_string, htf_label, htf_ms, ltf_label]
-//
-// SUPPORTED PAIRINGS:
-//   LTF    →  Primary   Secondary
-//   30s    →  5m        -
-//   1m     →  15m       1H
-//   2m     →  30m       1H
-//   3m     →  30m       1H
-//   5m     →  1H        4H
-//   15m    →  4H        -
-//   1H     →  D         -
-//   4H     →  D         -
 //
 // To add a new pairing: add one case to the switch below
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // HTF slot constants
 const string HTF_SLOT_PRIMARY   = "primary"
-const string HTF_SLOT_SECONDARY = "secondary"
+const string HTF_SLOT_SUPPORT_A = "support_a"
+const string HTF_SLOT_SUPPORT_B = "support_b"
 
 // Unified HTF pairing function
 get_tf_pairing(string chart_tf, string slot) =>
     if slot == HTF_SLOT_PRIMARY
         switch chart_tf
-            "30S" => [true, "5",   "5m",  TF_5M_MS,  "30s"]   // 30s → 5m   (10x)
-            "1"   => [true, "15",  "15m", TF_15M_MS, "1m"]    // 1m  → 15m  (15x)
-            "2"   => [true, "30",  "30m", TF_30M_MS, "2m"]    // 2m  → 30m  (15x)
-            "3"   => [true, "30",  "30m", TF_30M_MS, "3m"]    // 3m  → 30m  (10x)
-            "5"   => [true, "60",  "1H",  TF_1H_MS,  "5m"]    // 5m  → 1H   (12x)
-            "15"  => [true, "240", "4H",  TF_4H_MS,  "15m"]   // 15m → 4H   (16x)
-            "60"  => [true, "D",   "D",   TF_D_MS,   "1H"]    // 1H  → D    (24x)
-            "240" => [true, "D",   "D",   TF_D_MS,   "4H"]    // 4H  → D    (6x)
+            "30S" => [true, "5",   "5m",  TF_5M_MS,  "30s"]   // 30s → 5m
+            "1"   => [true, "15",  "15m", TF_15M_MS, "1m"]    // 1m  → 15m
+            "2"   => [true, "30",  "30m", TF_30M_MS, "2m"]    // 2m  → 30m
+            "3"   => [true, "30",  "30m", TF_30M_MS, "3m"]    // 3m  → 30m
+            "4"   => [true, "30",  "30m", TF_30M_MS, "4m"]    // 4m  → 30m
+            "5"   => [true, "60",  "1H",  TF_1H_MS,  "5m"]    // 5m  → 1H
+            "10"  => [true, "60",  "1H",  TF_1H_MS,  "10m"]   // 10m → 1H
+            "15"  => [true, "240", "4H",  TF_4H_MS,  "15m"]   // 15m → 4H
+            "30"  => [true, "240", "4H",  TF_4H_MS,  "30m"]   // 30m → 4H
+            "45"  => [true, "240", "4H",  TF_4H_MS,  "45m"]   // 45m → 4H
+            "60"  => [true, "D",   "D",   TF_D_MS,   "1H"]    // 1H  → D
+            "120" => [true, "D",   "D",   TF_D_MS,   "2H"]    // 2H  → D
+            "180" => [true, "D",   "D",   TF_D_MS,   "3H"]    // 3H  → D
+            "240" => [true, "D",   "D",   TF_D_MS,   "4H"]    // 4H  → D
+            "D"   => [true, "W",   "W",   TF_W_MS,   "D"]     // D   → W
             =>       [false, "",   "",    0,         ""]      // Unsupported
-    else  // secondary
+    else if slot == HTF_SLOT_SUPPORT_A
         switch chart_tf
-            "1"   => [true, "60",  "1H", TF_1H_MS, "1m"]      // 1m → 1H (60x)
-            "2"   => [true, "60",  "1H", TF_1H_MS, "2m"]      // 2m → 1H (30x)
-            "3"   => [true, "60",  "1H", TF_1H_MS, "3m"]      // 3m → 1H (20x)
-            "5"   => [true, "240", "4H", TF_4H_MS, "5m"]      // 5m → 4H (48x)
-            =>       [false, "",   "",   0,        ""]        // Not supported
+            "30S" => [true, "1",   "1m",  TF_1M_MS,  "30s"]   // 30s → 1m
+            "1"   => [true, "5",   "5m",  TF_5M_MS,  "1m"]    // 1m  → 5m
+            "2"   => [true, "5",   "5m",  TF_5M_MS,  "2m"]    // 2m  → 5m
+            "3"   => [true, "15",  "15m", TF_15M_MS, "3m"]    // 3m  → 15m
+            "4"   => [true, "15",  "15m", TF_15M_MS, "4m"]    // 4m  → 15m
+            "5"   => [true, "15",  "15m", TF_15M_MS, "5m"]    // 5m  → 15m
+            "10"  => [true, "30",  "30m", TF_30M_MS, "10m"]   // 10m → 30m
+            "15"  => [true, "60",  "1H",  TF_1H_MS,  "15m"]   // 15m → 1H
+            "30"  => [true, "60",  "1H",  TF_1H_MS,  "30m"]   // 30m → 1H
+            "45"  => [true, "60",  "1H",  TF_1H_MS,  "45m"]   // 45m → 1H
+            "60"  => [true, "240", "4H",  TF_4H_MS,  "1H"]    // 1H  → 4H
+            "120" => [true, "240", "4H",  TF_4H_MS,  "2H"]    // 2H  → 4H
+            "180" => [true, "240", "4H",  TF_4H_MS,  "3H"]    // 3H  → 4H
+            =>       [false, "",   "",    0,         ""]      // Unsupported (240, D)
+    else if slot == HTF_SLOT_SUPPORT_B
+        switch chart_tf
+            "30S" => [true, "15",  "15m", TF_15M_MS, "30s"]   // 30s → 15m
+            "1"   => [true, "60",  "1H",  TF_1H_MS,  "1m"]    // 1m  → 1H
+            "2"   => [true, "60",  "1H",  TF_1H_MS,  "2m"]    // 2m  → 1H
+            "3"   => [true, "60",  "1H",  TF_1H_MS,  "3m"]    // 3m  → 1H
+            "4"   => [true, "60",  "1H",  TF_1H_MS,  "4m"]    // 4m  → 1H
+            "5"   => [true, "240", "4H",  TF_4H_MS,  "5m"]    // 5m  → 4H
+            "10"  => [true, "240", "4H",  TF_4H_MS,  "10m"]   // 10m → 4H
+            "15"  => [true, "D",   "D",   TF_D_MS,   "15m"]   // 15m → D
+            "30"  => [true, "D",   "D",   TF_D_MS,   "30m"]   // 30m → D
+            "45"  => [true, "D",   "D",   TF_D_MS,   "45m"]   // 45m → D
+            "60"  => [true, "W",   "W",   TF_W_MS,   "1H"]    // 1H  → W
+            "120" => [true, "W",   "W",   TF_W_MS,   "2H"]    // 2H  → W
+            "180" => [true, "W",   "W",   TF_W_MS,   "3H"]    // 3H  → W
+            "240" => [true, "W",   "W",   TF_W_MS,   "4H"]    // 4H  → W
+            =>       [false, "",   "",    0,         ""]      // Unsupported (D)
+    else
+        [false, "", "", 0, ""]  // Unknown slot
 
 string CHART_TF = timeframe.period
 [IS_VALID, HTF_STRING, HTF_LABEL, HTF_MS, LTF_LABEL] = get_tf_pairing(CHART_TF, HTF_SLOT_PRIMARY)
-[IS_VALID_HTF2, HTF2_STRING, HTF2_LABEL, HTF2_MS, _] = get_tf_pairing(CHART_TF, HTF_SLOT_SECONDARY)
+
+// Helper to convert Pine TF string to display label
+get_tf_display_label(string tf) =>
+    int secs = timeframe.in_seconds(tf)
+    if secs < 60
+        str.tostring(secs) + "s"
+    else if secs < 3600
+        str.tostring(secs / 60) + "m"
+    else if secs < 86400
+        str.tostring(secs / 3600) + "H"
+    else if secs < 604800
+        "D"
+    else
+        "W"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
@@ -203,75 +234,105 @@ const string DIR_BEARISH = "Bearish Only"
 const color GAP_COLOR = color.new(color.rgb(187, 217, 251), 90)
 
 // ─── Group Constants ───
-GROUP_PO3_CHART  = "📊 PO3 Chart"
-GROUP_PO3_ZONES  = "📊 PO3 Zones"
-GROUP_CHART_ZONES = "🎨 Chart Zones"
-GROUP_MBZ        = "🎯 MBZ"
-GROUP_SIF        = "✨ SIF"
+GROUP_PO3_CHART    = "📊 PO3 Chart"
+GROUP_PO3_CANDLES  = "📊 PO3 Candles"
+GROUP_PO3_FVGS     = "📊 PO3 FVGs"
+GROUP_MBZ          = "🎯 MBZ"
+GROUP_SIF          = "✨ SIF"
+GROUP_CHART_ZONES  = "🎨 Chart Zones"
 GROUP_INVALIDATION = "✋ Invalidation"
-GROUP_DETECTION  = "🔍 Detection"
-GROUP_ADVANCED   = "⚙️ Advanced"
+GROUP_GAP_SOURCES  = "📊 Gap Sources"
+GROUP_ADVANCED     = "⚙️ Advanced"
 
 // ─── 📊 PO3 Chart ───
 show_po3_chart         = input.bool(true, "Show PO3 Chart", group=GROUP_PO3_CHART, inline="po3_master")
 po3_placement          = input.string("Right", "", options=["Right", "Overlay"], group=GROUP_PO3_CHART, inline="po3_master")
-po3_overlay_trans      = input.int(15, "Opacity", minval=0, maxval=100, group=GROUP_PO3_CHART, inline="po3_master")
+po3_overlay_trans      = input.int(15, "Opacity", minval=0, maxval=100, group=GROUP_PO3_CHART, inline="po3_master", tooltip="Transparency of PO3 candles in overlay mode")
 bool po3_is_overlay    = po3_placement == "Overlay"
-po3_candle_count       = input.int(15, "Candles", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_layout")
+po3_candle_count       = input.int(15, "TF 1", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_tf1", tooltip="Main timeframe candle count (always active, auto-paired)")
+show_po3_support_a    = input.bool(false, "TF 2", group=GROUP_PO3_CHART, inline="po3_sa", tooltip="Lower timeframe for detailed price structure")
+po3_sa_manual         = input.bool(false, "Manual", group=GROUP_PO3_CHART, inline="po3_sa")
+po3_sa_tf_input       = input.timeframe("5", "", group=GROUP_PO3_CHART, inline="po3_sa")
+po3_sa_candle_count   = input.int(10, "", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_sa")
+show_po3_support_b    = input.bool(false, "TF 3", group=GROUP_PO3_CHART, inline="po3_sb", tooltip="Higher timeframe for broader market context")
+po3_sb_manual         = input.bool(false, "Manual", group=GROUP_PO3_CHART, inline="po3_sb")
+po3_sb_tf_input       = input.timeframe("240", "", group=GROUP_PO3_CHART, inline="po3_sb")
+po3_sb_candle_count   = input.int(10, "", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_sb")
 po3_offset             = input.int(50, "Offset", minval=5, maxval=200, group=GROUP_PO3_CHART, inline="po3_layout")
 po3_candle_spacing     = input.int(3, "Spacing", minval=2, maxval=10, group=GROUP_PO3_CHART, inline="po3_layout")
-po3_bull_body          = input.color(color.rgb(255, 255, 255), "+ Body", group=GROUP_PO3_CHART, inline="po3_bull")
-po3_bull_border        = input.color(color.rgb(76, 76, 76), "Border", group=GROUP_PO3_CHART, inline="po3_bull")
-po3_bull_wick          = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_PO3_CHART, inline="po3_bull")
-po3_bear_body          = input.color(color.rgb(0, 0, 0), "− Body", group=GROUP_PO3_CHART, inline="po3_bear")
-po3_bear_border        = input.color(color.rgb(76, 76, 76), "Border", group=GROUP_PO3_CHART, inline="po3_bear")
-po3_bear_wick          = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_PO3_CHART, inline="po3_bear")
-show_po3_label         = input.bool(true, "Label", group=GROUP_PO3_CHART, inline="po3_lbl")
-po3_label_color        = input.color(color.rgb(0, 0, 0), "", group=GROUP_PO3_CHART, inline="po3_lbl")
-po3_label_size_input   = input.string("Large", "", options=["Tiny", "Small", "Normal", "Large"], group=GROUP_PO3_CHART, inline="po3_lbl")
-show_po3_dividers      = input.bool(true, "Dividers", group=GROUP_PO3_CHART, inline="po3_div")
-po3_divider_color      = input.color(color.new(color.rgb(219, 219, 219), 40), "", group=GROUP_PO3_CHART, inline="po3_div")
-po3_divider_style_in   = input.string("····", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3_CHART, inline="po3_div")
-show_po3_fvgs          = input.bool(false, "Show FVGs", group=GROUP_PO3_CHART, inline="po3_fvg")
-po3_fvg_bull_color     = input.color(color.new(color.rgb(184, 184, 184), 75), "+", group=GROUP_PO3_CHART, inline="po3_fvg")
-po3_fvg_bear_color     = input.color(color.new(color.rgb(184, 184, 184), 75), "−", group=GROUP_PO3_CHART, inline="po3_fvg")
-po3_fvg_extend         = input.int(1, "FVG Extend", minval=0, maxval=5, group=GROUP_PO3_CHART, inline="po3_fvg")
+po3_gap                = input.int(5, "Gap", minval=0, maxval=20, group=GROUP_PO3_CHART, inline="po3_layout", tooltip="Space between PO3 tier charts")
 
-// ─── 📊 PO3 Zones ───
-po3_show_mbz           = input.bool(true, "Show MBZ", group=GROUP_PO3_ZONES, inline="po3_filter")
-po3_show_sif           = input.bool(true, "Show SIF", group=GROUP_PO3_ZONES, inline="po3_filter")
-po3_show_times         = input.bool(false, "Show Times", group=GROUP_PO3_ZONES, inline="po3_filter")
-po3_show_all_zones     = input.bool(false, "Show All Chart Zones", group=GROUP_PO3_ZONES, tooltip="When off, the main chart only shows zones from PO3 visible candles. Enable to show all detected zones regardless of PO3 range.")
-po3_mbz_bull_highlight = input.color(color.new(color.rgb(16, 110, 237), 60), "MBZ +", group=GROUP_PO3_ZONES, inline="po3_mbz_hl")
-po3_mbz_bear_highlight = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_PO3_ZONES, inline="po3_mbz_hl")
-po3_mbz_zone_bull     = input.color(color.new(color.rgb(144, 191, 249), 85), "MBZ Zone +", group=GROUP_PO3_ZONES, inline="po3_mbz_zone")
-po3_mbz_zone_bear     = input.color(color.new(color.rgb(255, 204, 128), 90), "−", group=GROUP_PO3_ZONES, inline="po3_mbz_zone")
-po3_mbz_label_color   = input.color(color.new(color.rgb(57, 120, 221), 0), "MBZ Label +", group=GROUP_PO3_ZONES, inline="po3_mbz_lbl")
-po3_mbz_label_bear    = input.color(color.new(color.rgb(255, 152, 0), 0), "−", group=GROUP_PO3_ZONES, inline="po3_mbz_lbl")
-po3_sif_bull_highlight = input.color(color.new(color.rgb(38, 166, 154), 50), "SIF +", group=GROUP_PO3_ZONES, inline="po3_sif_hl")
-po3_sif_bear_highlight = input.color(color.new(color.rgb(239, 83, 80), 50), "−", group=GROUP_PO3_ZONES, inline="po3_sif_hl")
-po3_sif_zone_bull     = input.color(color.new(color.rgb(38, 166, 154), 90), "SIF Zone +", group=GROUP_PO3_ZONES, inline="po3_sif_zone")
-po3_sif_zone_bear     = input.color(color.new(color.rgb(239, 83, 80), 85), "−", group=GROUP_PO3_ZONES, inline="po3_sif_zone")
-po3_sif_label_color   = input.color(color.new(color.rgb(38, 166, 154), 0), "SIF Label +", group=GROUP_PO3_ZONES, inline="po3_sif_lbl")
-po3_sif_label_bear    = input.color(color.new(color.rgb(239, 83, 80), 0), "−", group=GROUP_PO3_ZONES, inline="po3_sif_lbl")
-po3_midline_color      = input.color(color.new(color.rgb(0, 0, 0), 50), "Midline", group=GROUP_PO3_ZONES, inline="po3_midline")
-po3_midline_style      = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3_ZONES, inline="po3_midline")
+// Resolve Support A TF
+[SA_VALID_AUTO, SA_STRING_AUTO, SA_LABEL_AUTO, SA_MS_AUTO, _sa] = get_tf_pairing(CHART_TF, HTF_SLOT_SUPPORT_A)
+string SA_TF_STRING = po3_sa_manual ? po3_sa_tf_input : (SA_VALID_AUTO ? SA_STRING_AUTO : "1")
+string SA_TF_LABEL  = po3_sa_manual ? get_tf_display_label(po3_sa_tf_input) : SA_LABEL_AUTO
+int    SA_TF_MS     = po3_sa_manual ? timeframe.in_seconds(po3_sa_tf_input) * 1000 : SA_MS_AUTO
+bool   SA_IS_VALID  = show_po3_support_a and (po3_sa_manual or SA_VALID_AUTO) and timeframe.in_seconds(SA_TF_STRING) > timeframe.in_seconds()
 
-// Engine flags derived from PO3 zone toggles (PO3 is the primary controller)
+// Resolve Support B TF
+[SB_VALID_AUTO, SB_STRING_AUTO, SB_LABEL_AUTO, SB_MS_AUTO, _sb] = get_tf_pairing(CHART_TF, HTF_SLOT_SUPPORT_B)
+string SB_TF_STRING = po3_sb_manual ? po3_sb_tf_input : (SB_VALID_AUTO ? SB_STRING_AUTO : "1")
+string SB_TF_LABEL  = po3_sb_manual ? get_tf_display_label(po3_sb_tf_input) : SB_LABEL_AUTO
+int    SB_TF_MS     = po3_sb_manual ? timeframe.in_seconds(po3_sb_tf_input) * 1000 : SB_MS_AUTO
+bool   SB_IS_VALID  = show_po3_support_b and (po3_sb_manual or SB_VALID_AUTO) and timeframe.in_seconds(SB_TF_STRING) > timeframe.in_seconds()
+
+// ─── 📊 PO3 Candles ───
+po3_bull_body          = input.color(color.rgb(255, 255, 255), "+ Body", group=GROUP_PO3_CANDLES, inline="po3_bull")
+po3_bull_border        = input.color(color.rgb(76, 76, 76), "Border", group=GROUP_PO3_CANDLES, inline="po3_bull")
+po3_bull_wick          = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_PO3_CANDLES, inline="po3_bull")
+po3_bear_body          = input.color(color.rgb(0, 0, 0), "− Body", group=GROUP_PO3_CANDLES, inline="po3_bear")
+po3_bear_border        = input.color(color.rgb(76, 76, 76), "Border", group=GROUP_PO3_CANDLES, inline="po3_bear")
+po3_bear_wick          = input.color(color.rgb(76, 76, 76), "Wick", group=GROUP_PO3_CANDLES, inline="po3_bear")
+show_po3_label         = input.bool(true, "Label", group=GROUP_PO3_CANDLES, inline="po3_lbl")
+po3_label_color        = input.color(color.rgb(0, 0, 0), "", group=GROUP_PO3_CANDLES, inline="po3_lbl")
+po3_label_size_input   = input.string("Large", "", options=["Tiny", "Small", "Normal", "Large"], group=GROUP_PO3_CANDLES, inline="po3_lbl")
+show_po3_dividers      = input.bool(true, "Dividers", group=GROUP_PO3_CANDLES, inline="po3_div")
+po3_divider_color      = input.color(color.new(color.rgb(219, 219, 219), 40), "", group=GROUP_PO3_CANDLES, inline="po3_div")
+po3_divider_style_in   = input.string("····", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3_CANDLES, inline="po3_div")
+po3_show_times         = input.bool(false, "Show Times", group=GROUP_PO3_CANDLES)
+
+// ─── 📊 PO3 FVGs ───
+show_po3_fvgs          = input.bool(false, "Show FVGs", group=GROUP_PO3_FVGS, inline="po3_fvg")
+po3_fvg_bull_color     = input.color(color.new(color.rgb(184, 184, 184), 75), "+", group=GROUP_PO3_FVGS, inline="po3_fvg")
+po3_fvg_bear_color     = input.color(color.new(color.rgb(184, 184, 184), 75), "−", group=GROUP_PO3_FVGS, inline="po3_fvg")
+po3_fvg_extend         = input.int(1, "FVG Extend", minval=0, maxval=5, group=GROUP_PO3_FVGS, inline="po3_fvg", tooltip="Extra candles to extend FVG boxes on PO3")
+po3_midline_color      = input.color(color.new(color.rgb(0, 0, 0), 50), "PO3 Midline", group=GROUP_PO3_FVGS, inline="po3_midline")
+po3_midline_style      = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_PO3_FVGS, inline="po3_midline")
+
+// ─── 🎯 MBZ ───
+po3_show_mbz           = input.bool(true, "Enable MBZ", group=GROUP_MBZ)
+po3_mbz_bull_highlight = input.color(color.new(color.rgb(16, 110, 237), 60), "Candle +", group=GROUP_MBZ, inline="po3_mbz_hl")
+po3_mbz_bear_highlight = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_MBZ, inline="po3_mbz_hl")
+po3_mbz_zone_bull     = input.color(color.new(color.rgb(144, 191, 249), 85), "Zone +", group=GROUP_MBZ, inline="po3_mbz_zone")
+po3_mbz_zone_bear     = input.color(color.new(color.rgb(255, 204, 128), 90), "−", group=GROUP_MBZ, inline="po3_mbz_zone")
+po3_mbz_label_color   = input.color(color.new(color.rgb(57, 120, 221), 0), "Label +", group=GROUP_MBZ, inline="po3_mbz_lbl")
+po3_mbz_label_bear    = input.color(color.new(color.rgb(255, 152, 0), 0), "−", group=GROUP_MBZ, inline="po3_mbz_lbl")
+mbz_fill_bull      = input.color(color.new(color.rgb(187, 217, 251), 90), "Fill +", group=GROUP_MBZ, inline="mbz_fill")
+mbz_fill_bear      = input.color(color.new(color.rgb(255, 224, 178), 90), "−", group=GROUP_MBZ, inline="mbz_fill")
+mbz_border_bull    = input.color(color.new(color.rgb(92, 166, 233), 40), "Border +", group=GROUP_MBZ, inline="mbz_bdr")
+mbz_border_bear    = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_MBZ, inline="mbz_bdr")
+
 bool enable_mbz_engine = po3_show_mbz
+
+// ─── ✨ SIF ───
+po3_show_sif           = input.bool(true, "Enable SIF", group=GROUP_SIF)
+po3_sif_bull_highlight = input.color(color.new(color.rgb(38, 166, 154), 50), "Candle +", group=GROUP_SIF, inline="po3_sif_hl")
+po3_sif_bear_highlight = input.color(color.new(color.rgb(239, 83, 80), 50), "−", group=GROUP_SIF, inline="po3_sif_hl")
+po3_sif_zone_bull     = input.color(color.new(color.rgb(38, 166, 154), 90), "Zone +", group=GROUP_SIF, inline="po3_sif_zone")
+po3_sif_zone_bear     = input.color(color.new(color.rgb(239, 83, 80), 85), "−", group=GROUP_SIF, inline="po3_sif_zone")
+po3_sif_label_color   = input.color(color.new(color.rgb(38, 166, 154), 0), "Label +", group=GROUP_SIF, inline="po3_sif_lbl")
+po3_sif_label_bear    = input.color(color.new(color.rgb(239, 83, 80), 0), "−", group=GROUP_SIF, inline="po3_sif_lbl")
+sif_fill_bull      = input.color(color.new(color.rgb(172, 229, 220), 90), "Fill +", group=GROUP_SIF, inline="sif_fill")
+sif_fill_bear      = input.color(color.new(color.rgb(252, 203, 205), 90), "−", group=GROUP_SIF, inline="sif_fill")
+sif_border_bull    = input.color(color.new(color.rgb(38, 166, 154), 55), "Border +", group=GROUP_SIF, inline="sif_bdr")
+sif_border_bear    = input.color(color.new(color.rgb(239, 83, 80), 65), "−", group=GROUP_SIF, inline="sif_bdr")
+
 bool enable_sif_engine = po3_show_sif
 
 // ─── 🎨 Chart Zones ───
-show_chart_zones   = input.bool(true, "Show Chart Zones", group=GROUP_CHART_ZONES)
-mbz_fill_bull      = input.color(color.new(color.rgb(187, 217, 251), 90), "MBZ +", group=GROUP_CHART_ZONES, inline="mbz_fill")
-mbz_fill_bear      = input.color(color.new(color.rgb(255, 224, 178), 90), "−", group=GROUP_CHART_ZONES, inline="mbz_fill")
-mbz_border_bull    = input.color(color.new(color.rgb(92, 166, 233), 40), "MBZ Border +", group=GROUP_CHART_ZONES, inline="mbz_bdr")
-mbz_border_bear    = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_CHART_ZONES, inline="mbz_bdr")
-sif_fill_bull      = input.color(color.new(color.rgb(172, 229, 220), 90), "SIF +", group=GROUP_CHART_ZONES, inline="sif_fill")
-sif_fill_bear      = input.color(color.new(color.rgb(252, 203, 205), 90), "−", group=GROUP_CHART_ZONES, inline="sif_fill")
-sif_border_bull    = input.color(color.new(color.rgb(38, 166, 154), 55), "SIF Border +", group=GROUP_CHART_ZONES, inline="sif_bdr")
-sif_border_bear    = input.color(color.new(color.rgb(239, 83, 80), 65), "−", group=GROUP_CHART_ZONES, inline="sif_bdr")
-// Shared zone settings
+show_chart_zones   = input.bool(true, "Show on Chart", group=GROUP_CHART_ZONES)
+chart_zone_source = input.string("Main", "Chart Source", options=["Main", "TF 2", "TF 3"], group=GROUP_CHART_ZONES, tooltip="Which timeframe tier's zones render on the main chart")
+po3_limit_to_range = input.bool(true, "Limit to PO3 Range", group=GROUP_CHART_ZONES, tooltip="When on, chart zones only show for candles visible on the PO3. Disable to show all detected zones.")
 zone_border_width  = input.int(2, "Border Width", minval=0, maxval=5, group=GROUP_CHART_ZONES)
 zone_extension_bars = input.int(4, "Zone Extension in HTF Bars", minval=1, maxval=20, group=GROUP_CHART_ZONES)
 zone_label_color   = input.color(DEFAULT_ZONE_LABEL_COLOR, "Label", group=GROUP_CHART_ZONES, inline="lbl")
@@ -281,42 +342,25 @@ zone_midline_color = input.color(color.new(color.rgb(99, 99, 99), 50), "", group
 zone_midline_style_in = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_CHART_ZONES, inline="zone_mid")
 show_forming_zones = input.bool(false, "Show Forming Zones", group=GROUP_CHART_ZONES)
 
-// Secondary zone styling
-const string SECONDARY_BORDER_STYLE = line.style_dashed
-const int SECONDARY_BORDER_WIDTH = 2
-
-// ─── 🎯 MBZ ───
-extend_to_wick = input.bool(true, "Extend to Wick", group=GROUP_MBZ, tooltip='Extend zone boundary to the furthest wick (own candle or reference candle)')
-same_source_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, "Same-Source MBZ", options=[SAME_SOURCE_FILTER_ALL_TOUCHES, SAME_SOURCE_FILTER_FIRST_TOUCH, SAME_SOURCE_FILTER_LATEST_TOUCH], group=GROUP_MBZ)
-invalidation_mode = input.string(MBZ_INVALIDATION_STRICT, "MBZ Invalidation", options=[MBZ_INVALIDATION_STANDARD, MBZ_INVALIDATION_CONSERVATIVE, MBZ_INVALIDATION_STRICT, MBZ_INVALIDATION_CUSTOM], group=GROUP_MBZ, inline="mbz_inv")
-custom_threshold_percent = input.float(50, "Custom %", minval=1, maxval=100, step=1, group=GROUP_MBZ, inline="mbz_inv")
-
-// ─── ✨ SIF ───
-sif_invalidation_mode = input.string(SIF_INVALIDATION_STRICT, "SIF Invalidation", options=[SIF_INVALIDATION_STRICT, SIF_INVALIDATION_LENIENT, SIF_INVALIDATION_CUSTOM], group=GROUP_SIF, inline="sif_inv")
-sif_custom_threshold_percent = input.float(99, "Custom %", minval=1, maxval=100, step=1, group=GROUP_SIF, inline="sif_inv")
+// ─── 📊 Gap Sources ───
+enable_fvg      = input.bool(true, "Fair Value Gaps", group=GROUP_GAP_SOURCES, inline="src1")
+enable_fvg_vi   = input.bool(true, "Include VI Extension", group=GROUP_GAP_SOURCES, inline="src1")
+enable_implied  = input.bool(false, "Implied FVG", group=GROUP_GAP_SOURCES, inline="src2")
+enable_volume   = input.bool(false, "Volume Imbalance", group=GROUP_GAP_SOURCES, inline="src3")
 
 // ─── ✋ Invalidation ───
 enable_invalidation = input.bool(true, "Enable Invalidation", group=GROUP_INVALIDATION)
-
-// ─── 🔍 Detection ───
-enable_fvg      = input.bool(true, "Fair Value Gaps", group=GROUP_DETECTION, inline="src1")
-enable_fvg_vi   = input.bool(true, "Include VI Extension", group=GROUP_DETECTION, inline="src1")
-enable_implied  = input.bool(false, "Implied FVG", group=GROUP_DETECTION, inline="src2")
-enable_volume   = input.bool(false, "Volume Imbalance", group=GROUP_DETECTION, inline="src3")
-max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_DETECTION)
-mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_DETECTION)
-
-// HTF display mode
-const string HTF_DISPLAY_BOTH     = "Primary + Secondary"
-const string HTF_DISPLAY_PRIMARY  = "Primary"
-const string HTF_DISPLAY_SECONDARY = "Secondary"
-htf_display_mode = input.string(HTF_DISPLAY_PRIMARY, "HTF Display", options=[HTF_DISPLAY_BOTH, HTF_DISPLAY_PRIMARY, HTF_DISPLAY_SECONDARY], group=GROUP_DETECTION)
-
-// Derived display flags
-bool show_htf1 = htf_display_mode == HTF_DISPLAY_BOTH or htf_display_mode == HTF_DISPLAY_PRIMARY
-bool show_htf2 = IS_VALID_HTF2 and (htf_display_mode == HTF_DISPLAY_BOTH or htf_display_mode == HTF_DISPLAY_SECONDARY)
+invalidation_mode = input.string(MBZ_INVALIDATION_STRICT, "MBZ Invalidation", options=[MBZ_INVALIDATION_STANDARD, MBZ_INVALIDATION_CONSERVATIVE, MBZ_INVALIDATION_STRICT, MBZ_INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline="mbz_inv")
+custom_threshold_percent = input.float(50, "Custom %", minval=1, maxval=100, step=1, group=GROUP_INVALIDATION, inline="mbz_inv")
+sif_invalidation_mode = input.string(SIF_INVALIDATION_STRICT, "SIF Invalidation", options=[SIF_INVALIDATION_STRICT, SIF_INVALIDATION_LENIENT, SIF_INVALIDATION_CUSTOM], group=GROUP_INVALIDATION, inline="sif_inv")
+sif_custom_threshold_percent = input.float(99, "Custom %", minval=1, maxval=100, step=1, group=GROUP_INVALIDATION, inline="sif_inv")
+extend_to_wick = input.bool(true, "Extend to Wick", group=GROUP_INVALIDATION, tooltip='Extend zone boundary to the furthest wick (own candle or reference candle)')
+same_source_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, "Same-Source MBZ", options=[SAME_SOURCE_FILTER_ALL_TOUCHES, SAME_SOURCE_FILTER_FIRST_TOUCH, SAME_SOURCE_FILTER_LATEST_TOUCH], group=GROUP_INVALIDATION)
 
 // ─── ⚙️ Advanced ───
+max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_ADVANCED)
+mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_ADVANCED)
+
 // Workspace Tools
 WORKSPACE_DEFAULT_NEAREST = 1
 WORKSPACE_FADE_OPACITY = 80
@@ -341,7 +385,6 @@ is_weekday = ny_dow >= dayofweek.monday and ny_dow <= dayofweek.friday
 is_auto_ws_time_window = is_weekday and ny_hour >= AUTO_WS_START_HOUR and ny_hour < AUTO_WS_END_HOUR
 workspace_active = workspace_mode_enabled or (auto_workspace_enabled and is_auto_ws_timeframe and is_auto_ws_time_window)
 
-// Source Origins
 // Gap display mode constants
 const string GAP_DISPLAY_OFF        = "Off"
 const string GAP_DISPLAY_ALL        = "All Gaps"
@@ -349,13 +392,9 @@ const string GAP_DISPLAY_MBZ_SOURCE = "MBZ Source Only"
 const string GAP_DISPLAY_SIF_SOURCE = "SIF Source Only"
 
 gap_display_mode = input.string(GAP_DISPLAY_OFF, "Show Gaps", options=[GAP_DISPLAY_OFF, GAP_DISPLAY_ALL, GAP_DISPLAY_MBZ_SOURCE, GAP_DISPLAY_SIF_SOURCE], group=GROUP_ADVANCED)
-
-// Reference
 show_color_table = input.bool(false, "Show Color Table", group=GROUP_ADVANCED)
 show_status_table = input.bool(true, "Show Status Table", group=GROUP_ADVANCED, inline="status")
 status_table_offset = input.int(100, "Offset", minval=-150, maxval=150, group=GROUP_ADVANCED, inline="status")
-
-// Development
 show_htf_candles = input.bool(false, "Show HTF Candles", group=GROUP_ADVANCED)
 disable_vi_suppression = input.bool(true, "Disable VI Suppression", group=GROUP_ADVANCED)
 
@@ -384,9 +423,7 @@ string ZONE_MIDLINE_STYLE = switch zone_midline_style_in
 // Validation boundary is an inherent feature - static styling
 const string VALIDATION_LINE_STYLE = line.style_dotted
 const int VALIDATION_LINE_WIDTH = 2
-const int VALIDATION_LINE_WIDTH_SECONDARY = 4
 const int VALIDATION_LINE_TRANS = 65
-const int VALIDATION_LINE_TRANS_SECONDARY = 90
 
 // Resolve MBZ invalidation threshold based on mode
 float MBZ_INVALIDATION_THRESHOLD = switch invalidation_mode
@@ -865,11 +902,34 @@ var HTFContext htf1 = HTFContext.new(
     next_gap_id      = 1
 )
 
-// Secondary HTF context
-var HTFContext htf2 = HTFContext.new(
-    htf_string       = HTF2_STRING,
-    htf_label        = HTF2_LABEL,
-    htf_ms           = HTF2_MS,
+// Support A HTF context
+var HTFContext htf_sa = HTFContext.new(
+    htf_string       = SA_TF_STRING,
+    htf_label        = SA_TF_LABEL,
+    htf_ms           = SA_TF_MS,
+    curr_open        = 0.0,
+    curr_high        = 0.0,
+    curr_low         = 0.0,
+    curr_time        = 0,
+    o1 = 0.0, h1 = 0.0, l1 = 0.0, c1 = 0.0, t1 = 0,
+    o2 = 0.0, h2 = 0.0, l2 = 0.0, c2 = 0.0, t2 = 0,
+    o3 = 0.0, h3 = 0.0, l3 = 0.0, c3 = 0.0, t3 = 0,
+    o4 = 0.0, h4 = 0.0, l4 = 0.0, c4 = 0.0,
+    o5 = 0.0, h5 = 0.0, l5 = 0.0, c5 = 0.0,
+    breakaway_upper_1 = na, breakaway_lower_1 = na,
+    breakaway_upper_2 = na, breakaway_lower_2 = na,
+    breakaway_upper_3 = na, breakaway_lower_3 = na,
+    gap_array        = array.new<GapData>(),
+    zone_array       = array.new<CandleZone>(),
+    htf_times        = array.new<int>(),
+    next_gap_id      = 1
+)
+
+// Support B HTF context
+var HTFContext htf_sb = HTFContext.new(
+    htf_string       = SB_TF_STRING,
+    htf_label        = SB_TF_LABEL,
+    htf_ms           = SB_TF_MS,
     curr_open        = 0.0,
     curr_high        = 0.0,
     curr_low         = 0.0,
@@ -965,18 +1025,113 @@ var PO3Chart po3_primary = PO3Chart.new(
     tf_label       = na
 )
 
+// Support A PO3Chart
+var PO3Chart po3_support_a = PO3Chart.new(
+    htf_label      = SA_TF_LABEL,
+    max_candles    = po3_sa_candle_count,
+    offset         = po3_offset,
+    spacing        = po3_candle_spacing,
+    bull_body      = po3_bull_body,
+    bull_border    = po3_bull_border,
+    bull_wick      = po3_bull_wick,
+    bear_body      = po3_bear_body,
+    bear_border    = po3_bear_border,
+    bear_wick      = po3_bear_wick,
+    show_label     = show_po3_label,
+    label_color    = po3_label_color,
+    label_size     = po3_label_size_resolved,
+    show_dividers  = show_po3_dividers,
+    divider_color  = po3_divider_color,
+    divider_style  = po3_divider_style_resolved,
+    show_mbz       = po3_show_mbz,
+    mbz_bull_highlight = po3_mbz_bull_highlight,
+    mbz_bear_highlight = po3_mbz_bear_highlight,
+    show_sif       = po3_show_sif,
+    sif_bull_highlight = po3_sif_bull_highlight,
+    sif_bear_highlight = po3_sif_bear_highlight,
+    mbz_zone_bull  = po3_mbz_zone_bull,
+    mbz_zone_bear  = po3_mbz_zone_bear,
+    sif_zone_bull  = po3_sif_zone_bull,
+    sif_zone_bear  = po3_sif_zone_bear,
+    midline_color  = po3_midline_color,
+    midline_style  = po3_midline_style_resolved,
+    is_overlay     = false,
+    htf_ms         = SA_TF_MS,
+    data           = array.new<PO3CandleData>(),
+    bodies         = array.new<box>(),
+    wicks          = array.new<line>(),
+    dividers       = array.new<line>(),
+    highlights     = array.new<box>(),
+    zone_boxes     = array.new<box>(),
+    zone_midlines  = array.new<line>(),
+    zone_labels    = array.new<label>(),
+    fvg_boxes      = array.new<box>(),
+    forming_body   = na,
+    forming_wick   = na,
+    tf_label       = na
+)
+
+// Support B PO3Chart
+var PO3Chart po3_support_b = PO3Chart.new(
+    htf_label      = SB_TF_LABEL,
+    max_candles    = po3_sb_candle_count,
+    offset         = po3_offset,
+    spacing        = po3_candle_spacing,
+    bull_body      = po3_bull_body,
+    bull_border    = po3_bull_border,
+    bull_wick      = po3_bull_wick,
+    bear_body      = po3_bear_body,
+    bear_border    = po3_bear_border,
+    bear_wick      = po3_bear_wick,
+    show_label     = show_po3_label,
+    label_color    = po3_label_color,
+    label_size     = po3_label_size_resolved,
+    show_dividers  = show_po3_dividers,
+    divider_color  = po3_divider_color,
+    divider_style  = po3_divider_style_resolved,
+    show_mbz       = po3_show_mbz,
+    mbz_bull_highlight = po3_mbz_bull_highlight,
+    mbz_bear_highlight = po3_mbz_bear_highlight,
+    show_sif       = po3_show_sif,
+    sif_bull_highlight = po3_sif_bull_highlight,
+    sif_bear_highlight = po3_sif_bear_highlight,
+    mbz_zone_bull  = po3_mbz_zone_bull,
+    mbz_zone_bear  = po3_mbz_zone_bear,
+    sif_zone_bull  = po3_sif_zone_bull,
+    sif_zone_bear  = po3_sif_zone_bear,
+    midline_color  = po3_midline_color,
+    midline_style  = po3_midline_style_resolved,
+    is_overlay     = false,
+    htf_ms         = SB_TF_MS,
+    data           = array.new<PO3CandleData>(),
+    bodies         = array.new<box>(),
+    wicks          = array.new<line>(),
+    dividers       = array.new<line>(),
+    highlights     = array.new<box>(),
+    zone_boxes     = array.new<box>(),
+    zone_midlines  = array.new<line>(),
+    zone_labels    = array.new<label>(),
+    fvg_boxes      = array.new<box>(),
+    forming_body   = na,
+    forming_wick   = na,
+    tf_label       = na
+)
+
 // PO3 visible candle times (for zone sync filter)
 var map<int, bool> po3_visible_times = map.new<int, bool>()
 
 // HTF boundary detection
 bool new_htf = IS_VALID ? ta.change(time(HTF_STRING)) != 0 : false
-bool new_htf2 = IS_VALID_HTF2 ? ta.change(time(HTF2_STRING)) != 0 : false
+bool new_htf_sa = SA_IS_VALID ? ta.change(time(SA_TF_STRING)) != 0 : false
+bool new_htf_sb = SB_IS_VALID ? ta.change(time(SB_TF_STRING)) != 0 : false
 
 // Breakaway trend range (HTF 20-bar high/low for breakaway detection)
 float htf_breakaway_upper = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
 float htf_breakaway_lower = IS_VALID ? request.security(syminfo.tickerid, HTF_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
-float htf2_breakaway_upper = IS_VALID_HTF2 ? request.security(syminfo.tickerid, HTF2_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
-float htf2_breakaway_lower = IS_VALID_HTF2 ? request.security(syminfo.tickerid, HTF2_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
+float sa_breakaway_upper = SA_IS_VALID ? request.security(syminfo.tickerid, SA_TF_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
+float sa_breakaway_lower = SA_IS_VALID ? request.security(syminfo.tickerid, SA_TF_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
+float sb_breakaway_upper = SB_IS_VALID ? request.security(syminfo.tickerid, SB_TF_STRING, ta.highest(high, BREAKAWAY_LENGTH)) : na
+float sb_breakaway_lower = SB_IS_VALID ? request.security(syminfo.tickerid, SB_TF_STRING, ta.lowest(low, BREAKAWAY_LENGTH)) : na
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTIONS
@@ -991,6 +1146,7 @@ float htf2_breakaway_lower = IS_VALID_HTF2 ? request.security(syminfo.tickerid, 
 // uppercase=true:  "15m" → "𝟭𝟱𝗠" (PO3 chart label)
 get_bold_htf_label(string label, bool uppercase) =>
     switch label
+        "1m"  => uppercase ? "𝟭𝗠" : "𝟭𝗺"
         "5m"  => uppercase ? "𝟱𝗠" : "𝟱𝗺"
         "15m" => uppercase ? "𝟭𝟱𝗠" : "𝟭𝟱𝗺"
         "30m" => uppercase ? "𝟯𝟬𝗠" : "𝟯𝟬𝗺"
@@ -2468,8 +2624,7 @@ if IS_VALID
         prev_preview_close := na
 
         // ─── Process HTF1 Candle Close ───
-        if show_htf1
-            process_htf_close(htf1, close[1], htf_breakaway_upper, htf_breakaway_lower)
+        process_htf_close(htf1, close[1], htf_breakaway_upper, htf_breakaway_lower)
 
         // ─── Collect PO3 Mini Chart Data ───
         if show_po3_chart and htf1.t1 > 0
@@ -2517,30 +2672,37 @@ if IS_VALID
             box.set_bgcolor(body_box, is_bull ? color.new(color.rgb(165, 214, 167), 74) : color.new(color.rgb(244, 143, 177), 74))
 
     // ─── FVG Updates (every bar) ───
-    if show_htf1
-        update_gap_positions(htf1.gap_array, htf1.zone_array)
+    update_gap_positions(htf1.gap_array, htf1.zone_array)
 
-        // ─── Live Invalidation (every bar) ───
-        // Check for OPENING GAPS only (permanent invalidation)
-        // Close-based invalidation is computed in rendering loop for visual hide/show
-        if enable_invalidation
-            check_zone_invalidation_live(htf1.zone_array, htf1.curr_open)
-
-// ─── HTF2 Processing (Secondary Timeframe) ───
-if IS_VALID_HTF2 and show_htf2
-    if new_htf2
-        process_htf_close(htf2, close[1], htf2_breakaway_upper, htf2_breakaway_lower)
-    else
-        // Update forming HTF2 candle
-        htf2.curr_high := math.max(high, htf2.curr_high)
-        htf2.curr_low  := math.min(low, htf2.curr_low)
-
-    // HTF2 gap position updates
-    update_gap_positions(htf2.gap_array, htf2.zone_array)
-
-    // HTF2 live invalidation
+    // ─── Live Invalidation (every bar) ───
     if enable_invalidation
-        check_zone_invalidation_live(htf2.zone_array, htf2.curr_open)
+        check_zone_invalidation_live(htf1.zone_array, htf1.curr_open)
+
+// ─── Support A Processing ───
+if SA_IS_VALID
+    if new_htf_sa
+        process_htf_close(htf_sa, close[1], sa_breakaway_upper, sa_breakaway_lower)
+        if show_po3_chart and htf_sa.t1 > 0
+            po3_collect(po3_support_a, htf_sa.o1, htf_sa.h1, htf_sa.l1, htf_sa.c1, htf_sa.t1)
+    else
+        htf_sa.curr_high := math.max(high, htf_sa.curr_high)
+        htf_sa.curr_low  := math.min(low, htf_sa.curr_low)
+    update_gap_positions(htf_sa.gap_array, htf_sa.zone_array)
+    if enable_invalidation
+        check_zone_invalidation_live(htf_sa.zone_array, htf_sa.curr_open)
+
+// ─── Support B Processing ───
+if SB_IS_VALID
+    if new_htf_sb
+        process_htf_close(htf_sb, close[1], sb_breakaway_upper, sb_breakaway_lower)
+        if show_po3_chart and htf_sb.t1 > 0
+            po3_collect(po3_support_b, htf_sb.o1, htf_sb.h1, htf_sb.l1, htf_sb.c1, htf_sb.t1)
+    else
+        htf_sb.curr_high := math.max(high, htf_sb.curr_high)
+        htf_sb.curr_low  := math.min(low, htf_sb.curr_low)
+    update_gap_positions(htf_sb.gap_array, htf_sb.zone_array)
+    if enable_invalidation
+        check_zone_invalidation_live(htf_sb.zone_array, htf_sb.curr_open)
 
 if IS_VALID
     // ─── Preview Zone Detection (realtime only, on price change) ───
@@ -2549,16 +2711,28 @@ if IS_VALID
     // Only runs on realtime bars to avoid performance overhead on historical data
     // Only updates when close price changes to avoid unnecessary box recreation
     bool preview_close_changed = close != prev_preview_close
-    if show_chart_zones and show_forming_zones and htf1.t1 > 0 and barstate.isrealtime and preview_close_changed
+    // Resolve preview context based on chart zone source
+    HTFContext preview_ctx = htf1
+    string preview_htf_label = HTF_LABEL
+    int preview_htf_ms = HTF_MS
+    if chart_zone_source == "TF 2" and SA_IS_VALID
+        preview_ctx := htf_sa
+        preview_htf_label := SA_TF_LABEL
+        preview_htf_ms := SA_TF_MS
+    else if chart_zone_source == "TF 3" and SB_IS_VALID
+        preview_ctx := htf_sb
+        preview_htf_label := SB_TF_LABEL
+        preview_htf_ms := SB_TF_MS
+    if show_chart_zones and show_forming_zones and preview_ctx.t1 > 0 and barstate.isrealtime and preview_close_changed
         prev_preview_close := close
         // Clear existing preview zones before re-detecting
         cleanup_preview_zones()
 
-        int preview_extension_width = zone_extension_bars * HTF_MS
+        int preview_extension_width = zone_extension_bars * preview_htf_ms
 
         // Preview MBZ: htf_*1 = reference candle, forming candle = potential MBZ candle
         if enable_mbz_engine
-            array<MBZFormationMatch> preview_mbz_matches = check_preview_mbz_formation(htf1.gap_array, htf1.o1, htf1.h1, htf1.l1, htf1.c1, htf1.t1, htf1.curr_open, htf1.curr_high, htf1.curr_low, close)
+            array<MBZFormationMatch> preview_mbz_matches = check_preview_mbz_formation(preview_ctx.gap_array, preview_ctx.o1, preview_ctx.h1, preview_ctx.l1, preview_ctx.c1, preview_ctx.t1, preview_ctx.curr_open, preview_ctx.curr_high, preview_ctx.curr_low, close)
             int num_preview_mbz = array.size(preview_mbz_matches)
 
             if num_preview_mbz > 0
@@ -2578,11 +2752,11 @@ if IS_VALID
                         array.push(mbz_gap_types, match.source_gap_type)
 
                     // Create preview zone (MBZ uses reference wick extension from htf_*1)
-                    create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, preview_mbz_bull, htf1.h1, htf1.l1, extend_to_wick, true, false, mbz_gap_ids, mbz_gap_types, mbz_fill_bull, mbz_fill_bear, preview_extension_width, HTF_LABEL)
+                    create_preview_zone(preview_ctx.curr_time, preview_ctx.curr_open, close, preview_ctx.curr_high, preview_ctx.curr_low, preview_mbz_bull, preview_ctx.h1, preview_ctx.l1, extend_to_wick, true, false, mbz_gap_ids, mbz_gap_types, mbz_fill_bull, mbz_fill_bear, preview_extension_width, preview_htf_label)
 
         // Preview SIF: Check if forming candle would create immediate SIF
         if enable_sif_engine
-            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types, sif_gap_breakaways] = check_preview_sif_formation(htf1.gap_array, htf1.curr_open, htf1.curr_high, htf1.curr_low, close, htf1.curr_time)
+            [has_preview_sif, sif_candle_bull, sif_gap_ids, sif_gap_types, sif_gap_breakaways] = check_preview_sif_formation(preview_ctx.gap_array, preview_ctx.curr_open, preview_ctx.curr_high, preview_ctx.curr_low, close, preview_ctx.curr_time)
 
             if has_preview_sif
                 // Apply direction filter (SIF direction = candle direction)
@@ -2605,20 +2779,17 @@ if IS_VALID
                         array.set(preview_zone_array, 0, existing)
                     else
                         // Create new SIF-only preview zone
-                        create_preview_zone(htf1.curr_time, htf1.curr_open, close, htf1.curr_high, htf1.curr_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, sif_fill_bull, sif_fill_bear, preview_extension_width, HTF_LABEL)
+                        create_preview_zone(preview_ctx.curr_time, preview_ctx.curr_open, close, preview_ctx.curr_high, preview_ctx.curr_low, sif_candle_bull, float(na), float(na), false, false, true, sif_gap_ids, sif_gap_types, sif_fill_bull, sif_fill_bear, preview_extension_width, preview_htf_label)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UNIFIED ZONE RENDERING (parameterized for HTF1/HTF2)
+// UNIFIED ZONE RENDERING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bool is_secondary) =>
+render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
     if array.size(zone_arr) == 0
         false
     else
-        // Auto-scale secondary: 4H uses scaled extension, others no scaling
-        float secondary_scale = htf_ms == TF_4H_MS ? SECONDARY_4H_EXTENSION_SCALE : 1.0
-        int scaled_bars = is_secondary ? math.max(1, math.round(zone_extension_bars / secondary_scale)) : zone_extension_bars
-        int zone_ext_width = scaled_bars * htf_ms
+        int zone_ext_width = zone_extension_bars * htf_ms
 
         // Same-Source filter tracking
         var map<int, bool> seen_gap_ids = map.new<int, bool>()
@@ -2722,7 +2893,7 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bo
 
             // PO3 zone filter: by default, main chart only shows zones from PO3 visible range
             // "Show All Chart Zones" disables this filter to reveal all detected zones
-            if not is_secondary and show_po3_chart and not po3_show_all_zones and map.size(po3_visible_times) > 0
+            if show_po3_chart and po3_limit_to_range and map.size(po3_visible_times) > 0
                 bool in_po3_range = map.contains(po3_visible_times, zone.formation_time)
                 bool po3_type_ok = (zone.has_mbz and po3_show_mbz) or (zone.has_sif and po3_show_sif)
                 if not in_po3_range or not po3_type_ok
@@ -2799,18 +2970,12 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bo
 
             if na(zone.zone_box)
                 string zone_label_text = build_zone_label(zone)
-                int resolved_border_width = is_secondary ? SECONDARY_BORDER_WIDTH : zone_border_width
-                if is_secondary
-                    zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=resolved_fill, border_color=resolved_border, border_width=resolved_border_width, border_style=SECONDARY_BORDER_STYLE, text=zone_label_text, text_color=resolved_label_color, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
-                else
-                    zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=resolved_fill, border_color=resolved_border, border_width=resolved_border_width, text=zone_label_text, text_color=resolved_label_color, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
+                zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=resolved_fill, border_color=resolved_border, border_width=zone_border_width, text=zone_label_text, text_color=resolved_label_color, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
 
                 // Validation boundary line
                 int validation_time = zone.formation_time + htf_ms
-                int vb_trans = is_secondary ? VALIDATION_LINE_TRANS_SECONDARY : VALIDATION_LINE_TRANS
-                int vb_width = is_secondary ? VALIDATION_LINE_WIDTH_SECONDARY : VALIDATION_LINE_WIDTH
-                color vb_color = color.new(zone_bdr, vb_trans)
-                zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=vb_width, style=VALIDATION_LINE_STYLE)
+                color vb_color = color.new(zone_bdr, VALIDATION_LINE_TRANS)
+                zone.validation_line := line.new(validation_time, zone.zone_top, validation_time, zone.zone_bottom, xloc=xloc.bar_time, color=vb_color, width=VALIDATION_LINE_WIDTH, style=VALIDATION_LINE_STYLE)
 
                 // Zone midline (50% level)
                 if show_zone_midline
@@ -2830,80 +2995,132 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open, bo
         true
 
 // Build PO3 visible times set (for zone filter — active unless "Show All Chart Zones" is on)
-if IS_VALID and show_chart_zones and show_po3_chart and not po3_show_all_zones and barstate.islast
+if IS_VALID and show_chart_zones and show_po3_chart and po3_limit_to_range and barstate.islast
     map.clear(po3_visible_times)
-    // Add confirmed candle times
-    if array.size(po3_primary.data) > 0
-        for i = 0 to array.size(po3_primary.data) - 1
-            map.put(po3_visible_times, array.get(po3_primary.data, i).t, true)
-    // Add forming candle time
-    if htf1.curr_time > 0
-        map.put(po3_visible_times, htf1.curr_time, true)
+    // Build from the selected chart zone source's PO3Chart data
+    if chart_zone_source == "TF 2" and SA_IS_VALID
+        if array.size(po3_support_a.data) > 0
+            for i = 0 to array.size(po3_support_a.data) - 1
+                map.put(po3_visible_times, array.get(po3_support_a.data, i).t, true)
+        if htf_sa.curr_time > 0
+            map.put(po3_visible_times, htf_sa.curr_time, true)
+    else if chart_zone_source == "TF 3" and SB_IS_VALID
+        if array.size(po3_support_b.data) > 0
+            for i = 0 to array.size(po3_support_b.data) - 1
+                map.put(po3_visible_times, array.get(po3_support_b.data, i).t, true)
+        if htf_sb.curr_time > 0
+            map.put(po3_visible_times, htf_sb.curr_time, true)
+    else
+        if array.size(po3_primary.data) > 0
+            for i = 0 to array.size(po3_primary.data) - 1
+                map.put(po3_visible_times, array.get(po3_primary.data, i).t, true)
+        if htf1.curr_time > 0
+            map.put(po3_visible_times, htf1.curr_time, true)
 
 if IS_VALID
-    // ─── Unified Zone Rendering (on HTF change or current bar) ───
-    // Only render when: HTF candle closes (new_htf) OR current bar updates (barstate.islast)
-    // This avoids redundant iterations on historical bars where zone state cannot change
-    if show_chart_zones and show_htf1 and (new_htf or barstate.islast)
-        render_htf_zones(htf1.zone_array, HTF_MS, htf1.curr_open, false)
-
-    // ─── HTF2 Zone Rendering (Secondary Timeframe - Dashed Borders) ───
-    if show_chart_zones and show_htf2 and (new_htf2 or barstate.islast)
-        render_htf_zones(htf2.zone_array, HTF2_MS, htf2.curr_open, true)
+    // ─── Unified Zone Rendering (single tier based on chart zone source) ───
+    if show_chart_zones and barstate.islast
+        if chart_zone_source == "TF 2" and SA_IS_VALID
+            render_htf_zones(htf_sa.zone_array, SA_TF_MS, htf_sa.curr_open)
+        else if chart_zone_source == "TF 3" and SB_IS_VALID
+            render_htf_zones(htf_sb.zone_array, SB_TF_MS, htf_sb.curr_open)
+        else
+            render_htf_zones(htf1.zone_array, HTF_MS, htf1.curr_open)
+    // Also render on HTF boundary changes (not just barstate.islast)
+    if show_chart_zones and not barstate.islast
+        if chart_zone_source == "TF 2" and SA_IS_VALID and new_htf_sa
+            render_htf_zones(htf_sa.zone_array, SA_TF_MS, htf_sa.curr_open)
+        else if chart_zone_source == "TF 3" and SB_IS_VALID and new_htf_sb
+            render_htf_zones(htf_sb.zone_array, SB_TF_MS, htf_sb.curr_open)
+        else if new_htf
+            render_htf_zones(htf1.zone_array, HTF_MS, htf1.curr_open)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PO3 MINI CHART RENDERING
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Helper: build invalidation + same-source maps for a zone array, then highlight
+po3_build_and_highlight(PO3Chart chart, array<CandleZone> zone_arr, float curr_open, int htf_ms) =>
+    var map<int, bool> inv_mbz = map.new<int, bool>()
+    var map<int, bool> inv_sif = map.new<int, bool>()
+    map.clear(inv_mbz)
+    map.clear(inv_sif)
+    if enable_invalidation
+        for z_i = 0 to array.size(zone_arr) - 1
+            CandleZone z = array.get(zone_arr, z_i)
+            if not z.is_invalidated
+                if z.has_mbz and check_mbz_component_invalidation(z, curr_open, close)
+                    map.put(inv_mbz, z.formation_time, true)
+                if z.has_sif and check_sif_component_invalidation(z, curr_open, close)
+                    map.put(inv_sif, z.formation_time, true)
+    var map<int, bool> ss_hidden = map.new<int, bool>()
+    map.clear(ss_hidden)
+    if same_source_filter != SAME_SOURCE_FILTER_ALL_TOUCHES
+        var map<int, bool> seen_gaps = map.new<int, bool>()
+        var map<int, int> first_touch = map.new<int, int>()
+        map.clear(seen_gaps)
+        map.clear(first_touch)
+        if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
+            for z_j = 0 to array.size(zone_arr) - 1
+                CandleZone zf = array.get(zone_arr, z_j)
+                if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
+                    bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
+                    if dir_ok
+                        map.put(first_touch, array.get(zf.source_gap_ids, 0), z_j)
+        for z_j = 0 to array.size(zone_arr) - 1
+            CandleZone zf = array.get(zone_arr, z_j)
+            if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
+                int gid = array.get(zf.source_gap_ids, 0)
+                if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
+                    if map.contains(seen_gaps, gid)
+                        map.put(ss_hidden, z_j, true)
+                    else
+                        map.put(seen_gaps, gid, true)
+                else if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
+                    if map.contains(first_touch, gid) and map.get(first_touch, gid) != z_j
+                        map.put(ss_hidden, z_j, true)
+    po3_highlight_zones(chart, zone_arr, inv_mbz, inv_sif, htf_ms, ss_hidden)
+
 if IS_VALID and show_po3_chart and barstate.islast and htf1.curr_open > 0
+    // ─── Multi-tier layout calculation (Right mode) ───
+    if not po3_is_overlay
+        int sa_width = SA_IS_VALID and htf_sa.curr_open > 0 ? (po3_sa_candle_count + 1) * po3_candle_spacing : 0
+        int main_width = (po3_candle_count + 1) * po3_candle_spacing
+
+        if SA_IS_VALID and htf_sa.curr_open > 0
+            po3_support_a.offset := po3_offset
+        po3_primary.offset := po3_offset + (sa_width > 0 ? sa_width + po3_gap : 0)
+        if SB_IS_VALID and htf_sb.curr_open > 0
+            po3_support_b.offset := po3_primary.offset + main_width + po3_gap
+
+    // ─── Support A rendering (leftmost) ───
+    if SA_IS_VALID and htf_sa.curr_open > 0
+        po3_render(po3_support_a, htf_sa.curr_open, htf_sa.curr_high, htf_sa.curr_low, close, htf_sa.curr_time)
+        if po3_support_a.show_mbz or po3_support_a.show_sif
+            po3_build_and_highlight(po3_support_a, htf_sa.zone_array, htf_sa.curr_open, SA_TF_MS)
+        if show_po3_fvgs
+            po3_draw_fvgs(po3_support_a)
+        if po3_support_a.show_dividers
+            po3_draw_dividers(po3_support_a, htf_sa.curr_time)
+
+    // ─── Main rendering (center) ───
     po3_render(po3_primary, htf1.curr_open, htf1.curr_high, htf1.curr_low, close, htf1.curr_time)
     if po3_primary.show_mbz or po3_primary.show_sif
-        // Build live invalidation maps (same logic as main rendering loop)
-        var map<int, bool> po3_inv_mbz = map.new<int, bool>()
-        var map<int, bool> po3_inv_sif = map.new<int, bool>()
-        map.clear(po3_inv_mbz)
-        map.clear(po3_inv_sif)
-        if enable_invalidation
-            for z_i = 0 to array.size(htf1.zone_array) - 1
-                CandleZone z = array.get(htf1.zone_array, z_i)
-                if not z.is_invalidated
-                    if z.has_mbz and check_mbz_component_invalidation(z, htf1.curr_open, close)
-                        map.put(po3_inv_mbz, z.formation_time, true)
-                    if z.has_sif and check_sif_component_invalidation(z, htf1.curr_open, close)
-                        map.put(po3_inv_sif, z.formation_time, true)
-        // Build same-source filter map (mirrors render_htf_zones logic)
-        var map<int, bool> po3_ss_hidden = map.new<int, bool>()
-        map.clear(po3_ss_hidden)
-        if same_source_filter != SAME_SOURCE_FILTER_ALL_TOUCHES
-            var map<int, bool> po3_seen_gaps = map.new<int, bool>()
-            var map<int, int> po3_first_touch = map.new<int, int>()
-            map.clear(po3_seen_gaps)
-            map.clear(po3_first_touch)
-            if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-                // Iterate newest→oldest (0→N-1 with unshift), last put = oldest = first touch
-                for z_j = 0 to array.size(htf1.zone_array) - 1
-                    CandleZone zf = array.get(htf1.zone_array, z_j)
-                    if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
-                        bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
-                        if dir_ok
-                            map.put(po3_first_touch, array.get(zf.source_gap_ids, 0), z_j)
-            for z_j = 0 to array.size(htf1.zone_array) - 1
-                CandleZone zf = array.get(htf1.zone_array, z_j)
-                if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
-                    int gid = array.get(zf.source_gap_ids, 0)
-                    if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
-                        if map.contains(po3_seen_gaps, gid)
-                            map.put(po3_ss_hidden, z_j, true)
-                        else
-                            map.put(po3_seen_gaps, gid, true)
-                    else if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-                        if map.contains(po3_first_touch, gid) and map.get(po3_first_touch, gid) != z_j
-                            map.put(po3_ss_hidden, z_j, true)
-        po3_highlight_zones(po3_primary, htf1.zone_array, po3_inv_mbz, po3_inv_sif, HTF_MS, po3_ss_hidden)
+        po3_build_and_highlight(po3_primary, htf1.zone_array, htf1.curr_open, HTF_MS)
     if show_po3_fvgs
         po3_draw_fvgs(po3_primary)
     if po3_primary.show_dividers
         po3_draw_dividers(po3_primary, htf1.curr_time)
+
+    // ─── Support B rendering (rightmost) ───
+    if SB_IS_VALID and htf_sb.curr_open > 0
+        po3_render(po3_support_b, htf_sb.curr_open, htf_sb.curr_high, htf_sb.curr_low, close, htf_sb.curr_time)
+        if po3_support_b.show_mbz or po3_support_b.show_sif
+            po3_build_and_highlight(po3_support_b, htf_sb.zone_array, htf_sb.curr_open, SB_TF_MS)
+        if show_po3_fvgs
+            po3_draw_fvgs(po3_support_b)
+        if po3_support_b.show_dividers
+            po3_draw_dividers(po3_support_b, htf_sb.curr_time)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATUS TABLE
@@ -2953,13 +3170,11 @@ if IS_VALID and show_status_table and barstate.islast
     string inv_display = "  " + mbz_inv_display + " " + sif_inv_display
 
     // Build timeframe mapping display
-    string tf_display = ""
-    if show_htf1 and show_htf2
-        tf_display := LTF_LABEL + " → " + HTF_LABEL + " + " + HTF2_LABEL
-    else if show_htf2
-        tf_display := LTF_LABEL + " → " + HTF2_LABEL
-    else
-        tf_display := LTF_LABEL + " → " + HTF_LABEL
+    string tf_display = LTF_LABEL + " → " + HTF_LABEL
+    if chart_zone_source == "TF 2" and SA_IS_VALID
+        tf_display := LTF_LABEL + " → " + SA_TF_LABEL
+    else if chart_zone_source == "TF 3" and SB_IS_VALID
+        tf_display := LTF_LABEL + " → " + SB_TF_LABEL
 
     string status_text = tf_display + "  " + gap_type_display + inv_display + wick_ext_display + workspace_display
     table.cell(status_table, 2, 0, status_text, bgcolor=color.new(color.rgb(245, 245, 245), 20), text_color=color.black, text_size=size.tiny)
