@@ -213,7 +213,10 @@ GROUP_DETECTION  = "🔍 Detection"
 GROUP_ADVANCED   = "⚙️ Advanced"
 
 // ─── 📊 PO3 Chart ───
-show_po3_chart         = input.bool(true, "Show PO3 Chart", group=GROUP_PO3_CHART)
+show_po3_chart         = input.bool(true, "Show PO3 Chart", group=GROUP_PO3_CHART, inline="po3_master")
+po3_placement          = input.string("Right", "", options=["Right", "Overlay"], group=GROUP_PO3_CHART, inline="po3_master")
+po3_overlay_trans      = input.int(15, "Opacity", minval=0, maxval=100, group=GROUP_PO3_CHART, inline="po3_master")
+bool po3_is_overlay    = po3_placement == "Overlay"
 po3_candle_count       = input.int(15, "Candles", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_layout")
 po3_offset             = input.int(50, "Offset", minval=5, maxval=200, group=GROUP_PO3_CHART, inline="po3_layout")
 po3_candle_spacing     = input.int(3, "Spacing", minval=2, maxval=10, group=GROUP_PO3_CHART, inline="po3_layout")
@@ -261,7 +264,7 @@ bool enable_sif_engine = po3_show_sif
 // ─── 🎨 Chart Zones ───
 mbz_fill_bull      = input.color(color.new(color.rgb(187, 217, 251), 90), "MBZ +", group=GROUP_CHART_ZONES, inline="mbz_fill")
 mbz_fill_bear      = input.color(color.new(color.rgb(255, 224, 178), 90), "−", group=GROUP_CHART_ZONES, inline="mbz_fill")
-mbz_border_bull    = input.color(color.new(color.rgb(57, 120, 221), 60), "MBZ Border +", group=GROUP_CHART_ZONES, inline="mbz_bdr")
+mbz_border_bull    = input.color(color.new(color.rgb(92, 166, 233), 40), "MBZ Border +", group=GROUP_CHART_ZONES, inline="mbz_bdr")
 mbz_border_bear    = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_CHART_ZONES, inline="mbz_bdr")
 sif_fill_bull      = input.color(color.new(color.rgb(172, 229, 220), 90), "SIF +", group=GROUP_CHART_ZONES, inline="sif_fill")
 sif_fill_bear      = input.color(color.new(color.rgb(252, 203, 205), 90), "−", group=GROUP_CHART_ZONES, inline="sif_fill")
@@ -459,6 +462,8 @@ type PO3Chart
     color  sif_zone_bear
     color  midline_color
     string midline_style
+    bool   is_overlay
+    int    htf_ms
     // ─── Data ───
     array<PO3CandleData> data
     // ─── Visual state ───
@@ -943,6 +948,8 @@ var PO3Chart po3_primary = PO3Chart.new(
     sif_zone_bear      = po3_sif_zone_bear,
     midline_color      = po3_midline_color,
     midline_style      = po3_midline_style_resolved,
+    is_overlay         = po3_is_overlay,
+    htf_ms             = HTF_MS,
     data           = array.new<PO3CandleData>(),
     bodies         = array.new<box>(),
     wicks          = array.new<line>(),
@@ -1852,21 +1859,35 @@ po3_cleanup(PO3Chart chart) =>
     box.delete(chart.forming_body)
     line.delete(chart.forming_wick)
 
-// Draw a single PO3 candle (body box + wick line) at x_center
+// Draw a single PO3 candle (body box + wick line)
+// Right mode: x_center is a bar_index position (xloc.bar_index)
+// Overlay mode: x_left/x_right are time boundaries (xloc.bar_time)
 // When is_forming=true, stores in chart.forming_body/wick instead of arrays
-po3_draw_candle(PO3Chart chart, int x_center, float o, float h, float l, float c, bool is_forming) =>
+po3_draw_candle(PO3Chart chart, int x_center, float o, float h, float l, float c, bool is_forming, int x_left = na, int x_right = na) =>
     bool is_bull   = c >= o
-    color c_body   = is_bull ? chart.bull_body   : chart.bear_body
-    color c_border = is_bull ? chart.bull_border : chart.bear_border
-    color c_wick   = is_bull ? chart.bull_wick   : chart.bear_wick
+    // In overlay mode, blend additional transparency into candle colors
+    color raw_body   = is_bull ? chart.bull_body   : chart.bear_body
+    color raw_border = is_bull ? chart.bull_border : chart.bear_border
+    color raw_wick   = is_bull ? chart.bull_wick   : chart.bear_wick
+    int ot = chart.is_overlay ? po3_overlay_trans : 0
+    color c_body   = ot > 0 ? color.new(raw_body, math.min(100, color.t(raw_body) + ot)) : raw_body
+    color c_border = ot > 0 ? color.new(raw_border, math.min(100, color.t(raw_border) + ot)) : raw_border
+    color c_wick   = ot > 0 ? color.new(raw_wick, math.min(100, color.t(raw_wick) + ot)) : raw_wick
 
     float body_top = math.max(o, c)
     float body_bot = math.min(o, c)
     if body_top == body_bot
         body_top := o + syminfo.mintick
 
-    line wick_line = line.new(x_center, h, x_center, l, color=c_wick, width=1)
-    box  body_box  = box.new(x_center - 1, body_top, x_center + 1, body_bot, border_color=c_border, bgcolor=c_body, border_width=1)
+    line wick_line = na
+    box  body_box  = na
+    if chart.is_overlay
+        int wick_x = x_left + (x_right - x_left) / 2
+        wick_line := line.new(wick_x, h, wick_x, l, xloc=xloc.bar_time, color=c_wick, width=1)
+        body_box  := box.new(x_left, body_top, x_right, body_bot, xloc=xloc.bar_time, border_color=c_border, bgcolor=c_body, border_width=1)
+    else
+        wick_line := line.new(x_center, h, x_center, l, color=c_wick, width=1)
+        body_box  := box.new(x_center - 1, body_top, x_center + 1, body_bot, border_color=c_border, bgcolor=c_body, border_width=1)
     if is_forming
         chart.forming_wick := wick_line
         chart.forming_body := body_box
@@ -1877,30 +1898,49 @@ po3_draw_candle(PO3Chart chart, int x_center, float o, float h, float l, float c
         true
 
 // Draw the full PO3 chart: confirmed candles + forming candle + label
-po3_render(PO3Chart chart, float curr_open, float curr_high, float curr_low, float curr_close) =>
+po3_render(PO3Chart chart, float curr_open, float curr_high, float curr_low, float curr_close, int curr_candle_time) =>
     po3_cleanup(chart)
     int confirmed_count = array.size(chart.data)
     float highest_point = curr_high
     int base_x = bar_index + chart.offset
 
-    // Confirmed candles: oldest left → newest right
-    if confirmed_count > 0
-        for i = 0 to confirmed_count - 1
-            int slot = confirmed_count - 1 - i
-            PO3CandleData candle = array.get(chart.data, slot)
-            int x_center = base_x + (i * chart.spacing)
-            po3_draw_candle(chart, x_center, candle.o, candle.h, candle.l, candle.c, false)
-            if candle.h > highest_point
-                highest_point := candle.h
+    if chart.is_overlay
+        // Overlay mode: draw candles at their actual time positions
+        if confirmed_count > 0
+            for i = 0 to confirmed_count - 1
+                int slot = confirmed_count - 1 - i
+                PO3CandleData candle = array.get(chart.data, slot)
+                po3_draw_candle(chart, na, candle.o, candle.h, candle.l, candle.c, false, candle.t, candle.t + chart.htf_ms)
+                if candle.h > highest_point
+                    highest_point := candle.h
 
-    // Forming candle (rightmost)
-    int f_x = base_x + (confirmed_count * chart.spacing)
-    po3_draw_candle(chart, f_x, curr_open, curr_high, curr_low, curr_close, true)
+        // Forming candle: from curr_candle_time to current bar time
+        po3_draw_candle(chart, na, curr_open, curr_high, curr_low, curr_close, true, curr_candle_time, time)
 
-    // TF label centered horizontally over all candles (confirmed + forming)
-    if chart.show_label
-        int label_x = (base_x + f_x) / 2
-        chart.tf_label := label.new(label_x, highest_point, get_bold_htf_label(chart.htf_label, true), style=label.style_label_down, color=color.new(color.white, 100), textcolor=chart.label_color, size=chart.label_size)
+        // TF label centered over the visible range
+        if chart.show_label
+            int oldest_time = confirmed_count > 0 ? array.get(chart.data, confirmed_count - 1).t : curr_candle_time
+            int label_time = oldest_time + (time - oldest_time) / 2
+            chart.tf_label := label.new(label_time, highest_point, get_bold_htf_label(chart.htf_label, true), xloc=xloc.bar_time, style=label.style_label_down, color=color.new(color.white, 100), textcolor=chart.label_color, size=chart.label_size)
+    else
+        // Right mode: draw candles at bar_index offsets
+        if confirmed_count > 0
+            for i = 0 to confirmed_count - 1
+                int slot = confirmed_count - 1 - i
+                PO3CandleData candle = array.get(chart.data, slot)
+                int x_center = base_x + (i * chart.spacing)
+                po3_draw_candle(chart, x_center, candle.o, candle.h, candle.l, candle.c, false)
+                if candle.h > highest_point
+                    highest_point := candle.h
+
+        // Forming candle (rightmost)
+        int f_x = base_x + (confirmed_count * chart.spacing)
+        po3_draw_candle(chart, f_x, curr_open, curr_high, curr_low, curr_close, true)
+
+        // TF label centered horizontally over all candles (confirmed + forming)
+        if chart.show_label
+            int label_x = (base_x + f_x) / 2
+            chart.tf_label := label.new(label_x, highest_point, get_bold_htf_label(chart.htf_label, true), style=label.style_label_down, color=color.new(color.white, 100), textcolor=chart.label_color, size=chart.label_size)
 
 // Draw HTF divider lines on the main chart for visible candle range
 po3_draw_dividers(PO3Chart chart, int curr_candle_time) =>
@@ -1931,16 +1971,25 @@ po3_draw_fvgs(PO3Chart chart) =>
             PO3CandleData c2 = array.get(chart.data, i + 1)  // displacement
             PO3CandleData c3 = array.get(chart.data, i + 2)  // before displacement
 
-            // Slot positions (oldest=left): c3 at slot count-1-(i+2), c1 at slot count-1-i
-            int x_left  = base_x + ((count - 1 - (i + 2)) * chart.spacing) + 1
-            int x_right = base_x + ((count - 1 - i + po3_fvg_extend) * chart.spacing) - 1
-
             float c1_body_bot = math.min(c1.o, c1.c)
             float c1_body_top = math.max(c1.o, c1.c)
             float c2_body_bot = math.min(c2.o, c2.c)
             float c2_body_top = math.max(c2.o, c2.c)
             float c3_body_top = math.max(c3.o, c3.c)
             float c3_body_bot = math.min(c3.o, c3.c)
+
+            // X coordinates differ by mode
+            int x_left  = na
+            int x_right = na
+            string fvg_xloc = xloc.bar_index
+            if chart.is_overlay
+                x_left  := c3.t
+                x_right := c1.t + chart.htf_ms * (1 + po3_fvg_extend)
+                fvg_xloc := xloc.bar_time
+            else
+                // Slot positions (oldest=left): c3 at slot count-1-(i+2), c1 at slot count-1-i
+                x_left  := base_x + ((count - 1 - (i + 2)) * chart.spacing) + 1
+                x_right := base_x + ((count - 1 - i + po3_fvg_extend) * chart.spacing) - 1
 
             // Bullish FVG: c1 low > c3 high
             if enable_fvg and c1.l > c3.h
@@ -1952,7 +2001,7 @@ po3_draw_fvgs(PO3Chart chart) =>
                 if vib_after or vib_before
                     fvg_top := vib_after ? c1_body_bot : c1.l
                     fvg_bot := vib_before ? c3_body_top : c3.h
-                box fvg = box.new(x_left, fvg_top, x_right, fvg_bot, border_color=color.new(color.white, 100), bgcolor=po3_fvg_bull_color, border_width=0)
+                box fvg = box.new(x_left, fvg_top, x_right, fvg_bot, xloc=fvg_xloc, border_color=color.new(color.white, 100), bgcolor=po3_fvg_bull_color, border_width=0)
                 array.push(chart.fvg_boxes, fvg)
 
             // Bearish FVG: c1 high < c3 low
@@ -1964,7 +2013,7 @@ po3_draw_fvgs(PO3Chart chart) =>
                 if vib_after or vib_before
                     fvg_top := vib_before ? c3_body_bot : c3.l
                     fvg_bot := vib_after ? c1_body_top : c1.h
-                box fvg = box.new(x_left, fvg_top, x_right, fvg_bot, border_color=color.new(color.white, 100), bgcolor=po3_fvg_bear_color, border_width=0)
+                box fvg = box.new(x_left, fvg_top, x_right, fvg_bot, xloc=fvg_xloc, border_color=color.new(color.white, 100), bgcolor=po3_fvg_bear_color, border_width=0)
                 array.push(chart.fvg_boxes, fvg)
 
 // Highlight PO3 candles that have MBZ/SIF zones: recolor body + draw zone box + label
@@ -1978,7 +2027,8 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
         for i = 0 to confirmed_count - 1
             int data_idx = confirmed_count - 1 - i
             PO3CandleData candle = array.get(chart.data, data_idx)
-            int x_center = base_x + (i * chart.spacing)
+            int x_center = chart.is_overlay ? na : base_x + (i * chart.spacing)
+            int candle_time_mid = chart.is_overlay ? candle.t + chart.htf_ms / 2 : na
             bool wick_split = false
 
             for z_idx = 0 to zone_count - 1
@@ -2017,8 +2067,12 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
                         float body_b = math.min(candle.o, candle.c)
                         color wk = candle.c >= candle.o ? chart.bull_wick : chart.bear_wick
                         line.delete(array.get(chart.wicks, i))
-                        array.set(chart.wicks, i, line.new(x_center, candle.h, x_center, body_t, color=wk, width=1))
-                        array.push(chart.wicks, line.new(x_center, body_b, x_center, candle.l, color=wk, width=1))
+                        if chart.is_overlay
+                            array.set(chart.wicks, i, line.new(candle_time_mid, candle.h, candle_time_mid, body_t, xloc=xloc.bar_time, color=wk, width=1))
+                            array.push(chart.wicks, line.new(candle_time_mid, body_b, candle_time_mid, candle.l, xloc=xloc.bar_time, color=wk, width=1))
+                        else
+                            array.set(chart.wicks, i, line.new(x_center, candle.h, x_center, body_t, color=wk, width=1))
+                            array.push(chart.wicks, line.new(x_center, body_b, x_center, candle.l, color=wk, width=1))
                         wick_split := true
 
                 // Zone box left edge:
@@ -2033,16 +2087,26 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
                         ref_pushed := true
                 // Inclusion/Reflection: zone uses wick area, so cover the candle
                 bool zone_uses_wick = zone.zone_subtype == SUBTYPE_INCLUSION or zone.zone_subtype == SUBTYPE_REFLECTION
-                int zone_left  = ref_pushed ? x_center - chart.spacing : zone_uses_wick ? x_center - 1 : x_center
-                int zone_right = x_center + chart.spacing + 1
+
+                int zone_left  = na
+                int zone_right = na
+                string zone_xloc = xloc.bar_index
+                if chart.is_overlay
+                    zone_left  := ref_pushed ? candle.t - chart.htf_ms : candle.t
+                    zone_right := candle.t + chart.htf_ms
+                    zone_xloc  := xloc.bar_time
+                else
+                    zone_left  := ref_pushed ? x_center - chart.spacing : zone_uses_wick ? x_center - 1 : x_center
+                    zone_right := x_center + chart.spacing + 1
+
                 bool po3_use_mbz = zone.has_mbz and chart.show_mbz
                 color po3_zb_color = zone.is_bullish ? (po3_use_mbz ? chart.mbz_zone_bull : chart.sif_zone_bull) : (po3_use_mbz ? chart.mbz_zone_bear : chart.sif_zone_bear)
-                box zb = box.new(zone_left, zone.zone_top, zone_right, zone.zone_bottom, border_color=color.new(color.white, 100), bgcolor=po3_zb_color, border_width=0)
+                box zb = box.new(zone_left, zone.zone_top, zone_right, zone.zone_bottom, xloc=zone_xloc, border_color=color.new(color.white, 100), bgcolor=po3_zb_color, border_width=0)
                 array.push(chart.zone_boxes, zb)
 
                 // 50% midline
                 float midpoint = (zone.zone_top + zone.zone_bottom) / 2
-                line ml = line.new(zone_left, midpoint, zone_right, midpoint, color=chart.midline_color, width=1, style=chart.midline_style)
+                line ml = line.new(zone_left, midpoint, zone_right, midpoint, xloc=zone_xloc, color=chart.midline_color, width=1, style=chart.midline_style)
                 array.push(chart.zone_midlines, ml)
 
                 // Zone label: above for bearish, below for bullish
@@ -2060,7 +2124,7 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
                 bool use_mbz_lbl = zone.has_mbz and enable_mbz_engine
                 color label_clr = zone.is_bullish ? (use_mbz_lbl ? po3_mbz_label_color : po3_sif_label_color) : (use_mbz_lbl ? po3_mbz_label_bear : po3_sif_label_bear)
                 int label_x_pos = (zone_left + zone_right) / 2
-                label lbl = label.new(label_x_pos, label_y, label_text, style=label_sty, color=color.new(color.white, 100), textcolor=label_clr, size=size.tiny)
+                label lbl = label.new(label_x_pos, label_y, label_text, xloc=zone_xloc, style=label_sty, color=color.new(color.white, 100), textcolor=label_clr, size=size.tiny)
                 array.push(chart.zone_labels, lbl)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -3019,7 +3083,7 @@ if IS_VALID
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if IS_VALID and show_po3_chart and barstate.islast and htf1.curr_open > 0
-    po3_render(po3_primary, htf1.curr_open, htf1.curr_high, htf1.curr_low, close)
+    po3_render(po3_primary, htf1.curr_open, htf1.curr_high, htf1.curr_low, close, htf1.curr_time)
     if po3_primary.show_mbz or po3_primary.show_sif
         // Build live invalidation maps (same logic as main rendering loop)
         var map<int, bool> po3_inv_mbz = map.new<int, bool>()
