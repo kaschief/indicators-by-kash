@@ -2751,13 +2751,15 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
         // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ zone per gap_id
         // zone_arr uses unshift (index 0 = newest), so iterate 0→N-1 (newest→oldest)
         // map.put overwrites, so last put per gap_id = oldest = first touch
+        // Must exclude live-invalidated zones so they don't claim the slot and hide all others
         if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
             for zone_index = 0 to array.size(zone_arr) - 1
                 CandleZone current_zone = array.get(zone_arr, zone_index)
                 if not current_zone.has_mbz
                     continue
                 bool show_direction = mbz_direction_filter == DIR_BOTH or (current_zone.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not current_zone.is_bullish and mbz_direction_filter == DIR_BEARISH)
-                if show_direction and not current_zone.is_invalidated and array.size(current_zone.source_gap_ids) > 0
+                bool live_inv = enable_invalidation and check_mbz_component_invalidation(current_zone, htf_curr_open, close)
+                if show_direction and not current_zone.is_invalidated and not live_inv and array.size(current_zone.source_gap_ids) > 0
                     int gap_id = array.get(current_zone.source_gap_ids, 0)
                     map.put(first_touch_index_per_gap, gap_id, zone_index)
 
@@ -2986,6 +2988,7 @@ if IS_VALID
 // Helper: build invalidation + same-source maps for a zone array, then highlight
 po3_build_and_highlight(PO3Chart chart, array<CandleZone> zone_arr, float curr_open, int htf_ms) =>
     int zone_count = array.size(zone_arr)
+    int confirmed_count = array.size(chart.data)
     var map<int, bool> inv_mbz = map.new<int, bool>()
     var map<int, bool> inv_sif = map.new<int, bool>()
     map.clear(inv_mbz)
@@ -2998,6 +3001,14 @@ po3_build_and_highlight(PO3Chart chart, array<CandleZone> zone_arr, float curr_o
                     map.put(inv_mbz, z.formation_time, true)
                 if z.has_sif and check_sif_component_invalidation(z, curr_open, close)
                     map.put(inv_sif, z.formation_time, true)
+
+    // Build set of PO3 candle times (only zones matching these can render on PO3)
+    var map<int, bool> po3_candle_times = map.new<int, bool>()
+    map.clear(po3_candle_times)
+    if confirmed_count > 0
+        for c_i = 0 to confirmed_count - 1
+            map.put(po3_candle_times, array.get(chart.data, c_i).t, true)
+
     var map<int, bool> ss_hidden = map.new<int, bool>()
     map.clear(ss_hidden)
     if same_source_filter != SAME_SOURCE_FILTER_ALL_TOUCHES and zone_count > 0
@@ -3005,16 +3016,23 @@ po3_build_and_highlight(PO3Chart chart, array<CandleZone> zone_arr, float curr_o
         var map<int, int> first_touch = map.new<int, int>()
         map.clear(seen_gaps)
         map.clear(first_touch)
+
+        // Same-source pre-pass: only consider zones that can actually render on PO3
+        // (matching candle time, not live-invalidated, passes direction filter)
+        // This mirrors the chart rendering which applies these filters before same-source
         if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
             for z_j = 0 to zone_count - 1
                 CandleZone zf = array.get(zone_arr, z_j)
-                if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
+                if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0 and map.contains(po3_candle_times, zf.formation_time) and not map.contains(inv_mbz, zf.formation_time)
                     bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
                     if dir_ok
                         map.put(first_touch, array.get(zf.source_gap_ids, 0), z_j)
         for z_j = 0 to zone_count - 1
             CandleZone zf = array.get(zone_arr, z_j)
-            if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0
+            if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0 and map.contains(po3_candle_times, zf.formation_time) and not map.contains(inv_mbz, zf.formation_time)
+                bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
+                if not dir_ok
+                    continue
                 int gid = array.get(zf.source_gap_ids, 0)
                 if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
                     if map.contains(seen_gaps, gid)
