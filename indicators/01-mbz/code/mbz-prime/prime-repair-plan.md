@@ -14,7 +14,7 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 2: Sunday 1D Fix
+## Phase 2: Sunday 1D Fix ✅
 
 - Add `timeframe.in_seconds() < 86400` to `should_skip_sunday_liquidity()`
 - On 1D CME charts, Monday data is no longer lost
