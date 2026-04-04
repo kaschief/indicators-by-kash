@@ -73,9 +73,10 @@ Branch: `prime-repair` (clean baseline before changes)
 
 **Test**: 1H levels alongside 4H. 4H pool still works. No interference.
 
-### Phase 6C: 15m Pool
+### Phase 6C: 15m Pool ✅
 - Same pattern for 15m (`timeframe.change("15")`)
 - Visible on sub-15m charts only
+- Superscript label: 15ᵐ
 
 **Test**: 15m levels alongside 1H and 4H. All pools unaffected.
 
