@@ -711,6 +711,8 @@ type LiquidityPoolCollection
     int current_low_mitigation_bar
     int first_unbreached_high_index
     int first_unbreached_low_index
+    float min_unbreached_high
+    float max_unbreached_low
 
 // DTT Session tracking
 type DttSession
@@ -1015,7 +1017,9 @@ create_liquidity_pool() =>
          int(na),
          int(na),
          0,
-         0
+         0,
+         float(na),
+         float(na)
      )
 
 liquidity_pool_session_count(pool) => array.size(pool.highs)
@@ -1087,6 +1091,28 @@ liquidity_pool_advance_low_pointer(pool) =>
         idx += 1
     pool.first_unbreached_low_index := idx
 
+liquidity_pool_recompute_min_unbreached_high(pool) =>
+    total = liquidity_pool_session_count(pool)
+    result = float(na)
+    if pool.first_unbreached_high_index < total
+        for i = pool.first_unbreached_high_index to total - 1
+            if not array.get(pool.high_breached, i)
+                h = array.get(pool.highs, i)
+                if na(result) or h < result
+                    result := h
+    pool.min_unbreached_high := result
+
+liquidity_pool_recompute_max_unbreached_low(pool) =>
+    total = liquidity_pool_session_count(pool)
+    result = float(na)
+    if pool.first_unbreached_low_index < total
+        for i = pool.first_unbreached_low_index to total - 1
+            if not array.get(pool.low_breached, i)
+                l = array.get(pool.lows, i)
+                if na(result) or l > result
+                    result := l
+    pool.max_unbreached_low := result
+
 liquidity_pool_trim(pool, max_entries) =>
     while array.size(pool.highs) > max_entries
         array.shift(pool.highs)
@@ -1113,6 +1139,8 @@ liquidity_pool_trim(pool, max_entries) =>
 
     liquidity_pool_advance_high_pointer(pool)
     liquidity_pool_advance_low_pointer(pool)
+    liquidity_pool_recompute_min_unbreached_high(pool)
+    liquidity_pool_recompute_max_unbreached_low(pool)
 
 liquidity_pool_finalize_session(pool, session_close_time, max_entries) =>
     if not na(pool.current_high) and not na(pool.current_low)
@@ -1142,6 +1170,9 @@ liquidity_pool_finalize_session(pool, session_close_time, max_entries) =>
         if pool.first_unbreached_low_index >= liquidity_pool_session_count(pool)
             pool.first_unbreached_low_index := new_index
 
+        pool.min_unbreached_high := na(pool.min_unbreached_high) ? pool.current_high : math.min(pool.min_unbreached_high, pool.current_high)
+        pool.max_unbreached_low := na(pool.max_unbreached_low) ? pool.current_low : math.max(pool.max_unbreached_low, pool.current_low)
+
         liquidity_pool_trim(pool, max_entries)
 
     liquidity_pool_clear_current(pool)
@@ -1150,7 +1181,8 @@ liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
     found_breach = false
     total = liquidity_pool_session_count(pool)
     if total > 0
-        if pool.first_unbreached_high_index < total
+        bool high_breached_min = false
+        if pool.first_unbreached_high_index < total and not na(pool.min_unbreached_high) and bar_high >= pool.min_unbreached_high
             for i = pool.first_unbreached_high_index to total - 1
                 if not array.get(pool.high_breached, i)
                     tracked_high = array.get(pool.highs, i)
@@ -1158,9 +1190,14 @@ liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
                         array.set(pool.high_breached, i, true)
                         array.set(pool.high_breach_times, i, bar_time)
                         found_breach := true
+                        if tracked_high == pool.min_unbreached_high
+                            high_breached_min := true
             liquidity_pool_advance_high_pointer(pool)
+            if high_breached_min
+                liquidity_pool_recompute_min_unbreached_high(pool)
 
-        if pool.first_unbreached_low_index < total
+        bool low_breached_max = false
+        if pool.first_unbreached_low_index < total and not na(pool.max_unbreached_low) and bar_low <= pool.max_unbreached_low
             for i = pool.first_unbreached_low_index to total - 1
                 if not array.get(pool.low_breached, i)
                     tracked_low = array.get(pool.lows, i)
@@ -1168,7 +1205,11 @@ liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
                         array.set(pool.low_breached, i, true)
                         array.set(pool.low_breach_times, i, bar_time)
                         found_breach := true
+                        if tracked_low == pool.max_unbreached_low
+                            low_breached_max := true
             liquidity_pool_advance_low_pointer(pool)
+            if low_breached_max
+                liquidity_pool_recompute_max_unbreached_low(pool)
 
     found_breach
 
@@ -1205,6 +1246,8 @@ liquidity_pool_clear(pool) =>
     liquidity_pool_clear_current(pool)
     pool.first_unbreached_high_index := 0
     pool.first_unbreached_low_index := 0
+    pool.min_unbreached_high := float(na)
+    pool.max_unbreached_low := float(na)
 
 // Initialize daily liquidity pool instance
 var LiquidityPoolCollection daily_liquidity_pool = create_liquidity_pool()
