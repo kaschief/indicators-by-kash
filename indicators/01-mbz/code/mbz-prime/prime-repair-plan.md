@@ -36,7 +36,7 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 4: Performance Optimization
+## Phase 4: Performance Optimization ✅ 
 
 - `mark_breaches()` returns bool flag when any new breach is found
 - Per-pool `var` breach flags with previous-bar rotation
@@ -48,12 +48,13 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 5: DTT Removal
+## Phase 5: Source Origin Label Centering
 
-- Remove all ~208 DTT references (constants, types, inputs, pools, tracking, detection, rendering, labels, status table)
-- Update `SourceTypeStats` constructor arg count
+- Source origin labels: `label.style_none`, no vertical offset, sit directly on line
+- Remove offset multiplier constants
+- Labels centered horizontally on the line
 
-**Test**: No DTT MBZs. No DTT in settings/labels/status. All other pools unaffected.
+**Test**: Labels on the line, not floating below. Existing pool labels readable.
 
 ---
 
@@ -80,13 +81,11 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 7: Label Improvements
+## Phase 7: Superscript TF Labels (after Phase 6)
 
-- Source origin labels: `label.style_none`, no vertical offset, sit directly on line
-- Superscript TF labels: 4ʰ, 1ʰ, 15ᵐ
-- Remove offset multiplier constants
+- Superscript formatting for TF pool labels: 4ʰ, 1ʰ, 15ᵐ
 
-**Test**: Labels on the line, not floating. TF labels use superscript. Existing pool labels unchanged.
+**Test**: TF labels use superscript. Existing pool labels unchanged.
 
 ---
 
@@ -110,10 +109,20 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
+## Phase 10: DTT Removal (deferred)
+
+- Remove all ~208 DTT references (constants, types, inputs, pools, tracking, detection, rendering, labels, status table)
+- Update `SourceTypeStats` constructor arg count
+
+**Test**: No DTT MBZs. No DTT in settings/labels/status. All other pools unaffected.
+
+---
+
 ## Dependency Graph
 
 ```
-Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6A → 6B → 6C → Phase 7 → Phase 8 → Phase 9
+Phase 1 → 2 → 3 → 4 → 5 → 6A → 6B → 6C → 7 → 8 → 9
+                                                       └→ 10 (deferred)
 ```
 
 Each phase is independently committable and testable on TradingView before proceeding.
