@@ -761,36 +761,9 @@ var array<int> displayed_mbz_indices = array.new<int>()       // Display trackin
 var array<ConsolidatedMBZ> last_consolidated_mbzs = array.new<ConsolidatedMBZ>()
 var label liquidity_variant_placeholder_label = na
 
-// Daily liquidity tracking
-var array<line> daily_liquidity_lines = array.new<line>()
-var array<label> daily_liquidity_labels = array.new<label>()
-// Weekly liquidity tracking
-var array<line> weekly_liquidity_lines = array.new<line>()
-var array<label> weekly_liquidity_labels = array.new<label>()
-// Monthly liquidity tracking
-var array<line> monthly_liquidity_lines = array.new<line>()
-var array<label> monthly_liquidity_labels = array.new<label>()
-// Asia session liquidity tracking
-var array<line> asia_liquidity_lines = array.new<line>()
-var array<label> asia_liquidity_labels = array.new<label>()
-// London session liquidity tracking
-var array<line> london_liquidity_lines = array.new<line>()
-var array<label> london_liquidity_labels = array.new<label>()
-// NY AM session liquidity tracking
-var array<line> nyam_liquidity_lines = array.new<line>()
-var array<label> nyam_liquidity_labels = array.new<label>()
-// Lunch session liquidity tracking
-var array<line> lunch_liquidity_lines = array.new<line>()
-var array<label> lunch_liquidity_labels = array.new<label>()
-// NY PM session liquidity tracking
-var array<line> nypm_liquidity_lines = array.new<line>()
-var array<label> nypm_liquidity_labels = array.new<label>()
-// ONS session liquidity tracking
-var array<line> ons_liquidity_lines = array.new<line>()
-var array<label> ons_liquidity_labels = array.new<label>()
-// Premarket session liquidity tracking
-var array<line> premarket_liquidity_lines = array.new<line>()
-var array<label> premarket_liquidity_labels = array.new<label>()
+// Unified source origin line/label tracking (cross-pool deduplication)
+var array<line> source_origin_lines = array.new<line>()
+var array<label> source_origin_labels = array.new<label>()
 
 // Performance optimization flags
 var bool needs_visual_update = true
@@ -937,6 +910,37 @@ build_liquidity_pool_label(pool_type, time_value) =>
         LIQUIDITY_SOURCE_TYPE_PREMARKET => LIQUIDITY_SOURCE_TYPE_PREMARKET
         => pool_type
     append_nine_suffix(display_type)
+
+get_source_priority(string token) =>
+    switch token
+        LIQUIDITY_SOURCE_TYPE_MONTHLY => 3
+        LIQUIDITY_SOURCE_TYPE_WEEKLY => 2
+        LIQUIDITY_SOURCE_TYPE_DAILY => 1
+        => 0
+
+is_source_origin_enabled(string token) =>
+    switch token
+        LIQUIDITY_SOURCE_TYPE_DAILY => show_daily_liquidity_lines
+        LIQUIDITY_SOURCE_TYPE_WEEKLY => show_weekly_liquidity_lines
+        LIQUIDITY_SOURCE_TYPE_MONTHLY => show_monthly_liquidity_lines
+        => show_intraday_liquidity_lines
+
+get_source_color_width(string token) =>
+    color c = intraday_liquidity_color
+    int w = intraday_liquidity_line_width
+    if token == LIQUIDITY_SOURCE_TYPE_DAILY
+        c := daily_liquidity_color
+        w := daily_liquidity_line_width
+    else if token == LIQUIDITY_SOURCE_TYPE_WEEKLY
+        c := weekly_liquidity_color
+        w := weekly_liquidity_line_width
+    else if token == LIQUIDITY_SOURCE_TYPE_MONTHLY
+        c := monthly_liquidity_color
+        w := monthly_liquidity_line_width
+    [c, w]
+
+// Pool lookup is handled inline in the rendering block via resolve_source_pool variable assignment
+// because Pine Script switch/if-else returning UDTs requires careful type handling
 
 create_liquidity_pool() =>
     LiquidityPoolCollection.new(
@@ -2759,61 +2763,13 @@ manage_consolidated_mbz_display() =>
 
     array.clear(displayed_mbz_indices)
 
-    for liq_line in daily_liquidity_lines
-        line.delete(liq_line)
-    array.clear(daily_liquidity_lines)
+    for elem in source_origin_lines
+        line.delete(elem)
+    array.clear(source_origin_lines)
 
-    for liq_label in daily_liquidity_labels
-        label.delete(liq_label)
-    array.clear(daily_liquidity_labels)
-
-    for liq_line in weekly_liquidity_lines
-        line.delete(liq_line)
-    array.clear(weekly_liquidity_lines)
-
-    for liq_label in weekly_liquidity_labels
-        label.delete(liq_label)
-    array.clear(weekly_liquidity_labels)
-
-    for liq_line in monthly_liquidity_lines
-        line.delete(liq_line)
-    array.clear(monthly_liquidity_lines)
-
-    for liq_label in monthly_liquidity_labels
-        label.delete(liq_label)
-    array.clear(monthly_liquidity_labels)
-
-    for liq_line in asia_liquidity_lines
-        line.delete(liq_line)
-    array.clear(asia_liquidity_lines)
-
-    for liq_label in asia_liquidity_labels
-        label.delete(liq_label)
-    array.clear(asia_liquidity_labels)
-
-    for liq_line in london_liquidity_lines
-        line.delete(liq_line)
-    array.clear(london_liquidity_lines)
-
-    for liq_label in london_liquidity_labels
-        label.delete(liq_label)
-    array.clear(london_liquidity_labels)
-
-    for liq_line in nyam_liquidity_lines
-        line.delete(liq_line)
-    array.clear(nyam_liquidity_lines)
-
-    for liq_label in nyam_liquidity_labels
-        label.delete(liq_label)
-    array.clear(nyam_liquidity_labels)
-
-    for liq_line in lunch_liquidity_lines
-        line.delete(liq_line)
-    array.clear(lunch_liquidity_lines)
-
-    for liq_label in lunch_liquidity_labels
-        label.delete(liq_label)
-    array.clear(lunch_liquidity_labels)
+    for elem in source_origin_labels
+        label.delete(elem)
+    array.clear(source_origin_labels)
 
     // Group MBZs by candle for consolidation
     displayable_mbzs = array.new<MBZRecord>()
@@ -2970,17 +2926,12 @@ manage_consolidated_mbz_display() =>
     // Only process if we have consolidated MBZs
     if array.size(consolidated_mbzs) > 0
         // Process each consolidated group
-        // Deduplicate liquidity level lines (by price AND source type) to prevent duplicate lines
-        displayed_daily_levels = array.new_float()
-        displayed_weekly_levels = array.new_float()
-        displayed_monthly_levels = array.new_float()
-        displayed_asia_levels = array.new_float()
-        displayed_london_levels = array.new_float()
-        displayed_nyam_levels = array.new_float()
-        displayed_lunch_levels = array.new_float()
-        displayed_nypm_levels = array.new_float()
-        displayed_ons_levels = array.new_float()
-        displayed_premarket_levels = array.new_float()
+        // Cross-pool deduplication maps: key = price string, value = array index or priority
+        dedup_line_index = map.new<string, int>()
+        dedup_label_index = map.new<string, int>()
+        dedup_priority = map.new<string, int>()
+        dedup_count = map.new<string, int>()
+        dedup_tokens = map.new<string, string>()
 
         // Process newest to oldest so newest MBZs get source origin line priority
         for consolidated_group_index = array.size(consolidated_mbzs) - 1 to 0
@@ -3078,7 +3029,7 @@ manage_consolidated_mbz_display() =>
                  )
                 array.push(mbz_extended_boxes, consolidated_extension_box)
 
-            if show_source_origins
+            if show_source_origins and should_highlight_consolidated_zone
                 // Process each MBZ in the group for source origins
                 for current_mbz_index = 0 to array.size(current_consolidated_mbz.mbz_group) - 1
                     current_mbz_in_group = array.get(current_consolidated_mbz.mbz_group, current_mbz_index)
@@ -3117,127 +3068,111 @@ manage_consolidated_mbz_display() =>
                     if na(source_price_key) or source_token == ""
                         continue
 
-                    // Global deduplication check + capacity limits
-                    should_skip = false
-                    if source_token == LIQUIDITY_SOURCE_TYPE_DAILY and show_daily_liquidity_lines
-                        if array.includes(displayed_daily_levels, source_price_key) or array.size(daily_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if source_token == LIQUIDITY_SOURCE_TYPE_WEEKLY and show_weekly_liquidity_lines
-                        if array.includes(displayed_weekly_levels, source_price_key) or array.size(weekly_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if source_token == LIQUIDITY_SOURCE_TYPE_MONTHLY and show_monthly_liquidity_lines
-                        if array.includes(displayed_monthly_levels, source_price_key) or array.size(monthly_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if (source_token == LIQUIDITY_SOURCE_TYPE_ASIA or source_token == LIQUIDITY_SOURCE_TYPE_ASIA_NINE) and show_intraday_liquidity_lines
-                        if array.includes(displayed_asia_levels, source_price_key) or array.size(asia_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if (source_token == LIQUIDITY_SOURCE_TYPE_LONDON or source_token == LIQUIDITY_SOURCE_TYPE_LONDON_NINE) and show_intraday_liquidity_lines
-                        if array.includes(displayed_london_levels, source_price_key) or array.size(london_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if (source_token == LIQUIDITY_SOURCE_TYPE_NYAM or source_token == LIQUIDITY_SOURCE_TYPE_NYAM_NINE) and show_intraday_liquidity_lines
-                        if array.includes(displayed_nyam_levels, source_price_key) or array.size(nyam_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if source_token == LIQUIDITY_SOURCE_TYPE_LUNCH and show_intraday_liquidity_lines
-                        if array.includes(displayed_lunch_levels, source_price_key) or array.size(lunch_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if (source_token == LIQUIDITY_SOURCE_TYPE_NYPM or source_token == LIQUIDITY_SOURCE_TYPE_NYPM_NINE) and show_intraday_liquidity_lines
-                        if array.includes(displayed_nypm_levels, source_price_key) or array.size(nypm_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if source_token == LIQUIDITY_SOURCE_TYPE_ONS and show_intraday_liquidity_lines
-                        if array.includes(displayed_ons_levels, source_price_key) or array.size(ons_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else if source_token == LIQUIDITY_SOURCE_TYPE_PREMARKET and show_intraday_liquidity_lines
-                        if array.includes(displayed_premarket_levels, source_price_key) or array.size(premarket_liquidity_lines) >= max_source_displays_effective
-                            should_skip := true
-                    else
-                        should_skip := true  // Unrecognized or disabled source type
-
-                    if should_skip
+                    // Check if this source type is enabled
+                    if not is_source_origin_enabled(source_token)
                         continue
 
-                    // Determine source-specific settings
-                    line_color = color.white
-                    line_width = 1
+                    price_str = str.tostring(source_price_key)
 
+                    if map.contains(dedup_line_index, price_str)
+                        // MERGE: add token to existing label (cross-pool dedup)
+                        new_token_display = source_token
+                        existing_tokens = map.get(dedup_tokens, price_str)
+                        if not str.contains(existing_tokens, "|" + new_token_display + "|")
+                            updated_tokens = existing_tokens + new_token_display + "|"
+                            map.put(dedup_tokens, price_str, updated_tokens)
+                            new_count = map.get(dedup_count, price_str) + 1
+                            map.put(dedup_count, price_str, new_count)
+                            // Rebuild label in priority order
+                            parts = array.new<string>()
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_MONTHLY + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_MONTHLY)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_WEEKLY + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_WEEKLY)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_DAILY + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_DAILY)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_ASIA + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_ASIA)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_ASIA_NINE + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_ASIA_NINE)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_LONDON + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_LONDON)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_LONDON_NINE + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_LONDON_NINE)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_NYAM + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_NYAM)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_NYAM_NINE + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_NYAM_NINE)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_LUNCH + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_LUNCH)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_NYPM + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_NYPM)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_NYPM_NINE + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_NYPM_NINE)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_ONS + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_ONS)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_PREMARKET + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_PREMARKET)
+                            label_text = new_count > 1 ? str.tostring(new_count) + ": " + array.join(parts, ", ") : array.join(parts, ", ")
+                            existing_label_idx = map.get(dedup_label_index, price_str)
+                            existing_label = array.get(source_origin_labels, existing_label_idx)
+                            label.set_text(existing_label, label_text)
+
+                        // Upgrade color/width if higher priority source
+                        new_priority = get_source_priority(source_token)
+                        if new_priority > map.get(dedup_priority, price_str)
+                            existing_line_idx = map.get(dedup_line_index, price_str)
+                            existing_line = array.get(source_origin_lines, existing_line_idx)
+                            [new_color, new_width] = get_source_color_width(source_token)
+                            line.set_color(existing_line, new_color)
+                            line.set_width(existing_line, new_width)
+                            map.put(dedup_priority, price_str, new_priority)
+                        continue
+
+                    // Capacity check against unified array
+                    if array.size(source_origin_lines) >= max_source_displays_effective
+                        continue
+
+                    // Resolve pool for this source token (inline to avoid UDT return issues)
+                    [line_color, line_width] = get_source_color_width(source_token)
                     LiquidityPoolCollection liquidity_pool = na
-
                     if source_token == LIQUIDITY_SOURCE_TYPE_DAILY
-                        line_color := daily_liquidity_color
-                        line_width := daily_liquidity_line_width
-
                         liquidity_pool := daily_liquidity_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
-                        line_color := weekly_liquidity_color
-                        line_width := weekly_liquidity_line_width
-
                         liquidity_pool := weekly_liquidity_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_MONTHLY
-                        line_color := monthly_liquidity_color
-                        line_width := monthly_liquidity_line_width
-
                         liquidity_pool := monthly_liquidity_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_ASIA
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := asia_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_ASIA_NINE
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := asia_nine_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_LONDON
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := london_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_LONDON_NINE
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := london_nine_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_NYAM
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := nyam_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_NYAM_NINE
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := nyam_nine_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_LUNCH
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := lunch_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_NYPM
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := nypm_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_NYPM_NINE
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := nypm_nine_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_ONS
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := ons_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_PREMARKET
-                        line_color := intraday_liquidity_color
-                        line_width := intraday_liquidity_line_width
-
                         liquidity_pool := premarket_session_pool
 
-                    // Look up this level in the appropriate liquidity pool
                     if na(liquidity_pool)
                         continue
 
                     session_count = liquidity_pool_session_count(liquidity_pool)
                     level_found = false
+
+                    if session_count == 0
+                        continue
 
                     for session_idx = 0 to session_count - 1
                         session_high = array.get(liquidity_pool.highs, session_idx)
@@ -3266,99 +3201,20 @@ manage_consolidated_mbz_display() =>
                             is_high_level := false
 
                         if level_matched
-                            // Create line immediately
+                            // FIRST OCCURRENCE: draw line and label, register in dedup maps
                             liquidity_line = line.new(level_time, level_price, level_end_time, level_price, xloc=xloc.bar_time, color=line_color, width=line_width, style=line.style_solid)
+                            array.push(source_origin_lines, liquidity_line)
 
-                            // Add to appropriate array and mark as displayed
-                            if source_token == LIQUIDITY_SOURCE_TYPE_DAILY
-                                array.push(daily_liquidity_lines, liquidity_line)
-                                array.push(displayed_daily_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(daily_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_WEEKLY
-                                array.push(weekly_liquidity_lines, liquidity_line)
-                                array.push(displayed_weekly_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(weekly_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_MONTHLY
-                                array.push(monthly_liquidity_lines, liquidity_line)
-                                array.push(displayed_monthly_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(monthly_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_ASIA or source_token == LIQUIDITY_SOURCE_TYPE_ASIA_NINE
-                                array.push(asia_liquidity_lines, liquidity_line)
-                                array.push(displayed_asia_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(asia_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_LONDON or source_token == LIQUIDITY_SOURCE_TYPE_LONDON_NINE
-                                array.push(london_liquidity_lines, liquidity_line)
-                                array.push(displayed_london_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(london_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_NYAM or source_token == LIQUIDITY_SOURCE_TYPE_NYAM_NINE
-                                array.push(nyam_liquidity_lines, liquidity_line)
-                                array.push(displayed_nyam_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(nyam_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_LUNCH
-                                array.push(lunch_liquidity_lines, liquidity_line)
-                                array.push(displayed_lunch_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(lunch_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_NYPM or source_token == LIQUIDITY_SOURCE_TYPE_NYPM_NINE
-                                array.push(nypm_liquidity_lines, liquidity_line)
-                                array.push(displayed_nypm_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(nypm_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_ONS
-                                array.push(ons_liquidity_lines, liquidity_line)
-                                array.push(displayed_ons_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(ons_liquidity_labels, liquidity_label)
-                            else if source_token == LIQUIDITY_SOURCE_TYPE_PREMARKET
-                                array.push(premarket_liquidity_lines, liquidity_line)
-                                array.push(displayed_premarket_levels, source_price_key)
-                                label_text = build_liquidity_pool_label(source_token, level_label_time)
-                                final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                                label_style = label.style_none
-                                bar_range = high - low
-                                liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                                array.push(premarket_liquidity_labels, liquidity_label)
+                            final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
+                            label_text = build_liquidity_pool_label(source_token, level_label_time)
+                            liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
+                            array.push(source_origin_labels, liquidity_label)
+
+                            map.put(dedup_line_index, price_str, array.size(source_origin_lines) - 1)
+                            map.put(dedup_label_index, price_str, array.size(source_origin_labels) - 1)
+                            map.put(dedup_priority, price_str, get_source_priority(source_token))
+                            map.put(dedup_count, price_str, 1)
+                            map.put(dedup_tokens, price_str, "|" + source_token + "|")
 
                             level_found := true
                             break

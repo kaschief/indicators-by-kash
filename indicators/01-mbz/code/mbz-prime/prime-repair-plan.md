@@ -48,7 +48,7 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 5: Source Origin Label Centering
+## Phase 5: Source Origin Label Centering ✅
 
 - Source origin labels: `label.style_none`, no vertical offset, sit directly on line
 - Remove offset multiplier constants
@@ -89,23 +89,23 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 8: Cross-Pool Source Line Deduplication
+## Phase 8: Cross-Pool Source Line Deduplication ✅
 
-- When multiple pools have levels at the same price, draw one line with combined label
-- Two-pass rendering: collect candidates, then draw deduplicated
-- Label format: `daily·4ʰ·15ᵐ` for shared levels
+- Replace 20 per-pool line/label arrays with 2 unified arrays
+- Replace 10 per-pool dedup arrays with map-based O(1) lookup
+- Same price from different pools → 1 line, merged label (e.g., "2: asia, ons")
+- Tokens ordered by priority (monthly > weekly > daily > sessions)
 - Line color/width from highest-priority pool
+- Gate source origins with `should_highlight_consolidated_zone` (orphan fix)
+- Fixed missing nypm/ons/premarket cleanup bug
 
-**Test**: Shared prices show one line. Different prices unaffected. Display cap respected.
+**Test**: Shared prices show one line. Labels readable with count format. No orphaned lines.
 
 ---
 
-## Phase 9: Source Origin Orphan Fix
+## Phase 9: Source Origin Orphan Fix ✅ (merged into Phase 8)
 
-- Gate source origin rendering with `should_highlight_consolidated_zone`
-- Source lines only draw when the MBZ zone box is also drawn
-
-**Test**: No orphaned lines for invalidated/hidden MBZs. Toggle "Show Invalidated" works correctly.
+- Included in Phase 8 — `should_highlight_consolidated_zone` gate added to source origin rendering
 
 ---
 
