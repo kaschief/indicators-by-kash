@@ -50,6 +50,7 @@ LIQUIDITY_SOURCE_TYPE_PREMARKET = "premarket"
 LIQUIDITY_SOURCE_TYPE_DTT = "dtt"
 LIQUIDITY_SOURCE_TYPE_15M = "15ᵐ"
 LIQUIDITY_SOURCE_TYPE_1H = "1ʰ"
+LIQUIDITY_SOURCE_TYPE_4H = "4ʰ"
 
 // Status table display constants
 STATUS_DISPLAY_ALL = "all"
@@ -97,6 +98,7 @@ ONS_LIQUIDITY_SCAN_CAP = 200          // ~40 weeks of overnight/premarket sessio
 PREMARKET_LIQUIDITY_SCAN_CAP = 200
 FIFTEEN_MIN_LIQUIDITY_SCAN_CAP = 500  // ~8 trading days of 15m candles
 ONE_HOUR_LIQUIDITY_SCAN_CAP = 500     // ~20 trading days of 1h candles
+FOUR_HOUR_LIQUIDITY_SCAN_CAP = 500    // ~83 trading days of 4h candles
 
 // Timeframe restrictions for liquidity pools (in minutes)
 MIN_TF_DAILY_LIQUIDITY = 15           // Daily: show on 15m+ (timeframe must be >= 15m)
@@ -476,6 +478,7 @@ show_session_times_table = input.bool(false, "Show Session Times Table", group=G
 enable_dtt_sessions = input.bool(true, "Enable DTT Sessions", group=GROUP_LIQUIDITY_DTT, tooltip='Enable DTT: 15 cascading sessions where each session uses the previous session\'s high/low as liquidity pools\n\nSessions: Damasu → Osaka → Kyoto → Nagasaki → Turncoat → Bishop → Knight → Big Ben → NY Open → Judas → Model 11 → Model 110 → Lunch → Model 1001 → Model 111')
 
 // === 💧 TIMEFRAME LIQUIDITY POOLS ===
+enable_4h_liquidity = input.bool(false, "4ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 4-hour candle high/low breaches')
 enable_1h_liquidity = input.bool(false, "1ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 1-hour candle high/low breaches')
 enable_15m_liquidity = input.bool(false, "15ᵐ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 15-minute candle high/low breaches')
 
@@ -583,9 +586,15 @@ intraday_liquidity_line_width = input.int(DEFAULT_INTRADAY_LIQUIDITY_LINE_WIDTH,
 show_dtt_liquidity_lines = input.bool(true, INPUT_LABEL_DTT, group=GROUP_SOURCE_ORIGINS, inline='src13', tooltip='Show DTT verification lines')
 dtt_liquidity_color = input.color(DEFAULT_DTT_LIQUIDITY_COLOR, '', group=GROUP_SOURCE_ORIGINS, inline='src13', tooltip='Line color for DTT verification lines')
 dtt_liquidity_line_width = input.int(DEFAULT_DTT_LIQUIDITY_LINE_WIDTH, INPUT_LABEL_WIDTH, minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src13', tooltip='Line thickness for DTT verification lines')
-show_tf_liquidity_lines = input.bool(true, "1ʰ / 15ᵐ", group=GROUP_SOURCE_ORIGINS, inline='src_tf', tooltip='Show timeframe-based liquidity pool source levels (1H and 15m)')
-tf_liquidity_color = input.color(DEFAULT_TF_LIQUIDITY_COLOR, "", group=GROUP_SOURCE_ORIGINS, inline='src_tf')
-tf_liquidity_line_width = input.int(DEFAULT_TF_LIQUIDITY_LINE_WIDTH, INPUT_LABEL_WIDTH, minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src_tf')
+show_4h_liquidity_lines = input.bool(true, "4ʰ", group=GROUP_SOURCE_ORIGINS, inline='src_4h', tooltip='Show 4-hour liquidity pool source levels')
+four_hour_liquidity_color = input.color(color.new(color.rgb(41, 98, 255), 50), "", group=GROUP_SOURCE_ORIGINS, inline='src_4h')
+four_hour_liquidity_line_width = input.int(1, "", minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src_4h')
+show_1h_liquidity_lines = input.bool(true, "1ʰ", group=GROUP_SOURCE_ORIGINS, inline='src_1h', tooltip='Show 1-hour liquidity pool source levels')
+one_hour_liquidity_color = input.color(color.new(color.rgb(139, 195, 74), 50), "", group=GROUP_SOURCE_ORIGINS, inline='src_1h')
+one_hour_liquidity_line_width = input.int(1, "", minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src_1h')
+show_15m_liquidity_lines = input.bool(true, "15ᵐ", group=GROUP_SOURCE_ORIGINS, inline='src_15m', tooltip='Show 15-minute liquidity pool source levels')
+fifteen_min_liquidity_color = input.color(DEFAULT_TF_LIQUIDITY_COLOR, "", group=GROUP_SOURCE_ORIGINS, inline='src_15m')
+fifteen_min_liquidity_line_width = input.int(1, "", minval=MIN_BORDER_WIDTH, maxval=MAX_BORDER_WIDTH, group=GROUP_SOURCE_ORIGINS, inline='src_15m')
 source_origin_label_text_color = input.color(DEFAULT_SOURCE_ORIGIN_LABEL_TEXT_COLOR, 'Label', group=GROUP_SOURCE_ORIGINS, inline='src14', tooltip='Text color for source origin labels')
 
 // === ✨ MBZ EXTENSION ===
@@ -753,6 +762,7 @@ type SourceTypeStats
     int liquidity_ons_count
     int liquidity_premarket_count
     int liquidity_dtt_count
+    int liquidity_4h_count
     int liquidity_1h_count
     int liquidity_15m_count
     int liquidity_total_count
@@ -938,6 +948,7 @@ build_liquidity_pool_label(pool_type, time_value) =>
         LIQUIDITY_SOURCE_TYPE_NYPM => LIQUIDITY_SOURCE_TYPE_NYPM
         LIQUIDITY_SOURCE_TYPE_ONS => LIQUIDITY_SOURCE_TYPE_ONS
         LIQUIDITY_SOURCE_TYPE_PREMARKET => LIQUIDITY_SOURCE_TYPE_PREMARKET
+        LIQUIDITY_SOURCE_TYPE_4H => LIQUIDITY_SOURCE_TYPE_4H
         LIQUIDITY_SOURCE_TYPE_1H => LIQUIDITY_SOURCE_TYPE_1H
         LIQUIDITY_SOURCE_TYPE_15M => LIQUIDITY_SOURCE_TYPE_15M
         => pool_type
@@ -955,8 +966,9 @@ is_source_origin_enabled(string token) =>
         LIQUIDITY_SOURCE_TYPE_DAILY => show_daily_liquidity_lines
         LIQUIDITY_SOURCE_TYPE_WEEKLY => show_weekly_liquidity_lines
         LIQUIDITY_SOURCE_TYPE_MONTHLY => show_monthly_liquidity_lines
-        LIQUIDITY_SOURCE_TYPE_1H => show_tf_liquidity_lines
-        LIQUIDITY_SOURCE_TYPE_15M => show_tf_liquidity_lines
+        LIQUIDITY_SOURCE_TYPE_4H => show_4h_liquidity_lines
+        LIQUIDITY_SOURCE_TYPE_1H => show_1h_liquidity_lines
+        LIQUIDITY_SOURCE_TYPE_15M => show_15m_liquidity_lines
         => show_intraday_liquidity_lines
 
 get_source_color_width(string token) =>
@@ -971,12 +983,15 @@ get_source_color_width(string token) =>
     else if token == LIQUIDITY_SOURCE_TYPE_MONTHLY
         c := monthly_liquidity_color
         w := monthly_liquidity_line_width
+    else if token == LIQUIDITY_SOURCE_TYPE_4H
+        c := four_hour_liquidity_color
+        w := four_hour_liquidity_line_width
     else if token == LIQUIDITY_SOURCE_TYPE_1H
-        c := tf_liquidity_color
-        w := tf_liquidity_line_width
+        c := one_hour_liquidity_color
+        w := one_hour_liquidity_line_width
     else if token == LIQUIDITY_SOURCE_TYPE_15M
-        c := tf_liquidity_color
-        w := tf_liquidity_line_width
+        c := fifteen_min_liquidity_color
+        w := fifteen_min_liquidity_line_width
     [c, w]
 
 // Pool lookup is handled inline in the rendering block via resolve_source_pool variable assignment
@@ -1271,6 +1286,8 @@ var LiquidityPoolCollection premarket_session_pool = create_liquidity_pool()
 var LiquidityPoolCollection fifteen_min_pool = create_liquidity_pool()
 // Initialize 1-hour timeframe liquidity pool instance
 var LiquidityPoolCollection one_hour_pool = create_liquidity_pool()
+// Initialize 4-hour timeframe liquidity pool instance
+var LiquidityPoolCollection four_hour_pool = create_liquidity_pool()
 
 // Initialize NINE variant liquidity pools (used in "Both" mode)
 var LiquidityPoolCollection asia_nine_pool = create_liquidity_pool()
@@ -2391,7 +2408,7 @@ determine_consolidated_status(consolidated_mbz) =>
 
 // Build source type statistics for consolidated MBZ groups
 get_source_type_stats(mbz_group) =>
-    stats = SourceTypeStats.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    stats = SourceTypeStats.new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     stats.group_size := array.size(mbz_group)
 
     tokens_seen = array.new<string>()
@@ -2438,6 +2455,9 @@ get_source_type_stats(mbz_group) =>
             counted_token := true
         else if token == LIQUIDITY_SOURCE_TYPE_PREMARKET
             stats.liquidity_premarket_count += 1
+            counted_token := true
+        else if token == LIQUIDITY_SOURCE_TYPE_4H
+            stats.liquidity_4h_count += 1
             counted_token := true
         else if token == LIQUIDITY_SOURCE_TYPE_1H
             stats.liquidity_1h_count += 1
@@ -2576,6 +2596,8 @@ build_source_breakdown(mbz_group) =>
         array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_ONS, stats.liquidity_ons_count))
     if stats.liquidity_premarket_count > 0
         array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_PREMARKET, stats.liquidity_premarket_count))
+    if stats.liquidity_4h_count > 0
+        array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_4H, stats.liquidity_4h_count))
     if stats.liquidity_1h_count > 0
         array.push(parts, format_source_token(LIQUIDITY_SOURCE_TYPE_1H, stats.liquidity_1h_count))
     if stats.liquidity_15m_count > 0
@@ -2639,6 +2661,8 @@ build_source_breakdown_extension_from_stats(stats, mbz_group) =>
             array.push(parts, format_source_token_with_nine(LIQUIDITY_SOURCE_TYPE_ONS, stats.liquidity_ons_count))
         if stats.liquidity_premarket_count > 0
             array.push(parts, format_source_token_with_nine(LIQUIDITY_SOURCE_TYPE_PREMARKET, stats.liquidity_premarket_count))
+        if stats.liquidity_4h_count > 0
+            array.push(parts, format_source_token_with_nine(LIQUIDITY_SOURCE_TYPE_4H, stats.liquidity_4h_count))
         if stats.liquidity_1h_count > 0
             array.push(parts, format_source_token_with_nine(LIQUIDITY_SOURCE_TYPE_1H, stats.liquidity_1h_count))
         if stats.liquidity_15m_count > 0
@@ -3246,6 +3270,8 @@ manage_consolidated_mbz_display() =>
                                 array.push(parts, LIQUIDITY_SOURCE_TYPE_ONS)
                             if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_PREMARKET + "|")
                                 array.push(parts, LIQUIDITY_SOURCE_TYPE_PREMARKET)
+                            if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_4H + "|")
+                                array.push(parts, LIQUIDITY_SOURCE_TYPE_4H)
                             if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_1H + "|")
                                 array.push(parts, LIQUIDITY_SOURCE_TYPE_1H)
                             if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_15M + "|")
@@ -3301,6 +3327,8 @@ manage_consolidated_mbz_display() =>
                         liquidity_pool := ons_session_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_PREMARKET
                         liquidity_pool := premarket_session_pool
+                    else if source_token == LIQUIDITY_SOURCE_TYPE_4H
+                        liquidity_pool := four_hour_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_1H
                         liquidity_pool := one_hour_pool
                     else if source_token == LIQUIDITY_SOURCE_TYPE_15M
@@ -3383,6 +3411,7 @@ enable_premarket_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQU
 enable_dtt_liquidity_tracking = current_tf_minutes <= MAX_TF_DTT
 enable_15m_liquidity_tracking = current_tf_minutes < 15  // Only on sub-15m charts
 enable_1h_liquidity_tracking = current_tf_minutes < 60   // Only on sub-1H charts
+enable_4h_liquidity_tracking = current_tf_minutes < 240  // Only on sub-4H charts
 
 // Breach flags: track whether mark_breaches found anything (current + previous bar)
 var bool daily_breach = false
@@ -3417,6 +3446,8 @@ var bool fifteen_min_breach = false
 var bool fifteen_min_breach_prev = false
 var bool one_hour_breach = false
 var bool one_hour_breach_prev = false
+var bool four_hour_breach = false
+var bool four_hour_breach_prev = false
 
 // Rotate breach flags (previous = current, current = false)
 daily_breach_prev := daily_breach
@@ -3451,6 +3482,8 @@ fifteen_min_breach_prev := fifteen_min_breach
 fifteen_min_breach := false
 one_hour_breach_prev := one_hour_breach
 one_hour_breach := false
+four_hour_breach_prev := four_hour_breach
+four_hour_breach := false
 
 // Calculate Sunday skip once for all liquidity sources (performance optimization)
 skip_sunday_liquidity = should_skip_sunday_liquidity(time)
@@ -3772,6 +3805,17 @@ if enable_premarket_liquidity_tracking and (show_source_origins or liquidity_det
 else if barstate.isnew
     liquidity_pool_clear_current(premarket_session_pool)
 
+// 4-hour timeframe liquidity pool tracking
+if enable_4h_liquidity_tracking and enable_4h_liquidity and (show_source_origins or liquidity_detection_enabled)
+    if barstate.isnew and timeframe.change("240")
+        liquidity_pool_finalize_session(four_hour_pool, nz(time[1], time), FOUR_HOUR_LIQUIDITY_SCAN_CAP)
+        liquidity_pool_reset_current(four_hour_pool, high, low, time, bar_index)
+    else
+        liquidity_pool_update_current_extremes(four_hour_pool, high, low, time, bar_index)
+    four_hour_breach := liquidity_pool_mark_breaches(four_hour_pool, high, low, time)
+else if barstate.isnew
+    liquidity_pool_clear_current(four_hour_pool)
+
 // 1-hour timeframe liquidity pool tracking
 if enable_1h_liquidity_tracking and enable_1h_liquidity and (show_source_origins or liquidity_detection_enabled)
     if barstate.isnew and timeframe.change("60")
@@ -4018,6 +4062,14 @@ if liquidity_detection_enabled
             if process_liquidity_events(premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index, premarket_events_sct, premarket_events_lt, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
+        // Process 4-hour timeframe liquidity pool (if enabled)
+        if enable_4h_liquidity and enable_4h_liquidity_tracking
+            four_hour_scan_cap = FOUR_HOUR_LIQUIDITY_SCAN_CAP
+            [four_hour_events_is_high, four_hour_events_rules, four_hour_events_is_exact, four_hour_events_source_price, four_hour_events_source_bar_index, four_hour_events_sct, four_hour_events_lt] = process_liquidity_pool(four_hour_pool, LIQUIDITY_SOURCE_TYPE_4H, four_hour_scan_cap, four_hour_breach or four_hour_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+
+            if process_liquidity_events(four_hour_events_is_high, four_hour_events_rules, four_hour_events_is_exact, four_hour_events_source_price, four_hour_events_source_bar_index, four_hour_events_sct, four_hour_events_lt, LIQUIDITY_SOURCE_TYPE_4H, four_hour_pool, bar_index, b_open, b_high, b_low, b_close)
+                needs_visual_update := true
+
         // Process 1-hour timeframe liquidity pool (if enabled)
         if enable_1h_liquidity and enable_1h_liquidity_tracking
             one_hour_scan_cap = ONE_HOUR_LIQUIDITY_SCAN_CAP
@@ -4250,7 +4302,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 13, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 4, 14, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -4306,23 +4358,29 @@ if show_color_table and barstate.islast
     table.cell(color_table, 2, 8, str.format("R:{0} G:{1} B:{2}", int(color.r(dtt_liquidity_color)), int(color.g(dtt_liquidity_color)), int(color.b(dtt_liquidity_color))), text_size=size.small)
     table.cell(color_table, 3, 8, str.tostring(int(color.t(dtt_liquidity_color))), text_size=size.small)
 
-    // 1H TF Liquidity Color
-    table.cell(color_table, 0, 9, "1ʰ Liq", text_size=size.small)
+    // 4H TF Liquidity Color
+    table.cell(color_table, 0, 9, "4ʰ Liq", text_size=size.small)
     table.cell(color_table, 1, 9, "", text_size=size.small)
-    table.cell(color_table, 2, 9, str.format("R:{0} G:{1} B:{2}", int(color.r(tf_liquidity_color)), int(color.g(tf_liquidity_color)), int(color.b(tf_liquidity_color))), text_size=size.small)
-    table.cell(color_table, 3, 9, str.tostring(int(color.t(tf_liquidity_color))), text_size=size.small)
+    table.cell(color_table, 2, 9, str.format("R:{0} G:{1} B:{2}", int(color.r(four_hour_liquidity_color)), int(color.g(four_hour_liquidity_color)), int(color.b(four_hour_liquidity_color))), text_size=size.small)
+    table.cell(color_table, 3, 9, str.tostring(int(color.t(four_hour_liquidity_color))), text_size=size.small)
+
+    // 1H TF Liquidity Color
+    table.cell(color_table, 0, 10, "1ʰ Liq", text_size=size.small)
+    table.cell(color_table, 1, 10, "", text_size=size.small)
+    table.cell(color_table, 2, 10, str.format("R:{0} G:{1} B:{2}", int(color.r(one_hour_liquidity_color)), int(color.g(one_hour_liquidity_color)), int(color.b(one_hour_liquidity_color))), text_size=size.small)
+    table.cell(color_table, 3, 10, str.tostring(int(color.t(one_hour_liquidity_color))), text_size=size.small)
 
     // 15m TF Liquidity Color
-    table.cell(color_table, 0, 10, "15ᵐ Liq", text_size=size.small)
-    table.cell(color_table, 1, 10, "", text_size=size.small)
-    table.cell(color_table, 2, 10, str.format("R:{0} G:{1} B:{2}", int(color.r(tf_liquidity_color)), int(color.g(tf_liquidity_color)), int(color.b(tf_liquidity_color))), text_size=size.small)
-    table.cell(color_table, 3, 10, str.tostring(int(color.t(tf_liquidity_color))), text_size=size.small)
+    table.cell(color_table, 0, 11, "15ᵐ Liq", text_size=size.small)
+    table.cell(color_table, 1, 11, "", text_size=size.small)
+    table.cell(color_table, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(fifteen_min_liquidity_color)), int(color.g(fifteen_min_liquidity_color)), int(color.b(fifteen_min_liquidity_color))), text_size=size.small)
+    table.cell(color_table, 3, 11, str.tostring(int(color.t(fifteen_min_liquidity_color))), text_size=size.small)
 
     // Zone Midline Color
-    table.cell(color_table, 0, 11, "Zone Mid", text_size=size.small)
-    table.cell(color_table, 1, 11, "591", text_size=size.small)
-    table.cell(color_table, 2, 11, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_midline_color)), int(color.g(zone_midline_color)), int(color.b(zone_midline_color))), text_size=size.small)
-    table.cell(color_table, 3, 11, str.tostring(int(color.t(zone_midline_color))), text_size=size.small)
+    table.cell(color_table, 0, 12, "Zone Mid", text_size=size.small)
+    table.cell(color_table, 1, 12, "591", text_size=size.small)
+    table.cell(color_table, 2, 12, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_midline_color)), int(color.g(zone_midline_color)), int(color.b(zone_midline_color))), text_size=size.small)
+    table.cell(color_table, 3, 12, str.tostring(int(color.t(zone_midline_color))), text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSION TIMES TABLE
@@ -4448,12 +4506,14 @@ if show_status_table and barstate.islast
     // Build sources string
     source_parts = array.new<string>()
 
-    any_tf_pool_enabled = enable_1h_liquidity or enable_15m_liquidity
+    any_tf_pool_enabled = enable_4h_liquidity or enable_1h_liquidity or enable_15m_liquidity
 
     if all_sources_enabled and not any_tf_pool_enabled
         array.push(source_parts, STATUS_DISPLAY_ALL)
     else if all_sources_enabled and any_tf_pool_enabled
         array.push(source_parts, STATUS_DISPLAY_ALL)
+        if enable_4h_liquidity
+            array.push(source_parts, LIQUIDITY_SOURCE_TYPE_4H)
         if enable_1h_liquidity
             array.push(source_parts, LIQUIDITY_SOURCE_TYPE_1H)
         if enable_15m_liquidity
@@ -4483,7 +4543,9 @@ if show_status_table and barstate.islast
         if enable_dtt_sessions
             array.push(source_parts, STATUS_DISPLAY_DTT)
 
-        // TF pools (1H before 15m)
+        // TF pools (4H before 1H before 15m)
+        if enable_4h_liquidity
+            array.push(source_parts, LIQUIDITY_SOURCE_TYPE_4H)
         if enable_1h_liquidity
             array.push(source_parts, LIQUIDITY_SOURCE_TYPE_1H)
         if enable_15m_liquidity
