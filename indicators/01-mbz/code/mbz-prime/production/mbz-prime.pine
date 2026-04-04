@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='mbz prime •'
-SHORT_TITLE="mbz prime •"
+SHORT_TITLE="mbz prime • repair-optimized"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -25,21 +25,16 @@ SOURCE_FAMILY_LIQUIDITY = "liquidity"
 POOL_BOUNDARY_HIGH = "high"
 POOL_BOUNDARY_LOW = "low"
 
-// Variant types
 VARIANT_LIQUIDITY = "Liquidity"
 
 // Formation rules
 FORMATION_RULE_LIQUIDITY_IMMEDIATE = "liquidity_immediate"
 FORMATION_RULE_LIQUIDITY_STANDARD = "liquidity_standard"
-FORMATION_RULE_LIQUIDITY_STANDARD_PLUS = "liquidity_standard_plus"
 FORMATION_RULE_LIQUIDITY_DELAYED = "liquidity_delayed"
-FORMATION_RULE_LIQUIDITY_DELAYED_PLUS = "liquidity_delayed_plus"
 
 FORMATION_PREFIX_LIQUIDITY_IMMEDIATE = "L-IMM "
 FORMATION_PREFIX_LIQUIDITY_STANDARD = "L-STD "
-FORMATION_PREFIX_LIQUIDITY_STANDARD_PLUS = "L-STD• "
 FORMATION_PREFIX_LIQUIDITY_DELAYED = "L-DEL "
-FORMATION_PREFIX_LIQUIDITY_DELAYED_PLUS = "L-DEL• "
 
 // Liquidity source types
 LIQUIDITY_SOURCE_TYPE_DAILY = "daily"
@@ -454,12 +449,9 @@ backtesting_mode = input.bool(false, "Enable Backtesting Mode", group=GROUP_INVA
 show_active_mbzs = not backtesting_mode
 show_invalidated_mbzs = show_invalidated_mbzs_input or backtesting_mode
 
-// Set variant mode (liquidity only)
-mbz_variant_mode = VARIANT_LIQUIDITY
-
 // === 👁️ VISIBILITY FILTERS ===
 mbz_direction_filter = input.string(MBZ_DIRECTION_BOTH, 'Direction', options=[MBZ_DIRECTION_BOTH, MBZ_DIRECTION_BULLISH, MBZ_DIRECTION_BEARISH], group=GROUP_VISIBILITY_FILTERS, inline='dir1', tooltip='Filter MBZ display by direction:\n• Both: Show all MBZs\n• Bullish Only: Show only bullish MBZs\n• Bearish Only: Show only bearish MBZs')
-filter_duplicate_formations = input.bool(true, 'Show Best Formation Only', group=GROUP_VISIBILITY_FILTERS, inline='form1', tooltip='When multiple formations exist at the same liquidity level, show only the highest priority:\n• IMM > STD• > STD > DEL\n\nDisable to show all formations')
+filter_duplicate_formations = input.bool(true, 'Show Best Formation Only', group=GROUP_VISIBILITY_FILTERS, inline='form1', tooltip='When multiple formations exist at the same liquidity level, show only the highest priority:\n• IMM > STD > DEL\n\nDisable to show all formations')
 
 // === 💧 LIQUIDITY: HIGHER TIMEFRAMES ===
 enable_daily_liquidity = input.bool(true, INPUT_LABEL_DAILY, group=GROUP_LIQUIDITY_HTF, inline='liq_htf', tooltip='Detect MBZs from daily high/low breaches')
@@ -559,10 +551,10 @@ actual_enable_lunch = nine_times_mode == NINE_MODE_NINE_ONLY ? false : enable_lu
 enable_nine_variants = nine_times_mode == NINE_MODE_BOTH
 
 // === 🎭 MBZ FORMATION VARIANTS ===
-// Directional (•) suffix: Candle A moved in direction of sweep (bullish for BSL, bearish for SSL)
-enable_liquidity_immediate = input.bool(true, INPUT_LABEL_IMMEDIATE, group=GROUP_LIQUIDITY_RULES, tooltip='Immediate: First touch of pool produces same-bar rejection (current bar sweep)')
-enable_liquidity_standard = input.bool(true, INPUT_LABEL_STANDARD, group=GROUP_LIQUIDITY_RULES, tooltip='Standard: Previous bar swept pool, current bar respects original extreme (no new high/low)\n\nL-STD = Candle A direction does not matter\nL-STD• = Candle A moved into the sweep')
-enable_liquidity_delayed = input.bool(true, INPUT_LABEL_DELAYED, group=GROUP_LIQUIDITY_RULES, tooltip='Delayed: Sweep closes beyond pool, next bar re-enters (delayed confirmation)\n\nL-DEL = Candle A direction does not matter\nL-DEL• = Candle A moved into the sweep')
+// All formations enforce directional A-candle (bullish for BSL, bearish for SSL)
+enable_liquidity_immediate = input.bool(true, INPUT_LABEL_IMMEDIATE, group=GROUP_LIQUIDITY_RULES, tooltip='Immediate: Same-bar sweep and rejection.\n\nBullish: Current bar dips below SSL (low), closes above open.\nBearish: Current bar spikes above BSL (high), closes below open.\n\nCandle must move into the sweep direction.')
+enable_liquidity_standard = input.bool(true, INPUT_LABEL_STANDARD, group=GROUP_LIQUIDITY_RULES, tooltip='Standard: Previous bar sweeps, current bar displaces.\n\nBullish: A is bearish (moves down into SSL), wicks below low, closes above it. B is bullish, opens above level.\nBearish: A is bullish (moves up into BSL), wicks above high, closes below it. B is bearish, opens below level.')
+enable_liquidity_delayed = input.bool(true, INPUT_LABEL_DELAYED, group=GROUP_LIQUIDITY_RULES, tooltip='Delayed: Previous bar closes through level, current bar displaces back.\n\nBullish: A is bearish (moves down into SSL), body closes below low. B is bullish, opens below level.\nBearish: A is bullish (moves up into BSL), body closes above high. B is bearish, opens above level.')
 
 liquidity_detection_enabled = enable_liquidity_immediate or enable_liquidity_standard or enable_liquidity_delayed
 
@@ -1326,7 +1318,7 @@ check_midpoint_confirmation(is_bearish_mbz, close_price, midpoint) =>
 //
 // Reference Wick Extension (+wick):
 // - IMMEDIATE: Never applies (A stays inside by definition)
-// - STANDARD: Always applies when enabled (A wicks beyond, B constrained)
+// - STANDARD: Always applies when enabled (A moves into sweep, wicks beyond, B displaces)
 // - DELAYED: Sometimes applies (depends on actual wick positions)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1344,39 +1336,35 @@ liquidity_immediate_condition(is_bearish_pattern, level_value, a_high, a_low, a_
         is_bullish_candle = b_close > b_open
         previous_inside and current_sweep and is_bullish_candle
 
-// STANDARD: A wicks through level but closes inside, B doesn't exceed A's extreme
-// Returns [is_valid, is_directional] - is_directional means A moved into the sweep (L-STD•)
+// STANDARD: A moves into the sweep (directional), wicks through level but closes inside, B displaces
 liquidity_standard_condition(is_bearish_pattern, level_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low) =>
     if is_bearish_pattern
         wick_only_first_breach = a_open < level_value and a_high > level_value and a_close < level_value
-        no_new_extreme = b_high <= a_high
+        a_moved_into_sweep = a_close > a_open  // A must be bullish (moved up into BSL)
         is_bearish_candle = b_close < b_open
-        is_valid = wick_only_first_breach and b_open < level_value and no_new_extreme and is_bearish_candle
-        is_directional = a_close > a_open  // A is bullish (moved up into BSL)
-        [is_valid, is_directional]
+        is_valid = wick_only_first_breach and b_open < level_value and is_bearish_candle and a_moved_into_sweep
+        [is_valid, true]
     else
         wick_only_first_breach = a_open > level_value and a_low < level_value and a_close > level_value
-        no_new_extreme = b_low >= a_low
+        a_moved_into_sweep = a_close < a_open  // A must be bearish (moved down into SSL)
         is_bullish_candle = b_close > b_open
-        is_valid = wick_only_first_breach and b_open > level_value and no_new_extreme and is_bullish_candle
-        is_directional = a_close < a_open  // A is bearish (moved down into SSL)
-        [is_valid, is_directional]
+        is_valid = wick_only_first_breach and b_open > level_value and is_bullish_candle and a_moved_into_sweep
+        [is_valid, true]
 
-// DELAYED: A body closes through level, B opens on breach side
-// Returns [is_valid, is_directional] - is_directional means A moved into the sweep (L-DEL•)
+// DELAYED: A moves into the sweep (directional), body closes through level, B displaces
 liquidity_delayed_condition(is_bearish_pattern, level_value, a_open, a_close, b_open, b_close) =>
     if is_bearish_pattern
         body_close_breach = a_close > level_value
+        a_moved_into_sweep = a_close > a_open  // A must be bullish (moved up through BSL)
         is_bearish_candle = b_close < b_open
-        is_valid = body_close_breach and b_open > level_value and is_bearish_candle
-        is_directional = a_close > a_open  // A is bullish (moved up through BSL)
-        [is_valid, is_directional]
+        is_valid = body_close_breach and b_open > level_value and is_bearish_candle and a_moved_into_sweep
+        [is_valid, true]
     else
         body_close_breach = a_close < level_value
+        a_moved_into_sweep = a_close < a_open  // A must be bearish (moved down through SSL)
         is_bullish_candle = b_close > b_open
-        is_valid = body_close_breach and b_open < level_value and is_bullish_candle
-        is_directional = a_close < a_open  // A is bearish (moved down through SSL)
-        [is_valid, is_directional]
+        is_valid = body_close_breach and b_open < level_value and is_bullish_candle and a_moved_into_sweep
+        [is_valid, true]
 
 detect_liquidity_pool_patterns(
      pool_high_ready,
@@ -1464,23 +1452,23 @@ detect_liquidity_pool_patterns(
                 // high_mitigation_bar_new := bar_index
 
         if enable_standard_rule and breach_is_previous_high
-            [std_high_valid, std_high_directional] = liquidity_standard_condition(true, pool_high_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low)
+            [std_high_valid, _std_high_dir] = liquidity_standard_condition(true, pool_high_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low)
             if std_high_valid
                 [midpoint_passed_high_standard, is_exact_midpoint_high_standard] = check_midpoint_confirmation(true, b_close, a_midpoint)
                 if midpoint_passed_high_standard
                     array.push(events_is_high, true)
-                    array.push(events_formation_rule, std_high_directional ? FORMATION_RULE_LIQUIDITY_STANDARD_PLUS : FORMATION_RULE_LIQUIDITY_STANDARD)
+                    array.push(events_formation_rule, FORMATION_RULE_LIQUIDITY_STANDARD)
                     array.push(events_is_exact_midpoint, is_exact_midpoint_high_standard)
                     array.push(events_source_price, pool_high_value)
                     array.push(events_source_bar_index, source_bar_high)
 
         if enable_delayed_rule and breach_is_previous_high
-            [del_high_valid, del_high_directional] = liquidity_delayed_condition(true, pool_high_value, a_open, a_close, b_open, b_close)
+            [del_high_valid, _del_high_dir] = liquidity_delayed_condition(true, pool_high_value, a_open, a_close, b_open, b_close)
             if del_high_valid
                 [midpoint_passed_high_delayed, is_exact_midpoint_high_delayed] = check_midpoint_confirmation(true, b_close, a_midpoint)
                 if midpoint_passed_high_delayed
                     array.push(events_is_high, true)
-                    array.push(events_formation_rule, del_high_directional ? FORMATION_RULE_LIQUIDITY_DELAYED_PLUS : FORMATION_RULE_LIQUIDITY_DELAYED)
+                    array.push(events_formation_rule, FORMATION_RULE_LIQUIDITY_DELAYED)
                     array.push(events_is_exact_midpoint, is_exact_midpoint_high_delayed)
                     array.push(events_source_price, pool_high_value)
                     array.push(events_source_bar_index, source_bar_high)
@@ -1522,23 +1510,23 @@ detect_liquidity_pool_patterns(
                 // low_mitigation_bar_new := bar_index
 
         if enable_standard_rule and breach_is_previous_low
-            [std_low_valid, std_low_directional] = liquidity_standard_condition(false, pool_low_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low)
+            [std_low_valid, _std_low_dir] = liquidity_standard_condition(false, pool_low_value, a_open, a_close, a_high, a_low, b_open, b_close, b_high, b_low)
             if std_low_valid
                 [midpoint_passed_low_standard, is_exact_midpoint_low_standard] = check_midpoint_confirmation(false, b_close, a_midpoint)
                 if midpoint_passed_low_standard
                     array.push(events_is_high, false)
-                    array.push(events_formation_rule, std_low_directional ? FORMATION_RULE_LIQUIDITY_STANDARD_PLUS : FORMATION_RULE_LIQUIDITY_STANDARD)
+                    array.push(events_formation_rule, FORMATION_RULE_LIQUIDITY_STANDARD)
                     array.push(events_is_exact_midpoint, is_exact_midpoint_low_standard)
                     array.push(events_source_price, pool_low_value)
                     array.push(events_source_bar_index, source_bar_low)
 
         if enable_delayed_rule and breach_is_previous_low
-            [del_low_valid, del_low_directional] = liquidity_delayed_condition(false, pool_low_value, a_open, a_close, b_open, b_close)
+            [del_low_valid, _del_low_dir] = liquidity_delayed_condition(false, pool_low_value, a_open, a_close, b_open, b_close)
             if del_low_valid
                 [midpoint_passed_low_delayed, is_exact_midpoint_low_delayed] = check_midpoint_confirmation(false, b_close, a_midpoint)
                 if midpoint_passed_low_delayed
                     array.push(events_is_high, false)
-                    array.push(events_formation_rule, del_low_directional ? FORMATION_RULE_LIQUIDITY_DELAYED_PLUS : FORMATION_RULE_LIQUIDITY_DELAYED)
+                    array.push(events_formation_rule, FORMATION_RULE_LIQUIDITY_DELAYED)
                     array.push(events_is_exact_midpoint, is_exact_midpoint_low_delayed)
                     array.push(events_source_price, pool_low_value)
                     array.push(events_source_bar_index, source_bar_low)
@@ -1841,29 +1829,29 @@ process_liquidity_pool(
                 array.push(detected_events_source_price, array.get(current_events_source_price, event_index))
                 array.push(detected_events_source_bar_index, array.get(current_events_source_bar_index, event_index))
 
-    // Apply priority system: Delayed > Standard > Immediate
+    // Apply priority system: Immediate > Standard > Delayed
     event_count = array.size(detected_events_is_high)
     if event_count > 0
-        has_delayed = false
-        has_standard = false
         has_immediate = false
+        has_standard = false
+        has_delayed = false
 
         for rule_check_index = 0 to event_count - 1
             event_rule = array.get(detected_events_rules, rule_check_index)
-            if event_rule == FORMATION_RULE_LIQUIDITY_DELAYED
-                has_delayed := true
+            if event_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
+                has_immediate := true
             else if event_rule == FORMATION_RULE_LIQUIDITY_STANDARD
                 has_standard := true
-            else if event_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
-                has_immediate := true
+            else if event_rule == FORMATION_RULE_LIQUIDITY_DELAYED
+                has_delayed := true
 
         unified_rule = ""
-        if enable_delayed and has_delayed
-            unified_rule := FORMATION_RULE_LIQUIDITY_DELAYED
+        if enable_immediate and has_immediate
+            unified_rule := FORMATION_RULE_LIQUIDITY_IMMEDIATE
         else if enable_standard and has_standard
             unified_rule := FORMATION_RULE_LIQUIDITY_STANDARD
-        else if enable_immediate and has_immediate
-            unified_rule := FORMATION_RULE_LIQUIDITY_IMMEDIATE
+        else if enable_delayed and has_delayed
+            unified_rule := FORMATION_RULE_LIQUIDITY_DELAYED
 
         if unified_rule != ""
             for rule_override_index = 0 to event_count - 1
@@ -2019,9 +2007,9 @@ should_extend_wick(mbz_record) =>
         false
     else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
         false  // Never applies (A stays inside by definition)
-    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD or mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
+    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
         true   // Always applies (A's wick exceeds B's by constraint)
-    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED or mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
+    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
         // Check if ref wick extends beyond formation wick
         mbz_record.is_bullish ? mbz_record.ref_candle_low < mbz_record.low_price : mbz_record.ref_candle_high > mbz_record.high_price
     else
@@ -2566,15 +2554,11 @@ build_source_breakdown_extension_from_stats(stats, mbz_group) =>
 build_source_breakdown_extension(mbz_group) =>
     build_source_breakdown_extension_from_stats(get_source_type_stats(mbz_group), mbz_group)
 
-// Get formation priority as number (higher = better): IMM=5, STD•=4, STD=3, DEL•=2, DEL=1
+// Get formation priority as number (higher = better): IMM=3, STD=2, DEL=1
 get_formation_priority(formation_rule) =>
     if formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
-        5
-    else if formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
-        4
-    else if formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
         3
-    else if formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
+    else if formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
         2
     else if formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
         1
@@ -2583,36 +2567,25 @@ get_formation_priority(formation_rule) =>
 
 // Get priority formation rule for consolidated group (liquidity takes priority over imbalance)
 get_consolidated_formation_rule(mbz_group) =>
-    // Priority order: Immediate > Standard• > Standard > Delayed• > Delayed
+    // Priority order: Immediate > Standard > Delayed
     has_liq_immediate = false
-    has_liq_standard_plus = false
     has_liq_standard = false
-    has_liq_delayed_plus = false
     has_liq_delayed = false
 
     for i = 0 to array.size(mbz_group) - 1
         mbz = array.get(mbz_group, i)
         if mbz.formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
             has_liq_immediate := true
-            break  // Highest priority found
-        else if mbz.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
-            has_liq_standard_plus := true
+            break
         else if mbz.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
             has_liq_standard := true
-        else if mbz.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
-            has_liq_delayed_plus := true
         else if mbz.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
             has_liq_delayed := true
 
-    // Return highest priority rule found
     if has_liq_immediate
         FORMATION_RULE_LIQUIDITY_IMMEDIATE
-    else if has_liq_standard_plus
-        FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
     else if has_liq_standard
         FORMATION_RULE_LIQUIDITY_STANDARD
-    else if has_liq_delayed_plus
-        FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
     else if has_liq_delayed
         FORMATION_RULE_LIQUIDITY_DELAYED
     else
@@ -2629,13 +2602,8 @@ create_consolidated_extension_label(consolidated_mbz) =>
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_IMMEDIATE
     else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_STANDARD
-    else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
-        formation_prefix := FORMATION_PREFIX_LIQUIDITY_STANDARD_PLUS
     else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_DELAYED
-    else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
-        formation_prefix := FORMATION_PREFIX_LIQUIDITY_DELAYED_PLUS
-    // Imbalance standard has no prefix (status quo)
 
     direction = formation_prefix + MBZ_BASE_TEXT + (consolidated_mbz.is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX)
     extension_result = ""
@@ -2708,12 +2676,8 @@ build_alert_message_from_consolidated(consolidated_mbz) =>
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_IMMEDIATE
     else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_STANDARD
-    else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD_PLUS
-        formation_prefix := FORMATION_PREFIX_LIQUIDITY_STANDARD_PLUS
     else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
         formation_prefix := FORMATION_PREFIX_LIQUIDITY_DELAYED
-    else if priority_formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED_PLUS
-        formation_prefix := FORMATION_PREFIX_LIQUIDITY_DELAYED_PLUS
 
     direction = formation_prefix + MBZ_BASE_TEXT + (consolidated_mbz.is_bullish ? MBZ_BULLISH_SUFFIX : MBZ_BEARISH_SUFFIX)
 
