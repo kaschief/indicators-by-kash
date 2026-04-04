@@ -67,11 +67,14 @@ Branch: `prime-repair` (clean baseline before changes)
 
 **Test**: On 5m/15m chart, 4H levels appear and MBZs form. On 4H chart, hidden. No orphaned lines.
 
-### Phase 6B: 1H Pool
+### Phase 6B: 1H Pool ✅
 - Same pattern as 6A for 1H (`timeframe.change("60")`)
 - Visible on sub-1H charts only
+- Superscript label: 1ʰ
+- Scan caps bumped to 500 for both 15m and 1H
+- MBZ quota: default 60, max 100
 
-**Test**: 1H levels alongside 4H. 4H pool still works. No interference.
+**Test**: 1H levels alongside 15m. No interference. Capacity handles TF pools.
 
 ### Phase 6C: 15m Pool ✅
 - Same pattern for 15m (`timeframe.change("15")`)
