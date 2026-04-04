@@ -109,7 +109,30 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 10: DTT Removal (deferred)
+## Phase 10: Extend-to-Wick Update + 50% Midline ✅
+
+- Zone boundary uses the most extreme wick between ref candle and MBZ candle (matches Core)
+- Two-step architecture: compute base zone, then only expand via min/max
+- Removed `should_extend_wick()`, replaced with Core's approach in `get_mbz_subtype_zone()`
+- 50% midline: dotted line at zone midpoint with adjustable color, width, and style
+- Midline hidden on invalidated zones
+
+**Test**: Zone boundaries extend to furthest wick. Midline visible at 50%. Style customisable.
+
+---
+
+## Phase 11: Hide Nested MBZs
+
+- Option to hide MBZ zones that are fully contained within an existing non-invalidated MBZ zone
+- If zone A is 90-100 and zone B is 92-98, zone B is nested and can be hidden
+- New input toggle (similar to existing "show only latest/first touch" filters)
+- Hidden nested MBZs also hide their source origin lines
+
+**Test**: Nested MBZs hidden when toggle on. Non-nested MBZs unaffected. Toggle off shows all.
+
+---
+
+## Phase 12: DTT Removal (deferred)
 
 - Remove all ~208 DTT references (constants, types, inputs, pools, tracking, detection, rendering, labels, status table)
 - Update `SourceTypeStats` constructor arg count
@@ -121,8 +144,8 @@ Branch: `prime-repair` (clean baseline before changes)
 ## Dependency Graph
 
 ```
-Phase 1 → 2 → 3 → 4 → 5 → 6A → 6B → 6C → 7 → 8 → 9
-                                                       └→ 10 (deferred)
+Phase 1 → 2 → 3 → 4 → 5 → 6A → 6B → 6C → 7 → 8 → 9 → 10 → 11
+                                                              └→ 12 (deferred)
 ```
 
 Each phase is independently committable and testable on TradingView before proceeding.

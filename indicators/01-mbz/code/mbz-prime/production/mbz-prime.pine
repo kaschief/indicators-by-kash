@@ -577,7 +577,7 @@ source_origin_label_text_color = input.color(DEFAULT_SOURCE_ORIGIN_LABEL_TEXT_CO
 // === ✨ MBZ EXTENSION ===
 extended_box_bullish_color = input.color(DEFAULT_EXTENDED_BOX_BULLISH_COLOR, INPUT_LABEL_MBZ_PLUS, group=GROUP_MBZ_EXTENSION, inline='ext_colors', tooltip='Color for MBZ⁺ highlights and extensions')
 extended_box_bearish_color = input.color(DEFAULT_EXTENDED_BOX_BEARISH_COLOR, INPUT_LABEL_MBZ_MINUS, group=GROUP_MBZ_EXTENSION, inline='ext_colors', tooltip='Color for MBZ⁻ highlights and extensions')
-extend_to_reference_wick = input.bool(false, 'Extend to Reference Wick', group=GROUP_MBZ_EXTENSION, tooltip='Extend zone boundary to reference candle wick:\n• Bullish: Lower boundary extends to reference candle low\n• Bearish: Upper boundary extends to reference candle high')
+extend_to_reference_wick = input.bool(false, 'Extend to Wick', group=GROUP_MBZ_EXTENSION, tooltip='Extend zone boundary to the furthest wick (MBZ candle or reference candle):\n• Bullish: Lower boundary extends to the lowest wick\n• Bearish: Upper boundary extends to the highest wick')
 extended_box_length = input.int(DEFAULT_EXTENSION_BARS, INPUT_LABEL_NO_OF_BARS, minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Number of bars zones extend from formation (minimum width)')
 extension_fill_opacity = input.int(DEFAULT_EXTENSION_FILL_OPACITY, 'Fill Opacity', minval=0, maxval=100, group=GROUP_MBZ_EXTENSION, inline='ext_fixed', tooltip='Base opacity for extension box fill (0=solid, 100=invisible)')
 extended_box_text_color = input.color(DEFAULT_EXTENDED_BOX_TEXT_COLOR, INPUT_LABEL_LABEL, group=GROUP_MBZ_EXTENSION, inline='ext_props', tooltip='Text color for extension boxes')
@@ -585,6 +585,15 @@ extension_label_horizontal_alignment = input.string(LABEL_ALIGNMENT_CENTER, INPU
 extension_label_vertical_alignment = input.string(LABEL_VERTICAL_CENTER, 'Vertical', options=[LABEL_VERTICAL_TOP, LABEL_VERTICAL_CENTER, LABEL_VERTICAL_BOTTOM], group=GROUP_MBZ_EXTENSION, inline='ext_align', tooltip='Vertical text alignment')
 extension_label_horizontal_padding = input.int(0, INPUT_LABEL_HORIZONTAL_PADDING, minval=0, maxval=MAX_PADDING_HORIZONTAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Horizontal padding (0-10 spaces)')
 extension_label_vertical_padding = input.int(0, 'Vertical Padding', minval=0, maxval=MAX_PADDING_VERTICAL, group=GROUP_MBZ_EXTENSION, inline='ext_padding', tooltip='Vertical padding (0-5 newlines)')
+show_zone_midline = input.bool(true, "Midline", group=GROUP_MBZ_EXTENSION, inline="zone_mid")
+zone_midline_color = input.color(color.new(color.rgb(156, 156, 156), 50), "", group=GROUP_MBZ_EXTENSION, inline="zone_mid")
+zone_midline_style_in = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_MBZ_EXTENSION, inline="zone_mid")
+zone_midline_width = input.int(1, "", minval=1, maxval=3, group=GROUP_MBZ_EXTENSION, inline="zone_mid")
+
+zone_midline_style = switch zone_midline_style_in
+    "⎯⎯⎯" => line.style_solid
+    "----" => line.style_dashed
+    "····" => line.style_dotted
 
 // === 📊 COLOR REFERENCE TABLE ===
 show_color_table = input.bool(false, "Show Color Reference Table", group="📊 Color Reference", tooltip='Display a table showing all color RGB values and transparency used in the indicator')
@@ -755,6 +764,7 @@ var array<box> mbz_body_highlights = array.new_box()          // Body highlighti
 var array<box> mbz_wick_highlights = array.new_box()          // Wick highlighting
 var array<box> mbz_extended_boxes = array.new_box()           // Extension boxes
 var array<line> mbz_lines = array.new_line()                 // Breach level lines
+var array<line> mbz_midlines = array.new<line>()              // Zone midlines
 var array<label> mbz_extension_labels = array.new<label>()    // External extension labels (when outside box)
 var array<int> displayed_mbz_indices = array.new<int>()       // Display tracking
 // Cache of consolidated groups from last visual render (for stars reuse)
@@ -2005,59 +2015,45 @@ detect_mbz_subtype(mbz_open, mbz_close, mbz_high, mbz_low, source_type) =>
 // MBZ ZONE CALCULATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Check if +wick extension should apply based on formation rule
-should_extend_wick(mbz_record) =>
-    if not extend_to_reference_wick
-        false
-    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_IMMEDIATE
-        false  // Never applies (A stays inside by definition)
-    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_STANDARD
-        true   // Always applies (A's wick exceeds B's by constraint)
-    else if mbz_record.formation_rule == FORMATION_RULE_LIQUIDITY_DELAYED
-        // Check if ref wick extends beyond formation wick
-        mbz_record.is_bullish ? mbz_record.ref_candle_low < mbz_record.low_price : mbz_record.ref_candle_high > mbz_record.high_price
-    else
-        false
-
 get_mbz_subtype_zone(mbz_record) =>
-    should_extend = should_extend_wick(mbz_record)
-
+    // Step 1: Compute base zone boundaries per subtype
+    float base_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
+    float base_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
     if str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
         if mbz_record.is_bullish
-            if should_extend
-                [mbz_record.mbz_close, mbz_record.ref_candle_low]
-            else
-                [mbz_record.mbz_close, mbz_record.low_price]
+            base_top := mbz_record.mbz_close
+            base_bot := mbz_record.low_price
         else
-            if should_extend
-                [mbz_record.ref_candle_high, mbz_record.mbz_close]
-            else
-                [mbz_record.high_price, mbz_record.mbz_close]
+            base_top := mbz_record.high_price
+            base_bot := mbz_record.mbz_close
     else if str.contains(mbz_record.mbz_subtype, SUBTYPE_REFLECTION)
         if mbz_record.is_bullish
             wick_range = math.abs(mbz_record.high_price - mbz_record.mbz_open)
-            zone_bottom = mbz_record.mbz_close - wick_range
-            if should_extend
-                [mbz_record.mbz_close, mbz_record.ref_candle_low]
-            else
-                [mbz_record.mbz_close, zone_bottom]
+            base_top := mbz_record.mbz_close
+            base_bot := mbz_record.mbz_close - wick_range
         else
             wick_range = math.abs(mbz_record.low_price - mbz_record.mbz_open)
-            zone_top = mbz_record.mbz_close + wick_range
-            if should_extend
-                [mbz_record.ref_candle_high, mbz_record.mbz_close]
-            else
-                [zone_top, mbz_record.mbz_close]
-    else
-        body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
-        body_bottom = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
-        if should_extend
-            if mbz_record.is_bullish
-                [body_top, mbz_record.ref_candle_low]
-            else
-                [mbz_record.ref_candle_high, body_bottom]
+            base_top := mbz_record.mbz_close + wick_range
+            base_bot := mbz_record.mbz_close
+
+    // Step 2: Extend to furthest wick (own or reference) if enabled — only expands, never shrinks
+    float zone_top = base_top
+    float zone_bot = base_bot
+    if extend_to_reference_wick
+        if mbz_record.is_bullish
+            float furthest_low = mbz_record.low_price
+            if mbz_record.ref_candle_low < furthest_low
+                furthest_low := mbz_record.ref_candle_low
+            if furthest_low < zone_bot
+                zone_bot := furthest_low
         else
-            [body_top, body_bottom]
+            float furthest_high = mbz_record.high_price
+            if mbz_record.ref_candle_high > furthest_high
+                furthest_high := mbz_record.ref_candle_high
+            if furthest_high > zone_top
+                zone_top := furthest_high
+
+    [zone_top, zone_bot]
 
 get_mbz_invalidation_boundaries(mbz_record) =>
     is_inclusion = str.contains(mbz_record.mbz_subtype, SUBTYPE_INCLUSION)
@@ -2065,7 +2061,11 @@ get_mbz_invalidation_boundaries(mbz_record) =>
     is_standard = not is_inclusion and not is_reflection
 
     if is_standard and invalidation_boundary == INVALIDATION_BOUNDARY_EXTREMES
-        [mbz_record.high_price, mbz_record.low_price]
+        if extend_to_reference_wick
+            // When wick extension is active, use zone boundaries (which include wick extension)
+            get_mbz_subtype_zone(mbz_record)
+        else
+            [mbz_record.high_price, mbz_record.low_price]
     else
         get_mbz_subtype_zone(mbz_record)
 
@@ -2141,7 +2141,10 @@ should_mbz_be_invalidated(mbz_record, confirmed_close_price) =>
 cache_mbz_data(mbz_record) =>
     [cached_zone_top, cached_zone_bottom] = get_mbz_subtype_zone(mbz_record)
 
-    was_extended = should_extend_wick(mbz_record)
+    // Zone is extended if boundaries differ from base body
+    body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
+    body_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
+    was_extended = cached_zone_top != body_top or cached_zone_bottom != body_bot
 
     MBZRecord.new(
          mbz_record.bar_index,
@@ -2753,6 +2756,10 @@ manage_consolidated_mbz_display() =>
         box.delete(elem)
     array.clear(mbz_extended_boxes)
 
+    for elem in mbz_midlines
+        line.delete(elem)
+    array.clear(mbz_midlines)
+
     for elem in mbz_lines
         line.delete(elem)
     array.clear(mbz_lines)
@@ -3028,6 +3035,20 @@ manage_consolidated_mbz_display() =>
                      text_size=size.tiny
                  )
                 array.push(mbz_extended_boxes, consolidated_extension_box)
+
+                if show_zone_midline and not current_consolidated_mbz.is_consolidated_invalidated
+                    float mid_price = (current_consolidated_mbz.consolidated_zone_top + current_consolidated_mbz.consolidated_zone_bottom) / 2
+                    midline = line.new(
+                         current_consolidated_mbz.formation_time,
+                         mid_price,
+                         extension_right_time,
+                         mid_price,
+                         xloc=xloc.bar_time,
+                         color=zone_midline_color,
+                         width=zone_midline_width,
+                         style=zone_midline_style
+                     )
+                    array.push(mbz_midlines, midline)
 
             if show_source_origins and should_highlight_consolidated_zone
                 // Process each MBZ in the group for source origins
@@ -3984,6 +4005,9 @@ while array.size(mbz_wick_highlights) > max_wick_highlights_effective
 while array.size(mbz_extended_boxes) > max_extended_boxes_effective
     box.delete(array.shift(mbz_extended_boxes))
 
+while array.size(mbz_midlines) > max_extended_boxes_effective
+    line.delete(array.shift(mbz_midlines))
+
 // PERFORMANCE OPTIMIZED: Only check active (non-invalidated) MBZs
 // This avoids wasting checks on already-invalidated records every bar
 // CRITICAL OPTIMIZATION: Always sync invalidations (required for display), but skip confirmation status syncs during history
@@ -4074,7 +4098,7 @@ if barstate.isconfirmed
 // ═══════════════════════════════════════════════════════════════════════════════
 
 if show_color_table and barstate.islast
-    var table color_table = table.new(position.top_right, 4, 10, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 4, 11, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Color", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -4129,6 +4153,12 @@ if show_color_table and barstate.islast
     table.cell(color_table, 1, 8, "539", text_size=size.small)
     table.cell(color_table, 2, 8, str.format("R:{0} G:{1} B:{2}", int(color.r(dtt_liquidity_color)), int(color.g(dtt_liquidity_color)), int(color.b(dtt_liquidity_color))), text_size=size.small)
     table.cell(color_table, 3, 8, str.tostring(int(color.t(dtt_liquidity_color))), text_size=size.small)
+
+    // Zone Midline Color
+    table.cell(color_table, 0, 9, "Zone Mid", text_size=size.small)
+    table.cell(color_table, 1, 9, "591", text_size=size.small)
+    table.cell(color_table, 2, 9, str.format("R:{0} G:{1} B:{2}", int(color.r(zone_midline_color)), int(color.g(zone_midline_color)), int(color.b(zone_midline_color))), text_size=size.small)
+    table.cell(color_table, 3, 9, str.tostring(int(color.t(zone_midline_color))), text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSION TIMES TABLE
