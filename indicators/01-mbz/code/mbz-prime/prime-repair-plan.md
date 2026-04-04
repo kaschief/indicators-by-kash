@@ -98,8 +98,11 @@ Branch: `prime-repair` (clean baseline before changes)
 - Line color/width from highest-priority pool
 - Gate source origins with `should_highlight_consolidated_zone` (orphan fix)
 - Fixed missing nypm/ons/premarket cleanup bug
+- Session close time matching: store unique session identity at detection time
+- Dedup key = time + price (different sessions at same price no longer collapsed)
+- Eliminates orphaned lines and missing lines from price collisions
 
-**Test**: Shared prices show one line. Labels readable with count format. No orphaned lines.
+**Test**: Shared prices show one line. Labels readable with count format. No orphaned lines. No missing lines.
 
 ---
 

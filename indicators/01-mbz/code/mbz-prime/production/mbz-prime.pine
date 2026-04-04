@@ -658,6 +658,8 @@ type MBZRecord
     float ref_candle_high
     float ref_candle_low
     bool is_extended
+    int source_session_close_time  // Unique session identifier for source origin line rendering (immune to price collisions)
+    int source_level_time          // Time coordinate of the source level (high_time or low_time) — avoids pool lookup at render time
     int all_records_index    // PERF: Direct index in all_mbz_records for O(1) sync
 
 type LiquidityPoolCollection
@@ -1694,6 +1696,8 @@ process_liquidity_pool(
     detected_events_is_exact = array.new_bool()
     detected_events_source_price = array.new_float()
     detected_events_source_bar_index = array.new_int()
+    detected_events_session_close_time = array.new_int()
+    detected_events_level_time = array.new_int()
 
     total_sessions = liquidity_pool_session_count(pool)
     effective_scan_limit = math.min(total_sessions, timeframe_scan_cap)
@@ -1772,12 +1776,16 @@ process_liquidity_pool(
 
             session_event_count = array.size(session_events_is_high)
             if session_event_count > 0
+                session_close_time_value = array.get(pool.session_close_times, session_index)
                 for event_index = 0 to session_event_count - 1
-                    array.push(detected_events_is_high, array.get(session_events_is_high, event_index))
+                    event_is_high_val = array.get(session_events_is_high, event_index)
+                    array.push(detected_events_is_high, event_is_high_val)
                     array.push(detected_events_rules, array.get(session_events_rules, event_index))
                     array.push(detected_events_is_exact, array.get(session_events_is_exact, event_index))
                     array.push(detected_events_source_price, array.get(session_events_source_price, event_index))
                     array.push(detected_events_source_bar_index, array.get(session_events_source_bar_index, event_index))
+                    array.push(detected_events_session_close_time, session_close_time_value)
+                    array.push(detected_events_level_time, event_is_high_val ? pool_high_time : pool_low_time)
 
     // Process current (active) session
     current_high_value = pool.current_high
@@ -1837,11 +1845,14 @@ process_liquidity_pool(
         current_event_count = array.size(current_events_is_high)
         if current_event_count > 0
             for event_index = 0 to current_event_count - 1
-                array.push(detected_events_is_high, array.get(current_events_is_high, event_index))
+                current_event_is_high_val = array.get(current_events_is_high, event_index)
+                array.push(detected_events_is_high, current_event_is_high_val)
                 array.push(detected_events_rules, array.get(current_events_rules, event_index))
                 array.push(detected_events_is_exact, array.get(current_events_is_exact, event_index))
                 array.push(detected_events_source_price, array.get(current_events_source_price, event_index))
                 array.push(detected_events_source_bar_index, array.get(current_events_source_bar_index, event_index))
+                array.push(detected_events_session_close_time, 0)  // Sentinel: current session not yet finalized
+                array.push(detected_events_level_time, current_event_is_high_val ? pool.current_high_time : pool.current_low_time)
 
     // Apply priority system: Immediate > Standard > Delayed
     event_count = array.size(detected_events_is_high)
@@ -1871,7 +1882,7 @@ process_liquidity_pool(
             for rule_override_index = 0 to event_count - 1
                 array.set(detected_events_rules, rule_override_index, unified_rule)
 
-    [detected_events_is_high, detected_events_rules, detected_events_is_exact, detected_events_source_price, detected_events_source_bar_index]
+    [detected_events_is_high, detected_events_rules, detected_events_is_exact, detected_events_source_price, detected_events_source_bar_index, detected_events_session_close_time, detected_events_level_time]
 
 should_skip_sunday_liquidity(time_value) =>
     timeframe.in_seconds() < 86400 and not is_247_asset and not include_sunday_evening_liquidity and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
@@ -2175,7 +2186,9 @@ cache_mbz_data(mbz_record) =>
          mbz_record.source_origin_token,
          mbz_record.ref_candle_high,
          mbz_record.ref_candle_low,
-         was_extended
+         was_extended,
+         mbz_record.source_session_close_time,
+         mbz_record.source_level_time
      )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
@@ -2381,7 +2394,7 @@ register_new_mbz_record(mbz_record) =>
     cached_mbz
 
 // Helper to create and register a liquidity MBZ record (boundary derived)
-create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high, formation_low, formation_close, pool_type, pool_boundary, formation_rule, source_price, source_bar_index, is_bullish, source_origin_token, is_exact_midpoint, pool, is_high_boundary) =>
+create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high, formation_low, formation_close, pool_type, pool_boundary, formation_rule, source_price, source_bar_index, is_bullish, source_origin_token, is_exact_midpoint, pool, is_high_boundary, session_close_time_val, level_time_val) =>
     liquidity_source_id = array.get(liquidity_source_id_counter, 0)
     array.set(liquidity_source_id_counter, 0, liquidity_source_id + 1)
 
@@ -2417,7 +2430,9 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
          source_origin_token,
          high[1],
          low[1],
-         false
+         false,
+         session_close_time_val,
+         level_time_val
      )
 
     base_mbz_record.is_exactly_50_percent := is_exact_midpoint
@@ -2440,7 +2455,7 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
     register_new_mbz_record(base_mbz_record)
 
 // Helper to process liquidity events and create MBZ records (consolidates 15 duplicate loops)
-process_liquidity_events(array<bool> events_is_high, array<string> events_rules, array<bool> events_is_exact, array<float> events_source_price, array<int> events_source_bar_index, string source_type, LiquidityPoolCollection pool, int curr_bar_index, float b_open, float b_high, float b_low, float b_close) =>
+process_liquidity_events(array<bool> events_is_high, array<string> events_rules, array<bool> events_is_exact, array<float> events_source_price, array<int> events_source_bar_index, array<int> events_session_close_time, array<int> events_level_time, string source_type, LiquidityPoolCollection pool, int curr_bar_index, float b_open, float b_high, float b_low, float b_close) =>
     event_count = array.size(events_is_high)
     if event_count > 0
         for event_index = 0 to event_count - 1
@@ -2449,9 +2464,11 @@ process_liquidity_events(array<bool> events_is_high, array<string> events_rules,
             event_is_exact = array.get(events_is_exact, event_index)
             event_source_price = array.get(events_source_price, event_index)
             event_source_bar_index = array.get(events_source_bar_index, event_index)
+            event_session_close_time = array.get(events_session_close_time, event_index)
+            event_level_time = array.get(events_level_time, event_index)
             pool_boundary = event_is_high ? POOL_BOUNDARY_HIGH : POOL_BOUNDARY_LOW
             is_bullish_event = not event_is_high
-            create_liquidity_mbz_record(curr_bar_index, b_open, b_high, b_low, b_close, source_type, pool_boundary, event_rule, event_source_price, event_source_bar_index, is_bullish_event, source_type, event_is_exact, pool, event_is_high)
+            create_liquidity_mbz_record(curr_bar_index, b_open, b_high, b_low, b_close, source_type, pool_boundary, event_rule, event_source_price, event_source_bar_index, is_bullish_event, source_type, event_is_exact, pool, event_is_high, event_session_close_time, event_level_time)
     event_count > 0
 
 // Build source breakdown with counts - USED for candle label logic
@@ -3085,6 +3102,9 @@ manage_consolidated_mbz_display() =>
                     // Standard liquidity sources (Daily, Weekly, Monthly, Intraday)
                     source_token = current_mbz_in_group.source_origin_token
                     source_price_key = current_mbz_in_group.source_high
+                    mbz_source_level_time = current_mbz_in_group.source_level_time
+                    mbz_source_sct = current_mbz_in_group.source_session_close_time
+                    mbz_pool_boundary = current_mbz_in_group.pool_boundary
 
                     if na(source_price_key) or source_token == ""
                         continue
@@ -3093,17 +3113,22 @@ manage_consolidated_mbz_display() =>
                     if not is_source_origin_enabled(source_token)
                         continue
 
-                    price_str = str.tostring(source_price_key)
+                    // Skip if source_level_time was not captured (legacy records)
+                    if na(mbz_source_level_time) or mbz_source_level_time == 0
+                        continue
 
-                    if map.contains(dedup_line_index, price_str)
+                    // Dedup key: level_time + price uniquely identifies a source level across pools
+                    dedup_key = str.tostring(mbz_source_level_time) + "_" + str.tostring(source_price_key)
+
+                    if map.contains(dedup_line_index, dedup_key)
                         // MERGE: add token to existing label (cross-pool dedup)
                         new_token_display = source_token
-                        existing_tokens = map.get(dedup_tokens, price_str)
+                        existing_tokens = map.get(dedup_tokens, dedup_key)
                         if not str.contains(existing_tokens, "|" + new_token_display + "|")
                             updated_tokens = existing_tokens + new_token_display + "|"
-                            map.put(dedup_tokens, price_str, updated_tokens)
-                            new_count = map.get(dedup_count, price_str) + 1
-                            map.put(dedup_count, price_str, new_count)
+                            map.put(dedup_tokens, dedup_key, updated_tokens)
+                            new_count = map.get(dedup_count, dedup_key) + 1
+                            map.put(dedup_count, dedup_key, new_count)
                             // Rebuild label in priority order
                             parts = array.new<string>()
                             if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_MONTHLY + "|")
@@ -3135,26 +3160,26 @@ manage_consolidated_mbz_display() =>
                             if str.contains(updated_tokens, "|" + LIQUIDITY_SOURCE_TYPE_PREMARKET + "|")
                                 array.push(parts, LIQUIDITY_SOURCE_TYPE_PREMARKET)
                             label_text = new_count > 1 ? str.tostring(new_count) + ": " + array.join(parts, ", ") : array.join(parts, ", ")
-                            existing_label_idx = map.get(dedup_label_index, price_str)
+                            existing_label_idx = map.get(dedup_label_index, dedup_key)
                             existing_label = array.get(source_origin_labels, existing_label_idx)
                             label.set_text(existing_label, label_text)
 
                         // Upgrade color/width if higher priority source
                         new_priority = get_source_priority(source_token)
-                        if new_priority > map.get(dedup_priority, price_str)
-                            existing_line_idx = map.get(dedup_line_index, price_str)
+                        if new_priority > map.get(dedup_priority, dedup_key)
+                            existing_line_idx = map.get(dedup_line_index, dedup_key)
                             existing_line = array.get(source_origin_lines, existing_line_idx)
                             [new_color, new_width] = get_source_color_width(source_token)
                             line.set_color(existing_line, new_color)
                             line.set_width(existing_line, new_width)
-                            map.put(dedup_priority, price_str, new_priority)
+                            map.put(dedup_priority, dedup_key, new_priority)
                         continue
 
                     // Capacity check against unified array
                     if array.size(source_origin_lines) >= max_source_displays_effective
                         continue
 
-                    // Resolve pool for this source token (inline to avoid UDT return issues)
+                    // Resolve pool to get breach end time via session_close_time matching
                     [line_color, line_width] = get_source_color_width(source_token)
                     LiquidityPoolCollection liquidity_pool = na
                     if source_token == LIQUIDITY_SOURCE_TYPE_DAILY
@@ -3189,59 +3214,41 @@ manage_consolidated_mbz_display() =>
                     if na(liquidity_pool)
                         continue
 
-                    session_count = liquidity_pool_session_count(liquidity_pool)
-                    level_found = false
+                    // Line start time is stored directly — no pool lookup needed
+                    level_time = mbz_source_level_time
+                    level_price = source_price_key
+                    level_end_time = time  // Default: extend to current bar
+                    level_label_time = nz(mbz_source_sct, 0)
 
-                    if session_count == 0
-                        continue
+                    // Find breach end time by matching session_close_time (unique integer, immune to price collisions)
+                    is_high_boundary = mbz_pool_boundary == POOL_BOUNDARY_HIGH
+                    if not na(mbz_source_sct) and mbz_source_sct != 0
+                        // Finalized session: scan pool for matching session_close_time
+                        session_count = liquidity_pool_session_count(liquidity_pool)
+                        for session_idx = 0 to session_count - 1
+                            if array.get(liquidity_pool.session_close_times, session_idx) == mbz_source_sct
+                                level_label_time := mbz_source_sct
+                                if is_high_boundary
+                                    level_end_time := liquidity_pool_get_high_line_end_time(liquidity_pool, session_idx, time)
+                                else
+                                    level_end_time := liquidity_pool_get_low_line_end_time(liquidity_pool, session_idx, time)
+                                break
+                    // else: current session sentinel (0) — level_end_time stays at `time` (extends to now)
 
-                    for session_idx = 0 to session_count - 1
-                        session_high = array.get(liquidity_pool.highs, session_idx)
-                        session_low = array.get(liquidity_pool.lows, session_idx)
+                    // Draw source origin line and label
+                    liquidity_line = line.new(level_time, level_price, level_end_time, level_price, xloc=xloc.bar_time, color=line_color, width=line_width, style=line.style_solid)
+                    array.push(source_origin_lines, liquidity_line)
 
-                        level_matched = false
-                        level_price = 0.0
-                        level_time = 0
-                        level_end_time = 0
-                        level_label_time = 0
-                        is_high_level = false
+                    final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
+                    label_text = build_liquidity_pool_label(source_token, level_label_time)
+                    liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
+                    array.push(source_origin_labels, liquidity_label)
 
-                        if session_high == source_price_key
-                            level_matched := true
-                            level_price := session_high
-                            level_time := array.get(liquidity_pool.high_times, session_idx)
-                            level_end_time := liquidity_pool_get_high_line_end_time(liquidity_pool, session_idx, time)
-                            level_label_time := array.get(liquidity_pool.session_close_times, session_idx)
-                            is_high_level := true
-                        else if session_low == source_price_key
-                            level_matched := true
-                            level_price := session_low
-                            level_time := array.get(liquidity_pool.low_times, session_idx)
-                            level_end_time := liquidity_pool_get_low_line_end_time(liquidity_pool, session_idx, time)
-                            level_label_time := array.get(liquidity_pool.session_close_times, session_idx)
-                            is_high_level := false
-
-                        if level_matched
-                            // FIRST OCCURRENCE: draw line and label, register in dedup maps
-                            liquidity_line = line.new(level_time, level_price, level_end_time, level_price, xloc=xloc.bar_time, color=line_color, width=line_width, style=line.style_solid)
-                            array.push(source_origin_lines, liquidity_line)
-
-                            final_label_time = level_end_time != level_time ? int((level_time + level_end_time) / 2) : level_time
-                            label_text = build_liquidity_pool_label(source_token, level_label_time)
-                            liquidity_label = label.new(final_label_time, level_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, textcolor=source_origin_label_text_color, size=size.tiny, color=color.new(color.white, 100))
-                            array.push(source_origin_labels, liquidity_label)
-
-                            map.put(dedup_line_index, price_str, array.size(source_origin_lines) - 1)
-                            map.put(dedup_label_index, price_str, array.size(source_origin_labels) - 1)
-                            map.put(dedup_priority, price_str, get_source_priority(source_token))
-                            map.put(dedup_count, price_str, 1)
-                            map.put(dedup_tokens, price_str, "|" + source_token + "|")
-
-                            level_found := true
-                            break
-
-                        if level_found
-                            break
+                    map.put(dedup_line_index, dedup_key, array.size(source_origin_lines) - 1)
+                    map.put(dedup_label_index, dedup_key, array.size(source_origin_labels) - 1)
+                    map.put(dedup_priority, dedup_key, get_source_priority(source_token))
+                    map.put(dedup_count, dedup_key, 1)
+                    map.put(dedup_tokens, dedup_key, "|" + source_token + "|")
 
             // END: Unified source origins collection and rendering
 
@@ -3791,97 +3798,97 @@ if liquidity_detection_enabled
 
         // Process DAILY liquidity pool (if enabled and not skipping Sunday)
         if enable_daily_liquidity and not skip_sunday_liquidity
-            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, daily_breach or daily_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index, daily_events_sct, daily_events_lt] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, daily_breach or daily_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_DAILY, daily_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index, daily_events_sct, daily_events_lt, LIQUIDITY_SOURCE_TYPE_DAILY, daily_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // Process WEEKLY liquidity pool (if enabled)
         if enable_weekly_liquidity
-            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, weekly_breach or weekly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index, weekly_events_sct, weekly_events_lt] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, weekly_breach or weekly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index, weekly_events_sct, weekly_events_lt, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // Process MONTHLY liquidity pool (if enabled)
         if enable_monthly_liquidity
-            [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, monthly_breach or monthly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index, monthly_events_sct, monthly_events_lt] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, monthly_breach or monthly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index, monthly_events_sct, monthly_events_lt, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_asia_liquidity and not skip_sunday_liquidity
-            [asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index] = process_liquidity_pool(asia_session_pool, LIQUIDITY_SOURCE_TYPE_ASIA, asia_scan_cap, asia_breach or asia_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index, asia_events_sct, asia_events_lt] = process_liquidity_pool(asia_session_pool, LIQUIDITY_SOURCE_TYPE_ASIA, asia_scan_cap, asia_breach or asia_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             asia_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_ASIA_NINE : LIQUIDITY_SOURCE_TYPE_ASIA
-            if process_liquidity_events(asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index, asia_token, asia_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index, asia_events_sct, asia_events_lt, asia_token, asia_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // Asia NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_asia_liquidity and not skip_sunday_liquidity
-            [asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index] = process_liquidity_pool(asia_nine_pool, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_scan_cap, asia_nine_breach or asia_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index, asia_nine_events_sct, asia_nine_events_lt] = process_liquidity_pool(asia_nine_pool, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_scan_cap, asia_nine_breach or asia_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_nine_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index, asia_nine_events_sct, asia_nine_events_lt, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_london_liquidity and not skip_sunday_liquidity
-            [london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index] = process_liquidity_pool(london_session_pool, LIQUIDITY_SOURCE_TYPE_LONDON, london_scan_cap, london_breach or london_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index, london_events_sct, london_events_lt] = process_liquidity_pool(london_session_pool, LIQUIDITY_SOURCE_TYPE_LONDON, london_scan_cap, london_breach or london_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             london_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_LONDON_NINE : LIQUIDITY_SOURCE_TYPE_LONDON
-            if process_liquidity_events(london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index, london_token, london_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index, london_events_sct, london_events_lt, london_token, london_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // London NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_london_liquidity and not skip_sunday_liquidity
-            [london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index] = process_liquidity_pool(london_nine_pool, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_scan_cap, london_nine_breach or london_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index, london_nine_events_sct, london_nine_events_lt] = process_liquidity_pool(london_nine_pool, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_scan_cap, london_nine_breach or london_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_nine_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index, london_nine_events_sct, london_nine_events_lt, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_nyam_liquidity and not skip_sunday_liquidity
-            [nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index] = process_liquidity_pool(nyam_session_pool, LIQUIDITY_SOURCE_TYPE_NYAM, nyam_scan_cap, nyam_breach or nyam_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index, nyam_events_sct, nyam_events_lt] = process_liquidity_pool(nyam_session_pool, LIQUIDITY_SOURCE_TYPE_NYAM, nyam_scan_cap, nyam_breach or nyam_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             nyam_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_NYAM_NINE : LIQUIDITY_SOURCE_TYPE_NYAM
-            if process_liquidity_events(nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index, nyam_token, nyam_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index, nyam_events_sct, nyam_events_lt, nyam_token, nyam_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // NY AM NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_nyam_liquidity and not skip_sunday_liquidity
-            [nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index] = process_liquidity_pool(nyam_nine_pool, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_scan_cap, nyam_nine_breach or nyam_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index, nyam_nine_events_sct, nyam_nine_events_lt] = process_liquidity_pool(nyam_nine_pool, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_scan_cap, nyam_nine_breach or nyam_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_nine_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index, nyam_nine_events_sct, nyam_nine_events_lt, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if actual_enable_lunch and not skip_sunday_liquidity
-            [lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index] = process_liquidity_pool(lunch_session_pool, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_scan_cap, lunch_breach or lunch_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index, lunch_events_sct, lunch_events_lt] = process_liquidity_pool(lunch_session_pool, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_scan_cap, lunch_breach or lunch_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index, lunch_events_sct, lunch_events_lt, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_nypm_liquidity and not skip_sunday_liquidity
-            [nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index] = process_liquidity_pool(nypm_session_pool, LIQUIDITY_SOURCE_TYPE_NYPM, nypm_scan_cap, nypm_breach or nypm_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index, nypm_events_sct, nypm_events_lt] = process_liquidity_pool(nypm_session_pool, LIQUIDITY_SOURCE_TYPE_NYPM, nypm_scan_cap, nypm_breach or nypm_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             nypm_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_NYPM_NINE : LIQUIDITY_SOURCE_TYPE_NYPM
-            if process_liquidity_events(nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index, nypm_token, nypm_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index, nypm_events_sct, nypm_events_lt, nypm_token, nypm_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // NY PM NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_nypm_liquidity and not skip_sunday_liquidity
-            [nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index] = process_liquidity_pool(nypm_nine_pool, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_scan_cap, nypm_nine_breach or nypm_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index, nypm_nine_events_sct, nypm_nine_events_lt] = process_liquidity_pool(nypm_nine_pool, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_scan_cap, nypm_nine_breach or nypm_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_nine_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index, nypm_nine_events_sct, nypm_nine_events_lt, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_ons_liquidity and not skip_sunday_liquidity
-            [ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index] = process_liquidity_pool(ons_session_pool, LIQUIDITY_SOURCE_TYPE_ONS, ons_scan_cap, ons_breach or ons_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index, ons_events_sct, ons_events_lt] = process_liquidity_pool(ons_session_pool, LIQUIDITY_SOURCE_TYPE_ONS, ons_scan_cap, ons_breach or ons_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_ONS, ons_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index, ons_events_sct, ons_events_lt, LIQUIDITY_SOURCE_TYPE_ONS, ons_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_premarket_liquidity and not skip_sunday_liquidity
-            [premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index] = process_liquidity_pool(premarket_session_pool, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_scan_cap, premarket_breach or premarket_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index, premarket_events_sct, premarket_events_lt] = process_liquidity_pool(premarket_session_pool, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_scan_cap, premarket_breach or premarket_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
-            if process_liquidity_events(premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_session_pool, bar_index, b_open, b_high, b_low, b_close)
+            if process_liquidity_events(premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index, premarket_events_sct, premarket_events_lt, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // ─────────────────────────────────────────────────────────────────────────
@@ -3922,7 +3929,9 @@ if liquidity_detection_enabled
                          dtt_source,            // Origin also shows DTT session
                          event_is_exact,
                          dtt_dummy_pool,        // Pass dummy pool (DTT doesn't use pool collection)
-                         event_is_high
+                         event_is_high,
+                         0,                     // DTT uses its own rendering path, no session_close_time needed
+                         0                      // DTT uses its own rendering path, no level_time needed
                      )
 
                     needs_visual_update := true
