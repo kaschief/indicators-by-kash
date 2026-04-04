@@ -36,14 +36,15 @@ Branch: `prime-repair` (clean baseline before changes)
 
 ---
 
-## Phase 4: Performance Optimization ✅
+## Phase 4: Performance Optimization
 
-- Re-enable auto-mitigation with 3-bar grace window (was disabled for debugging)
-- Record `first_breach_bar` in `mark_breaches()` so it's available for early-skip
-- Early-skip in `process_liquidity_pool()`: skip mitigated entries and entries with stale breaches
-- Fix stale `first_breach_bar` in `finalize_session()` — push clean slate values
+- `mark_breaches()` returns bool flag when any new breach is found
+- Per-pool `var` breach flags with previous-bar rotation
+- `process_liquidity_pool()` skips finalized session loop entirely when no breach on current or previous bar
+- Current session processing always runs (no skip)
+- Zero detection risk — if no breach happened, no pattern can form
 
-**Test**: No 60-second timeout. Same MBZ detections as before optimization. No missing MBZs.
+**Test**: No 60-second timeout. Same MBZ detections as Phase 3. No missing MBZs. Compare counts.
 
 ---
 

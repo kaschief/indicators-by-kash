@@ -1109,6 +1109,7 @@ liquidity_pool_finalize_session(pool, session_close_time, max_entries) =>
     liquidity_pool_clear_current(pool)
 
 liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
+    found_breach = false
     total = liquidity_pool_session_count(pool)
     if total > 0
         if pool.first_unbreached_high_index < total
@@ -1118,6 +1119,7 @@ liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
                     if bar_high >= tracked_high
                         array.set(pool.high_breached, i, true)
                         array.set(pool.high_breach_times, i, bar_time)
+                        found_breach := true
             liquidity_pool_advance_high_pointer(pool)
 
         if pool.first_unbreached_low_index < total
@@ -1127,9 +1129,10 @@ liquidity_pool_mark_breaches(pool, bar_high, bar_low, bar_time) =>
                     if bar_low <= tracked_low
                         array.set(pool.low_breached, i, true)
                         array.set(pool.low_breach_times, i, bar_time)
+                        found_breach := true
             liquidity_pool_advance_low_pointer(pool)
 
-    total
+    found_breach
 
 liquidity_pool_get_high_line_end_time(pool, index, fallback_time) =>
     high_breached = array.get(pool.high_breached, index)
@@ -1662,6 +1665,7 @@ process_liquidity_pool(
      pool,
      pool_source_type,
      timeframe_scan_cap,
+     has_recent_breach,
      enable_immediate,
      enable_standard,
      enable_delayed,
@@ -1685,8 +1689,8 @@ process_liquidity_pool(
     effective_scan_limit = math.min(total_sessions, timeframe_scan_cap)
     scan_start_index = math.max(0, total_sessions - effective_scan_limit)
 
-    // Process finalized sessions
-    if total_sessions > 0
+    // Process finalized sessions (skip entirely when no breach on this or previous bar)
+    if total_sessions > 0 and has_recent_breach
         for session_index = scan_start_index to total_sessions - 1
             pool_high_value = array.get(pool.highs, session_index)
             pool_low_value = array.get(pool.lows, session_index)
@@ -3426,6 +3430,66 @@ enable_ons_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_premarket_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_dtt_liquidity_tracking = current_tf_minutes <= MAX_TF_DTT
 
+// Breach flags: track whether mark_breaches found anything (current + previous bar)
+var bool daily_breach = false
+var bool daily_breach_prev = false
+var bool weekly_breach = false
+var bool weekly_breach_prev = false
+var bool monthly_breach = false
+var bool monthly_breach_prev = false
+var bool asia_breach = false
+var bool asia_breach_prev = false
+var bool asia_nine_breach = false
+var bool asia_nine_breach_prev = false
+var bool london_breach = false
+var bool london_breach_prev = false
+var bool london_nine_breach = false
+var bool london_nine_breach_prev = false
+var bool nyam_breach = false
+var bool nyam_breach_prev = false
+var bool nyam_nine_breach = false
+var bool nyam_nine_breach_prev = false
+var bool lunch_breach = false
+var bool lunch_breach_prev = false
+var bool nypm_breach = false
+var bool nypm_breach_prev = false
+var bool nypm_nine_breach = false
+var bool nypm_nine_breach_prev = false
+var bool ons_breach = false
+var bool ons_breach_prev = false
+var bool premarket_breach = false
+var bool premarket_breach_prev = false
+
+// Rotate breach flags (previous = current, current = false)
+daily_breach_prev := daily_breach
+daily_breach := false
+weekly_breach_prev := weekly_breach
+weekly_breach := false
+monthly_breach_prev := monthly_breach
+monthly_breach := false
+asia_breach_prev := asia_breach
+asia_breach := false
+asia_nine_breach_prev := asia_nine_breach
+asia_nine_breach := false
+london_breach_prev := london_breach
+london_breach := false
+london_nine_breach_prev := london_nine_breach
+london_nine_breach := false
+nyam_breach_prev := nyam_breach
+nyam_breach := false
+nyam_nine_breach_prev := nyam_nine_breach
+nyam_nine_breach := false
+lunch_breach_prev := lunch_breach
+lunch_breach := false
+nypm_breach_prev := nypm_breach
+nypm_breach := false
+nypm_nine_breach_prev := nypm_nine_breach
+nypm_nine_breach := false
+ons_breach_prev := ons_breach
+ons_breach := false
+premarket_breach_prev := premarket_breach
+premarket_breach := false
+
 // Calculate Sunday skip once for all liquidity sources (performance optimization)
 skip_sunday_liquidity = should_skip_sunday_liquidity(time)
 
@@ -3438,7 +3502,7 @@ if enable_daily_liquidity_tracking and (show_source_origins or liquidity_detecti
         else
             liquidity_pool_update_current_extremes(daily_liquidity_pool, high, low, time, bar_index)
 
-        liquidity_pool_mark_breaches(daily_liquidity_pool, high, low, time)
+        daily_breach := liquidity_pool_mark_breaches(daily_liquidity_pool, high, low, time)
     // When skip_sunday_liquidity is TRUE: freeze Friday's session in current pool, don't finalize, don't mark breaches
     // Creates gap until Monday when session will finalize normally
 else if barstate.isnew
@@ -3452,7 +3516,7 @@ if enable_weekly_liquidity_tracking and (show_source_origins or liquidity_detect
     else
         liquidity_pool_update_current_extremes(weekly_liquidity_pool, high, low, time, bar_index)
 
-    liquidity_pool_mark_breaches(weekly_liquidity_pool, high, low, time)
+    weekly_breach := liquidity_pool_mark_breaches(weekly_liquidity_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(weekly_liquidity_pool)
 
@@ -3464,7 +3528,7 @@ if enable_monthly_liquidity_tracking and (show_source_origins or liquidity_detec
     else
         liquidity_pool_update_current_extremes(monthly_liquidity_pool, high, low, time, bar_index)
 
-    liquidity_pool_mark_breaches(monthly_liquidity_pool, high, low, time)
+    monthly_breach := liquidity_pool_mark_breaches(monthly_liquidity_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(monthly_liquidity_pool)
 
@@ -3491,7 +3555,7 @@ if enable_asia_liquidity_tracking and (show_source_origins or liquidity_detectio
             liquidity_pool_update_current_extremes(asia_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(asia_session_pool, high, low, time)
+        asia_breach := liquidity_pool_mark_breaches(asia_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(asia_session_pool)
 
@@ -3514,7 +3578,7 @@ if enable_nine_variants and enable_asia_liquidity_tracking and (show_source_orig
         if in_asia_nine_session
             liquidity_pool_update_current_extremes(asia_nine_pool, high, low, time, bar_index)
 
-        liquidity_pool_mark_breaches(asia_nine_pool, high, low, time)
+        asia_nine_breach := liquidity_pool_mark_breaches(asia_nine_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(asia_nine_pool)
 
@@ -3541,7 +3605,7 @@ if enable_london_liquidity_tracking and (show_source_origins or liquidity_detect
             liquidity_pool_update_current_extremes(london_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(london_session_pool, high, low, time)
+        london_breach := liquidity_pool_mark_breaches(london_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(london_session_pool)
 
@@ -3563,7 +3627,7 @@ if enable_nine_variants and enable_london_liquidity_tracking and (show_source_or
         if in_london_nine_session
             liquidity_pool_update_current_extremes(london_nine_pool, high, low, time, bar_index)
 
-        liquidity_pool_mark_breaches(london_nine_pool, high, low, time)
+        london_nine_breach := liquidity_pool_mark_breaches(london_nine_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(london_nine_pool)
 
@@ -3590,7 +3654,7 @@ if enable_nyam_liquidity_tracking and (show_source_origins or liquidity_detectio
             liquidity_pool_update_current_extremes(nyam_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(nyam_session_pool, high, low, time)
+        nyam_breach := liquidity_pool_mark_breaches(nyam_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(nyam_session_pool)
 
@@ -3612,7 +3676,7 @@ if enable_nine_variants and enable_nyam_liquidity_tracking and (show_source_orig
         if in_nyam_nine_session
             liquidity_pool_update_current_extremes(nyam_nine_pool, high, low, time, bar_index)
 
-        liquidity_pool_mark_breaches(nyam_nine_pool, high, low, time)
+        nyam_nine_breach := liquidity_pool_mark_breaches(nyam_nine_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(nyam_nine_pool)
 
@@ -3639,7 +3703,7 @@ if enable_lunch_liquidity_tracking and (show_source_origins or liquidity_detecti
             liquidity_pool_update_current_extremes(lunch_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(lunch_session_pool, high, low, time)
+        lunch_breach := liquidity_pool_mark_breaches(lunch_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(lunch_session_pool)
 
@@ -3666,7 +3730,7 @@ if enable_nypm_liquidity_tracking and (show_source_origins or liquidity_detectio
             liquidity_pool_update_current_extremes(nypm_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(nypm_session_pool, high, low, time)
+        nypm_breach := liquidity_pool_mark_breaches(nypm_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(nypm_session_pool)
 
@@ -3688,7 +3752,7 @@ if enable_nine_variants and enable_nypm_liquidity_tracking and (show_source_orig
         if in_nypm_nine_session
             liquidity_pool_update_current_extremes(nypm_nine_pool, high, low, time, bar_index)
 
-        liquidity_pool_mark_breaches(nypm_nine_pool, high, low, time)
+        nypm_nine_breach := liquidity_pool_mark_breaches(nypm_nine_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(nypm_nine_pool)
 
@@ -3715,7 +3779,7 @@ if enable_ons_liquidity_tracking and (show_source_origins or liquidity_detection
             liquidity_pool_update_current_extremes(ons_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(ons_session_pool, high, low, time)
+        ons_breach := liquidity_pool_mark_breaches(ons_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(ons_session_pool)
 
@@ -3742,7 +3806,7 @@ if enable_premarket_liquidity_tracking and (show_source_origins or liquidity_det
             liquidity_pool_update_current_extremes(premarket_session_pool, high, low, time, bar_index)
 
         // Always mark breaches (both during and after session)
-        liquidity_pool_mark_breaches(premarket_session_pool, high, low, time)
+        premarket_breach := liquidity_pool_mark_breaches(premarket_session_pool, high, low, time)
 else if barstate.isnew
     liquidity_pool_clear_current(premarket_session_pool)
 
@@ -3877,27 +3941,27 @@ if liquidity_detection_enabled
 
         // Process DAILY liquidity pool (if enabled and not skipping Sunday)
         if enable_daily_liquidity and not skip_sunday_liquidity
-            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index] = process_liquidity_pool(daily_liquidity_pool, LIQUIDITY_SOURCE_TYPE_DAILY, daily_scan_cap, daily_breach or daily_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(daily_events_is_high, daily_events_rules, daily_events_is_exact, daily_events_source_price, daily_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_DAILY, daily_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // Process WEEKLY liquidity pool (if enabled)
         if enable_weekly_liquidity
-            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index] = process_liquidity_pool(weekly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_scan_cap, weekly_breach or weekly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(weekly_events_is_high, weekly_events_rules, weekly_events_is_exact, weekly_events_source_price, weekly_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_WEEKLY, weekly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         // Process MONTHLY liquidity pool (if enabled)
         if enable_monthly_liquidity
-            [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index] = process_liquidity_pool(monthly_liquidity_pool, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_scan_cap, monthly_breach or monthly_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(monthly_events_is_high, monthly_events_rules, monthly_events_is_exact, monthly_events_source_price, monthly_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_MONTHLY, monthly_liquidity_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_asia_liquidity and not skip_sunday_liquidity
-            [asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index] = process_liquidity_pool(asia_session_pool, LIQUIDITY_SOURCE_TYPE_ASIA, asia_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index] = process_liquidity_pool(asia_session_pool, LIQUIDITY_SOURCE_TYPE_ASIA, asia_scan_cap, asia_breach or asia_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             asia_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_ASIA_NINE : LIQUIDITY_SOURCE_TYPE_ASIA
             if process_liquidity_events(asia_events_is_high, asia_events_rules, asia_events_is_exact, asia_events_source_price, asia_events_source_bar_index, asia_token, asia_session_pool, bar_index, b_open, b_high, b_low, b_close)
@@ -3905,13 +3969,13 @@ if liquidity_detection_enabled
 
         // Asia NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_asia_liquidity and not skip_sunday_liquidity
-            [asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index] = process_liquidity_pool(asia_nine_pool, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index] = process_liquidity_pool(asia_nine_pool, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_scan_cap, asia_nine_breach or asia_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(asia_nine_events_is_high, asia_nine_events_rules, asia_nine_events_is_exact, asia_nine_events_source_price, asia_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_ASIA_NINE, asia_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_london_liquidity and not skip_sunday_liquidity
-            [london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index] = process_liquidity_pool(london_session_pool, LIQUIDITY_SOURCE_TYPE_LONDON, london_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index] = process_liquidity_pool(london_session_pool, LIQUIDITY_SOURCE_TYPE_LONDON, london_scan_cap, london_breach or london_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             london_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_LONDON_NINE : LIQUIDITY_SOURCE_TYPE_LONDON
             if process_liquidity_events(london_events_is_high, london_events_rules, london_events_is_exact, london_events_source_price, london_events_source_bar_index, london_token, london_session_pool, bar_index, b_open, b_high, b_low, b_close)
@@ -3919,13 +3983,13 @@ if liquidity_detection_enabled
 
         // London NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_london_liquidity and not skip_sunday_liquidity
-            [london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index] = process_liquidity_pool(london_nine_pool, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index] = process_liquidity_pool(london_nine_pool, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_scan_cap, london_nine_breach or london_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(london_nine_events_is_high, london_nine_events_rules, london_nine_events_is_exact, london_nine_events_source_price, london_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_LONDON_NINE, london_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_nyam_liquidity and not skip_sunday_liquidity
-            [nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index] = process_liquidity_pool(nyam_session_pool, LIQUIDITY_SOURCE_TYPE_NYAM, nyam_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index] = process_liquidity_pool(nyam_session_pool, LIQUIDITY_SOURCE_TYPE_NYAM, nyam_scan_cap, nyam_breach or nyam_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             nyam_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_NYAM_NINE : LIQUIDITY_SOURCE_TYPE_NYAM
             if process_liquidity_events(nyam_events_is_high, nyam_events_rules, nyam_events_is_exact, nyam_events_source_price, nyam_events_source_bar_index, nyam_token, nyam_session_pool, bar_index, b_open, b_high, b_low, b_close)
@@ -3933,19 +3997,19 @@ if liquidity_detection_enabled
 
         // NY AM NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_nyam_liquidity and not skip_sunday_liquidity
-            [nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index] = process_liquidity_pool(nyam_nine_pool, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index] = process_liquidity_pool(nyam_nine_pool, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_scan_cap, nyam_nine_breach or nyam_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(nyam_nine_events_is_high, nyam_nine_events_rules, nyam_nine_events_is_exact, nyam_nine_events_source_price, nyam_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_NYAM_NINE, nyam_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if actual_enable_lunch and not skip_sunday_liquidity
-            [lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index] = process_liquidity_pool(lunch_session_pool, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index] = process_liquidity_pool(lunch_session_pool, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_scan_cap, lunch_breach or lunch_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(lunch_events_is_high, lunch_events_rules, lunch_events_is_exact, lunch_events_source_price, lunch_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_LUNCH, lunch_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_nypm_liquidity and not skip_sunday_liquidity
-            [nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index] = process_liquidity_pool(nypm_session_pool, LIQUIDITY_SOURCE_TYPE_NYPM, nypm_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index] = process_liquidity_pool(nypm_session_pool, LIQUIDITY_SOURCE_TYPE_NYPM, nypm_scan_cap, nypm_breach or nypm_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             nypm_token = nine_times_mode == NINE_MODE_NINE_ONLY ? LIQUIDITY_SOURCE_TYPE_NYPM_NINE : LIQUIDITY_SOURCE_TYPE_NYPM
             if process_liquidity_events(nypm_events_is_high, nypm_events_rules, nypm_events_is_exact, nypm_events_source_price, nypm_events_source_bar_index, nypm_token, nypm_session_pool, bar_index, b_open, b_high, b_low, b_close)
@@ -3953,19 +4017,19 @@ if liquidity_detection_enabled
 
         // NY PM NINE variant pool processing (Both mode)
         if enable_nine_variants and enable_nypm_liquidity and not skip_sunday_liquidity
-            [nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index] = process_liquidity_pool(nypm_nine_pool, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index] = process_liquidity_pool(nypm_nine_pool, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_scan_cap, nypm_nine_breach or nypm_nine_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(nypm_nine_events_is_high, nypm_nine_events_rules, nypm_nine_events_is_exact, nypm_nine_events_source_price, nypm_nine_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_NYPM_NINE, nypm_nine_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_ons_liquidity and not skip_sunday_liquidity
-            [ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index] = process_liquidity_pool(ons_session_pool, LIQUIDITY_SOURCE_TYPE_ONS, ons_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index] = process_liquidity_pool(ons_session_pool, LIQUIDITY_SOURCE_TYPE_ONS, ons_scan_cap, ons_breach or ons_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(ons_events_is_high, ons_events_rules, ons_events_is_exact, ons_events_source_price, ons_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_ONS, ons_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
 
         if enable_premarket_liquidity and not skip_sunday_liquidity
-            [premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index] = process_liquidity_pool(premarket_session_pool, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_scan_cap, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
+            [premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index] = process_liquidity_pool(premarket_session_pool, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_scan_cap, premarket_breach or premarket_breach_prev, enable_liquidity_immediate, enable_liquidity_standard, enable_liquidity_delayed, a_open, a_close, a_high, a_low, a_midpoint, b_open, b_close, b_high, b_low)
 
             if process_liquidity_events(premarket_events_is_high, premarket_events_rules, premarket_events_is_exact, premarket_events_source_price, premarket_events_source_bar_index, LIQUIDITY_SOURCE_TYPE_PREMARKET, premarket_session_pool, bar_index, b_open, b_high, b_low, b_close)
                 needs_visual_update := true
