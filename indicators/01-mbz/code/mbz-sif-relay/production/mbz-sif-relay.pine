@@ -8,7 +8,7 @@
 //   Chart Zone Source selector controls which tier renders on the main chart.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay • -dev", shorttitle="relay • DEVELOPMENT", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -88,6 +88,30 @@ const string BREAKDOWN_SEPARATOR = ", "
 // Wick dominance threshold (wick must be >= 80% of body)
 const float WICK_DOMINANCE_THRESHOLD = 0.80
 
+// Liquidity pool constants
+const int POOL_SOURCE_ID_DAILY   = -1
+const int POOL_SOURCE_ID_WEEKLY  = -2
+const int POOL_SOURCE_ID_MONTHLY = -3
+const int POOL_SOURCE_ID_4H      = -4
+const int POOL_SOURCE_ID_1H      = -5
+const string POOL_SOURCE_DAILY = "daily"
+const string POOL_SOURCE_WEEKLY = "weekly"
+const string POOL_SOURCE_MONTHLY = "monthly"
+const string POOL_SOURCE_4H = "4ʰ"
+const string POOL_SOURCE_1H = "1ʰ"
+
+// Liquidity formation rule constants
+const string LIQ_RULE_IMM = "L-IMM"
+const string LIQ_RULE_STD = "L-STD"
+const string LIQ_RULE_DEL = "L-DEL"
+
+// Liquidity pool scan caps (max finalized sessions stored per pool)
+const int LIQ_SCAN_CAP_1H      = 500   // ~20 trading days
+const int LIQ_SCAN_CAP_4H      = 500   // ~83 trading days
+const int LIQ_SCAN_CAP_DAILY   = 300   // ~14 months
+const int LIQ_SCAN_CAP_WEEKLY  = 50    // ~1 year
+const int LIQ_SCAN_CAP_MONTHLY = 30    // ~2.5 years
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INVALIDATION THRESHOLDS (Edit these values to adjust invalidation sensitivity)
@@ -118,14 +142,8 @@ const string SIF_INVALIDATION_STRICT   = "Strict (55%)"
 const string SIF_INVALIDATION_LENIENT  = "Lenient (85%)"
 const string SIF_INVALIDATION_CUSTOM   = "Custom"
 
-const int   INVALIDATION_LOOKBACK_LIMIT = 500
-
 // Implied FVG detection parameters
 const float  IMPLIED_DISPLACEMENT_MULTIPLIER = 1.25
-const int    IMPLIED_DISPLACEMENT_LOOKBACK   = 4
-
-// VI suppression temporal window
-const int SUPPRESSION_TEMPORAL_WINDOW = 2
 
 // MBZ label text color default
 const color DEFAULT_ZONE_LABEL_COLOR = color.new(color.rgb(156, 156, 156), 20)
@@ -239,29 +257,47 @@ const string DIR_BEARISH = "Bearish Only"
 const color GAP_COLOR = color.new(color.rgb(187, 217, 251), 90)
 
 // ─── Group Constants ───
+GROUP_ENGINE       = "🔧 Engine"
 GROUP_PO3_CHART    = "📊 PO3 Chart"
 GROUP_PO3_CANDLES  = "📊 PO3 Candles"
 GROUP_PO3_FVGS     = "📊 PO3 FVGs"
-GROUP_MBZ_PO3      = "🎯 MBZ on PO3"
-GROUP_MBZ_CHART    = "🎯 MBZ on Chart"
-GROUP_SIF_PO3      = "✨ SIF on PO3"
-GROUP_SIF_CHART    = "✨ SIF on Chart"
-GROUP_CHART_ZONES  = "🎨 Chart Zones"
-GROUP_INVALIDATION = "✋ Invalidation"
-GROUP_GAP_SOURCES  = "📊 Gap Sources"
-GROUP_ADVANCED     = "⚙️ Advanced"
+GROUP_MBZ_PO3        = "🎯 MBZ on PO3"
+GROUP_MBZ_CHART      = "🎯 MBZ on Chart"
+GROUP_MBZ_DETECTION  = "🎯 Liquidity MBZ"
+GROUP_LIQ_HTF        = "💧 Higher Timeframe Pools"
+GROUP_LIQ_TF         = "💧 Timeframe Pools"
+GROUP_SIF_PO3        = "✨ SIF on PO3"
+GROUP_SIF_CHART      = "✨ SIF on Chart"
+GROUP_CHART_ZONES    = "🎨 Chart Zones"
+GROUP_INVALIDATION   = "✋ Invalidation"
+GROUP_GAP_SOURCES    = "📊 Gap Sources"
+GROUP_ADVANCED       = "⚙️ Advanced"
+
+// ─── 🔧 Engine ───
+const string MBZ_MODE_GAP       = "Gap"
+const string MBZ_MODE_LIQUIDITY = "Liquidity"
+const string MBZ_MODE_BOTH      = "Liquidity + Gap"
+const string MBZ_MODE_OFF       = "Off"
+mbz_mode = input.string(MBZ_MODE_BOTH, "MBZ", options=[MBZ_MODE_GAP, MBZ_MODE_LIQUIDITY, MBZ_MODE_BOTH, MBZ_MODE_OFF], group=GROUP_ENGINE, inline="engine")
+enable_sif = input.bool(true, "SIF", group=GROUP_ENGINE, inline="engine")
+mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_ENGINE)
+
+// Derive engine + source flags from dropdown
+bool enable_mbz        = mbz_mode != MBZ_MODE_OFF
+bool enable_gap_mbz    = mbz_mode == MBZ_MODE_GAP or mbz_mode == MBZ_MODE_BOTH
+bool enable_liq_pools = mbz_mode == MBZ_MODE_LIQUIDITY or mbz_mode == MBZ_MODE_BOTH
 
 // ─── 📊 PO3 Chart ───
 show_po3_chart         = input.bool(true, "Show PO3", group=GROUP_PO3_CHART, inline="po3_master")
-po3_candle_count       = input.int(15, "Main HTF", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_master")
+po3_candle_count       = input.int(15, "Main HTF", minval=2, maxval=100, group=GROUP_PO3_CHART, inline="po3_master")
 show_htf2    = input.bool(false, "HTF 2", group=GROUP_PO3_CHART, inline="po3_htf2", tooltip="Lower timeframe for detailed price structure")
 htf2_manual         = input.bool(false, "Manual", group=GROUP_PO3_CHART, inline="po3_htf2")
 htf2_tf_input       = input.timeframe("5", "", group=GROUP_PO3_CHART, inline="po3_htf2")
-htf2_candle_count   = input.int(10, "", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_htf2")
+htf2_candle_count   = input.int(10, "", minval=2, maxval=100, group=GROUP_PO3_CHART, inline="po3_htf2")
 show_htf3    = input.bool(false, "HTF 3", group=GROUP_PO3_CHART, inline="po3_htf3", tooltip="Higher timeframe for broader market context")
 htf3_manual         = input.bool(false, "Manual", group=GROUP_PO3_CHART, inline="po3_htf3")
 htf3_tf_input       = input.timeframe("240", "", group=GROUP_PO3_CHART, inline="po3_htf3")
-htf3_candle_count   = input.int(10, "", minval=2, maxval=50, group=GROUP_PO3_CHART, inline="po3_htf3")
+htf3_candle_count   = input.int(10, "", minval=2, maxval=100, group=GROUP_PO3_CHART, inline="po3_htf3")
 
 // Resolve HTF2 TF
 [HTF2_AUTO_VALID, HTF2_AUTO_STRING, HTF2_AUTO_LABEL, HTF2_AUTO_MS, _htf2] = get_tf_pairing(CHART_TF, HTF_SLOT_2)
@@ -280,7 +316,7 @@ bool   HTF3_VALID  = show_htf3 and (htf3_manual or HTF3_AUTO_VALID) and timefram
 // ─── 📊 PO3 Candles ───
 po3_is_overlay         = input.bool(false, "Overlay", group=GROUP_PO3_CANDLES, inline="po3_candle_layout")
 po3_overlay_trans      = input.int(15, "Opacity", minval=0, maxval=100, group=GROUP_PO3_CANDLES, inline="po3_candle_layout", tooltip="Transparency of PO3 candles in overlay mode")
-po3_offset             = input.int(50, "Offset", minval=5, maxval=200, group=GROUP_PO3_CANDLES, inline="po3_candle_layout")
+po3_offset             = input.int(50, "Offset", minval=5, maxval=300, group=GROUP_PO3_CANDLES, inline="po3_candle_layout")
 po3_gap                = input.int(10, "Gap", minval=0, maxval=30, group=GROUP_PO3_CANDLES, inline="po3_candle_layout", tooltip="Space between PO3 tier charts")
 po3_bull_body          = input.color(color.rgb(255, 255, 255), "+ Body", group=GROUP_PO3_CANDLES, inline="po3_bull")
 po3_bull_border        = input.color(color.rgb(76, 76, 76), "Border", group=GROUP_PO3_CANDLES, inline="po3_bull")
@@ -292,6 +328,7 @@ show_po3_label         = input.bool(true, "Label", group=GROUP_PO3_CANDLES, inli
 po3_label_color        = input.color(color.rgb(0, 0, 0), "", group=GROUP_PO3_CANDLES, inline="po3_lbl")
 po3_label_size_input   = input.string("Large", "", options=["Tiny", "Small", "Normal", "Large"], group=GROUP_PO3_CANDLES, inline="po3_lbl")
 po3_label_bottom       = input.bool(false, "Bottom", group=GROUP_PO3_CANDLES, inline="po3_lbl")
+po3_show_pool_source   = input.bool(true, "Pool Source", group=GROUP_PO3_CANDLES, inline="po3_lbl", tooltip='Show the highest-timeframe pool source (e.g., "weekly", "daily") as a second line on liquidity MBZ labels.')
 po3_align_labels       = input.bool(true, "Align Labels", group=GROUP_PO3_CANDLES, tooltip="Align all PO3 tier labels at the same height")
 show_po3_dividers      = input.bool(true, "Dividers", group=GROUP_PO3_CANDLES, inline="po3_div")
 po3_divider_color      = input.color(color.new(color.rgb(219, 219, 219), 40), "", group=GROUP_PO3_CANDLES, inline="po3_div")
@@ -307,15 +344,13 @@ po3_fvg_bear_color     = input.color(color.new(color.rgb(184, 184, 184), 75), "�
 po3_fvg_extend         = input.int(1, "Extend", minval=0, maxval=5, group=GROUP_PO3_FVGS, inline="po3_fvg", tooltip="Extra candles to extend FVG boxes on PO3")
 
 // ─── 🎯 MBZ on PO3 ───
-po3_show_mbz           = input.bool(true, "Enable MBZ", group=GROUP_MBZ_PO3)
+po3_show_mbz           = input.bool(true, "Show MBZ on PO3", group=GROUP_MBZ_PO3)
 po3_mbz_bull_highlight = input.color(color.new(color.rgb(16, 110, 237), 60), "Candle +", group=GROUP_MBZ_PO3, inline="po3_mbz_hl")
 po3_mbz_bear_highlight = input.color(color.new(color.rgb(255, 152, 0), 60), "−", group=GROUP_MBZ_PO3, inline="po3_mbz_hl")
 po3_mbz_zone_bull     = input.color(color.new(color.rgb(144, 191, 249), 85), "Zone +", group=GROUP_MBZ_PO3, inline="po3_mbz_zone")
 po3_mbz_zone_bear     = input.color(color.new(color.rgb(255, 204, 128), 90), "−", group=GROUP_MBZ_PO3, inline="po3_mbz_zone")
 po3_mbz_label_color   = input.color(color.new(color.rgb(57, 120, 221), 0), "Label +", group=GROUP_MBZ_PO3, inline="po3_mbz_lbl")
-po3_mbz_label_bear    = input.color(color.new(color.rgb(255, 152, 0), 0), "−", group=GROUP_MBZ_PO3, inline="po3_mbz_lbl")
-
-bool enable_mbz_engine = po3_show_mbz
+po3_mbz_label_bear    = input.color(color.new(color.rgb(239, 83, 80), 0), "−", group=GROUP_MBZ_PO3, inline="po3_mbz_lbl")
 
 // ─── 🎯 MBZ on Chart ───
 show_mbz_on_chart  = input.bool(true, "Show MBZ on Chart", group=GROUP_MBZ_CHART)
@@ -326,16 +361,23 @@ mbz_border_bear    = input.color(color.new(color.rgb(255, 152, 0), 60), "−", g
 extend_to_wick = input.bool(true, "Extend to Wick", group=GROUP_MBZ_CHART, tooltip='Extend zone boundary to the furthest wick (own candle or reference candle)')
 same_source_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, "Same-Source", options=[SAME_SOURCE_FILTER_ALL_TOUCHES, SAME_SOURCE_FILTER_FIRST_TOUCH, SAME_SOURCE_FILTER_LATEST_TOUCH], group=GROUP_MBZ_CHART)
 
+// ─── 🎯 MBZ Detection ───
+enable_liq_imm = input.bool(true, "Immediate", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A stays inside level, B sweeps through on current candle.')
+enable_liq_std = input.bool(true, "Standard", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A wicks through level (directional), closes inside; B displaces.')
+enable_liq_del = input.bool(true, "Delayed", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A body closes through level (directional); B displaces.')
+enable_liq_monthly = input.bool(true, "Monthly", group=GROUP_LIQ_HTF, inline="liq_htf")
+enable_liq_weekly  = input.bool(true, "Weekly", group=GROUP_LIQ_HTF, inline="liq_htf")
+enable_liq_daily   = input.bool(true, "Daily", group=GROUP_LIQ_HTF, inline="liq_htf")
+enable_liq_4h      = input.bool(true, "4ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
+enable_liq_1h      = input.bool(true, "1ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 // ─── ✨ SIF on PO3 ───
-po3_show_sif           = input.bool(true, "Enable SIF", group=GROUP_SIF_PO3)
+po3_show_sif           = input.bool(true, "Show SIF on PO3", group=GROUP_SIF_PO3)
 po3_sif_bull_highlight = input.color(color.new(color.rgb(38, 166, 154), 50), "Candle +", group=GROUP_SIF_PO3, inline="po3_sif_hl")
 po3_sif_bear_highlight = input.color(color.new(color.rgb(239, 83, 80), 50), "−", group=GROUP_SIF_PO3, inline="po3_sif_hl")
 po3_sif_zone_bull     = input.color(color.new(color.rgb(38, 166, 154), 90), "Zone +", group=GROUP_SIF_PO3, inline="po3_sif_zone")
 po3_sif_zone_bear     = input.color(color.new(color.rgb(239, 83, 80), 85), "−", group=GROUP_SIF_PO3, inline="po3_sif_zone")
 po3_sif_label_color   = input.color(color.new(color.rgb(38, 166, 154), 0), "Label +", group=GROUP_SIF_PO3, inline="po3_sif_lbl")
 po3_sif_label_bear    = input.color(color.new(color.rgb(239, 83, 80), 0), "−", group=GROUP_SIF_PO3, inline="po3_sif_lbl")
-
-bool enable_sif_engine = po3_show_sif
 
 // ─── ✨ SIF on Chart ───
 show_sif_on_chart  = input.bool(true, "Show SIF on Chart", group=GROUP_SIF_CHART)
@@ -352,7 +394,7 @@ po3_limit_to_range = input.bool(true, "Limit to PO3 Range", group=GROUP_CHART_ZO
 zone_border_width  = input.int(2, "Border Width", minval=0, maxval=5, group=GROUP_CHART_ZONES, inline="zone_shared")
 zone_extension_bars = input.int(4, "Zone Extension", minval=1, maxval=20, group=GROUP_CHART_ZONES, inline="zone_shared")
 zone_label_color   = input.color(DEFAULT_ZONE_LABEL_COLOR, "Zone Label", group=GROUP_CHART_ZONES, inline="lbl")
-zone_label_size    = input.string("Normal", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_CHART_ZONES, inline="lbl")
+zone_label_size    = input.string("Small", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], group=GROUP_CHART_ZONES, inline="lbl")
 show_zone_midline  = input.bool(true, "Midline", group=GROUP_CHART_ZONES, inline="zone_mid")
 zone_midline_color = input.color(color.new(color.rgb(99, 99, 99), 50), "", group=GROUP_CHART_ZONES, inline="zone_mid")
 zone_midline_style_in = input.string("----", "", options=["⎯⎯⎯", "----", "····"], group=GROUP_CHART_ZONES, inline="zone_mid")
@@ -371,8 +413,7 @@ sif_invalidation_mode = input.string(SIF_INVALIDATION_STRICT, "SIF", options=[SI
 sif_custom_threshold_percent = input.float(99, "Custom %", minval=1, maxval=100, step=1, group=GROUP_INVALIDATION, inline="sif_inv")
 
 // ─── ⚙️ Advanced ───
-max_htf_candles  = input.int(200, "HTF Candles", minval=5, maxval=200, group=GROUP_ADVANCED)
-mbz_direction_filter = input.string(DIR_BOTH, "Direction", options=[DIR_BOTH, DIR_BULLISH, DIR_BEARISH], group=GROUP_ADVANCED)
+max_htf_candles  = input.int(200, "Gap/SIF HTF Lookback", minval=5, maxval=200, group=GROUP_ADVANCED, tooltip='How many HTF candles back to scan for FVG gaps, MBZ/SIF zone formation, and invalidation.\n\nGaps and zones older than this are removed.\n\nOnly affects gap-based detection (FVG, implied, volume). Liquidity pool depth is separate — see Daily Scan Cap in MBZ Detection.')
 
 // Workspace Tools
 WORKSPACE_DEFAULT_NEAREST = 1
@@ -410,6 +451,13 @@ status_table_offset = input.int(100, "Offset", minval=-150, maxval=150, group=GR
 show_htf_candles = input.bool(false, "Show HTF Candles", group=GROUP_ADVANCED)
 disable_vi_suppression = input.bool(true, "Disable VI Suppression", group=GROUP_ADVANCED)
 show_color_table = input.bool(false, "Show Color Table", group=GROUP_ADVANCED)
+
+
+// ─── Input Enforcement ───
+// MBZ source enforcement handled by dropdown (Gap/Liquidity/Both/Off — no invalid state possible)
+// Formation rule enforcement: at least one rule when liquidity active
+if enable_liq_pools and not enable_liq_imm and not enable_liq_std and not enable_liq_del
+    enable_liq_std := true
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DERIVED VALUES
@@ -606,6 +654,8 @@ type CandleZone
     float  ref_candle_high     // Reference candle high (for wick extension)
     float  ref_candle_low      // Reference candle low (for wick extension)
     bool   is_wick_extended    // True if zone was extended to reference wick
+    string liq_formation_rule  // "L-IMM", "L-STD", "L-DEL", or "" if gap-only
+    bool   has_gap_mbz         // True if gap-based MBZ contributed (for label parenthesizing)
 
     // ─── SIF-specific fields ───
     bool   is_immediate_sif    // True if first tap AND inversion same candle
@@ -626,6 +676,7 @@ type CandleZone
 
 type HTFContext
     // ─── Configuration ───
+    int    tier_index              // 1, 2, or 3 — used for per-tier pool detection state
     string htf_string              // TradingView timeframe string ("240", "D", etc.)
     string htf_label               // Display label ("4H", "D", etc.)
     int    htf_ms                  // Milliseconds per HTF candle
@@ -677,6 +728,53 @@ type HTFContext
 
     // ─── Display flag: true when this tier is the chart zone source ───
     bool   is_chart_source
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIQUIDITY POOL TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type PoolLevel
+    // ─── Session identity ───
+    float  session_high
+    float  session_low
+    int    high_time
+    int    low_time
+    int    session_close_time
+    // ─── Breach state (shared — tier-independent) ───
+    bool   high_breached
+    int    high_breach_time
+    int    high_first_breach_bar
+    bool   low_breached
+    int    low_breach_time
+    int    low_first_breach_bar
+    // ─── Per-tier detection state (high side) ───
+    int    high_first_htf_reach_1
+    int    high_first_htf_reach_2
+    int    high_first_htf_reach_3
+    bool   high_used_by_pattern_1
+    bool   high_used_by_pattern_2
+    bool   high_used_by_pattern_3
+    // ─── Per-tier detection state (low side) ───
+    int    low_first_htf_reach_1
+    int    low_first_htf_reach_2
+    int    low_first_htf_reach_3
+    bool   low_used_by_pattern_1
+    bool   low_used_by_pattern_2
+    bool   low_used_by_pattern_3
+
+type LiquidityPoolCollection
+    // ─── Finalized sessions ───
+    array<PoolLevel> levels
+    // ─── Forming session ───
+    float current_high
+    float current_low
+    int   current_high_time
+    int   current_low_time
+    // ─── Performance pointers ───
+    int   first_unbreached_high_index
+    int   first_unbreached_low_index
+    float min_unbreached_high
+    float max_unbreached_low
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // UNIFIED ZONE FUNCTIONS
@@ -851,11 +949,12 @@ get_or_create_zone(array<CandleZone> zone_arr, int formation_bar_index, int form
         array.unshift(zone_arr, new_zone)
         [new_zone, 0, true]
 
-// Add source gap to zone's source arrays (avoids duplicates)
+// Add source gap to zone's source arrays (avoids duplicates for gap sources)
+// Pool sources (negative IDs) skip dedup — each represents a unique session contribution.
+// Gap sources (positive IDs) dedup by ID to prevent the same gap from being counted twice.
 add_source_to_zone(CandleZone zone, int gap_id, string gap_type) =>
-    // Check if already present
     bool already_present = false
-    if array.size(zone.source_gap_ids) > 0
+    if gap_id >= 0 and array.size(zone.source_gap_ids) > 0
         for i = 0 to array.size(zone.source_gap_ids) - 1
             if array.get(zone.source_gap_ids, i) == gap_id
                 already_present := true
@@ -871,6 +970,7 @@ add_source_to_zone(CandleZone zone, int gap_id, string gap_type) =>
 // Primary HTF context - encapsulates all state for the main timeframe
 
 var HTFContext htf1 = HTFContext.new(
+    tier_index       = 1,
     htf_string       = HTF_STRING,
     htf_label        = HTF_LABEL,
     htf_ms           = HTF_MS,
@@ -892,6 +992,7 @@ var HTFContext htf1 = HTFContext.new(
 
 // HTF2 context
 var HTFContext htf2 = HTFContext.new(
+    tier_index       = 2,
     htf_string       = HTF2_STRING,
     htf_label        = HTF2_LABEL,
     htf_ms           = HTF2_MS,
@@ -913,6 +1014,7 @@ var HTFContext htf2 = HTFContext.new(
 
 // HTF3 context
 var HTFContext htf3 = HTFContext.new(
+    tier_index       = 3,
     htf_string       = HTF3_STRING,
     htf_label        = HTF3_LABEL,
     htf_ms           = HTF3_MS,
@@ -981,10 +1083,10 @@ var PO3Chart po3_primary = PO3Chart.new(
     show_dividers  = show_po3_dividers,
     divider_color  = po3_divider_color,
     divider_style  = po3_divider_style_resolved,
-    show_mbz           = po3_show_mbz,
+    show_mbz           = enable_mbz and po3_show_mbz,
     mbz_bull_highlight = po3_mbz_bull_highlight,
     mbz_bear_highlight = po3_mbz_bear_highlight,
-    show_sif           = po3_show_sif,
+    show_sif           = enable_sif and po3_show_sif,
     sif_bull_highlight = po3_sif_bull_highlight,
     sif_bear_highlight = po3_sif_bear_highlight,
     mbz_zone_bull      = po3_mbz_zone_bull,
@@ -1026,10 +1128,10 @@ var PO3Chart po3_htf2 = PO3Chart.new(
     show_dividers  = false,
     divider_color  = po3_divider_color,
     divider_style  = po3_divider_style_resolved,
-    show_mbz       = po3_show_mbz,
+    show_mbz       = enable_mbz and po3_show_mbz,
     mbz_bull_highlight = po3_mbz_bull_highlight,
     mbz_bear_highlight = po3_mbz_bear_highlight,
-    show_sif       = po3_show_sif,
+    show_sif       = enable_sif and po3_show_sif,
     sif_bull_highlight = po3_sif_bull_highlight,
     sif_bear_highlight = po3_sif_bear_highlight,
     mbz_zone_bull  = po3_mbz_zone_bull,
@@ -1071,10 +1173,10 @@ var PO3Chart po3_htf3 = PO3Chart.new(
     show_dividers  = false,
     divider_color  = po3_divider_color,
     divider_style  = po3_divider_style_resolved,
-    show_mbz       = po3_show_mbz,
+    show_mbz       = enable_mbz and po3_show_mbz,
     mbz_bull_highlight = po3_mbz_bull_highlight,
     mbz_bear_highlight = po3_mbz_bear_highlight,
-    show_sif       = po3_show_sif,
+    show_sif       = enable_sif and po3_show_sif,
     sif_bull_highlight = po3_sif_bull_highlight,
     sif_bear_highlight = po3_sif_bear_highlight,
     mbz_zone_bull  = po3_mbz_zone_bull,
@@ -1134,7 +1236,14 @@ get_bold_htf_label(string label, bool uppercase) =>
 
 // Build source breakdown text from gap types array
 // Returns empty string for single FVG (standard case), otherwise shows breakdown
-build_source_breakdown(array<string> source_gap_types) =>
+// Pool source timeframe in milliseconds (0 = not a pool source)
+pool_source_ms(string src) =>
+    src == POOL_SOURCE_MONTHLY ? TF_M_MS : src == POOL_SOURCE_WEEKLY ? TF_W_MS : src == POOL_SOURCE_DAILY ? TF_D_MS : src == POOL_SOURCE_4H ? TF_4H_MS : src == POOL_SOURCE_1H ? TF_1H_MS : 0
+
+// Pool sources (e.g., "daily") appear first, then gap sources
+// show_pool_sources: pool sources are MBZ-only, hide when MBZ off
+// show_gap_sources: gap sources may come from MBZ or SIF, hide when neither engine wants them
+build_source_breakdown(array<string> source_gap_types, bool show_pool_sources, bool show_gap_sources, int htf_ms) =>
     int num_sources = array.size(source_gap_types)
     if num_sources == 0
         ""
@@ -1144,9 +1253,21 @@ build_source_breakdown(array<string> source_gap_types) =>
         int fvg_vi_count = 0
         int imp_count = 0
         int vol_count = 0
+        int pool_count = 0
+        array<string> pool_names = array.new<string>()
+        array<int> pool_counts = array.new<int>()
 
         for i = 0 to num_sources - 1
             string src = array.get(source_gap_types, i)
+            bool is_gap = src == GAP_TYPE_FVG or src == GAP_TYPE_FVG_VI or src == GAP_TYPE_IMPLIED or src == GAP_TYPE_VOLUME
+            if is_gap and not show_gap_sources
+                continue
+            if not is_gap and not show_pool_sources
+                continue
+            if not is_gap
+                int src_ms = pool_source_ms(src)
+                if src_ms > 0 and src_ms <= htf_ms
+                    continue
             if src == GAP_TYPE_FVG
                 fvg_count += 1
             else if src == GAP_TYPE_FVG_VI
@@ -1155,84 +1276,141 @@ build_source_breakdown(array<string> source_gap_types) =>
                 imp_count += 1
             else if src == GAP_TYPE_VOLUME
                 vol_count += 1
+            else
+                pool_count += 1
+                int name_idx = array.indexof(pool_names, src)
+                if name_idx == -1
+                    array.push(pool_names, src)
+                    array.push(pool_counts, 1)
+                else
+                    array.set(pool_counts, name_idx, array.get(pool_counts, name_idx) + 1)
 
-        // Count distinct types (fvg and fvg·vi grouped as one type family)
-        int distinct_types = (fvg_count > 0 or fvg_vi_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
-
-        string source_type_text = ""
-
-        if distinct_types == 1
-            // Single type: show type with multiplier if count > 1 (FVG shows nothing if count == 1)
-            if fvg_count > 0 and fvg_vi_count == 0
-                if fvg_count == 1
-                    source_type_text := ""
-                else
-                    source_type_text := GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count)
-            else if fvg_vi_count > 0 and fvg_count == 0
-                if fvg_vi_count == 1
-                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY
-                else
-                    source_type_text := GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count)
-            else if fvg_count > 0 and fvg_vi_count > 0
-                array<string> fvg_parts = array.new<string>()
-                array.push(fvg_parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
-                array.push(fvg_parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
-                source_type_text := str.tostring(fvg_count + fvg_vi_count) + COUNT_SEPARATOR + array.join(fvg_parts, BREAKDOWN_SEPARATOR)
-            else if imp_count > 0
-                if imp_count == 1
-                    source_type_text := "ⁱᵐᵖ"
-                else
-                    source_type_text := GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count)
-            else if vol_count > 0
-                if vol_count == 1
-                    source_type_text := "ᵛᵒˡ"
-                else
-                    source_type_text := GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count)
+        int visible_count = fvg_count + fvg_vi_count + imp_count + vol_count + pool_count
+        if visible_count == 0
+            ""
         else
-            // Multiple distinct types: show "count: type1, type2" format
-            array<string> parts = array.new<string>()
+            // Build pool display string ordered by TF priority (monthly > weekly > daily > 4H), matching Prime
+            string pool_display = ""
+            if array.size(pool_names) > 0
+                array<string> pool_parts = array.new<string>()
+                array<string> pool_order = array.from(POOL_SOURCE_MONTHLY, POOL_SOURCE_WEEKLY, POOL_SOURCE_DAILY, POOL_SOURCE_4H, POOL_SOURCE_1H)
+                for p = 0 to array.size(pool_order) - 1
+                    string ordered_name = array.get(pool_order, p)
+                    int name_idx = array.indexof(pool_names, ordered_name)
+                    if name_idx != -1
+                        int pc = array.get(pool_counts, name_idx)
+                        array.push(pool_parts, pc == 1 ? ordered_name : ordered_name + MULTIPLIER_SYMBOL + str.tostring(pc))
+                pool_display := array.join(pool_parts, BREAKDOWN_SEPARATOR)
 
-            if fvg_count > 0
-                array.push(parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
-            if fvg_vi_count > 0
-                array.push(parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
-            if imp_count > 0
-                array.push(parts, imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count))
-            if vol_count > 0
-                array.push(parts, vol_count == 1 ? GAP_SOURCE_VOLUME_DISPLAY : GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count))
+            // Count distinct type families (fvg and fvg·vi grouped as one)
+            int gap_types = (fvg_count > 0 or fvg_vi_count > 0 ? 1 : 0) + (imp_count > 0 ? 1 : 0) + (vol_count > 0 ? 1 : 0)
+            int distinct_types = gap_types + (pool_count > 0 ? 1 : 0)
 
-            string breakdown = array.join(parts, BREAKDOWN_SEPARATOR)
-            source_type_text := str.tostring(num_sources) + COUNT_SEPARATOR + breakdown
+            string source_type_text = ""
 
-        source_type_text
+            if distinct_types == 1
+                if pool_count > 0
+                    source_type_text := array.size(pool_names) > 1 ? str.tostring(visible_count) + COUNT_SEPARATOR + pool_display : pool_display
+                else if fvg_count > 0 and fvg_vi_count == 0
+                    if fvg_count == 1
+                        source_type_text := ""
+                    else
+                        source_type_text := GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count)
+                else if fvg_vi_count > 0 and fvg_count == 0
+                    if fvg_vi_count == 1
+                        source_type_text := GAP_SOURCE_FVG_VI_DISPLAY
+                    else
+                        source_type_text := GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count)
+                else if fvg_count > 0 and fvg_vi_count > 0
+                    array<string> fvg_parts = array.new<string>()
+                    array.push(fvg_parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+                    array.push(fvg_parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
+                    source_type_text := str.tostring(fvg_count + fvg_vi_count) + COUNT_SEPARATOR + array.join(fvg_parts, BREAKDOWN_SEPARATOR)
+                else if imp_count > 0
+                    if imp_count == 1
+                        source_type_text := "ⁱᵐᵖ"
+                    else
+                        source_type_text := GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count)
+                else if vol_count > 0
+                    if vol_count == 1
+                        source_type_text := "ᵛᵒˡ"
+                    else
+                        source_type_text := GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count)
+            else
+                // Multiple distinct types: pool sources first, then gap sources
+                array<string> parts = array.new<string>()
+
+                if pool_count > 0
+                    array.push(parts, pool_display)
+                if fvg_count > 0
+                    array.push(parts, fvg_count == 1 ? GAP_SOURCE_FVG_BREAKDOWN_DISPLAY : GAP_SOURCE_FVG_BREAKDOWN_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_count))
+                if fvg_vi_count > 0
+                    array.push(parts, fvg_vi_count == 1 ? GAP_SOURCE_FVG_VI_DISPLAY : GAP_SOURCE_FVG_VI_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(fvg_vi_count))
+                if imp_count > 0
+                    array.push(parts, imp_count == 1 ? GAP_SOURCE_IMPLIED_DISPLAY : GAP_SOURCE_IMPLIED_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(imp_count))
+                if vol_count > 0
+                    array.push(parts, vol_count == 1 ? GAP_SOURCE_VOLUME_DISPLAY : GAP_SOURCE_VOLUME_DISPLAY + MULTIPLIER_SYMBOL + str.tostring(vol_count))
+
+                string breakdown = array.join(parts, BREAKDOWN_SEPARATOR)
+                source_type_text := str.tostring(visible_count) + COUNT_SEPARATOR + breakdown
+
+            source_type_text
 
 // Build unified zone label showing which engines validated it
 // Format: "𝗠𝗕𝗭·𝗦𝗜𝗙⁺·𝟰𝗛" or "IMM-SIF⁺·𝟰𝗛" or "MBZ⁺·𝟰𝗛" with source breakdown on second line
 // show_mbz/show_sif control which engines appear in the label (adapts to active toggles)
-build_zone_label(CandleZone zone, bool show_mbz, bool show_sif) =>
-    string direction_suffix = zone.is_bullish ? "⁺" : "⁻"
-
-    // Build engine prefix based on what the zone has AND what's active
+// Build engine prefix string: handles MBZ/SIF combinations + LQ formation rule.
+// Parentheses only when zone has BOTH gap-based MBZ AND pool-based MBZ.
+// use_bold: true for main chart labels (bold Unicode), false for PO3 (plain text).
+build_engine_prefix(CandleZone zone, bool show_mbz, bool show_sif, bool use_bold) =>
     bool mbz_visible = zone.has_mbz and show_mbz
     bool sif_visible = zone.has_sif and show_sif
-    string engine_prefix = ""
+    string prefix = ""
     if mbz_visible and sif_visible
-        engine_prefix := SIF_MBZ_COMBINED_BOLD
+        prefix := use_bold ? SIF_MBZ_COMBINED_BOLD : "MBZ·SIF"
     else if mbz_visible
-        engine_prefix := MBZ_BASE_TEXT
+        prefix := MBZ_BASE_TEXT
     else if sif_visible
-        engine_prefix := SIF_LABEL
+        prefix := SIF_LABEL
 
-    // Use zone's stored HTF label (supports multi-HTF)
+    bool has_liq = zone.liq_formation_rule != "" and na(zone.liq_formation_rule) == false
+    if has_liq and mbz_visible
+        if zone.has_gap_mbz
+            prefix := "(" + zone.liq_formation_rule + ")·" + prefix
+        else
+            prefix := zone.liq_formation_rule + "·" + prefix
+    prefix
+
+build_zone_label(CandleZone zone, bool show_mbz, bool show_sif, int htf_ms) =>
+    string direction_suffix = zone.is_bullish ? "⁺" : "⁻"
+    string prefix = build_engine_prefix(zone, show_mbz, show_sif, true)
     string htf_label_display = na(zone.htf_label) ? get_bold_htf_label(HTF_LABEL, false) : get_bold_htf_label(zone.htf_label, false)
-    string result = engine_prefix + direction_suffix + "·" + htf_label_display
-
-    // Add source breakdown on new line if not empty
-    string source_text = build_source_breakdown(zone.source_gap_types)
+    string result = prefix + direction_suffix + "·" + htf_label_display
+    // Pool sources are MBZ-only; gap sources show when gap-MBZ contributed or SIF is visible
+    bool show_pool = show_mbz
+    bool show_gap = (show_mbz and zone.has_gap_mbz) or (zone.has_sif and show_sif)
+    string source_text = build_source_breakdown(zone.source_gap_types, show_pool, show_gap, htf_ms)
     if str.length(source_text) > 0
         result := result + "\n" + source_text
-
     result
+
+// Returns the highest-timeframe pool source that is ABOVE the current HTF.
+// Skips sources at or below the HTF timeframe (e.g., "daily" hidden on daily HTF).
+// Returns "" if no qualifying pool sources exist.
+get_highest_pool_source(array<string> source_gap_types, int htf_ms) =>
+    string highest = ""
+    int highest_priority = 0
+    for i = 0 to array.size(source_gap_types) - 1
+        string src = array.get(source_gap_types, i)
+        int src_ms = pool_source_ms(src)
+        if src_ms > htf_ms and src_ms > highest_priority
+            highest_priority := src_ms
+            highest := src
+    highest
+
+// ─── Direction Filter Helper ───
+passes_direction_filter(bool is_bullish) =>
+    mbz_direction_filter == DIR_BOTH or (is_bullish and mbz_direction_filter == DIR_BULLISH) or (not is_bullish and mbz_direction_filter == DIR_BEARISH)
 
 // ─── Body Boundary Helpers ───
 htf_body_top(float o, float c) => math.max(o, c)
@@ -1504,7 +1682,7 @@ detect_htf_gaps(HTFContext ctx, int window_start) =>
 
 // Check gap interactions: first tap and inversion (close through)
 // Must be called BEFORE MBZ detection - ALWAYS runs (independent of gap display mode)
-// Registers SIF zones when enable_sif_engine is true and immediate SIF is detected
+// Registers SIF zones when enable_sif is true and immediate SIF is detected
 check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float htf_candle_open, float htf_candle_high, float htf_candle_low, float htf_candle_close, int htf_candle_time, string htf_label_param) =>
     // Track whether any gap has immediate SIF (first tap + inversion same candle)
     bool has_immediate_sif = false
@@ -1592,7 +1770,7 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
 
         // PASS 2: Register SIF zone ONLY for immediate SIF (first tap + inversion same candle)
         // Delayed inversions don't create zones - they're just gap closures, not SIF formations
-        if enable_sif_engine and has_immediate_sif
+        if enable_sif and has_immediate_sif
             // Immediate SIF detected - get or create zone for this candle
             // SIF zones don't use reference wick extension (set ref to na, allow_extension to false)
             [zone, zone_idx, is_new] = get_or_create_zone(zone_arr, bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false, htf_label_param)
@@ -1732,10 +1910,10 @@ update_gap_positions(array<GapData> gap_arr, array<CandleZone> zone_arr, bool do
             if do_style_update and not na(gap.gap_box)
                 bool type_ok = (enable_fvg and (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_FVG_VI)) or (enable_implied and gap.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and gap.gap_type == GAP_TYPE_VOLUME)
                 bool dir_ok = mbz_direction_filter == DIR_BOTH or (gap.mbz_is_bullish and mbz_direction_filter == DIR_BULLISH) or (not gap.mbz_is_bullish and mbz_direction_filter == DIR_BEARISH)
-                bool is_mbz_source = enable_mbz_engine and gap.mbz_ref_time > 0 and dir_ok and type_ok
+                bool is_mbz_source = enable_mbz and gap.mbz_ref_time > 0 and dir_ok and type_ok
                 bool sif_dir_ok = mbz_direction_filter == DIR_BOTH or (gap.is_bullish and mbz_direction_filter == DIR_BEARISH) or (not gap.is_bullish and mbz_direction_filter == DIR_BULLISH)
                 bool sif_type_ok = (enable_fvg and (gap.gap_type == GAP_TYPE_FVG or gap.gap_type == GAP_TYPE_FVG_VI)) or (enable_implied and gap.gap_type == GAP_TYPE_IMPLIED) or (enable_volume and gap.gap_type == GAP_TYPE_VOLUME)
-                bool is_sif_source = enable_sif_engine and gap.is_inverted and sif_dir_ok and sif_type_ok
+                bool is_sif_source = enable_sif and gap.is_inverted and sif_dir_ok and sif_type_ok
 
                 bool mbz_zone_active = map.contains(active_mbz_gap_ids, gap.gap_id)
                 bool sif_zone_active = map.contains(active_sif_gap_ids, gap.gap_id)
@@ -2014,17 +2192,12 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
 
                 // Pick highlight color: MBZ takes priority, then SIF
                 color hl_color = na
-                string zone_text = ""
                 if mbz_live_ok
                     hl_color := zone.is_bullish ? chart.mbz_bull_highlight : chart.mbz_bear_highlight
-                    zone_text := "MBZ"
                 else
                     hl_color := zone.is_bullish ? chart.sif_bull_highlight : chart.sif_bear_highlight
-                    zone_text := "SIF"
 
-                // Combined MBZ+SIF label
-                if mbz_live_ok and sif_live_ok
-                    zone_text := SIF_MBZ_COMBINED_BOLD
+                string zone_text = build_engine_prefix(zone, mbz_live_ok, sif_live_ok, false)
 
                 // Recolor candle body (keep original border) + split wick (once per candle)
                 if i < array.size(chart.bodies) and i < array.size(chart.wicks)
@@ -2045,17 +2218,13 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
 
                 // Zone box left edge:
                 //   ref_pushed → extend to ref candle (left by 1 spacing)
-                //   inclusion/reflection → cover the candle (zone uses wick area)
-                //   standard (no ref push) → right of candle body only
+                //   otherwise → right half of candle body only
                 bool ref_pushed = false
                 if zone.is_wick_extended and not na(zone.ref_candle_high) and not na(zone.ref_candle_low)
                     if zone.is_bullish and zone.ref_candle_low < zone.candle_low
                         ref_pushed := true
                     else if not zone.is_bullish and zone.ref_candle_high > zone.candle_high
                         ref_pushed := true
-                // Inclusion/Reflection: zone uses wick area, so cover the candle
-                bool zone_uses_wick = zone.zone_subtype == SUBTYPE_INCLUSION or zone.zone_subtype == SUBTYPE_REFLECTION
-
                 int zone_left  = na
                 int zone_right = na
                 string zone_xloc = xloc.bar_index
@@ -2064,7 +2233,7 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
                     zone_right := candle.t + chart.htf_ms
                     zone_xloc  := xloc.bar_time
                 else
-                    zone_left  := ref_pushed ? x_center - chart.spacing : zone_uses_wick ? x_center - 1 : x_center
+                    zone_left  := ref_pushed ? x_center - chart.spacing : x_center
                     zone_right := x_center + chart.spacing + 1
 
                 bool po3_use_mbz = zone.has_mbz and chart.show_mbz
@@ -2087,9 +2256,13 @@ po3_highlight_zones(PO3Chart chart, array<CandleZone> zone_arr, map<int, bool> i
                     if str.length(m) < 2
                         m := "0" + m
                     label_text := label_text + " · " + h + ":" + m
+                if po3_show_pool_source and zone.liq_formation_rule != ""
+                    string pool_src = get_highest_pool_source(zone.source_gap_types, htf_ms)
+                    if pool_src != ""
+                        label_text := zone.is_bullish ? (label_text + "\n" + pool_src) : (pool_src + "\n" + label_text)
                 float label_y = zone.is_bullish ? math.min(zone.zone_bottom, candle.l) : math.max(zone.zone_top, candle.h)
                 string label_sty = zone.is_bullish ? label.style_label_up : label.style_label_down
-                bool use_mbz_lbl = zone.has_mbz and enable_mbz_engine
+                bool use_mbz_lbl = zone.has_mbz and enable_mbz
                 color label_clr = zone.is_bullish ? (use_mbz_lbl ? po3_mbz_label_color : po3_sif_label_color) : (use_mbz_lbl ? po3_mbz_label_bear : po3_sif_label_bear)
                 int label_x_pos = (zone_left + zone_right) / 2
                 label lbl = label.new(label_x_pos, label_y, label_text, xloc=zone_xloc, style=label_sty, color=color.new(color.white, 100), textcolor=label_clr, size=size.tiny)
@@ -2298,6 +2471,397 @@ cleanup_zones(array<CandleZone> zone_arr, int window_start, int max_count) =>
     while array.size(zone_arr) > max_count
         delete_zone_visuals(array.pop(zone_arr))
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIQUIDITY POOL FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+liq_pool_create() =>
+    LiquidityPoolCollection.new(array.new<PoolLevel>(), float(na), float(na), int(na), int(na), 0, 0, float(na), float(na))
+
+liq_pool_session_count(LiquidityPoolCollection pool) =>
+    array.size(pool.levels)
+
+liq_pool_clear_current(LiquidityPoolCollection pool) =>
+    pool.current_high := na
+    pool.current_low := na
+    pool.current_high_time := na
+    pool.current_low_time := na
+
+liq_pool_reset_current(LiquidityPoolCollection pool, float highest, float lowest, int time_val) =>
+    pool.current_high := highest
+    pool.current_low := lowest
+    pool.current_high_time := time_val
+    pool.current_low_time := time_val
+
+liq_pool_update_current(LiquidityPoolCollection pool, float highest, float lowest, int time_val) =>
+    if na(pool.current_high) or na(pool.current_low)
+        liq_pool_reset_current(pool, highest, lowest, time_val)
+    else
+        if highest > pool.current_high
+            pool.current_high := highest
+            pool.current_high_time := time_val
+        if lowest < pool.current_low
+            pool.current_low := lowest
+            pool.current_low_time := time_val
+
+liq_pool_advance_high_pointer(LiquidityPoolCollection pool) =>
+    count = liq_pool_session_count(pool)
+    idx = math.max(0, pool.first_unbreached_high_index)
+    if idx > count
+        idx := count
+    while idx < count and array.get(pool.levels, idx).high_breached
+        idx += 1
+    pool.first_unbreached_high_index := idx
+
+liq_pool_advance_low_pointer(LiquidityPoolCollection pool) =>
+    count = liq_pool_session_count(pool)
+    idx = math.max(0, pool.first_unbreached_low_index)
+    if idx > count
+        idx := count
+    while idx < count and array.get(pool.levels, idx).low_breached
+        idx += 1
+    pool.first_unbreached_low_index := idx
+
+liq_pool_recompute_min_unbreached_high(LiquidityPoolCollection pool) =>
+    total = liq_pool_session_count(pool)
+    result = float(na)
+    if pool.first_unbreached_high_index < total
+        for i = pool.first_unbreached_high_index to total - 1
+            PoolLevel lvl = array.get(pool.levels, i)
+            if not lvl.high_breached
+                if na(result) or lvl.session_high < result
+                    result := lvl.session_high
+    pool.min_unbreached_high := result
+
+liq_pool_recompute_max_unbreached_low(LiquidityPoolCollection pool) =>
+    total = liq_pool_session_count(pool)
+    result = float(na)
+    if pool.first_unbreached_low_index < total
+        for i = pool.first_unbreached_low_index to total - 1
+            PoolLevel lvl = array.get(pool.levels, i)
+            if not lvl.low_breached
+                if na(result) or lvl.session_low > result
+                    result := lvl.session_low
+    pool.max_unbreached_low := result
+
+liq_pool_trim(LiquidityPoolCollection pool, int max_entries) =>
+    while liq_pool_session_count(pool) > max_entries
+        array.shift(pool.levels)
+        pool.first_unbreached_high_index := math.max(0, pool.first_unbreached_high_index - 1)
+        pool.first_unbreached_low_index := math.max(0, pool.first_unbreached_low_index - 1)
+
+    liq_pool_advance_high_pointer(pool)
+    liq_pool_advance_low_pointer(pool)
+    liq_pool_recompute_min_unbreached_high(pool)
+    liq_pool_recompute_max_unbreached_low(pool)
+
+liq_pool_finalize_session(LiquidityPoolCollection pool, int close_time, int max_entries) =>
+    if not na(pool.current_high) and not na(pool.current_low)
+        PoolLevel lvl = PoolLevel.new()
+        lvl.session_high := pool.current_high
+        lvl.session_low := pool.current_low
+        lvl.high_time := pool.current_high_time
+        lvl.low_time := pool.current_low_time
+        lvl.session_close_time := close_time
+        lvl.high_breached := false
+        lvl.low_breached := false
+        lvl.high_used_by_pattern_1 := false
+        lvl.high_used_by_pattern_2 := false
+        lvl.high_used_by_pattern_3 := false
+        lvl.low_used_by_pattern_1 := false
+        lvl.low_used_by_pattern_2 := false
+        lvl.low_used_by_pattern_3 := false
+        array.push(pool.levels, lvl)
+
+        new_index = liq_pool_session_count(pool) - 1
+        if pool.first_unbreached_high_index >= liq_pool_session_count(pool)
+            pool.first_unbreached_high_index := new_index
+        if pool.first_unbreached_low_index >= liq_pool_session_count(pool)
+            pool.first_unbreached_low_index := new_index
+
+        pool.min_unbreached_high := na(pool.min_unbreached_high) ? pool.current_high : math.min(pool.min_unbreached_high, pool.current_high)
+        pool.max_unbreached_low := na(pool.max_unbreached_low) ? pool.current_low : math.max(pool.max_unbreached_low, pool.current_low)
+
+        liq_pool_trim(pool, max_entries)
+
+    liq_pool_clear_current(pool)
+
+liq_pool_mark_breaches(LiquidityPoolCollection pool, float bar_high, float bar_low, int bar_time) =>
+    found_breach = false
+    total = liq_pool_session_count(pool)
+    if total > 0
+        bool high_breached_min = false
+        if pool.first_unbreached_high_index < total and not na(pool.min_unbreached_high) and bar_high >= pool.min_unbreached_high
+            for i = pool.first_unbreached_high_index to total - 1
+                PoolLevel lvl = array.get(pool.levels, i)
+                if not lvl.high_breached and bar_high >= lvl.session_high
+                    lvl.high_breached := true
+                    lvl.high_breach_time := bar_time
+                    lvl.high_first_breach_bar := bar_index
+                    array.set(pool.levels, i, lvl)
+                    found_breach := true
+                    if lvl.session_high == pool.min_unbreached_high
+                        high_breached_min := true
+            liq_pool_advance_high_pointer(pool)
+            if high_breached_min
+                liq_pool_recompute_min_unbreached_high(pool)
+
+        bool low_breached_max = false
+        if pool.first_unbreached_low_index < total and not na(pool.max_unbreached_low) and bar_low <= pool.max_unbreached_low
+            for i = pool.first_unbreached_low_index to total - 1
+                PoolLevel lvl = array.get(pool.levels, i)
+                if not lvl.low_breached and bar_low <= lvl.session_low
+                    lvl.low_breached := true
+                    lvl.low_breach_time := bar_time
+                    lvl.low_first_breach_bar := bar_index
+                    array.set(pool.levels, i, lvl)
+                    found_breach := true
+                    if lvl.session_low == pool.max_unbreached_low
+                        low_breached_max := true
+            liq_pool_advance_low_pointer(pool)
+            if low_breached_max
+                liq_pool_recompute_max_unbreached_low(pool)
+
+    found_breach
+
+// ─── Liquidity Pool Pattern Conditions ───
+// Pure functions ported from Prime — detect IMM/STD/DEL sweep patterns against a pool level
+
+// IMMEDIATE: A stays inside level, B sweeps through on current candle
+liquidity_immediate_condition(bool is_bearish_pattern, float level_value, float a_high, float a_low, float a_close, float b_open, float b_close, float b_high, float b_low) =>
+    if is_bearish_pattern
+        previous_inside = a_high <= level_value
+        current_sweep = b_high > level_value and b_open < level_value
+        is_bearish_candle = b_close < b_open
+        previous_inside and current_sweep and is_bearish_candle
+    else
+        previous_inside = a_low >= level_value
+        current_sweep = b_low < level_value and b_open > level_value
+        is_bullish_candle = b_close > b_open
+        previous_inside and current_sweep and is_bullish_candle
+
+// STANDARD: A moves into the sweep (directional), wicks through level but closes inside, B displaces
+liquidity_standard_condition(bool is_bearish_pattern, float level_value, float a_open, float a_close, float a_high, float a_low, float b_open, float b_close, float b_high, float b_low) =>
+    if is_bearish_pattern
+        wick_only_first_breach = a_open < level_value and a_high > level_value and a_close < level_value
+        a_moved_into_sweep = a_close > a_open
+        is_bearish_candle = b_close < b_open
+        is_valid = wick_only_first_breach and b_open < level_value and is_bearish_candle and a_moved_into_sweep
+        [is_valid, true]
+    else
+        wick_only_first_breach = a_open > level_value and a_low < level_value and a_close > level_value
+        a_moved_into_sweep = a_close < a_open
+        is_bullish_candle = b_close > b_open
+        is_valid = wick_only_first_breach and b_open > level_value and is_bullish_candle and a_moved_into_sweep
+        [is_valid, true]
+
+// DELAYED: A moves into the sweep (directional), body closes through level, B displaces
+liquidity_delayed_condition(bool is_bearish_pattern, float level_value, float a_open, float a_close, float b_open, float b_close) =>
+    if is_bearish_pattern
+        body_close_breach = a_close > level_value
+        a_moved_into_sweep = a_close > a_open
+        is_bearish_candle = b_close < b_open
+        is_valid = body_close_breach and b_open > level_value and is_bearish_candle and a_moved_into_sweep
+        [is_valid, true]
+    else
+        body_close_breach = a_close < level_value
+        a_moved_into_sweep = a_close < a_open
+        is_bullish_candle = b_close > b_open
+        is_valid = body_close_breach and b_open < level_value and is_bullish_candle and a_moved_into_sweep
+        [is_valid, true]
+
+// Midpoint confirmation: B close must cross 50% of B body in the pattern direction
+check_midpoint_confirmation(bool is_bearish_mbz, float close_price, float midpoint) =>
+    if is_bearish_mbz
+        if close_price < midpoint
+            [true, false]
+        else if close_price == midpoint
+            [true, true]
+        else
+            [false, false]
+    else
+        if close_price > midpoint
+            [true, false]
+        else if close_price == midpoint
+            [true, true]
+        else
+            [false, false]
+
+// ─── Liquidity Formation Rule Priority ───
+// IMM > STD > DEL — used when multiple rules match the same zone
+get_liq_rule_priority(string rule) =>
+    if rule == LIQ_RULE_IMM
+        3
+    else if rule == LIQ_RULE_STD
+        2
+    else if rule == LIQ_RULE_DEL
+        1
+    else
+        0
+
+// ─── Pool Zone Creation Helper ───
+// Creates or updates a CandleZone from a pool sweep pattern.
+// Uses HTF candle OHLC (matching Prime at HTF granularity):
+//   - Midpoint: candle A body 50% = (ctx.o2+ctx.c2)/2
+//   - Zone boundaries: candle B OHLC (ctx.o1/c1/h1/l1)
+//   - Ref candle: candle A (ctx.h2/l2)
+create_pool_zone(HTFContext ctx, bool mbz_bull, string pool_source_label, string formation_rule, int pool_source_id) =>
+    float a_midpoint = (ctx.o2 + ctx.c2) / 2.0
+    [mid_ok, _at_mid] = check_midpoint_confirmation(not mbz_bull, ctx.c1, a_midpoint)
+
+    bool created = false
+    if mid_ok
+        if passes_direction_filter(mbz_bull)
+            [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_wick, ctx.htf_label)
+            zone.has_mbz := true
+            zone.ref_candle_high := ctx.h2
+            zone.ref_candle_low := ctx.l2
+            if not is_new and extend_to_wick and not zone.is_wick_extended
+                [new_top, new_bottom, now_extended] = calculate_zone_boundaries(ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, zone.zone_subtype, ctx.h2, ctx.l2, extend_to_wick)
+                zone.zone_top := new_top
+                zone.zone_bottom := new_bottom
+                zone.is_wick_extended := now_extended
+            if zone.liq_formation_rule == "" or get_liq_rule_priority(formation_rule) > get_liq_rule_priority(zone.liq_formation_rule)
+                zone.liq_formation_rule := formation_rule
+            add_source_to_zone(zone, pool_source_id, pool_source_label)
+            array.set(ctx.zone_array, zone_idx, zone)
+            created := true
+    created
+
+// ─── Per-Tier Pool Detection State Accessors ───
+pool_get_htf_reach(PoolLevel lvl, bool check_high, int tier) =>
+    check_high ?
+      (tier == 1 ? lvl.high_first_htf_reach_1 : tier == 2 ? lvl.high_first_htf_reach_2 : lvl.high_first_htf_reach_3) :
+      (tier == 1 ? lvl.low_first_htf_reach_1  : tier == 2 ? lvl.low_first_htf_reach_2  : lvl.low_first_htf_reach_3)
+
+pool_set_htf_reach(PoolLevel lvl, bool check_high, int tier, int val) =>
+    if check_high
+        if tier == 1
+            lvl.high_first_htf_reach_1 := val
+        else if tier == 2
+            lvl.high_first_htf_reach_2 := val
+        else
+            lvl.high_first_htf_reach_3 := val
+    else
+        if tier == 1
+            lvl.low_first_htf_reach_1 := val
+        else if tier == 2
+            lvl.low_first_htf_reach_2 := val
+        else
+            lvl.low_first_htf_reach_3 := val
+
+pool_get_used(PoolLevel lvl, bool check_high, int tier) =>
+    check_high ?
+      (tier == 1 ? lvl.high_used_by_pattern_1 : tier == 2 ? lvl.high_used_by_pattern_2 : lvl.high_used_by_pattern_3) :
+      (tier == 1 ? lvl.low_used_by_pattern_1  : tier == 2 ? lvl.low_used_by_pattern_2  : lvl.low_used_by_pattern_3)
+
+pool_set_used(PoolLevel lvl, bool check_high, int tier, bool val) =>
+    if check_high
+        if tier == 1
+            lvl.high_used_by_pattern_1 := val
+        else if tier == 2
+            lvl.high_used_by_pattern_2 := val
+        else
+            lvl.high_used_by_pattern_3 := val
+    else
+        if tier == 1
+            lvl.low_used_by_pattern_1 := val
+        else if tier == 2
+            lvl.low_used_by_pattern_2 := val
+        else
+            lvl.low_used_by_pattern_3 := val
+
+// ─── Pool Side Detection Helper ───
+// Runs at HTF close. Candle A/B reach gating ensures correct geometry:
+// STD/DEL need A as the sweep candle. first_htf_reach only latches when candle A
+// reaches the level. When only B reaches, detection defers to the next HTF close
+// (B becomes A after shift_htf_history), matching Prime's per-bar timing.
+// IMM fires on breach_in_b (B is the sweep candle for IMM, no deferral needed).
+detect_pool_side(LiquidityPoolCollection pool, HTFContext ctx, string pool_source_label, bool check_high_side, int i, int pool_source_id) =>
+    PoolLevel lvl = array.get(pool.levels, i)
+    int tier = ctx.tier_index
+    bool breached = check_high_side ? lvl.high_breached : lvl.low_breached
+    bool used = pool_get_used(lvl, check_high_side, tier)
+    bool found = false
+    if breached and not used
+        float level = check_high_side ? lvl.session_high : lvl.session_low
+        int breach_time = check_high_side ? lvl.high_breach_time : lvl.low_breach_time
+        int htf_reach = pool_get_htf_reach(lvl, check_high_side, tier)
+        bool is_bearish_pattern = check_high_side
+
+        // Check which candle reaches the level
+        bool a_reaches = check_high_side ? (ctx.h2 >= level) : (ctx.l2 <= level)
+        bool b_reaches = check_high_side ? (ctx.h1 >= level) : (ctx.l1 <= level)
+
+        // Latch only when candle A reaches — STD/DEL need A as the sweep candle.
+        // When only B reaches, defer: B becomes A on the next close via shift_htf_history.
+        bool is_first_a_reach = na(htf_reach) and a_reaches
+
+        if is_first_a_reach
+            pool_set_htf_reach(lvl, check_high_side, tier, ctx.t1)
+            array.set(pool.levels, i, lvl)
+
+        // IMM: breach must be during candle B (contemporaneous sweep)
+        bool breach_in_b = breach_time >= ctx.t1
+
+        // STD/DEL fire on first A-reach; IMM fires on breach_in_b
+        if is_first_a_reach or breach_in_b
+            string matched_rule = ""
+            if enable_liq_imm and breach_in_b
+                if liquidity_immediate_condition(is_bearish_pattern, level, ctx.h2, ctx.l2, ctx.c2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
+                    matched_rule := LIQ_RULE_IMM
+            if matched_rule == "" and enable_liq_std and (is_first_a_reach or (breach_time >= ctx.t2))
+                [std_valid, _] = liquidity_standard_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.h2, ctx.l2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
+                if std_valid
+                    matched_rule := LIQ_RULE_STD
+            if matched_rule == "" and enable_liq_del and (is_first_a_reach or (breach_time >= ctx.t2))
+                [del_valid, _] = liquidity_delayed_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.o1, ctx.c1)
+                if del_valid
+                    matched_rule := LIQ_RULE_DEL
+            if matched_rule != ""
+                pool_set_used(lvl, check_high_side, tier, true)
+                array.set(pool.levels, i, lvl)
+                found := create_pool_zone(ctx, not check_high_side, pool_source_label, matched_rule, pool_source_id)
+    found
+
+// ─── Liquidity Pool Pattern Detection ───
+// Runs at HTF close. Scans finalized pool sessions for sweep patterns.
+detect_liq_pool_patterns(LiquidityPoolCollection pool, HTFContext ctx, string pool_source_label, int pool_source_id) =>
+    bool found_pattern = false
+    int total = liq_pool_session_count(pool)
+    if total > 0
+        for i = 0 to total - 1
+            if detect_pool_side(pool, ctx, pool_source_label, true, i, pool_source_id)
+                found_pattern := true
+            if detect_pool_side(pool, ctx, pool_source_label, false, i, pool_source_id)
+                found_pattern := true
+    found_pattern
+
+// ─── Liquidity Pool Instances ───
+var LiquidityPoolCollection liq_daily_pool = liq_pool_create()
+var LiquidityPoolCollection liq_weekly_pool = liq_pool_create()
+var LiquidityPoolCollection liq_monthly_pool = liq_pool_create()
+var LiquidityPoolCollection liq_4h_pool = liq_pool_create()
+var LiquidityPoolCollection liq_1h_pool = liq_pool_create()
+
+// Authoritative H/L from TradingView's native candle data.
+// Eliminates chart-TF granularity mismatch: pool levels are identical on 5m, 15m, 1H, etc.
+[sec_daily_high, sec_daily_low] = request.security(syminfo.tickerid, "D", [high, low])
+[sec_weekly_high, sec_weekly_low] = request.security(syminfo.tickerid, "W", [high, low])
+[sec_monthly_high, sec_monthly_low] = request.security(syminfo.tickerid, "M", [high, low])
+
+// ─── Liquidity Pool Per-Bar Tracking ───
+// Shared session tracking: detects new sessions, finalizes the previous,
+// resets/updates current extremes, and marks breaches.
+// Returns true if any new breach was found (used for has_recent_breach gate).
+liq_pool_track(LiquidityPoolCollection pool, bool is_new_session, int scan_cap) =>
+    if is_new_session
+        liq_pool_finalize_session(pool, nz(time[1], time), scan_cap)
+        liq_pool_reset_current(pool, high, low, time)
+    else
+        liq_pool_update_current(pool, high, low, time)
+    liq_pool_mark_breaches(pool, high, low, time)
+
 // Process a complete HTF candle close for any context
 // This is the master function that orchestrates all HTF processing
 process_htf_close(HTFContext ctx, float htf_close) =>
@@ -2324,8 +2888,8 @@ process_htf_close(HTFContext ctx, float htf_close) =>
     if enable_invalidation
         check_zone_invalidation(ctx.zone_array, ctx.o1, ctx.c1)
 
-    // MBZ formation check
-    if enable_mbz_engine
+    // Gap-based MBZ formation check
+    if enable_mbz and enable_gap_mbz
         array<MBZFormationMatch> mbz_matches = check_mbz_formation(ctx.gap_array, ctx.o2, ctx.h2, ctx.l2, ctx.c2, ctx.t2, ctx.o1, ctx.h1, ctx.l1, ctx.c1)
         int num_matches = array.size(mbz_matches)
 
@@ -2333,27 +2897,12 @@ process_htf_close(HTFContext ctx, float htf_close) =>
             MBZFormationMatch first_match = array.get(mbz_matches, 0)
             bool mbz_bull = first_match.is_bullish
 
-            bool show_this_mbz = mbz_direction_filter == DIR_BOTH or (mbz_bull and mbz_direction_filter == DIR_BULLISH) or (not mbz_bull and mbz_direction_filter == DIR_BEARISH)
-
-            if show_this_mbz
-                // Calculate consolidated zone boundaries
-                float consolidated_zone_top = 0.0
-                float consolidated_zone_bottom = 0.0
-
-                for i = 0 to num_matches - 1
-                    MBZFormationMatch match = array.get(mbz_matches, i)
-                    [match_zone_top, match_zone_bot, _] = calculate_zone_boundaries(ctx.o1, ctx.c1, ctx.h1, ctx.l1, match.is_bullish, match.subtype, ctx.h2, ctx.l2, extend_to_wick)
-                    if i == 0
-                        consolidated_zone_top := match_zone_top
-                        consolidated_zone_bottom := match_zone_bot
-                    else
-                        consolidated_zone_top := math.max(consolidated_zone_top, match_zone_top)
-                        consolidated_zone_bottom := math.min(consolidated_zone_bottom, match_zone_bot)
-
+            if passes_direction_filter(mbz_bull)
                 // Register MBZ in unified zone_array
                 [zone, zone_idx, is_new] = get_or_create_zone(ctx.zone_array, bar_index, ctx.t1, ctx.o1, ctx.c1, ctx.h1, ctx.l1, mbz_bull, ctx.h2, ctx.l2, extend_to_wick, ctx.htf_label)
 
                 zone.has_mbz := true
+                zone.has_gap_mbz := true
                 zone.ref_candle_high := ctx.h2
                 zone.ref_candle_low := ctx.l2
 
@@ -2371,10 +2920,57 @@ process_htf_close(HTFContext ctx, float htf_close) =>
 
                 array.set(ctx.zone_array, zone_idx, zone)
 
+    // Liquidity pool MBZ detection
+    if enable_liq_pools
+        if enable_liq_daily
+            detect_liq_pool_patterns(liq_daily_pool, ctx, POOL_SOURCE_DAILY, POOL_SOURCE_ID_DAILY)
+        if enable_liq_weekly
+            detect_liq_pool_patterns(liq_weekly_pool, ctx, POOL_SOURCE_WEEKLY, POOL_SOURCE_ID_WEEKLY)
+        if enable_liq_monthly
+            detect_liq_pool_patterns(liq_monthly_pool, ctx, POOL_SOURCE_MONTHLY, POOL_SOURCE_ID_MONTHLY)
+        if enable_liq_4h
+            detect_liq_pool_patterns(liq_4h_pool, ctx, POOL_SOURCE_4H, POOL_SOURCE_ID_4H)
+        if enable_liq_1h
+            detect_liq_pool_patterns(liq_1h_pool, ctx, POOL_SOURCE_1H, POOL_SOURCE_ID_1H)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN EXECUTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── Liquidity Pool Tracking (MUST run BEFORE HTF close processing) ───
+// Session boundary: barstate.isnew gated (matching Prime) — only finalize on new bar opens.
+// Sunday handling: skip Sunday evening on intraday charts (freeze Friday's session, matching Prime).
+bool is_new_daily_session = barstate.isnew and not na(time[1]) and dayofmonth(time[1], NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
+bool skip_sunday_liq = timeframe.in_seconds() < 86400 and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday and hour(time, NY_TIMEZONE) >= 18
+bool is_new_weekly_session = barstate.isnew and not na(time[1]) and weekofyear(time[1], NY_TIMEZONE) != weekofyear(time, NY_TIMEZONE)
+bool is_new_monthly_session = barstate.isnew and not na(time[1]) and month(time[1], NY_TIMEZONE) != month(time, NY_TIMEZONE)
+if enable_liq_pools and not skip_sunday_liq
+    // Daily pool
+    if enable_liq_daily
+        if is_new_daily_session and not na(sec_daily_high[1]) and not na(sec_daily_low[1])
+            liq_daily_pool.current_high := sec_daily_high[1]
+            liq_daily_pool.current_low := sec_daily_low[1]
+        liq_pool_track(liq_daily_pool, is_new_daily_session, LIQ_SCAN_CAP_DAILY)
+    // Weekly pool
+    if enable_liq_weekly
+        if is_new_weekly_session and not na(sec_weekly_high[1]) and not na(sec_weekly_low[1])
+            liq_weekly_pool.current_high := sec_weekly_high[1]
+            liq_weekly_pool.current_low := sec_weekly_low[1]
+        liq_pool_track(liq_weekly_pool, is_new_weekly_session, LIQ_SCAN_CAP_WEEKLY)
+    // Monthly pool
+    if enable_liq_monthly
+        if is_new_monthly_session and not na(sec_monthly_high[1]) and not na(sec_monthly_low[1])
+            liq_monthly_pool.current_high := sec_monthly_high[1]
+            liq_monthly_pool.current_low := sec_monthly_low[1]
+        liq_pool_track(liq_monthly_pool, is_new_monthly_session, LIQ_SCAN_CAP_MONTHLY)
+    // 4H pool (sub-4H charts only)
+    if enable_liq_4h and timeframe.in_seconds() < 14400
+        bool is_new_4h_session = barstate.isnew and timeframe.change("240")
+        liq_pool_track(liq_4h_pool, is_new_4h_session, LIQ_SCAN_CAP_4H)
+    // 1H pool (sub-1H charts only)
+    if enable_liq_1h and timeframe.in_seconds() < 3600
+        bool is_new_1h_session = barstate.isnew and timeframe.change("60")
+        liq_pool_track(liq_1h_pool, is_new_1h_session, LIQ_SCAN_CAP_1H)
 if IS_VALID
     if new_htf
         // ─── Process HTF1 Candle Close ───
@@ -2462,9 +3058,43 @@ if HTF3_VALID
     if enable_invalidation and new_htf3
         check_zone_invalidation_live(htf3.zone_array, htf3.curr_open)
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // UNIFIED ZONE RENDERING
 // ═══════════════════════════════════════════════════════════════════════════════
+
+
+// ─── Same-Source Filter Helpers ───
+
+// Build first-touch index map: for each gap_id, stores the oldest eligible zone index.
+// eligible: pre-built map of zone indices that pass has_mbz, not invalidated, not live-invalidated, direction filter.
+ss_build_first_touch(array<CandleZone> zone_arr, map<int, bool> eligible) =>
+    map<int, int> ft = map.new<int, int>()
+    for i = 0 to array.size(zone_arr) - 1
+        if not map.contains(eligible, i)
+            continue
+        CandleZone z = array.get(zone_arr, i)
+        if z.has_mbz and array.size(z.source_gap_ids) > 0
+            int gid = array.get(z.source_gap_ids, 0)
+            if gid >= 0
+                map.put(ft, gid, i)
+    ft
+
+// Check if a zone should be hidden by same-source filter.
+// Mutates seen_gaps for LATEST_TOUCH mode (marks gap_id as seen).
+ss_should_hide(int zone_idx, int gap_id, map<int, bool> seen_gaps, map<int, int> first_touch_map) =>
+    if gap_id < 0
+        false
+    else if same_source_filter == SAME_SOURCE_FILTER_ALL_TOUCHES
+        false
+    else if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
+        if map.contains(seen_gaps, gap_id)
+            true
+        else
+            map.put(seen_gaps, gap_id, true)
+            false
+    else
+        not map.contains(first_touch_map, gap_id) or map.get(first_touch_map, gap_id) != zone_idx
 
 render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
     if array.size(zone_arr) == 0
@@ -2474,24 +3104,22 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
 
         // Same-Source filter tracking
         var map<int, bool> seen_gap_ids = map.new<int, bool>()
-        var map<int, int> first_touch_index_per_gap = map.new<int, int>()
         map.clear(seen_gap_ids)
-        map.clear(first_touch_index_per_gap)
 
-        // Pre-pass for FIRST TOUCH mode: Find oldest (first) non-invalidated MBZ zone per gap_id
-        // zone_arr uses unshift (index 0 = newest), so iterate 0→N-1 (newest→oldest)
-        // map.put overwrites, so last put per gap_id = oldest = first touch
-        // Must exclude live-invalidated zones so they don't claim the slot and hide all others
+        // Pre-pass for FIRST TOUCH mode: build eligible map, then delegate to ss_build_first_touch
+        var map<int, bool> ss_eligible = map.new<int, bool>()
+        var map<int, int> first_touch_index_per_gap = map.new<int, int>()
+        map.clear(ss_eligible)
+        map.clear(first_touch_index_per_gap)
         if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
             for zone_index = 0 to array.size(zone_arr) - 1
                 CandleZone current_zone = array.get(zone_arr, zone_index)
-                if not current_zone.has_mbz
+                if not current_zone.has_mbz or current_zone.is_invalidated
                     continue
-                bool show_direction = mbz_direction_filter == DIR_BOTH or (current_zone.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not current_zone.is_bullish and mbz_direction_filter == DIR_BEARISH)
                 bool live_inv = enable_invalidation and check_mbz_component_invalidation(current_zone, htf_curr_open, close)
-                if show_direction and not current_zone.is_invalidated and not live_inv and array.size(current_zone.source_gap_ids) > 0
-                    int gap_id = array.get(current_zone.source_gap_ids, 0)
-                    map.put(first_touch_index_per_gap, gap_id, zone_index)
+                if not live_inv and passes_direction_filter(current_zone.is_bullish)
+                    map.put(ss_eligible, zone_index, true)
+            first_touch_index_per_gap := ss_build_first_touch(zone_arr, ss_eligible)
 
         // Pre-pass for Nearest Zone Extension (workspace mode)
         var map<int, bool> extend_to_current = map.new<int, bool>()
@@ -2515,10 +3143,9 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
                     continue
                 if not z.has_mbz and not z.has_sif
                     continue
-                bool show_dir = mbz_direction_filter == DIR_BOTH or (z.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not z.is_bullish and mbz_direction_filter == DIR_BEARISH)
-                if not show_dir
+                if not passes_direction_filter(z.is_bullish)
                     continue
-                bool visible = (enable_mbz_engine and z.has_mbz) or (enable_sif_engine and z.has_sif)
+                bool visible = (enable_mbz and z.has_mbz) or (enable_sif and z.has_sif)
                 if not visible
                     continue
                 // Exclude VI-only zones from workspace extension if enabled
@@ -2578,7 +3205,7 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
             // "Show All Chart Zones" disables this filter to reveal all detected zones
             if show_po3_chart and po3_limit_to_range and map.size(po3_visible_times) > 0
                 bool in_po3_range = map.contains(po3_visible_times, zone.formation_time)
-                bool po3_type_ok = (zone.has_mbz and po3_show_mbz) or (zone.has_sif and po3_show_sif)
+                bool po3_type_ok = (zone.has_mbz and enable_mbz and po3_show_mbz) or (zone.has_sif and enable_sif and po3_show_sif)
                 if not in_po3_range or not po3_type_ok
                     delete_zone_visuals(zone)
                     array.set(zone_arr, i, zone)
@@ -2588,8 +3215,8 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
             bool mbz_live_invalid = zone.has_mbz and enable_invalidation and check_mbz_component_invalidation(zone, htf_curr_open, close)
             bool sif_live_invalid = zone.has_sif and enable_invalidation and check_sif_component_invalidation(zone, htf_curr_open, close)
 
-            bool mbz_active = enable_mbz_engine and zone.has_mbz and show_mbz_on_chart
-            bool sif_active = enable_sif_engine and zone.has_sif and show_sif_on_chart
+            bool mbz_active = enable_mbz and zone.has_mbz and show_mbz_on_chart
+            bool sif_active = enable_sif and zone.has_sif and show_sif_on_chart
             bool all_live_invalidated = (not mbz_active or mbz_live_invalid) and (not sif_active or sif_live_invalid)
 
             if all_live_invalidated and (mbz_active or sif_active)
@@ -2598,38 +3225,20 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
                 continue
 
             // Direction filter
-            bool show_direction = mbz_direction_filter == DIR_BOTH or (zone.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zone.is_bullish and mbz_direction_filter == DIR_BEARISH)
-            if not show_direction
+            if not passes_direction_filter(zone.is_bullish)
                 delete_zone_visuals(zone)
                 array.set(zone_arr, i, zone)
                 continue
 
             // Engine visibility
-            bool show_zone = (enable_mbz_engine and zone.has_mbz and show_mbz_on_chart) or (enable_sif_engine and zone.has_sif and show_sif_on_chart)
+            bool show_zone = (enable_mbz and zone.has_mbz and show_mbz_on_chart) or (enable_sif and zone.has_sif and show_sif_on_chart)
             if not show_zone
                 delete_zone_visuals(zone)
                 array.set(zone_arr, i, zone)
                 continue
 
-            // Same-Source filter logic (MBZ only)
-            bool should_show_zone = true
-            if zone.has_mbz and array.size(zone.source_gap_ids) > 0
-                int primary_gap_id = array.get(zone.source_gap_ids, 0)
-
-                if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
-                    if map.contains(seen_gap_ids, primary_gap_id)
-                        should_show_zone := false
-                    else
-                        map.put(seen_gap_ids, primary_gap_id, true)
-                else if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-                    if map.contains(first_touch_index_per_gap, primary_gap_id)
-                        int first_touch_idx = map.get(first_touch_index_per_gap, primary_gap_id)
-                        if i != first_touch_idx
-                            should_show_zone := false
-                    else
-                        should_show_zone := false
-
-            if not should_show_zone
+            // Same-Source filter (MBZ only, gap sources only — pool zones are independent)
+            if zone.has_mbz and array.size(zone.source_gap_ids) > 0 and ss_should_hide(i, array.get(zone.source_gap_ids, 0), seen_gap_ids, first_touch_index_per_gap)
                 delete_zone_visuals(zone)
                 array.set(zone_arr, i, zone)
                 continue
@@ -2645,16 +3254,16 @@ render_htf_zones(array<CandleZone> zone_arr, int htf_ms, float htf_curr_open) =>
             color resolved_label_color = is_faded ? color.new(zone_label_color, WORKSPACE_FADE_OPACITY) : zone_label_color
 
             // Resolve fill/border colors: MBZ takes priority, then SIF
-            bool use_mbz_colors = zone.has_mbz and enable_mbz_engine
+            bool use_mbz_colors = zone.has_mbz and enable_mbz
             color zone_fill = zone.is_bullish ? (use_mbz_colors ? mbz_fill_bull : sif_fill_bull) : (use_mbz_colors ? mbz_fill_bear : sif_fill_bear)
             color zone_bdr  = zone.is_bullish ? (use_mbz_colors ? mbz_border_bull : sif_border_bull) : (use_mbz_colors ? mbz_border_bear : sif_border_bear)
             color resolved_fill = is_faded ? color.new(zone_fill, 99) : zone_fill
             color resolved_border = is_faded ? color.new(zone_bdr, WORKSPACE_FADE_OPACITY) : zone_bdr
 
             if na(zone.zone_box)
-                bool label_mbz = zone.has_mbz and enable_mbz_engine and show_mbz_on_chart
-                bool label_sif = zone.has_sif and enable_sif_engine and show_sif_on_chart
-                string zone_label_text = build_zone_label(zone, label_mbz, label_sif)
+                bool label_mbz = zone.has_mbz and enable_mbz and show_mbz_on_chart
+                bool label_sif = zone.has_sif and enable_sif and show_sif_on_chart
+                string zone_label_text = build_zone_label(zone, label_mbz, label_sif, htf_ms)
                 zone.zone_box := box.new(zone.formation_time, zone.zone_top, zone_right_edge, zone.zone_bottom, xloc=xloc.bar_time, bgcolor=resolved_fill, border_color=resolved_border, border_width=zone_border_width, text=zone_label_text, text_color=resolved_label_color, text_size=ZONE_LABEL_SIZE_RESOLVED, text_halign=text.align_right, text_valign=text.align_center)
 
                 // Validation boundary line
@@ -2744,36 +3353,24 @@ po3_build_and_highlight(PO3Chart chart, array<CandleZone> zone_arr, float curr_o
     var map<int, bool> ss_hidden = map.new<int, bool>()
     map.clear(ss_hidden)
     if same_source_filter != SAME_SOURCE_FILTER_ALL_TOUCHES and zone_count > 0
-        var map<int, bool> seen_gaps = map.new<int, bool>()
-        var map<int, int> first_touch = map.new<int, int>()
-        map.clear(seen_gaps)
-        map.clear(first_touch)
-
-        // Same-source pre-pass: only consider zones that can actually render on PO3
-        // (matching candle time, not live-invalidated, passes direction filter)
-        // This mirrors the chart rendering which applies these filters before same-source
-        if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-            for z_j = 0 to zone_count - 1
-                CandleZone zf = array.get(zone_arr, z_j)
-                if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0 and map.contains(po3_candle_times, zf.formation_time) and not map.contains(inv_mbz, zf.formation_time)
-                    bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
-                    if dir_ok
-                        map.put(first_touch, array.get(zf.source_gap_ids, 0), z_j)
+        // Build eligible map: zones that can render on PO3 (matching candle time, not invalidated, direction OK)
+        var map<int, bool> po3_eligible = map.new<int, bool>()
+        map.clear(po3_eligible)
         for z_j = 0 to zone_count - 1
             CandleZone zf = array.get(zone_arr, z_j)
-            if zf.has_mbz and not zf.is_invalidated and array.size(zf.source_gap_ids) > 0 and map.contains(po3_candle_times, zf.formation_time) and not map.contains(inv_mbz, zf.formation_time)
-                bool dir_ok = mbz_direction_filter == DIR_BOTH or (zf.is_bullish and mbz_direction_filter == DIR_BULLISH) or (not zf.is_bullish and mbz_direction_filter == DIR_BEARISH)
-                if not dir_ok
-                    continue
-                int gid = array.get(zf.source_gap_ids, 0)
-                if same_source_filter == SAME_SOURCE_FILTER_LATEST_TOUCH
-                    if map.contains(seen_gaps, gid)
-                        map.put(ss_hidden, z_j, true)
-                    else
-                        map.put(seen_gaps, gid, true)
-                else if same_source_filter == SAME_SOURCE_FILTER_FIRST_TOUCH
-                    if map.contains(first_touch, gid) and map.get(first_touch, gid) != z_j
-                        map.put(ss_hidden, z_j, true)
+            if zf.has_mbz and not zf.is_invalidated and map.contains(po3_candle_times, zf.formation_time) and not map.contains(inv_mbz, zf.formation_time) and passes_direction_filter(zf.is_bullish)
+                map.put(po3_eligible, z_j, true)
+
+        var map<int, bool> seen_gaps = map.new<int, bool>()
+        map.clear(seen_gaps)
+        map<int, int> first_touch = ss_build_first_touch(zone_arr, po3_eligible)
+
+        for z_j = 0 to zone_count - 1
+            if not map.contains(po3_eligible, z_j)
+                continue
+            CandleZone zf = array.get(zone_arr, z_j)
+            if array.size(zf.source_gap_ids) > 0 and ss_should_hide(z_j, array.get(zf.source_gap_ids, 0), seen_gaps, first_touch)
+                map.put(ss_hidden, z_j, true)
     po3_highlight_zones(chart, zone_arr, inv_mbz, inv_sif, htf_ms, ss_hidden)
 
 // ─── PO3 Tier Rendering (script-scope helpers) ───
