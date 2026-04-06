@@ -114,17 +114,26 @@ const int LIQ_SCAN_CAP_MONTHLY = 30    // ~2.5 years
 const int LIQ_SCAN_CAP_SESSION = 200   // ~40 weeks of intraday sessions
 
 // Session pool constants
-const int POOL_SOURCE_ID_ASIA    = -6
+const int POOL_SOURCE_ID_ASIA      = -6
+const int POOL_SOURCE_ID_ASIA_9    = -11
 // IDs -7 through -10 reserved for London, NYAM, Lunch, NYPM
-// IDs -11 through -14 reserved for NINE variants
-const string POOL_SOURCE_ASIA    = "asia"
-const string SESSION_ASIA_TIME   = "2000-0000"
-const string DAY_CODE_MON_SAT    = ":23456"
-const int POOL_PRIORITY_ASIA     = TF_4H_MS - 1
+// IDs -12 through -14 reserved for London-9, NYAM-9, NYPM-9
+const string POOL_SOURCE_ASIA      = "asia"
+const string POOL_SOURCE_ASIA_9    = "asia-9"
+const string SESSION_ASIA_TIME     = "2000-0000"
+const string SESSION_ASIA_9_TIME   = "1800-0300"
+const string DAY_CODE_MON_SAT      = ":23456"
+const int POOL_PRIORITY_ASIA       = TF_4H_MS - 1
+const int POOL_PRIORITY_ASIA_9     = TF_4H_MS - 1
 const int POOL_PRIORITY_LONDON   = TF_4H_MS - 2
 const int POOL_PRIORITY_NYAM     = TF_4H_MS - 3
 const int POOL_PRIORITY_LUNCH    = TF_4H_MS - 4
 const int POOL_PRIORITY_NYPM     = TF_4H_MS - 5
+
+// Session NINE mode constants
+const string NINE_MODE_STANDARD  = "Standard"
+const string NINE_MODE_NINE_ONLY = "NINE Only"
+const string NINE_MODE_BOTH      = "Both"
 
 // Pool source display constants
 const string POOL_SRC_OFF           = "Off"
@@ -401,7 +410,12 @@ enable_liq_del = input.bool(true, "Delayed", group=GROUP_MBZ_DETECTION, inline="
 enable_liq_monthly = input.bool(true, "Monthly", group=GROUP_LIQ_HTF, inline="liq_htf")
 enable_liq_weekly  = input.bool(true, "Weekly", group=GROUP_LIQ_HTF, inline="liq_htf")
 enable_liq_daily   = input.bool(true, "Daily", group=GROUP_LIQ_HTF, inline="liq_htf")
-enable_liq_asia    = input.bool(false, "Asia", group=GROUP_LIQ_SESSION, inline="liq_session", tooltip="Session liquidity pools track high/low prices during specific trading sessions.\nPatterns are detected when session highs/lows are swept on HTF candles.\n\nAsia: 2000-0000 NY\n\nOnly active on sub-1H chart timeframes.")
+enable_liq_asia    = input.bool(false, "Asia", group=GROUP_LIQ_SESSION, inline="liq_session", tooltip="Asia session pool.\nStandard: 2000-0000 NY\nNINE: 1800-0300 NY\nOnly active on sub-1H chart timeframes.")
+nine_times_mode    = input.string(NINE_MODE_STANDARD, "Mode", options=[NINE_MODE_STANDARD, NINE_MODE_NINE_ONLY, NINE_MODE_BOTH], group=GROUP_LIQ_SESSION, tooltip="Standard: default ICT session times.\nNINE Only: replace with NINE's times.\nBoth: run standard AND NINE in parallel (NINE variants show with -9 suffix).")
+
+// Derive session enable flags from toggle + NINE mode
+bool enable_liq_asia_std = enable_liq_asia and nine_times_mode != NINE_MODE_NINE_ONLY
+bool enable_liq_asia_9   = enable_liq_asia and nine_times_mode != NINE_MODE_STANDARD
 enable_liq_4h      = input.bool(true, "4ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 enable_liq_1h      = input.bool(true, "1ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 // ─── ✨ SIF on PO3 ───
@@ -1272,7 +1286,7 @@ get_bold_htf_label(string label, bool uppercase) =>
 // Returns empty string for single FVG (standard case), otherwise shows breakdown
 // Pool source timeframe in milliseconds (0 = not a pool source)
 pool_source_ms(string src) =>
-    src == POOL_SOURCE_MONTHLY ? TF_M_MS : src == POOL_SOURCE_WEEKLY ? TF_W_MS : src == POOL_SOURCE_DAILY ? TF_D_MS : src == POOL_SOURCE_4H ? TF_4H_MS : src == POOL_SOURCE_ASIA ? POOL_PRIORITY_ASIA : src == POOL_SOURCE_1H ? TF_1H_MS : 0
+    src == POOL_SOURCE_MONTHLY ? TF_M_MS : src == POOL_SOURCE_WEEKLY ? TF_W_MS : src == POOL_SOURCE_DAILY ? TF_D_MS : src == POOL_SOURCE_4H ? TF_4H_MS : src == POOL_SOURCE_ASIA ? POOL_PRIORITY_ASIA : src == POOL_SOURCE_ASIA_9 ? POOL_PRIORITY_ASIA_9 : src == POOL_SOURCE_1H ? TF_1H_MS : 0
 
 // Pool sources (e.g., "daily") appear first, then gap sources
 // show_pool_sources: pool sources are MBZ-only, hide when MBZ off
@@ -1327,7 +1341,7 @@ build_source_breakdown(array<string> source_gap_types, bool show_pool_sources, b
             string pool_display = ""
             if array.size(pool_names) > 0
                 array<string> pool_parts = array.new<string>()
-                array<string> pool_order = array.from(POOL_SOURCE_MONTHLY, POOL_SOURCE_WEEKLY, POOL_SOURCE_DAILY, POOL_SOURCE_4H, POOL_SOURCE_ASIA, POOL_SOURCE_1H)
+                array<string> pool_order = array.from(POOL_SOURCE_MONTHLY, POOL_SOURCE_WEEKLY, POOL_SOURCE_DAILY, POOL_SOURCE_4H, POOL_SOURCE_ASIA, POOL_SOURCE_ASIA_9, POOL_SOURCE_1H)
                 for p = 0 to array.size(pool_order) - 1
                     string ordered_name = array.get(pool_order, p)
                     int name_idx = array.indexof(pool_names, ordered_name)
@@ -2886,6 +2900,7 @@ var LiquidityPoolCollection liq_monthly_pool = liq_pool_create()
 var LiquidityPoolCollection liq_4h_pool = liq_pool_create()
 var LiquidityPoolCollection liq_1h_pool = liq_pool_create()
 var LiquidityPoolCollection liq_asia_pool = liq_pool_create()
+var LiquidityPoolCollection liq_asia_9_pool = liq_pool_create()
 
 // Authoritative H/L from TradingView's native candle data.
 // Eliminates chart-TF granularity mismatch: pool levels are identical on 5m, 15m, 1H, etc.
@@ -2986,8 +3001,10 @@ process_htf_close(HTFContext ctx, float htf_close) =>
             detect_liq_pool_patterns(liq_4h_pool, ctx, POOL_SOURCE_4H, POOL_SOURCE_ID_4H)
         if enable_liq_1h
             detect_liq_pool_patterns(liq_1h_pool, ctx, POOL_SOURCE_1H, POOL_SOURCE_ID_1H)
-        if enable_liq_asia
+        if enable_liq_asia_std
             detect_liq_pool_patterns(liq_asia_pool, ctx, POOL_SOURCE_ASIA, POOL_SOURCE_ID_ASIA)
+        if enable_liq_asia_9
+            detect_liq_pool_patterns(liq_asia_9_pool, ctx, POOL_SOURCE_ASIA_9, POOL_SOURCE_ID_ASIA_9)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN EXECUTION
@@ -3007,6 +3024,12 @@ bool in_asia = not na(time(timeframe.period, asia_session_str, NY_TIMEZONE))
 bool was_in_asia = not na(time(timeframe.period, asia_session_str, NY_TIMEZONE)[1])
 bool asia_just_started = in_asia and not was_in_asia
 bool asia_just_ended = not in_asia and was_in_asia
+
+string asia_9_session_str = SESSION_ASIA_9_TIME + DAY_CODE_MON_SAT
+bool in_asia_9 = not na(time(timeframe.period, asia_9_session_str, NY_TIMEZONE))
+bool was_in_asia_9 = not na(time(timeframe.period, asia_9_session_str, NY_TIMEZONE)[1])
+bool asia_9_just_started = in_asia_9 and not was_in_asia_9
+bool asia_9_just_ended = not in_asia_9 and was_in_asia_9
 
 if enable_liq_pools and not skip_sunday_liq
     // Daily pool
@@ -3035,9 +3058,13 @@ if enable_liq_pools and not skip_sunday_liq
     if enable_liq_1h and timeframe.in_seconds() < 3600
         bool is_new_1h_session = barstate.isnew and timeframe.change("60")
         liq_pool_track(liq_1h_pool, is_new_1h_session, LIQ_SCAN_CAP_1H)
-    // Asia session pool (sub-1H charts only)
-    if enable_liq_asia and timeframe.in_seconds() < 3600
+// Session pools: not gated by skip_sunday_liq — boundaries are time-windowed,
+// so if the session is active on Sunday evening (e.g. Asia-9 at 1800), track it.
+if enable_liq_pools and timeframe.in_seconds() < 3600
+    if enable_liq_asia_std
         liq_pool_track_session(liq_asia_pool, in_asia, asia_just_started, asia_just_ended, LIQ_SCAN_CAP_SESSION)
+    if enable_liq_asia_9
+        liq_pool_track_session(liq_asia_9_pool, in_asia_9, asia_9_just_started, asia_9_just_ended, LIQ_SCAN_CAP_SESSION)
 if HTF1_VALID
     if new_htf1
         // ─── Process HTF1 Candle Close ───
