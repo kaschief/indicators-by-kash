@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='mbz prime •'
-SHORT_TITLE="mbz prime •"
+SHORT_TITLE="mbz prime • DEVELOPMENT"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -157,6 +157,11 @@ DEFAULT_EXTENSION_BORDER_WIDTH = 2
 
 NY_TIMEZONE = "America/New_York"
 SUNDAY_REOPEN_START_HOUR = 18
+
+// Daily boundary mode constants
+DAILY_BOUNDARY_EXCHANGE = "Exchange Session"
+DAILY_BOUNDARY_CALENDAR = "Calendar Day"
+EXCHANGE_SESSION_START_HOUR = 18  // 18:00 ET
 
 // DTT Sessions - 15 sessions per 24hr cycle
 DTT_MAX_SESSIONS_TO_KEEP = 15  // Keep only last DTT cycle (1 day)
@@ -483,6 +488,7 @@ enable_1h_liquidity = input.bool(false, "1ʰ", group=GROUP_LIQUIDITY_TF, inline=
 enable_15m_liquidity = input.bool(false, "15ᵐ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 15-minute candle high/low breaches')
 
 // === ⏰ TIME BEHAVIOR ===
+daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
 include_sunday_evening_liquidity = input.bool(true, INPUT_LABEL_INCLUDE_SUNDAY_EVENING, group=GROUP_TIME_BEHAVIOR, tooltip='SUNDAY EVENING LIQUIDITY (Traditional markets):\n\nForex/Futures reopen Sunday 18:00 NY time after Friday close. This 6-hour period is technically "Sunday" but traders often consider it Monday\'s session start.\n\n• ON (default): Include Sunday 18:00-00:00 in HTF liquidity pools (Daily, Weekly, Monthly)\n• OFF: Skip Sunday evening, start fresh Monday 00:00\n\nNote: Crypto/24-7 assets auto-detected and ignore this setting (always include all weekend hours)')
 
 // Current timeframe in minutes (calculated once, reused throughout)
@@ -526,6 +532,10 @@ if not detection_completed
             is_247_asset := found_weekend_bar
 
         detection_completed := true
+
+// Resolve effective daily boundary mode (24/7 assets force Calendar Day)
+effective_daily_boundary = is_247_asset ? DAILY_BOUNDARY_CALENDAR : daily_boundary_mode
+use_exchange_session = effective_daily_boundary == DAILY_BOUNDARY_EXCHANGE
 
 // Auto-apply 24/7 day codes if weekend bars detected
 day_codes = is_247_asset ? DAY_CODE_ALL_DAYS : DAY_CODE_MON_SAT
@@ -622,6 +632,7 @@ zone_midline_style = switch zone_midline_style_in
 show_color_table = input.bool(false, "Show Color Reference Table", group="📊 Color Reference", tooltip='Display a table showing all color RGB values and transparency used in the indicator')
 show_status_table = input.bool(true, 'Show Status Table', group="📊 Color Reference", inline='status', tooltip='Show a compact status table at bottom center displaying current settings')
 status_table_offset = input.int(DEFAULT_STATUS_TABLE_OFFSET, 'Offset', minval=-150, maxval=150, group="📊 Color Reference", inline='status', tooltip='Horizontal offset: negative = left, positive = right (-150 to 150)')
+show_pool_debug = input.bool(false, "Show Pool Debug", group="📊 Color Reference", tooltip='Display a debug table showing the last 10 daily sessions with H/L values, timestamps, and breach status')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIVE EXTENSION HELPERS
@@ -1975,7 +1986,33 @@ process_liquidity_pool(
     [detected_events_is_high, detected_events_rules, detected_events_is_exact, detected_events_source_price, detected_events_source_bar_index, detected_events_session_close_time, detected_events_level_time]
 
 should_skip_sunday_liquidity(time_value) =>
-    timeframe.in_seconds() < 86400 and not is_247_asset and not include_sunday_evening_liquidity and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+    // Exchange Session mode: Sunday 18:00 starts Monday's session, never skip
+    if use_exchange_session
+        false
+    else
+        timeframe.in_seconds() < 86400 and not is_247_asset and not include_sunday_evening_liquidity and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+
+// Exchange session boundary: new daily session starts at 18:00 ET Mon-Fri
+// Sunday 18:00 = Monday's session start (day 1 in Pine, but exchange opens)
+// Saturday bars never exist for traditional markets; 24/7 assets forced to Calendar Day
+// On daily+ timeframes: fall back to calendar day change (each bar = one session)
+is_new_exchange_daily_session() =>
+    prev_time = time[1]
+    if na(prev_time)
+        false
+    else if timeframe.in_seconds() >= 86400
+        // Daily+ charts: each bar is a full session, use calendar day change
+        dayofmonth(prev_time, NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
+    else
+        cur_hour = hour(time, NY_TIMEZONE)
+        prev_hour = hour(prev_time, NY_TIMEZONE)
+        cur_dow = dayofweek(time, NY_TIMEZONE)
+        prev_dow = dayofweek(prev_time, NY_TIMEZONE)
+        // Detect crossing 18:00 boundary: previous bar < 18:00, current bar >= 18:00 on same day
+        // OR day changed (gap from Friday PM to Sunday 18:00+)
+        crossed_18 = (cur_hour >= EXCHANGE_SESSION_START_HOUR and prev_hour < EXCHANGE_SESSION_START_HOUR and cur_dow == prev_dow)
+        day_changed = cur_dow != prev_dow and cur_hour >= EXCHANGE_SESSION_START_HOUR
+        crossed_18 or day_changed
 
 is_new_liquidity_session(pool_type) =>
     prev_time = time[1]
@@ -1984,7 +2021,10 @@ is_new_liquidity_session(pool_type) =>
     else
         switch pool_type
             LIQUIDITY_SOURCE_TYPE_DAILY =>
-                dayofmonth(prev_time, NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
+                if use_exchange_session
+                    is_new_exchange_daily_session()
+                else
+                    dayofmonth(prev_time, NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
             LIQUIDITY_SOURCE_TYPE_WEEKLY =>
                 weekofyear(prev_time, NY_TIMEZONE) != weekofyear(time, NY_TIMEZONE)
             LIQUIDITY_SOURCE_TYPE_MONTHLY =>
@@ -4296,6 +4336,49 @@ if barstate.isconfirmed
             alert_message := alert_message + array.get(mbz_alert_parts, i)
 
         alert(alert_message + " • " + tf)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POOL DEBUG TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if show_pool_debug and barstate.islast
+    int d_count = liquidity_pool_session_count(daily_liquidity_pool)
+    int show_count = math.min(d_count, 10)
+    if show_count > 0
+        var table pool_debug_tbl = table.new(position.bottom_right, 9, 12, bgcolor=color.white, border_width=1, border_color=color.gray)
+        table.cell(pool_debug_tbl, 0, 0, "#",       text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 1, 0, "Close",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 2, 0, "High",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 3, 0, "H date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 4, 0, "Low",     text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 5, 0, "L date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 6, 0, "H br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 7, 0, "L br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        table.cell(pool_debug_tbl, 8, 0, "Count",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+        for i = 0 to show_count - 1
+            int idx = d_count - 1 - i
+            float h = array.get(daily_liquidity_pool.highs, idx)
+            float l = array.get(daily_liquidity_pool.lows, idx)
+            bool hb = array.get(daily_liquidity_pool.high_breached, idx)
+            bool lb = array.get(daily_liquidity_pool.low_breached, idx)
+            int ct = array.size(daily_liquidity_pool.session_close_times) > idx ? array.get(daily_liquidity_pool.session_close_times, idx) : na
+            string close_str = na(ct) ? "?" : str.tostring(month(ct, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(ct, NY_TIMEZONE))
+            int ht = array.size(daily_liquidity_pool.high_times) > idx ? array.get(daily_liquidity_pool.high_times, idx) : na
+            string h_date = na(ht) ? "?" : str.tostring(month(ht, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(ht, NY_TIMEZONE)) + " " + str.tostring(hour(ht, NY_TIMEZONE)) + ":" + (minute(ht, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(ht, NY_TIMEZONE))
+            int lt = array.size(daily_liquidity_pool.low_times) > idx ? array.get(daily_liquidity_pool.low_times, idx) : na
+            string l_date = na(lt) ? "?" : str.tostring(month(lt, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(lt, NY_TIMEZONE)) + " " + str.tostring(hour(lt, NY_TIMEZONE)) + ":" + (minute(lt, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(lt, NY_TIMEZONE))
+            table.cell(pool_debug_tbl, 0, i + 1, str.tostring(i + 1), text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 1, i + 1, close_str, text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 2, i + 1, str.tostring(h, "#.##"), text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 3, i + 1, h_date, text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 4, i + 1, str.tostring(l, "#.##"), text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 5, i + 1, l_date, text_color=color.black, text_size=size.small)
+            table.cell(pool_debug_tbl, 6, i + 1, hb ? "Y" : "N", text_color=hb ? color.red : color.green, text_size=size.small)
+            table.cell(pool_debug_tbl, 7, i + 1, lb ? "Y" : "N", text_color=lb ? color.red : color.green, text_size=size.small)
+            table.cell(pool_debug_tbl, 8, i + 1, str.tostring(d_count), text_color=color.gray, text_size=size.small)
+        table.cell(pool_debug_tbl, 0, show_count + 1, "Prime Daily", text_color=color.blue, text_size=size.small)
+        table.cell(pool_debug_tbl, 1, show_count + 1, "1=newest", text_color=color.gray, text_size=size.small)
+        table.cell(pool_debug_tbl, 2, show_count + 1, effective_daily_boundary, text_color=color.gray, text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
