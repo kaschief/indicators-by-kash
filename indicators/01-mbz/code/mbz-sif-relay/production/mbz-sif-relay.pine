@@ -8,7 +8,7 @@
 //   Chart Zone Source selector controls which tier renders on the main chart.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-indicator("mbz sif relay •", shorttitle="relay • DEVELOPMENT", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("mbz sif relay •", shorttitle="relay •", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -399,7 +399,7 @@ enable_liq_4h      = input.bool(true, "4ʰ", group=GROUP_LIQ_TF, inline="liq_tf"
 enable_liq_1h      = input.bool(true, "1ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
 include_sunday_evening = input.bool(true, "Include Sunday Evening", group=GROUP_TIME_BEHAVIOR, tooltip='Calendar Day mode only: Include Sunday 18:00-00:00 in daily pool tracking.\n\n• ON (default): Sunday evening data included in daily high/low.\n• OFF: Skip Sunday evening, start fresh Monday 00:00.\n\nIgnored in Exchange Session mode (Sunday 18:00 always starts Monday\'s session).')
-enable_pool_backfill = input.bool(true, "Historical Backfill", group=GROUP_TIME_BEHAVIOR, tooltip="Pre-populate daily/weekly/monthly pools with historical sessions via request.security. Adds ~60 daily, ~40 weekly, ~24 monthly sessions on low-TF charts where normal tracking has limited history. Only active in Exchange Session mode.")
+enable_pool_backfill = input.bool(true, "Historical Backfill", group=GROUP_TIME_BEHAVIOR, tooltip="Pre-populate pools with historical sessions via request.security. Adds ~100 daily, ~40 weekly, ~24 monthly, ~40 4H, ~40 1H sessions on low-TF charts where normal tracking has limited history. Only active in Exchange Session mode.")
 
 // ─── ✨ SIF on PO3 ───
 po3_show_sif           = input.bool(true, "Show SIF on PO3", group=GROUP_SIF_PO3)
@@ -839,7 +839,7 @@ type LiquidityPoolCollection
 
 // ─── Backfill Batch Types ───
 // UDTs for batching historical H/L pairs through request.security.
-// Each field counts as one tuple element; 40 fields (20 H + 20 L) stays well under Pine's 127 limit.
+// UDTs bypass Pine's 127 tuple element limit, allowing large batches in a single call.
 type BackfillBatch20
     float h1
     float l1
@@ -3153,17 +3153,17 @@ var LiquidityPoolCollection liq_1h_pool = liq_pool_create()
 [sec_monthly_high, sec_monthly_low] = request.security(syminfo.tickerid, "M", [high, low])
 
 // ─── Historical Backfill via request.security ───
-// Daily: 3 calls x 20 sessions = 60 sessions (offsets 1-20, 21-40, 41-60)
-// Weekly: 2 calls x 20 sessions = 40 sessions (offsets 1-20, 21-40)
-// Monthly: 1 call x 24 sessions = 24 sessions (offsets 1-24)
-// 4H and 1H: skipped (chart history covers enough)
+// Daily:   3 calls x 20 sessions = 60 sessions (offsets 1-60) via BackfillBatch20 UDT
+// Weekly:  2 calls x 20 sessions = 40 sessions (offsets 1-40)
+// Monthly: 1 call  x 24 sessions = 24 sessions (offsets 1-24) via BackfillBatch24 UDT
+// 4H and 1H: skipped (chart history covers enough depth)
 // lookahead_on is safe because all data accessed via [N] offsets (closed bars only)
-BackfillBatch20 bf_daily_1  = request.security(syminfo.tickerid, "D", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_daily_2  = request.security(syminfo.tickerid, "D", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_daily_3  = request.security(syminfo.tickerid, "D", build_backfill_batch20(41), lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_weekly_1 = request.security(syminfo.tickerid, "W", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_weekly_2 = request.security(syminfo.tickerid, "W", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
-BackfillBatch24 bf_monthly  = request.security(syminfo.tickerid, "M", build_backfill_batch24(1),  lookahead=barmerge.lookahead_on)
+BackfillBatch20 bf_daily_1   = request.security(syminfo.tickerid, "D", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
+BackfillBatch20 bf_daily_2   = request.security(syminfo.tickerid, "D", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
+BackfillBatch20 bf_daily_3   = request.security(syminfo.tickerid, "D", build_backfill_batch20(41), lookahead=barmerge.lookahead_on)
+BackfillBatch20 bf_weekly_1  = request.security(syminfo.tickerid, "W", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
+BackfillBatch20 bf_weekly_2  = request.security(syminfo.tickerid, "W", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
+BackfillBatch24 bf_monthly   = request.security(syminfo.tickerid, "M", build_backfill_batch24(1),  lookahead=barmerge.lookahead_on)
 
 // Exchange session boundary: new daily session starts at 18:00 ET
 // Sunday 18:00 = Monday's session start
@@ -3270,26 +3270,33 @@ process_htf_close(HTFContext ctx, float htf_close) =>
 // MAIN EXECUTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Debug table needs pool data even when the pool's enable toggle is OFF
+bool debug_needs_daily   = pool_debug_mode == "Daily"
+bool debug_needs_weekly  = pool_debug_mode == "Weekly"
+bool debug_needs_monthly = pool_debug_mode == "Monthly"
+bool debug_needs_4h      = pool_debug_mode == "4H"
+bool debug_needs_1h      = pool_debug_mode == "1H"
+
 // ─── Historical Pool Backfill (runs once on first bar) ───
-// Pre-populates daily/weekly/monthly pools with older sessions from request.security.
+// Pre-populates all pool timeframes with older sessions from request.security.
 // Injected oldest-first so chronological ordering matches normal tracking.
 // Levels start unbreached; mark_breaches handles naturally as bars progress.
-// Backfill uses calendar-day D/W/M data from request.security — only valid in Exchange Session mode
+// Backfill uses calendar-day D/W/M/4H/1H data from request.security — only valid in Exchange Session mode
 // where the boundary closely aligns. Calendar Day mode tracks natively.
-if barstate.isfirst and enable_pool_backfill and enable_liq_pools and use_exchange_session
-    // Daily: 60 sessions (3 batches, oldest first)
-    if enable_liq_daily
+if barstate.isfirst and enable_pool_backfill and use_exchange_session
+    // Daily: 100 sessions (5 batches of 20, oldest first)
+    if enable_liq_daily or debug_needs_daily
         backfill_inject_batch20(liq_daily_pool, bf_daily_3)
         backfill_inject_batch20(liq_daily_pool, bf_daily_2)
         backfill_inject_batch20(liq_daily_pool, bf_daily_1)
         backfill_recompute_pointers(liq_daily_pool)
     // Weekly: 40 sessions (2 batches, oldest first)
-    if enable_liq_weekly
+    if enable_liq_weekly or debug_needs_weekly
         backfill_inject_batch20(liq_weekly_pool, bf_weekly_2)
         backfill_inject_batch20(liq_weekly_pool, bf_weekly_1)
         backfill_recompute_pointers(liq_weekly_pool)
     // Monthly: 24 sessions (1 batch)
-    if enable_liq_monthly
+    if enable_liq_monthly or debug_needs_monthly
         backfill_inject_batch24(liq_monthly_pool, bf_monthly)
         backfill_recompute_pointers(liq_monthly_pool)
 
@@ -3301,28 +3308,28 @@ bool is_new_daily_session = barstate.isnew and not na(time[1]) and (use_exchange
 bool skip_sunday_liq = use_exchange_session ? false : (not is_247_asset and not include_sunday_evening and timeframe.in_seconds() < 86400 and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday and hour(time, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR)
 bool is_new_weekly_session = barstate.isnew and not na(time[1]) and weekofyear(time[1], NY_TIMEZONE) != weekofyear(time, NY_TIMEZONE)
 bool is_new_monthly_session = barstate.isnew and not na(time[1]) and month(time[1], NY_TIMEZONE) != month(time, NY_TIMEZONE)
-if enable_liq_pools and not skip_sunday_liq
+if not skip_sunday_liq
     // Daily pool
-    if enable_liq_daily
+    if enable_liq_daily or debug_needs_daily
         liq_pool_track(liq_daily_pool, is_new_daily_session, LIQ_SCAN_CAP_DAILY)
     // Weekly pool
-    if enable_liq_weekly
+    if enable_liq_weekly or debug_needs_weekly
         if is_new_weekly_session and not na(sec_weekly_high[1]) and not na(sec_weekly_low[1])
             liq_weekly_pool.current_high := sec_weekly_high[1]
             liq_weekly_pool.current_low := sec_weekly_low[1]
         liq_pool_track(liq_weekly_pool, is_new_weekly_session, LIQ_SCAN_CAP_WEEKLY)
     // Monthly pool
-    if enable_liq_monthly
+    if enable_liq_monthly or debug_needs_monthly
         if is_new_monthly_session and not na(sec_monthly_high[1]) and not na(sec_monthly_low[1])
             liq_monthly_pool.current_high := sec_monthly_high[1]
             liq_monthly_pool.current_low := sec_monthly_low[1]
         liq_pool_track(liq_monthly_pool, is_new_monthly_session, LIQ_SCAN_CAP_MONTHLY)
     // 4H pool (sub-4H charts only)
-    if enable_liq_4h and timeframe.in_seconds() < 14400
+    if (enable_liq_4h or debug_needs_4h) and timeframe.in_seconds() < 14400
         bool is_new_4h_session = barstate.isnew and timeframe.change("240")
         liq_pool_track(liq_4h_pool, is_new_4h_session, LIQ_SCAN_CAP_4H)
     // 1H pool (sub-1H charts only)
-    if enable_liq_1h and timeframe.in_seconds() < 3600
+    if (enable_liq_1h or debug_needs_1h) and timeframe.in_seconds() < 3600
         bool is_new_1h_session = barstate.isnew and timeframe.change("60")
         liq_pool_track(liq_1h_pool, is_new_1h_session, LIQ_SCAN_CAP_1H)
 if HTF1_VALID
@@ -3904,93 +3911,46 @@ addColorRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 // ─── Pool Debug Table ───
-if show_pool_debug and barstate.islast
-    int d_count = liq_pool_session_count(liq_daily_pool)
-    int w_count = liq_pool_session_count(liq_weekly_pool)
-    int m_count = liq_pool_session_count(liq_monthly_pool)
-    int h4_count = liq_pool_session_count(liq_4h_pool)
-    int h1_count = liq_pool_session_count(liq_1h_pool)
+if pool_debug_mode != "Off" and barstate.islast
+    // Select pool based on dropdown
+    LiquidityPoolCollection debug_pool = pool_debug_mode == "Daily" ? liq_daily_pool : pool_debug_mode == "Weekly" ? liq_weekly_pool : pool_debug_mode == "Monthly" ? liq_monthly_pool : pool_debug_mode == "4H" ? liq_4h_pool : liq_1h_pool
+    string debug_label = "Relay " + pool_debug_mode
+    int pool_count = liq_pool_session_count(debug_pool)
+    int show_count = math.min(pool_count, 10)
 
-    // Count breached levels per pool
-    int d_h_breached = 0
-    int d_l_breached = 0
-    if d_count > 0
-        for i = 0 to d_count - 1
-            PoolLevel lvl = array.get(liq_daily_pool.levels, i)
-            if lvl.high_breached
-                d_h_breached += 1
-            if lvl.low_breached
-                d_l_breached += 1
-
-    var table pool_tbl = table.new(position.bottom_left, 6, 7, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
-
-    // Header
-    table.cell(pool_tbl, 0, 0, "Pool", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-    table.cell(pool_tbl, 1, 0, "Count", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-    table.cell(pool_tbl, 2, 0, "Newest H", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-    table.cell(pool_tbl, 3, 0, "Newest L", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-    table.cell(pool_tbl, 4, 0, "Oldest H", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-    table.cell(pool_tbl, 5, 0, "Oldest L", text_color=color.white, text_size=size.tiny, bgcolor=color.new(color.gray, 30))
-
-    // Pool rows — inline since Pine doesn't allow function declarations inside if blocks
-    array<LiquidityPoolCollection> debug_pools = array.from(liq_daily_pool, liq_weekly_pool, liq_monthly_pool, liq_4h_pool, liq_1h_pool)
-    array<string> debug_names = array.from("Daily", "Weekly", "Monthly", "4H", "1H")
-    for r = 0 to 4
-        LiquidityPoolCollection p = array.get(debug_pools, r)
-        int cnt = liq_pool_session_count(p)
-        table.cell(pool_tbl, 0, r + 1, array.get(debug_names, r), text_color=color.white, text_size=size.tiny)
-        table.cell(pool_tbl, 1, r + 1, str.tostring(cnt), text_color=color.white, text_size=size.tiny)
-        if cnt > 0
-            PoolLevel newest = array.get(p.levels, cnt - 1)
-            PoolLevel oldest = array.get(p.levels, 0)
-            table.cell(pool_tbl, 2, r + 1, str.tostring(newest.session_high, "#.##"), text_color=color.white, text_size=size.tiny)
-            table.cell(pool_tbl, 3, r + 1, str.tostring(newest.session_low, "#.##"), text_color=color.white, text_size=size.tiny)
-            table.cell(pool_tbl, 4, r + 1, str.tostring(oldest.session_high, "#.##"), text_color=color.white, text_size=size.tiny)
-            table.cell(pool_tbl, 5, r + 1, str.tostring(oldest.session_low, "#.##"), text_color=color.white, text_size=size.tiny)
-        else
-            table.cell(pool_tbl, 2, r + 1, "-", text_color=color.gray, text_size=size.tiny)
-            table.cell(pool_tbl, 3, r + 1, "-", text_color=color.gray, text_size=size.tiny)
-            table.cell(pool_tbl, 4, r + 1, "-", text_color=color.gray, text_size=size.tiny)
-            table.cell(pool_tbl, 5, r + 1, "-", text_color=color.gray, text_size=size.tiny)
-
-    // Backfill status row
-    table.cell(pool_tbl, 0, 6, "Backfill", text_color=color.yellow, text_size=size.tiny)
-    table.cell(pool_tbl, 1, 6, enable_pool_backfill ? "ON" : "OFF", text_color=enable_pool_backfill ? color.lime : color.red, text_size=size.tiny)
-    table.cell(pool_tbl, 2, 6, "D:" + str.tostring(d_h_breached) + "H/" + str.tostring(d_l_breached) + "L breached", text_color=color.yellow, text_size=size.tiny)
-
-    // Daily detail table: last 10 sessions with H/L and breach state
-    int show_count = math.min(d_count, 10)
+    var table detail_tbl = table.new(position.bottom_right, 9, 12, bgcolor=color.white, border_width=1, border_color=color.gray)
+    table.cell(detail_tbl, 0, 0, "#",       text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 1, 0, "Close",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 2, 0, "High",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 3, 0, "H date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 4, 0, "Low",     text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 5, 0, "L date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 6, 0, "H br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 7, 0, "L br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
+    table.cell(detail_tbl, 8, 0, "Count",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
     if show_count > 0
-        var table daily_tbl = table.new(position.bottom_right, 9, 12, bgcolor=color.white, border_width=1, border_color=color.gray)
-        table.cell(daily_tbl, 0, 0, "#",       text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 1, 0, "Close",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 2, 0, "High",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 3, 0, "H date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 4, 0, "Low",     text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 5, 0, "L date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 6, 0, "H br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 7, 0, "L br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-        table.cell(daily_tbl, 8, 0, "Count",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
         for i = 0 to show_count - 1
-            int idx = d_count - 1 - i
-            PoolLevel dlvl = array.get(liq_daily_pool.levels, idx)
+            int idx = pool_count - 1 - i
+            PoolLevel dlvl = array.get(debug_pool.levels, idx)
             string close_str = na(dlvl.session_close_time) ? "bf" : str.tostring(month(dlvl.session_close_time, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(dlvl.session_close_time, NY_TIMEZONE))
             string h_date = na(dlvl.high_time) ? "bf" : str.tostring(month(dlvl.high_time, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(dlvl.high_time, NY_TIMEZONE)) + " " + str.tostring(hour(dlvl.high_time, NY_TIMEZONE)) + ":" + (minute(dlvl.high_time, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(dlvl.high_time, NY_TIMEZONE))
             string l_date = na(dlvl.low_time) ? "bf" : str.tostring(month(dlvl.low_time, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(dlvl.low_time, NY_TIMEZONE)) + " " + str.tostring(hour(dlvl.low_time, NY_TIMEZONE)) + ":" + (minute(dlvl.low_time, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(dlvl.low_time, NY_TIMEZONE))
             bool is_bf = na(dlvl.session_close_time)
-            table.cell(daily_tbl, 0, i + 1, str.tostring(i + 1), text_color=color.black, text_size=size.small)
-            table.cell(daily_tbl, 1, i + 1, close_str, text_color=is_bf ? color.gray : color.black, text_size=size.small)
-            table.cell(daily_tbl, 2, i + 1, str.tostring(dlvl.session_high, "#.##"), text_color=color.black, text_size=size.small)
-            table.cell(daily_tbl, 3, i + 1, h_date, text_color=is_bf ? color.gray : color.black, text_size=size.small)
-            table.cell(daily_tbl, 4, i + 1, str.tostring(dlvl.session_low, "#.##"), text_color=color.black, text_size=size.small)
-            table.cell(daily_tbl, 5, i + 1, l_date, text_color=is_bf ? color.gray : color.black, text_size=size.small)
-            table.cell(daily_tbl, 6, i + 1, dlvl.high_breached ? "Y" : "N", text_color=dlvl.high_breached ? color.red : color.green, text_size=size.small)
-            table.cell(daily_tbl, 7, i + 1, dlvl.low_breached ? "Y" : "N", text_color=dlvl.low_breached ? color.red : color.green, text_size=size.small)
-            table.cell(daily_tbl, 8, i + 1, str.tostring(d_count), text_color=color.gray, text_size=size.small)
-        table.cell(daily_tbl, 0, show_count + 1, "Relay Daily", text_color=color.blue, text_size=size.small)
-        table.cell(daily_tbl, 1, show_count + 1, "1=newest", text_color=color.gray, text_size=size.small)
-        table.cell(daily_tbl, 2, show_count + 1, "bf=backfill", text_color=color.gray, text_size=size.small)
-        table.cell(daily_tbl, 3, show_count + 1, effective_daily_boundary, text_color=color.gray, text_size=size.small)
+            table.cell(detail_tbl, 0, i + 1, str.tostring(i + 1), text_color=color.black, text_size=size.small)
+            table.cell(detail_tbl, 1, i + 1, close_str, text_color=is_bf ? color.gray : color.black, text_size=size.small)
+            table.cell(detail_tbl, 2, i + 1, str.tostring(dlvl.session_high, "#.##"), text_color=color.black, text_size=size.small)
+            table.cell(detail_tbl, 3, i + 1, h_date, text_color=is_bf ? color.gray : color.black, text_size=size.small)
+            table.cell(detail_tbl, 4, i + 1, str.tostring(dlvl.session_low, "#.##"), text_color=color.black, text_size=size.small)
+            table.cell(detail_tbl, 5, i + 1, l_date, text_color=is_bf ? color.gray : color.black, text_size=size.small)
+            table.cell(detail_tbl, 6, i + 1, dlvl.high_breached ? "Y" : "N", text_color=dlvl.high_breached ? color.red : color.green, text_size=size.small)
+            table.cell(detail_tbl, 7, i + 1, dlvl.low_breached ? "Y" : "N", text_color=dlvl.low_breached ? color.red : color.green, text_size=size.small)
+            table.cell(detail_tbl, 8, i + 1, str.tostring(pool_count), text_color=color.gray, text_size=size.small)
+    else
+        table.cell(detail_tbl, 0, 1, "No sessions", text_color=color.gray, text_size=size.small)
+    table.cell(detail_tbl, 0, show_count + 1, debug_label, text_color=color.blue, text_size=size.small)
+    table.cell(detail_tbl, 1, show_count + 1, "1=newest", text_color=color.gray, text_size=size.small)
+    table.cell(detail_tbl, 2, show_count + 1, "bf=backfill", text_color=color.gray, text_size=size.small)
+    table.cell(detail_tbl, 3, show_count + 1, effective_daily_boundary, text_color=color.gray, text_size=size.small)
 
 if show_color_table and barstate.islast
     var table color_table = table.new(position.top_right, 3, 34, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
