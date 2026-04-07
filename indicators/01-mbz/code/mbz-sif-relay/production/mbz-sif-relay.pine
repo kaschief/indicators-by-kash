@@ -284,6 +284,7 @@ GROUP_MBZ_CHART      = "🎯 MBZ on Chart"
 GROUP_MBZ_DETECTION  = "🎯 Liquidity MBZ"
 GROUP_LIQ_HTF        = "💧 Higher Timeframe Pools"
 GROUP_LIQ_TF         = "💧 Timeframe Pools"
+GROUP_TIME_BEHAVIOR  = "⏰ Time Behavior"
 GROUP_SIF_PO3        = "✨ SIF on PO3"
 GROUP_SIF_CHART      = "✨ SIF on Chart"
 GROUP_CHART_ZONES    = "🎨 Chart Zones"
@@ -391,14 +392,15 @@ same_source_filter = input.string(SAME_SOURCE_FILTER_LATEST_TOUCH, "Same-Source"
 enable_liq_imm = input.bool(true, "Immediate", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A stays inside level, B sweeps through on current candle.')
 enable_liq_std = input.bool(true, "Standard", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A wicks through level (directional), closes inside; B displaces.')
 enable_liq_del = input.bool(true, "Delayed", group=GROUP_MBZ_DETECTION, inline="liq_rules", tooltip='A body closes through level (directional); B displaces.')
-enable_liq_monthly = input.bool(true, "Monthly", group=GROUP_LIQ_HTF, inline="liq_htf")
-enable_liq_weekly  = input.bool(true, "Weekly", group=GROUP_LIQ_HTF, inline="liq_htf")
 enable_liq_daily   = input.bool(true, "Daily", group=GROUP_LIQ_HTF, inline="liq_htf")
-enable_pool_backfill = input.bool(true, "Backfill", group=GROUP_LIQ_HTF, inline="liq_htf", tooltip="Pre-populate daily/weekly/monthly pools with historical sessions via request.security. Adds ~60 daily, ~40 weekly, ~24 monthly sessions on low-TF charts where normal tracking has limited history.")
-daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_LIQ_HTF, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
-include_sunday_evening = input.bool(true, "Include Sunday Evening", group=GROUP_LIQ_HTF, tooltip='Calendar Day mode only: Include Sunday 18:00-00:00 in daily pool tracking.\n\n• ON (default): Sunday evening data included in daily high/low.\n• OFF: Skip Sunday evening, start fresh Monday 00:00.\n\nIgnored in Exchange Session mode (Sunday 18:00 always starts Monday\'s session).')
+enable_liq_weekly  = input.bool(true, "Weekly", group=GROUP_LIQ_HTF, inline="liq_htf")
+enable_liq_monthly = input.bool(true, "Monthly", group=GROUP_LIQ_HTF, inline="liq_htf")
 enable_liq_4h      = input.bool(true, "4ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 enable_liq_1h      = input.bool(true, "1ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
+daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
+include_sunday_evening = input.bool(true, "Include Sunday Evening", group=GROUP_TIME_BEHAVIOR, tooltip='Calendar Day mode only: Include Sunday 18:00-00:00 in daily pool tracking.\n\n• ON (default): Sunday evening data included in daily high/low.\n• OFF: Skip Sunday evening, start fresh Monday 00:00.\n\nIgnored in Exchange Session mode (Sunday 18:00 always starts Monday\'s session).')
+enable_pool_backfill = input.bool(true, "Historical Backfill", group=GROUP_TIME_BEHAVIOR, tooltip="Pre-populate daily/weekly/monthly pools with historical sessions via request.security. Adds ~60 daily, ~40 weekly, ~24 monthly sessions on low-TF charts where normal tracking has limited history. Only active in Exchange Session mode.")
+
 // ─── ✨ SIF on PO3 ───
 po3_show_sif           = input.bool(true, "Show SIF on PO3", group=GROUP_SIF_PO3)
 po3_sif_bull_highlight = input.color(color.new(color.rgb(38, 166, 154), 50), "Candle +", group=GROUP_SIF_PO3, inline="po3_sif_hl")
@@ -480,7 +482,7 @@ show_status_table = input.bool(true, "Show Status Table", group=GROUP_ADVANCED, 
 status_table_offset = input.int(100, "Offset", minval=-150, maxval=150, group=GROUP_ADVANCED, inline="status")
 show_htf_candles = input.bool(false, "Show HTF Candles", group=GROUP_ADVANCED)
 disable_vi_suppression = input.bool(true, "Disable VI Suppression", group=GROUP_ADVANCED)
-show_pool_debug = input.bool(false, "Show Pool Debug", group=GROUP_ADVANCED)
+pool_debug_mode = input.string("Off", "Pool Debug", options=["Off", "Daily", "Weekly", "Monthly", "4H", "1H"], group=GROUP_ADVANCED)
 show_color_table = input.bool(false, "Show Color Table", group=GROUP_ADVANCED)
 
 
@@ -813,17 +815,10 @@ type PoolLevel
     bool   low_breached
     int    low_breach_time
     int    low_first_breach_bar
-    // ─── Per-tier detection state (high side) ───
-    int    high_first_htf_reach_1
-    int    high_first_htf_reach_2
-    int    high_first_htf_reach_3
+    // ─── Per-tier pattern-used flags (prevents duplicate zones per tier) ───
     bool   high_used_by_pattern_1
     bool   high_used_by_pattern_2
     bool   high_used_by_pattern_3
-    // ─── Per-tier detection state (low side) ───
-    int    low_first_htf_reach_1
-    int    low_first_htf_reach_2
-    int    low_first_htf_reach_3
     bool   low_used_by_pattern_1
     bool   low_used_by_pattern_2
     bool   low_used_by_pattern_3
@@ -2916,27 +2911,6 @@ create_pool_zone(HTFContext ctx, bool mbz_bull, string pool_source_label, string
     created
 
 // ─── Per-Tier Pool Detection State Accessors ───
-pool_get_htf_reach(PoolLevel lvl, bool check_high, int tier) =>
-    check_high ?
-      (tier == 1 ? lvl.high_first_htf_reach_1 : tier == 2 ? lvl.high_first_htf_reach_2 : lvl.high_first_htf_reach_3) :
-      (tier == 1 ? lvl.low_first_htf_reach_1  : tier == 2 ? lvl.low_first_htf_reach_2  : lvl.low_first_htf_reach_3)
-
-pool_set_htf_reach(PoolLevel lvl, bool check_high, int tier, int val) =>
-    if check_high
-        if tier == 1
-            lvl.high_first_htf_reach_1 := val
-        else if tier == 2
-            lvl.high_first_htf_reach_2 := val
-        else
-            lvl.high_first_htf_reach_3 := val
-    else
-        if tier == 1
-            lvl.low_first_htf_reach_1 := val
-        else if tier == 2
-            lvl.low_first_htf_reach_2 := val
-        else
-            lvl.low_first_htf_reach_3 := val
-
 pool_get_used(PoolLevel lvl, bool check_high, int tier) =>
     check_high ?
       (tier == 1 ? lvl.high_used_by_pattern_1 : tier == 2 ? lvl.high_used_by_pattern_2 : lvl.high_used_by_pattern_3) :
@@ -2959,11 +2933,13 @@ pool_set_used(PoolLevel lvl, bool check_high, int tier, bool val) =>
             lvl.low_used_by_pattern_3 := val
 
 // ─── Pool Side Detection Helper ───
-// Runs at HTF close. Candle A/B reach gating ensures correct geometry:
-// STD/DEL need A as the sweep candle. first_htf_reach only latches when candle A
-// reaches the level. When only B reaches, detection defers to the next HTF close
-// (B becomes A after shift_htf_history), matching Prime's per-bar timing.
-// IMM fires on breach_in_b (B is the sweep candle for IMM, no deferral needed).
+// Runs at HTF close. Uses breach_time windowing to map chart-bar breaches
+// to HTF candle A/B geometry. No latch — levels stay eligible until
+// breach_time naturally falls outside the 2-candle window.
+// IMM: breach during candle B period (B is sweep candle).
+// STD/DEL: breach during candle A period (A is sweep candle).
+// A B-period breach on close N becomes an A-period breach on close N+1
+// (after shift_htf_history), giving each level 2 consecutive close checks.
 detect_pool_side(LiquidityPoolCollection pool, HTFContext ctx, string pool_source_label, bool check_high_side, int i, int pool_source_id) =>
     PoolLevel lvl = array.get(pool.levels, i)
     int tier = ctx.tier_index
@@ -2973,42 +2949,39 @@ detect_pool_side(LiquidityPoolCollection pool, HTFContext ctx, string pool_sourc
     if breached and not used
         float level = check_high_side ? lvl.session_high : lvl.session_low
         int breach_time = check_high_side ? lvl.high_breach_time : lvl.low_breach_time
-        int htf_reach = pool_get_htf_reach(lvl, check_high_side, tier)
         bool is_bearish_pattern = check_high_side
 
-        // Check which candle reaches the level
+        // Breach-time windowing: map chart-bar breach timestamp to HTF candle periods.
+        // breach_in_b: breach during candle B period — check IMM (B is sweep candle)
+        // breach_in_a: breach during candle A period — check STD/DEL (A is sweep candle)
+        // These are mutually exclusive per close, matching Prime's breach_is_current/previous.
+        // After shift_htf_history, a B-period breach becomes an A-period breach on the next close.
+        bool breach_in_b = not na(breach_time) and breach_time >= ctx.t1
+        bool breach_in_a = not na(breach_time) and breach_time >= ctx.t2 and breach_time < ctx.t1
+
+        // OHLC reach: does the candle physically touch the level?
         bool a_reaches = check_high_side ? (ctx.h2 >= level) : (ctx.l2 <= level)
         bool b_reaches = check_high_side ? (ctx.h1 >= level) : (ctx.l1 <= level)
 
-        // Latch only when candle A reaches — STD/DEL need A as the sweep candle.
-        // When only B reaches, defer: B becomes A on the next close via shift_htf_history.
-        bool is_first_a_reach = na(htf_reach) and a_reaches
-
-        if is_first_a_reach
-            pool_set_htf_reach(lvl, check_high_side, tier, ctx.t1)
+        string matched_rule = ""
+        // IMM: breach during candle B, B sweeps the level
+        if enable_liq_imm and breach_in_b and b_reaches
+            if liquidity_immediate_condition(is_bearish_pattern, level, ctx.h2, ctx.l2, ctx.c2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
+                matched_rule := LIQ_RULE_IMM
+        // STD: breach during candle A, A is the sweep candle
+        if matched_rule == "" and enable_liq_std and breach_in_a and a_reaches
+            [std_valid, _] = liquidity_standard_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.h2, ctx.l2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
+            if std_valid
+                matched_rule := LIQ_RULE_STD
+        // DEL: breach during candle A, A is the sweep candle
+        if matched_rule == "" and enable_liq_del and breach_in_a and a_reaches
+            [del_valid, _] = liquidity_delayed_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.o1, ctx.c1)
+            if del_valid
+                matched_rule := LIQ_RULE_DEL
+        if matched_rule != ""
+            pool_set_used(lvl, check_high_side, tier, true)
             array.set(pool.levels, i, lvl)
-
-        // IMM: breach must be during candle B (contemporaneous sweep)
-        bool breach_in_b = breach_time >= ctx.t1
-
-        // STD/DEL fire on first A-reach; IMM fires on breach_in_b
-        if is_first_a_reach or breach_in_b
-            string matched_rule = ""
-            if enable_liq_imm and breach_in_b
-                if liquidity_immediate_condition(is_bearish_pattern, level, ctx.h2, ctx.l2, ctx.c2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
-                    matched_rule := LIQ_RULE_IMM
-            if matched_rule == "" and enable_liq_std and (is_first_a_reach or (breach_time >= ctx.t2))
-                [std_valid, _] = liquidity_standard_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.h2, ctx.l2, ctx.o1, ctx.c1, ctx.h1, ctx.l1)
-                if std_valid
-                    matched_rule := LIQ_RULE_STD
-            if matched_rule == "" and enable_liq_del and (is_first_a_reach or (breach_time >= ctx.t2))
-                [del_valid, _] = liquidity_delayed_condition(is_bearish_pattern, level, ctx.o2, ctx.c2, ctx.o1, ctx.c1)
-                if del_valid
-                    matched_rule := LIQ_RULE_DEL
-            if matched_rule != ""
-                pool_set_used(lvl, check_high_side, tier, true)
-                array.set(pool.levels, i, lvl)
-                found := create_pool_zone(ctx, not check_high_side, pool_source_label, matched_rule, pool_source_id)
+            found := create_pool_zone(ctx, not check_high_side, pool_source_label, matched_rule, pool_source_id)
     found
 
 // ─── Liquidity Pool Pattern Detection ───
@@ -3941,12 +3914,13 @@ if show_pool_debug and barstate.islast
     // Count breached levels per pool
     int d_h_breached = 0
     int d_l_breached = 0
-    for i = 0 to d_count - 1
-        PoolLevel lvl = array.get(liq_daily_pool.levels, i)
-        if lvl.high_breached
-            d_h_breached += 1
-        if lvl.low_breached
-            d_l_breached += 1
+    if d_count > 0
+        for i = 0 to d_count - 1
+            PoolLevel lvl = array.get(liq_daily_pool.levels, i)
+            if lvl.high_breached
+                d_h_breached += 1
+            if lvl.low_breached
+                d_l_breached += 1
 
     var table pool_tbl = table.new(position.bottom_left, 6, 7, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
 

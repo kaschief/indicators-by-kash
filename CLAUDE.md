@@ -307,3 +307,39 @@ This is explicit permission ONLY for that specific commit operation. You must st
 ## Enforcement
 
 If you execute a git command without explicit permission, the user will interrupt and remind you of this rule. Always acknowledge and apologize when this occurs.
+
+# Principal Engineer Delegation Rules
+
+## Never Pre-Solve When Delegating
+
+When asked to have the principal engineer fix or investigate something, describe ONLY the problem and symptoms. **NEVER** include:
+
+- Proposed solutions or fixes
+- Root cause analysis or theories
+- Code path traces or suggested approaches
+- "The fix is...", "The issue is probably...", "Replace X with Y"
+
+The principal must debug independently with fresh eyes. Pre-feeding solutions biases the investigation and leads to implementing flawed logic.
+
+### What to Include
+
+- The symptom (what's wrong, what's expected)
+- File paths
+- User-provided context (screenshots, error messages)
+- Which indicators are affected
+
+### What to EXCLUDE
+
+- Your analysis of why it's broken
+- Your proposed fix
+- Code snippets showing "the problem is here"
+- Suggestions like "check this function" or "the issue is in the timing"
+
+## Never Speculate Without Reading Code
+
+**NEVER guess or speculate about root causes, solutions, or behavior without first reading the relevant code.** If you don't know, say "I don't know, let me read the code" — do not pattern-match against documentation, plan files, or prior conversations and present it as analysis.
+
+- ❌ **WRONG**: Confidently explaining a root cause based on memory or plan docs without verifying against current code
+- ✅ **CORRECT**: Reading the actual functions involved, then explaining what the code does
+
+Speculation wastes time, erodes trust, and leads to wrong fixes. Read first, speak second.
