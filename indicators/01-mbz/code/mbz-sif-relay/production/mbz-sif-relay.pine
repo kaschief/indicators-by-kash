@@ -399,7 +399,7 @@ enable_liq_4h      = input.bool(true, "4ʰ", group=GROUP_LIQ_TF, inline="liq_tf"
 enable_liq_1h      = input.bool(true, "1ʰ", group=GROUP_LIQ_TF, inline="liq_tf")
 daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
 include_sunday_evening = input.bool(true, "Include Sunday Evening", group=GROUP_TIME_BEHAVIOR, tooltip='Calendar Day mode only: Include Sunday 18:00-00:00 in daily pool tracking.\n\n• ON (default): Sunday evening data included in daily high/low.\n• OFF: Skip Sunday evening, start fresh Monday 00:00.\n\nIgnored in Exchange Session mode (Sunday 18:00 always starts Monday\'s session).')
-enable_pool_backfill = input.bool(true, "Historical Backfill", group=GROUP_TIME_BEHAVIOR, tooltip="Pre-populate pools with historical sessions via request.security. Adds ~100 daily, ~40 weekly, ~24 monthly, ~40 4H, ~40 1H sessions on low-TF charts where normal tracking has limited history. Only active in Exchange Session mode.")
+enable_pool_backfill = input.bool(true, "Historical Backfill", group=GROUP_TIME_BEHAVIOR, tooltip="Pre-populate pools with historical sessions via request.security. Adds ~20 daily, ~20 weekly, ~24 monthly sessions on low-TF charts where normal tracking has limited history. Only active in Exchange Session mode.")
 
 // ─── ✨ SIF on PO3 ───
 po3_show_sif           = input.bool(true, "Show SIF on PO3", group=GROUP_SIF_PO3)
@@ -3153,16 +3153,11 @@ var LiquidityPoolCollection liq_1h_pool = liq_pool_create()
 [sec_monthly_high, sec_monthly_low] = request.security(syminfo.tickerid, "M", [high, low])
 
 // ─── Historical Backfill via request.security ───
-// Daily:   3 calls x 20 sessions = 60 sessions (offsets 1-60) via BackfillBatch20 UDT
-// Weekly:  2 calls x 20 sessions = 40 sessions (offsets 1-40)
-// Monthly: 1 call  x 24 sessions = 24 sessions (offsets 1-24) via BackfillBatch24 UDT
-// 4H and 1H: skipped (chart history covers enough depth)
-// lookahead_on is safe because all data accessed via [N] offsets (closed bars only)
+// 3 calls max — 4+ hits TV memory ceiling in replay mode
+// D: 20 sessions, W: 20 sessions, M: 24 sessions
+// lookahead_on safe — all data via [N] offsets (closed bars only)
 BackfillBatch20 bf_daily_1   = request.security(syminfo.tickerid, "D", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_daily_2   = request.security(syminfo.tickerid, "D", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_daily_3   = request.security(syminfo.tickerid, "D", build_backfill_batch20(41), lookahead=barmerge.lookahead_on)
 BackfillBatch20 bf_weekly_1  = request.security(syminfo.tickerid, "W", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_weekly_2  = request.security(syminfo.tickerid, "W", build_backfill_batch20(21), lookahead=barmerge.lookahead_on)
 BackfillBatch24 bf_monthly   = request.security(syminfo.tickerid, "M", build_backfill_batch24(1),  lookahead=barmerge.lookahead_on)
 
 // Exchange session boundary: new daily session starts at 18:00 ET
@@ -3284,15 +3279,12 @@ bool debug_needs_1h      = pool_debug_mode == "1H"
 // Backfill uses calendar-day D/W/M/4H/1H data from request.security — only valid in Exchange Session mode
 // where the boundary closely aligns. Calendar Day mode tracks natively.
 if barstate.isfirst and enable_pool_backfill and use_exchange_session
-    // Daily: 100 sessions (5 batches of 20, oldest first)
+    // Daily: 20 sessions (1 batch)
     if enable_liq_daily or debug_needs_daily
-        backfill_inject_batch20(liq_daily_pool, bf_daily_3)
-        backfill_inject_batch20(liq_daily_pool, bf_daily_2)
         backfill_inject_batch20(liq_daily_pool, bf_daily_1)
         backfill_recompute_pointers(liq_daily_pool)
-    // Weekly: 40 sessions (2 batches, oldest first)
+    // Weekly: 20 sessions (1 batch)
     if enable_liq_weekly or debug_needs_weekly
-        backfill_inject_batch20(liq_weekly_pool, bf_weekly_2)
         backfill_inject_batch20(liq_weekly_pool, bf_weekly_1)
         backfill_recompute_pointers(liq_weekly_pool)
     // Monthly: 24 sessions (1 batch)
