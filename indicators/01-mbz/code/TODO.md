@@ -92,39 +92,59 @@ Hoisted 12 per-call array allocations to function-scoped `var` state reused acro
 
 ---
 
-### 5. Consolidate 14 pool blocks into one parameterized loop
-Replace the 14 copy-paste pool tracking blocks with a single loop over a pool-descriptor array. Doesn't speed things up directly, but means any future perf fix applies once instead of 14 times. Force multiplier.
+## Remaining optimization candidates (unordered, user-directed)
 
-- **Risk**: medium — `time()` session probes take literal session strings, so the descriptor must carry them
+Confidence labels:
+- 🟢 = evidence-backed (measurement, git history, or verified behavior elsewhere)
+- 🟡 = reasoned from code reading, not measured
+- 🔴 = speculation, no evidence
+
+### 🟢 Migrate HTF (D/W/M) pool tracking to relay's `request.security` pattern
+Relay loads faster than prime and uses `request.security(syminfo.tickerid, "D"/"W"/"M", [high, low])` for HTF pool data. Prime iterates bars manually for daily, uses request.security only as a value override for weekly/monthly. Migrating means TradingView's engine does the HTF aggregation server-side; prime just reads cached values per bar.
+
+- **Evidence**: relay does it, relay is faster
+- **Security call budget**: 2 used, ~38 free — feasible
+- **Risk**: moderate — integration with existing MBZ detection pipeline
 - **Effort**: architectural
-- **When**: after #4, before #6
+- **Anchors**: mbz-prime lines ~3190-3230 (current HTF tracking), relay lines 3146-3155 + 3275-3287 (reference implementation)
 
-**Anchors**: mbz-prime lines 3528-3888
+### 🟡 Replace session `time(period, session_str, tz)` probes with HHMM math
+On intraday TFs, 11 session tracking blocks each call `time(timeframe.period, session, NY_TIMEZONE)` twice per bar to detect "am I in session X?" That's ~22 timezone lookups per bar. If Pine's `time()` is expensive, switching to simple HHMM-range checks (`cur_hhmm >= session_start and cur_hhmm < session_end`) is cheaper.
 
----
+- **Evidence**: none — don't know how expensive Pine's `time()` actually is
+- **Risk**: low — changes only "in session?" detection, not pool mechanics
+- **Effort**: medium (11 blocks to update)
+- **Note**: if done alongside the pool-block DRY consolidation, both changes land together
 
-### 6. Short-circuit `process_liquidity_pool` when nothing changed
-Currently the current-session path at 1904-1969 runs unconditionally. On bars with no breach and no pool state change, this is pure waste. Add early return that skips the block when `has_recent_breach` is false AND no pending events.
+### 🟡 Consolidate 11 pool processing blocks into a parameterized loop
+Replace 11 copy-paste blocks with a single loop over a `PoolDescriptor` array. Not a direct perf win — it's code quality. The force multiplier is that future perf changes apply once instead of 11 times. Also surfaces bottlenecks during the refactor that a superficial audit misses.
 
-- **Win**: medium
+- **Evidence**: DRY violation is a code quality issue, not a perf one
+- **Risk**: medium (big diff)
+- **Effort**: largest single change in backlog
+- **Anchors**: mbz-prime lines ~3565-3681
+
+### 🟡 Reduce `LIQUIDITY_SCAN_CAP` constants
+Scan caps (ASIA/LONDON/NYAM/etc = 200, TF pools = 500) bound worst-case scan work when a breach happens. Lower caps = faster worst case but older levels stop being detectable.
+
+- **Evidence**: none — don't know how often the scan actually hits the cap
+- **Tradeoff**: perf vs feature reach (user-facing)
+- **Effort**: trivial
+- **Anchors**: mbz-prime constants block near top
+
+### 🔴 Short-circuit `process_liquidity_pool` when nothing changed
+Audit suggested this but on re-read, the finalized-session scan is already gated by `has_recent_breach`. Only the current-session path always runs. After step 4's hoist the no-breach allocation cost is already gone. Diminishing returns.
+
+- **Evidence**: looks like the juice is already squeezed
 - **Effort**: moderate
-- **Risk**: must preserve event emission on the exact breach bar
-- **Anchors**: mbz-prime lines 4021+, 1904-1969
+- **Verdict**: probably not worth it
 
----
+### 🔴 Cache `timeframe.in_seconds()` and `is_247_asset` in `var`
+Both are `var`-eligible and currently recomputed multiple times per bar.
 
-### 7. Port mbz-prime HTF pools (D/W/M) to relay's `request.security` pattern
-Relay reads D/W/M H/L directly from `request.security(syminfo.tickerid, "D"/"W"/"M", [high, low])` + batched backfill. Prime iterates bars manually for daily and only uses request.security as a value override for weekly/monthly.
-
-- **Win**: small-medium on prime specifically
-- **Effort**: moderate
-- **Risk**: Pine's 40 `request.security` call budget — must verify headroom (blocked by #3)
-- **Anchors**: mbz-prime lines 3528-3577 (targets), relay lines 3146-3155 + 3275-3287 (reference implementation)
-
----
-
-### 8. Cache `timeframe.in_seconds()` and `is_247_asset` in `var` at top of bar
-Trivial. Both are `var`-eligible and currently recomputed multiple times per bar.
+- **Evidence**: none — cost of these is probably negligible
+- **Effort**: trivial
+- **Verdict**: cleanup, not perf
 
 ---
 
