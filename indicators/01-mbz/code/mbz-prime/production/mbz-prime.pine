@@ -705,7 +705,6 @@ type MBZRecord
     string source_origin_token   // Unified token describing the origin (e.g., fvg, daily)
     float ref_candle_high
     float ref_candle_low
-    bool is_extended
     int source_session_close_time  // Unique session identifier for source origin line rendering (immune to price collisions)
     int source_level_time          // Time coordinate of the source level (high_time or low_time) — avoids pool lookup at render time
     int all_records_index    // PERF: Direct index in all_mbz_records for O(1) sync
@@ -2296,11 +2295,6 @@ should_mbz_be_invalidated(mbz_record, confirmed_close_price) =>
 cache_mbz_data(mbz_record) =>
     [cached_zone_top, cached_zone_bottom] = get_mbz_subtype_zone(mbz_record)
 
-    // Zone is extended if boundaries differ from base body
-    body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
-    body_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
-    was_extended = cached_zone_top != body_top or cached_zone_bottom != body_bot
-
     MBZRecord.new(
          mbz_record.bar_index,
          mbz_record.formation_time,
@@ -2330,7 +2324,6 @@ cache_mbz_data(mbz_record) =>
          mbz_record.source_origin_token,
          mbz_record.ref_candle_high,
          mbz_record.ref_candle_low,
-         was_extended,
          mbz_record.source_session_close_time,
          mbz_record.source_level_time
      )
@@ -2583,7 +2576,6 @@ create_liquidity_mbz_record(formation_bar_index, formation_open, formation_high,
          source_origin_token,
          high[1],
          low[1],
-         false,
          session_close_time_val,
          level_time_val
      )
@@ -2812,32 +2804,17 @@ create_consolidated_extension_label(consolidated_mbz) =>
     source_stats = get_source_type_stats(consolidated_mbz.mbz_group)
     source_type_text = ""
 
-    is_extended_flag = false
+    extension_result := base_label
 
     if mbz_count == 1
         single_mbz = array.get(consolidated_mbz.mbz_group, 0)
         source_token = get_mbz_primary_source_token(single_mbz)
         source_type_text := source_token != "" ? append_nine_suffix(source_token) : ""
-
-        extension_result := base_label
-        is_extended_flag := single_mbz.is_extended
     else
-        source_breakdown = build_source_breakdown_extension_from_stats(source_stats, consolidated_mbz.mbz_group)
-        source_type_text := source_breakdown
-
-        extension_result := base_label
-
-        for i = 0 to mbz_count - 1
-            mbz = array.get(consolidated_mbz.mbz_group, i)
-            if mbz.is_extended
-                is_extended_flag := true
-                break
+        source_type_text := build_source_breakdown_extension_from_stats(source_stats, consolidated_mbz.mbz_group)
 
     if str.length(source_type_text) > 0
         extension_result := extension_result + "\n" + source_type_text
-
-    if is_extended_flag
-        extension_result := extension_result + "\n" + SUBTYPE_EXT_DISPLAY
 
     if consolidated_mbz.is_consolidated_invalidated
         extension_result := extension_result + " [X]"
@@ -4621,23 +4598,14 @@ if show_status_table and barstate.islast
     all_htf_enabled = enable_daily_liquidity and enable_weekly_liquidity and enable_monthly_liquidity
     all_intraday_enabled = enable_asia_liquidity and enable_london_liquidity and enable_nyam_liquidity and enable_lunch_liquidity and enable_nypm_liquidity and enable_ons_liquidity and enable_premarket_liquidity
     any_intraday_enabled = enable_asia_liquidity or enable_london_liquidity or enable_nyam_liquidity or enable_lunch_liquidity or enable_nypm_liquidity or enable_ons_liquidity or enable_premarket_liquidity
-    all_sources_enabled = all_htf_enabled and all_intraday_enabled and enable_dtt_sessions
+    all_tf_pools_enabled = enable_4h_liquidity and enable_1h_liquidity and enable_15m_liquidity
+    all_sources_enabled = all_htf_enabled and all_intraday_enabled and enable_dtt_sessions and all_tf_pools_enabled
 
     // Build sources string
     source_parts = array.new<string>()
 
-    any_tf_pool_enabled = enable_4h_liquidity or enable_1h_liquidity or enable_15m_liquidity
-
-    if all_sources_enabled and not any_tf_pool_enabled
+    if all_sources_enabled
         array.push(source_parts, STATUS_DISPLAY_ALL)
-    else if all_sources_enabled and any_tf_pool_enabled
-        array.push(source_parts, STATUS_DISPLAY_ALL)
-        if enable_4h_liquidity
-            array.push(source_parts, LIQUIDITY_SOURCE_TYPE_4H)
-        if enable_1h_liquidity
-            array.push(source_parts, LIQUIDITY_SOURCE_TYPE_1H)
-        if enable_15m_liquidity
-            array.push(source_parts, LIQUIDITY_SOURCE_TYPE_15M)
     else
         // HTF sources
         if all_htf_enabled

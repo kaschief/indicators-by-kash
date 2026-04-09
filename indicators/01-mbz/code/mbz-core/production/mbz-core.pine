@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='mbz core •'
-SHORT_TITLE="mbz core •"
+SHORT_TITLE="mbz core • DEVELOPMENT"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -426,8 +426,6 @@ type MBZRecord
     string source_gap_type
     // Breakaway MBZ detection
     bool is_breakaway_mbz        // true if source gap was a breakaway gap
-    // Reference wick extension
-    bool is_extended             // true if zone was extended by ref wick
 
 // Cached counts for multi-source evaluation
 type SourceTypeStats
@@ -1262,11 +1260,6 @@ should_mbz_be_invalidated(mbz_record, confirmed_close_price) =>
 cache_mbz_data(mbz_record) =>
     [cached_zone_top, cached_zone_bottom] = get_mbz_subtype_zone(mbz_record)
 
-    // Zone is extended if boundaries differ from base body
-    body_top = math.max(mbz_record.mbz_open, mbz_record.mbz_close)
-    body_bot = math.min(mbz_record.mbz_open, mbz_record.mbz_close)
-    was_extended = cached_zone_top != body_top or cached_zone_bottom != body_bot
-
     MBZRecord.new(
          mbz_record.bar_index,
          mbz_record.formation_time,
@@ -1291,8 +1284,7 @@ cache_mbz_data(mbz_record) =>
          mbz_record.source_gap_top,
          mbz_record.source_gap_bottom,
          mbz_record.source_gap_type,
-         mbz_record.is_breakaway_mbz,
-         was_extended
+         mbz_record.is_breakaway_mbz
      )
 
 get_cached_mbz_subtype_zone(mbz_record) =>
@@ -1603,7 +1595,7 @@ create_consolidated_extension_label(consolidated_mbz) =>
         mbz_text := mbz_text + " [½]"
 
     base_label = mbz_text
-    is_extended_flag = false
+    extension_result := base_label
 
     if mbz_count == 1
         single_mbz = array.get(consolidated_mbz.mbz_group, 0)
@@ -1615,27 +1607,12 @@ create_consolidated_extension_label(consolidated_mbz) =>
             source_type_text := GAP_SOURCE_VOLUME_DISPLAY
         else if str.contains(single_mbz.mbz_subtype, SUBTYPE_RDRB)
             source_type_text := GAP_SOURCE_RDRB_DISPLAY
-
-        extension_result := base_label
-        is_extended_flag := single_mbz.is_extended
     else
         source_stats = get_source_type_stats(consolidated_mbz.mbz_group)
-        source_breakdown = build_source_breakdown_extension_from_stats(source_stats)
-        source_type_text := source_breakdown
-
-        extension_result := base_label
-
-        for i = 0 to mbz_count - 1
-            mbz = array.get(consolidated_mbz.mbz_group, i)
-            if mbz.is_extended
-                is_extended_flag := true
-                break
+        source_type_text := build_source_breakdown_extension_from_stats(source_stats)
 
     if str.length(source_type_text) > 0
         extension_result := extension_result + "\n" + source_type_text
-
-    if is_extended_flag
-        extension_result := extension_result + "\n" + SUBTYPE_EXT_DISPLAY
 
     // Add status indicators AFTER special markers
     if consolidated_mbz.is_consolidated_invalidated
@@ -2350,8 +2327,7 @@ if array.size(active_gaps) > 0 and barstate.isconfirmed
                              0.0, 0.0, false,
                              label(na),
                              gap.gap_id, gap.bar_index, gap.top, gap.bottom, gap.gap_type,
-                             gap.is_breakaway_gap,
-                             false
+                             gap.is_breakaway_gap
                          )
 
                         // Cache data immediately for performance (with corrected zones)
