@@ -65,25 +65,30 @@ Skip Asia/London/NYAM/Lunch/NYPM/ONS/Premarket (+ NINE variants) processing on H
 
 ---
 
-### 3. Read `process_liquidity_events` + count `request.security` budget
-Two unknowns the audit flagged that need resolution before touching architecture:
-- `process_liquidity_events` at line 2603 wasn't opened — may hide more per-bar work
-- Pine Script has a ~40 `request.security` call limit per indicator. Prime currently uses a handful; relay uses more. Need a head count before proposing #6 migration.
+### 3. Read `process_liquidity_events` + count `request.security` budget ✅ DONE
 
-**Deliverable**: two-paragraph summary added to this TODO before #4 starts.
+**`process_liquidity_events` (line 2280)** — not a hot spot. Simple loop: exits if event_count == 0, otherwise 7× `array.get` per event to unpack + one `create_liquidity_mbz_record` call. Zero allocations inside the loop. Common-case cost is one `array.size` check per bar. No changes needed; the real hot work is upstream in `process_liquidity_pool`'s tuple-return allocations.
+
+**`request.security` budget** — prime currently uses 2 calls (lines 3080-3081: weekly H/L and monthly H/L). Pine limit is ~40/indicator. **~38 free slots.** The architectural D/W/M migration (step 7) is feasible without hitting the cap.
 
 ---
 
-### 4. Hoist tuple-return array allocations (BIGGEST PERF WIN)
-Root cause: `process_liquidity_pool`, `detect_liquidity_pool_patterns`, and `process_dtt_sessions` each allocate 5–7 fresh arrays every call. With ~14 pools (soon ~13 after DTT removal), that's **~150 empty array allocations per bar, every bar, across full chart history.**
+### 4. Hoist tuple-return array allocations ✅ DONE (kept — benefit unverified)
+Hoisted 12 per-call array allocations to function-scoped `var` state reused across calls.
 
-- Replace with `var`-scoped reusable arrays + `array.clear()` per call
-- Or refactor the API to direct-write via struct outparams
+**`detect_liquidity_pool_patterns`** (line 1286): 5 arrays (`events_is_high`, `events_formation_rule`, `events_is_exact_midpoint`, `events_source_price`, `events_source_bar_index`) moved from `array.new_*()` on entry → `var array.new_*()` + `array.clear()` on entry.
 
-**Hypothesized win**: Large. Ranked #1 by the audit.
-**Effort**: moderate
-**Risk**: low if API shape is preserved
-**Anchors**: mbz-prime lines 1533-1537, 1697-1702, 1808-1814
+**`process_liquidity_pool`** (line 1471): 7 arrays (`detected_events_is_high`, `detected_events_rules`, `detected_events_is_exact`, `detected_events_source_price`, `detected_events_source_bar_index`, `detected_events_session_close_time`, `detected_events_level_time`) moved to same pattern.
+
+**Correctness reasoning**: both functions return references to their scratch arrays via tuple. Callers read synchronously — `process_liquidity_events(daily_events_is_high, ...)` iterates and consumes before the next `process_liquidity_pool(weekly_liquidity_pool, ...)` call overwrites. Within a single call, `detect_liquidity_pool_patterns` is called in a loop AND once after; each return is immediately copied out to `detected_events_*` before the next call. Verified by tracing all call sites.
+
+**Honest perf framing**: the audit ranked this "Large win" but was explicitly speculating — no profiling. After implementing and testing, user did not perceive a substantial speedup. Retained anyway because (a) the change is correct, (b) it does eliminate some work even if modest, and (c) reverting costs more reading than it saves. **Not treated as a proven perf win.**
+
+**Other per-call allocations still present** (not touched — lower priority, same uncertainty):
+- `get_source_type_stats` allocates `SourceTypeStats.new(0,0,...)` + `tokens_seen` — called from label building, gated to `needs_visual_update`, not hot on historical load.
+- `build_source_breakdown*` helpers allocate `parts` — same gating.
+- `create_liquidity_mbz_record` / `cache_mbz_data` allocate `MBZRecord.new(...)` — per-event, not per-bar.
+- `invalidated_indices` at line ~3708 — inside GC block gated to `islastconfirmedhistory or islast`.
 
 ---
 
