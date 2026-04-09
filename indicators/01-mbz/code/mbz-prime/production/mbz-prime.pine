@@ -7,7 +7,7 @@ INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_LINES = 500
 INDICATOR_TITLE='mbz prime •'
-SHORT_TITLE="mbz prime •"
+SHORT_TITLE="mbz prime • DEVELOPMENT"
 
 indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
 
@@ -101,13 +101,27 @@ ONE_HOUR_LIQUIDITY_SCAN_CAP = 500     // ~20 trading days of 1h candles
 FOUR_HOUR_LIQUIDITY_SCAN_CAP = 500    // ~83 trading days of 4h candles
 
 // Timeframe restrictions for liquidity pools (in minutes)
+// HTF candle pools (Daily/Weekly/Monthly)
 MIN_TF_DAILY_LIQUIDITY = 15           // Daily: show on 15m+ (timeframe must be >= 15m)
 MAX_TF_DAILY_LIQUIDITY = 10079        // Daily: hide on Weekly+ (timeframe must be < 10080m/1W)
 MIN_TF_WEEKLY_LIQUIDITY = 30          // Weekly: show on 30m+ (timeframe must be >= 30m)
 MAX_TF_WEEKLY_LIQUIDITY = 43199       // Weekly: hide on Monthly+ (timeframe must be < 43200m/1M)
 MIN_TF_MONTHLY_LIQUIDITY = 30         // Monthly: show on 30m+ (timeframe must be >= 30m)
+// Session pools
 MAX_TF_INTRADAY_LIQUIDITY = 60        // All intraday sessions: show on 60m and below (applies to Asia, London, NYAM, Lunch, NYPM, ONS, Premarket)
-MAX_TF_DTT = 5                  // DTT sessions: show on 5m and below
+MAX_TF_DTT_LIQUIDITY = 5                        // DTT sessions: show on 5m and below
+// Sub-TF candle pools (15m/1H/4H)
+MAX_TF_15M_LIQUIDITY = 15             // 15m candle pools: show on 15m and below
+MAX_TF_1H_LIQUIDITY = 60              // 1H candle pools: show on 1H and below
+MAX_TF_4H_LIQUIDITY = 240             // 4H candle pools: show on 4H and below
+
+// Timeframe period strings (for timeframe.change() calls)
+TF_PERIOD_15M = "15"
+TF_PERIOD_1H = "60"
+TF_PERIOD_4H = "240"
+
+// Time unit conversions
+SECONDS_PER_DAY = 86400
 
 // Intraday session defaults (all times in NY timezone)
 // Day code constants
@@ -483,9 +497,9 @@ show_session_times_table = input.bool(false, "Show Session Times Table", group=G
 enable_dtt_sessions = input.bool(true, "Enable DTT Sessions", group=GROUP_LIQUIDITY_DTT, tooltip='Enable DTT: 15 cascading sessions where each session uses the previous session\'s high/low as liquidity pools\n\nSessions: Damasu → Osaka → Kyoto → Nagasaki → Turncoat → Bishop → Knight → Big Ben → NY Open → Judas → Model 11 → Model 110 → Lunch → Model 1001 → Model 111')
 
 // === 💧 TIMEFRAME LIQUIDITY POOLS ===
-enable_4h_liquidity = input.bool(false, "4ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 4-hour candle high/low breaches')
-enable_1h_liquidity = input.bool(false, "1ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 1-hour candle high/low breaches')
-enable_15m_liquidity = input.bool(false, "15ᵐ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 15-minute candle high/low breaches')
+enable_4h_liquidity = input.bool(true, "4ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 4-hour candle high/low breaches')
+enable_1h_liquidity = input.bool(true, "1ʰ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 1-hour candle high/low breaches')
+enable_15m_liquidity = input.bool(true, "15ᵐ", group=GROUP_LIQUIDITY_TF, inline='tf_pools', tooltip='Detect MBZs from 15-minute candle high/low breaches')
 
 // === ⏰ TIME BEHAVIOR ===
 daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
@@ -1990,7 +2004,7 @@ should_skip_sunday_liquidity(time_value) =>
     if use_exchange_session
         false
     else
-        timeframe.in_seconds() < 86400 and not is_247_asset and not include_sunday_evening_liquidity and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
+        timeframe.in_seconds() < SECONDS_PER_DAY and not is_247_asset and not include_sunday_evening_liquidity and dayofweek(time_value, NY_TIMEZONE) == dayofweek.sunday and hour(time_value, NY_TIMEZONE) >= SUNDAY_REOPEN_START_HOUR
 
 // Exchange session boundary: new daily session starts at 18:00 ET Mon-Fri
 // Sunday 18:00 = Monday's session start (day 1 in Pine, but exchange opens)
@@ -2000,7 +2014,7 @@ is_new_exchange_daily_session() =>
     prev_time = time[1]
     if na(prev_time)
         false
-    else if timeframe.in_seconds() >= 86400
+    else if timeframe.in_seconds() >= SECONDS_PER_DAY
         // Daily+ charts: each bar is a full session, use calendar day change
         dayofmonth(prev_time, NY_TIMEZONE) != dayofmonth(time, NY_TIMEZONE)
     else
@@ -3454,10 +3468,10 @@ enable_lunch_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDIT
 enable_nypm_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_ons_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
 enable_premarket_liquidity_tracking = current_tf_minutes <= MAX_TF_INTRADAY_LIQUIDITY
-enable_dtt_liquidity_tracking = current_tf_minutes <= MAX_TF_DTT
-enable_15m_liquidity_tracking = current_tf_minutes < 15  // Only on sub-15m charts
-enable_1h_liquidity_tracking = current_tf_minutes < 60   // Only on sub-1H charts
-enable_4h_liquidity_tracking = current_tf_minutes < 240  // Only on sub-4H charts
+enable_dtt_liquidity_tracking = current_tf_minutes <= MAX_TF_DTT_LIQUIDITY
+enable_15m_liquidity_tracking = current_tf_minutes <= MAX_TF_15M_LIQUIDITY
+enable_1h_liquidity_tracking = current_tf_minutes <= MAX_TF_1H_LIQUIDITY
+enable_4h_liquidity_tracking = current_tf_minutes <= MAX_TF_4H_LIQUIDITY
 
 // Breach flags: track whether mark_breaches found anything (current + previous bar)
 var bool daily_breach = false
@@ -3865,7 +3879,7 @@ else if barstate.isnew
 
 // 4-hour timeframe liquidity pool tracking
 if enable_4h_liquidity_tracking and enable_4h_liquidity and (show_source_origins or liquidity_detection_enabled)
-    if barstate.isnew and timeframe.change("240")
+    if barstate.isnew and timeframe.change(TF_PERIOD_4H)
         liquidity_pool_finalize_session(four_hour_pool, nz(time[1], time), FOUR_HOUR_LIQUIDITY_SCAN_CAP)
         liquidity_pool_reset_current(four_hour_pool, high, low, time, bar_index)
     else
@@ -3876,7 +3890,7 @@ else if barstate.isnew
 
 // 1-hour timeframe liquidity pool tracking
 if enable_1h_liquidity_tracking and enable_1h_liquidity and (show_source_origins or liquidity_detection_enabled)
-    if barstate.isnew and timeframe.change("60")
+    if barstate.isnew and timeframe.change(TF_PERIOD_1H)
         liquidity_pool_finalize_session(one_hour_pool, nz(time[1], time), ONE_HOUR_LIQUIDITY_SCAN_CAP)
         liquidity_pool_reset_current(one_hour_pool, high, low, time, bar_index)
     else
@@ -3887,7 +3901,7 @@ else if barstate.isnew
 
 // 15-minute timeframe liquidity pool tracking
 if enable_15m_liquidity_tracking and enable_15m_liquidity and (show_source_origins or liquidity_detection_enabled)
-    if barstate.isnew and timeframe.change("15")
+    if barstate.isnew and timeframe.change(TF_PERIOD_15M)
         liquidity_pool_finalize_session(fifteen_min_pool, nz(time[1], time), FIFTEEN_MIN_LIQUIDITY_SCAN_CAP)
         liquidity_pool_reset_current(fifteen_min_pool, high, low, time, bar_index)
     else
