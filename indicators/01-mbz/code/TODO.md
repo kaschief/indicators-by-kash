@@ -4,6 +4,20 @@ Status: audit complete (see bottom of this file). Revised execution plan below.
 
 ---
 
+## Known regression / decision log
+
+### Self-TF pool tracking reverted (commit 6157a092's `<` → `<=` change)
+**Symptom**: with `<=`, on a 4H chart the 4H pool self-tracks every bar. Every prior 4H candle becomes a pool level, and the next 4H candle that sweeps one creates a new 4H MBZ. This floods `all_mbz_records` with thousands of 4H records over a historical load. The FIFO cap at line ~3737 (`max_mbz_records_effective = max_liquidity_mbzs + max_invalidated_mbzs`, ~60 + invalidated) overflows, oldest records get evicted first, and the HTF (daily/weekly/monthly) records — which formed earliest in the chart history — are the first to be displaced. Net effect: HTF MBZs disappear from the visible window, seemingly "consumed" by 4H records.
+
+**Root cause**: FIFO eviction is source-type-agnostic. Self-TF tracking produces records at a much higher rate (roughly 1 per bar) than HTF pool tracking (1 per day/week/month). With a small records cap, high-rate sources always win out.
+
+**Decision**: revert the `<=` → `<` gate on lines 3093-3095 (self-TF pool tracking OFF on the chart's own TF). Keeps HTF MBZs stable on HTF charts. Lose the ability to detect self-TF sweeps on the chart's own TF (still visible on sub-TFs).
+
+**If you want self-TF sweeps back** — three options, all require changes beyond the gate:
+1. Raise `max_liquidity_mbzs` default substantially (cheap, trades memory for headroom).
+2. Source-type-aware trimming: give HTF records priority survival in the FIFO eviction. Architectural but correct.
+3. Reduce self-TF scan caps (`FOUR_HOUR_LIQUIDITY_SCAN_CAP` etc.) dramatically when `current_tf_minutes == pool_tf_minutes` so fewer pool levels exist to sweep. Targeted, preserves HTF budget.
+
 ## Execution Plan (ordered by ROI × risk)
 
 ### 1. Remove DTT sessions entirely ✅ DONE
@@ -38,13 +52,16 @@ These are historical records, not active reference material. Leave as archaeolog
 
 ---
 
-### 2. Gate intraday session pools by timeframe (trivial win)
-Skip Asia/London/NYAM/Lunch/NYPM/ONS/Premarket blocks entirely on HTF charts where they're irrelevant. Currently each session runs 2× `time(timeframe.period, session, NY_TIMEZONE)` probes per bar — ~20 probes/bar wasted on 4H+ charts.
+### 2. Gate intraday session pools by timeframe ✅ DONE
+Skip Asia/London/NYAM/Lunch/NYPM/ONS/Premarket (+ NINE variants) processing on HTF charts where they're irrelevant.
 
-- Add outer TF gate to each session block
-- Small–medium perf win, ~15 min of work, trivial risk
+**Root cause found during implementation**: the tracking blocks (lines 3580-3855 equivalent) were already TF-gated via `enable_*_liquidity_tracking` — the audit's claim about "wasted time() probes" was incorrect for those. The REAL leak was in the processing blocks (~lines 3585-3657) which only checked `enable_*_liquidity` (user input) without the TF gate, so on HTF charts `process_liquidity_pool(...)` was still being called on empty stale pools every bar, allocating 5-7 arrays per call.
 
-**Anchors**: mbz-prime lines 3580-3855
+**Fix**: added `and enable_<session>_liquidity_tracking` to all 11 intraday processing `if` conditions (Asia/London/NYAM/Lunch/NYPM/ONS/Premarket + 4 NINE variants).
+
+**Expected benefit on 4H+ charts**: ~55-77 array allocations/bar eliminated + 11 × `process_liquidity_pool` + 11 × `process_liquidity_events` calls skipped per bar. Estimated medium win specifically for HTF historical loads.
+
+**Not touched**: Daily/Weekly/Monthly processing blocks at lines 3565/3572/3579 don't have TF gates either, but user's scope was explicitly intraday. HTF gating for D/W/M left for future consideration if relevant (daily gate would skip on below-15m or above-weekly).
 
 ---
 
