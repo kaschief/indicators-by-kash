@@ -1595,25 +1595,28 @@ build_zone_label(CandleZone zone, bool show_mbz, bool show_sif, int htf_ms) =>
 
 // Returns highest-TF pool source name + optional total visible count.
 // Uses same visibility logic as build_source_breakdown for count parity.
+// Guarded: callers may pass an empty source_gap_types; Pine's `for 0 to -1`
+// iterates backward and would index -1 without this size check.
 get_pool_source_label(array<string> source_gap_types, bool show_pool_sources, bool show_gap_sources, int htf_ms, bool show_count) =>
     string highest = ""
     int highest_priority = 0
     int count = 0
-    for i = 0 to array.size(source_gap_types) - 1
-        string src = array.get(source_gap_types, i)
-        bool is_gap = src == GAP_TYPE_FVG or src == GAP_TYPE_FVG_VI or src == GAP_TYPE_IMPLIED or src == GAP_TYPE_VOLUME
-        if is_gap and not show_gap_sources
-            continue
-        if not is_gap and not show_pool_sources
-            continue
-        if not is_gap
-            int src_ms = pool_source_ms(src)
-            if src_ms > 0 and src_ms <= htf_ms
+    if array.size(source_gap_types) > 0
+        for i = 0 to array.size(source_gap_types) - 1
+            string src = array.get(source_gap_types, i)
+            bool is_gap = src == GAP_TYPE_FVG or src == GAP_TYPE_FVG_VI or src == GAP_TYPE_IMPLIED or src == GAP_TYPE_VOLUME
+            if is_gap and not show_gap_sources
                 continue
-            if src_ms > highest_priority
-                highest_priority := src_ms
-                highest := src
-        count += 1
+            if not is_gap and not show_pool_sources
+                continue
+            if not is_gap
+                int src_ms = pool_source_ms(src)
+                if src_ms > 0 and src_ms <= htf_ms
+                    continue
+                if src_ms > highest_priority
+                    highest_priority := src_ms
+                    highest := src
+            count += 1
     string result = highest
     if show_count and count > 1
         result := highest + " (" + str.tostring(count) + ")"
@@ -1942,7 +1945,9 @@ check_gap_interactions(array<GapData> gap_arr, array<CandleZone> zone_arr, float
 
         // PASS 2: Only immediate SIF (tap + inversion on same candle) creates a zone.
         // Delayed inversions are gap closures, not SIF formations.
-        if enable_sif and has_immediate_sif
+        // sif_gap_ids is guaranteed non-empty by logic (has_immediate_sif implies
+        // at least one push at line 1934), but the defensive guard protects future refactors.
+        if enable_sif and has_immediate_sif and array.size(sif_gap_ids) > 0
             // SIF zones don't use reference wick extension (na refs, allow_extension=false)
             [zone, zone_idx, is_new] = get_or_create_zone(zone_arr, bar_index, htf_candle_time, htf_candle_open, htf_candle_close, htf_candle_high, htf_candle_low, is_candle_bullish, float(na), float(na), false, htf_label_param)
 
@@ -3452,16 +3457,19 @@ if HTF4_VALID
 
 // Build first-touch index map: for each gap_id, stores the oldest eligible zone index.
 // eligible: pre-built map of zone indices that pass has_mbz, not invalidated, not live-invalidated, direction filter.
+// Guarded: callers currently ensure non-empty zone_arr, but this defensive check
+// prevents Pine's `for 0 to -1` reverse-iteration crash if a future caller forgets.
 ss_build_first_touch(array<CandleZone> zone_arr, map<int, bool> eligible) =>
     map<int, int> ft = map.new<int, int>()
-    for i = 0 to array.size(zone_arr) - 1
-        if not map.contains(eligible, i)
-            continue
-        CandleZone z = array.get(zone_arr, i)
-        if z.has_mbz and array.size(z.source_gap_ids) > 0
-            int gid = array.get(z.source_gap_ids, 0)
-            if gid >= 0
-                map.put(ft, gid, i)
+    if array.size(zone_arr) > 0
+        for i = 0 to array.size(zone_arr) - 1
+            if not map.contains(eligible, i)
+                continue
+            CandleZone z = array.get(zone_arr, i)
+            if z.has_mbz and array.size(z.source_gap_ids) > 0
+                int gid = array.get(z.source_gap_ids, 0)
+                if gid >= 0
+                    map.put(ft, gid, i)
     ft
 
 // Check if a zone should be hidden by same-source filter.
@@ -3793,18 +3801,22 @@ if HTF1_VALID and show_po3_chart and barstate.islast and htf1.curr_open > 0
     if htf4_active
         array.push(sort_ms, HTF4_MS), array.push(sort_ids, 4)
 
-    // Insertion sort — sorts sort_ms ascending with sort_ids in lockstep
+    // Insertion sort — sorts sort_ms ascending with sort_ids in lockstep.
+    // Guarded with n >= 2: Pine's `for a to b` iterates backward when a > b,
+    // so `for sort_i = 1 to 0` on a single-element array would fire with
+    // sort_i = 1 and fail on array.get().
     int n = array.size(sort_ms)
-    for sort_i = 1 to n - 1
-        int key_ms = array.get(sort_ms,  sort_i)
-        int key_id = array.get(sort_ids, sort_i)
-        int sort_j = sort_i - 1
-        while sort_j >= 0 and array.get(sort_ms, sort_j) > key_ms
-            array.set(sort_ms,  sort_j + 1, array.get(sort_ms,  sort_j))
-            array.set(sort_ids, sort_j + 1, array.get(sort_ids, sort_j))
-            sort_j := sort_j - 1
-        array.set(sort_ms,  sort_j + 1, key_ms)
-        array.set(sort_ids, sort_j + 1, key_id)
+    if n >= 2
+        for sort_i = 1 to n - 1
+            int key_ms = array.get(sort_ms,  sort_i)
+            int key_id = array.get(sort_ids, sort_i)
+            int sort_j = sort_i - 1
+            while sort_j >= 0 and array.get(sort_ms, sort_j) > key_ms
+                array.set(sort_ms,  sort_j + 1, array.get(sort_ms,  sort_j))
+                array.set(sort_ids, sort_j + 1, array.get(sort_ids, sort_j))
+                sort_j := sort_j - 1
+            array.set(sort_ms,  sort_j + 1, key_ms)
+            array.set(sort_ids, sort_j + 1, key_id)
 
     if po3_is_overlay
         // Overlay: Main renders at actual time, others at po3_offset
