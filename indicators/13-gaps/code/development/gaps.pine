@@ -1,5 +1,5 @@
 //@version=6
-indicator("gaps •", overlay=true, max_boxes_count=500, max_lines_count=500)
+indicator("gaps • development", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=5000)
 
 const int RIGHT_EDGE_CUSHION = 3
 const float CE_LEVEL = 0.50
@@ -246,6 +246,11 @@ type GapData
     int creationBar
     int creationTime
     int leftTime
+    // Optional label prefix override for NWOG/NDOG geometry merge.
+    // na = use default (gap type as prefix)
+    // ""  = hide label (NDOG side of a merged pair)
+    // other = use as prefix (e.g. "NWOG / NDOG" on the NWOG side)
+    string labelPrefixOverride
 
 type SessionDividers
     array<int> dividerTimes
@@ -263,7 +268,6 @@ var float sundayOpenPrice = na
 
 var float prevDayClosePrice = na
 var float newDayOpenPrice = na
-var int lastNDOGDay = na
 
 // Alert tracking (reset each bar)
 var string rthFilledAlertMsg = na
@@ -509,7 +513,8 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
          gapType=gapType,
          creationBar=bar_index,
          creationTime=time,
-         leftTime=leftTime
+         leftTime=leftTime,
+         labelPrefixOverride=na
      )
 
 draw_gap_projections(GapData gap, int rightEdgeTime) =>
@@ -639,9 +644,13 @@ clearProjections(GapData gap) =>
             label.delete(projLabel)
         array.clear(gap.projectionLabels)
 
-// Single source of truth for gap label text (used in createGap and restoreGapDrawings)
+// Single source of truth for gap label text (used in createGap and restoreGapDrawings).
+// Honors labelPrefixOverride first: na → default dispatch; "" → hidden; else → use as prefix.
+// Override is set by the NWOG/NDOG geometry merge in the master scan at creation time.
 getGapLabelText(GapData gap) =>
-    if gap.gapType == GAP_TYPE_FVG_BULLISH
+    if not na(gap.labelPrefixOverride)
+        gap.labelPrefixOverride == "" ? "" : getGapLabelWithFill(gap, gap.labelPrefixOverride)
+    else if gap.gapType == GAP_TYPE_FVG_BULLISH
         GAP_TYPE_FVG_BULLISH
     else if gap.gapType == GAP_TYPE_FVG_BEARISH
         GAP_TYPE_FVG_BEARISH
@@ -756,6 +765,19 @@ restoreGapDrawings(GapData gap) =>
         line.set_y1(gap.bottomBoundaryLine, gap.bottom)
         line.set_y2(gap.bottomBoundaryLine, gap.bottom)
     if not na(gap.dateLabel)
+        // Self-heal labelPrefixOverride: if the partner that caused this override
+        // is no longer in gapsArray (e.g. limit-removed), fall back to default.
+        // Guard against empty gapsArray — Pine's `for 0 to -1` iterates backward.
+        if not na(gap.labelPrefixOverride) and array.size(gapsArray) > 0
+            string partnerType = gap.gapType == GAP_TYPE_NWOG ? GAP_TYPE_NDOG : GAP_TYPE_NWOG
+            bool partnerFound = false
+            for h = 0 to array.size(gapsArray) - 1
+                other = array.get(gapsArray, h)
+                if other.gapType == partnerType and other.top == gap.top and other.bottom == gap.bottom
+                    partnerFound := true
+                    break
+            if not partnerFound
+                gap.labelPrefixOverride := na
         label.set_text(gap.dateLabel, getGapLabelText(gap))
 
 // Stop extending gap drawings at current time (mitigation point)
@@ -920,34 +942,110 @@ if rthStart and displayRTH and array.size(gapsArray) > 0
         if gap.gapType == GAP_TYPE_RTH
             gap.passedNextSession := true
 
-if displayNWOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
-    // Use cached 1-minute data (performance optimization)
-    arrayTimes = cached_1m_times
-    arrayOpens = cached_1m_opens
-    arrayCloses = cached_1m_closes
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSOLIDATED 1-MINUTE SCAN
+// ═══════════════════════════════════════════════════════════════════════════════
+// Single pass over cached_1m_times replacing five previous per-bar loops.
+// Each job runs inline with its own lookback cutoff and display gate:
+//   1. Mark NWOG passedNextSession (Sunday 18:00)
+//   2. Mark NDOG passedNextSession (any 18:00 session open)
+//   3. Collect NWOG/NDOG divider times
+//   4. Create NWOG gap (Fri 16:59 close → Sun 18:00 open)
+//   5. Create NDOG gap (weekday 16:59 close → next 18:00 open)
+//
+// Ordering at each session open: mark-passed runs BEFORE gap creation so new
+// gaps are not considered for their own passed-session check. The existing
+// safety windows (6 days NWOG, 20h NDOG) are also still enforced per gap.
+//
+// Because this scan now runs before the display loop, newly created gaps and
+// passed-session mutations are visible in the same bar they happen — a minor
+// improvement over the previous split-scan layout where NDOG creation ran
+// after floating rendering and appeared one bar late.
+masterScanActive = (displayNWOG or displayNDOG or showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
+if masterScanActive and not na(cached_1m_times) and array.size(cached_1m_times) > 0
+    nwogLookback = time - nwogLimit * 3 * MILLISECONDS_PER_WEEK
+    ndogLookback = time - ndogLimit * 3 * MILLISECONDS_PER_DAY
+    dividerLookback = showNWOGDividers ? nwogLookback : ndogLookback
+    earliestLookback = math.min(nwogLookback, math.min(ndogLookback, dividerLookback))
 
-    if not na(arrayTimes) and array.size(arrayTimes) > 0
-        // Calculate lookback limit: only process recent weeks
-        lookbackLimit = time - (nwogLimit * 3 * MILLISECONDS_PER_WEEK)
+    for i = 0 to array.size(cached_1m_times) - 1
+        barTime = array.get(cached_1m_times, i)
+        if barTime < earliestLookback
+            continue
 
-        for i = 0 to array.size(arrayTimes) - 1
-            barTime = array.get(arrayTimes, i)
+        barDay = dayofweek(barTime, TIMEZONE)
+        barHour = hour(barTime, TIMEZONE)
+        barMinute = minute(barTime, TIMEZONE)
 
-            // Skip bars that are too old for performance
-            if barTime < lookbackLimit
-                continue
+        isSessionOpen = ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+        isSundayOpen = isSessionOpen and barDay == 1
+        isWeekdayClose = barDay >= 2 and barDay <= 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
 
-            barDay = dayofweek(barTime, TIMEZONE)
-            barHour = hour(barTime, TIMEZONE)
-            barMinute = minute(barTime, TIMEZONE)
+        // Friday close capture for NWOG (barDay == 6 is Friday under Sun=1 convention)
+        if displayNWOG and barDay == 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE and barTime >= nwogLookback
+            fridayClosePrice := array.get(cached_1m_closes, i)
 
-            if barDay == 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
+        // Weekday close capture for NDOG (Mon–Fri 16:59)
+        if displayNDOG and isWeekdayClose and barTime >= ndogLookback
+            prevDayClosePrice := array.get(cached_1m_closes, i)
+
+        if isSessionOpen
+            // Divider collection (pool-architecture is append-only per existing contract)
+            if barTime >= dividerLookback
+                if showNDOGDividers
+                    array.push(ndogDividers.dividerTimes, barTime)
+                if showNWOGDividers and isSundayOpen
+                    array.push(nwogDividers.dividerTimes, barTime)
+
+            // Combined mark-passed pass: one gapsArray scan handles both gap types.
+            // Guards prevent self-marking: a newly created gap (below) has not yet
+            // been pushed when this loop runs for the current session-open iteration.
+            if (displayNWOG or displayNDOG) and array.size(gapsArray) > 0
                 for j = 0 to array.size(gapsArray) - 1
                     gap = array.get(gapsArray, j)
-                    // Only mark NWOG gaps that were created at least 6 days before this session
-                    // (6 days = 518400000 ms, ensures it's the NEXT Sunday not the same one)
-                    if gap.gapType == GAP_TYPE_NWOG and (barTime - gap.creationTime) >= 518400000
+                    if displayNWOG and isSundayOpen and gap.gapType == GAP_TYPE_NWOG and (barTime - gap.creationTime) >= 518400000
                         gap.passedNextSession := true
+                    if displayNDOG and gap.gapType == GAP_TYPE_NDOG and (barTime - gap.creationTime) >= 72000000
+                        gap.passedNextSession := true
+
+            // Create NWOG (Sunday 18:00 only, requires Friday close captured)
+            if displayNWOG and isSundayOpen and not na(fridayClosePrice) and barTime >= nwogLookback
+                sundayOpenPrice := array.get(cached_1m_opens, i)
+                if sundayOpenPrice != fridayClosePrice
+                    nwogTop = math.max(fridayClosePrice, sundayOpenPrice)
+                    nwogBottom = math.min(fridayClosePrice, sundayOpenPrice)
+                    nwogIsBullish = sundayOpenPrice > fridayClosePrice
+                    nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false, na, nwogIsBullish)
+                    array.push(gapsArray, nwogGap)
+                    if countGapsByType(GAP_TYPE_NWOG) > nwogLimit
+                        removeOldestGap(GAP_TYPE_NWOG)
+                fridayClosePrice := na
+
+            // Create NDOG (any 18:00 session open, requires prev-day close captured)
+            if displayNDOG and not na(prevDayClosePrice) and barTime >= ndogLookback
+                newDayOpenPrice := array.get(cached_1m_opens, i)
+                if newDayOpenPrice != prevDayClosePrice
+                    ndogTop = math.max(prevDayClosePrice, newDayOpenPrice)
+                    ndogBottom = math.min(prevDayClosePrice, newDayOpenPrice)
+                    ndogIsBullish = newDayOpenPrice > prevDayClosePrice
+                    ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false, na, ndogIsBullish)
+                    array.push(gapsArray, ndogGap)
+                    // NWOG/NDOG geometry merge: if a NWOG with identical top/bottom already
+                    // exists (Sunday open creates both gap types), override labels so the
+                    // NWOG shows "NWOG / NDOG" and the NDOG's label is hidden. Self-heals
+                    // via restoreGapDrawings if the partner is later removed.
+                    // Guard with size >= 2 because `for size-2 to 0` on a 1-element array
+                    // becomes `for -1 to 0` which Pine iterates forward starting at -1.
+                    if isSundayOpen and array.size(gapsArray) >= 2
+                        for k = array.size(gapsArray) - 2 to 0
+                            other = array.get(gapsArray, k)
+                            if other.gapType == GAP_TYPE_NWOG and other.top == ndogGap.top and other.bottom == ndogGap.bottom
+                                other.labelPrefixOverride := GAP_TYPE_NWOG_NDOG
+                                ndogGap.labelPrefixOverride := ""
+                                break
+                    if countGapsByType(GAP_TYPE_NDOG) > ndogLimit
+                        removeOldestGap(GAP_TYPE_NDOG)
+                prevDayClosePrice := na
 
 // Create RTH gap when RTH opens (preview stays until gap is created)
 if rthStart and not na(rthClosePrice) and displayRTH
@@ -1031,19 +1129,8 @@ if array.size(gapsArray) > 0
                     freshNDOGBar := gap.creationBar
                     break
 
-    // Combine NWOG/NDOG labels when they share the same geometry (Sunday open = both NWOG and NDOG)
-    for i = 0 to array.size(gapsArray) - 1
-        nwogGap = array.get(gapsArray, i)
-        if nwogGap.gapType == GAP_TYPE_NWOG
-            for j = 0 to array.size(gapsArray) - 1
-                ndogGap = array.get(gapsArray, j)
-                if ndogGap.gapType == GAP_TYPE_NDOG and ndogGap.top == nwogGap.top and ndogGap.bottom == nwogGap.bottom
-                    // Same geometry - combine labels
-                    if not na(nwogGap.dateLabel)
-                        label.set_text(nwogGap.dateLabel, getGapLabelWithFill(nwogGap, GAP_TYPE_NWOG_NDOG))
-                    if not na(ndogGap.dateLabel)
-                        label.set_text(ndogGap.dateLabel, "")  // Hide NDOG label
-
+    // NWOG/NDOG label merge is now handled via labelPrefixOverride (set at NDOG
+    // creation in the master scan, self-healing on partner removal in restoreGapDrawings).
     // Fresh mode: restore labels for fresh candidates (may have been hidden by hideGapDrawings on previous bars)
     if isFreshFilter
         // Restore distinct NDOG label
@@ -1335,48 +1422,14 @@ if array.size(gapsArray) > 0
                     for projLabel in gap.projectionLabels
                         label.set_x(projLabel, projRightTime)
 
-if displayNWOG and isValidNWOGTimeframe
-    // Use cached 1-minute data (performance optimization)
-    arrayTimes = cached_1m_times
-    arrayOpens = cached_1m_opens
-    arrayCloses = cached_1m_closes
-
-    if not na(arrayTimes) and array.size(arrayTimes) > 0
-        // Calculate lookback limit: only process recent weeks (3x buffer for safety)
-        lookbackLimit = time - (nwogLimit * 3 * MILLISECONDS_PER_WEEK)
-
-        for i = 0 to array.size(arrayTimes) - 1
-            barTime = array.get(arrayTimes, i)
-
-            // Skip bars that are too old for performance
-            if barTime < lookbackLimit
-                continue
-
-            barDay = dayofweek(barTime, TIMEZONE)
-            barHour = hour(barTime, TIMEZONE)
-            barMinute = minute(barTime, TIMEZONE)
-
-            if barDay == 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
-                fridayClosePrice := array.get(arrayCloses, i)
-
-            if barDay == 1 and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE and not na(fridayClosePrice)
-                sundayOpenPrice := array.get(arrayOpens, i)
-
-                if sundayOpenPrice != fridayClosePrice
-                    nwogTop = math.max(fridayClosePrice, sundayOpenPrice)
-                    nwogBottom = math.min(fridayClosePrice, sundayOpenPrice)
-                    nwogIsBullish = sundayOpenPrice > fridayClosePrice  // Bullish if gapped up
-
-                    nwogGap = createGap(nwogTop, nwogBottom, GAP_TYPE_NWOG, false, na, nwogIsBullish)
-                    array.push(gapsArray, nwogGap)
-
-                    if countGapsByType(GAP_TYPE_NWOG) > nwogLimit
-                        removeOldestGap(GAP_TYPE_NWOG)
-
-                fridayClosePrice := na
-
-// Manage projections: ensure only the most recent unfilled gap of each type has projections
-if array.size(gapsArray) > 0
+// Projection management: only runs on the last bar.
+// Steady state is a pure function of gap.creationBar and gap.filled, which are
+// finalized by the time we reach the last bar. Historical bars would just draw
+// and re-clear projections that only the last bar ever needs to display, so
+// gating with barstate.islast skips that wasted per-bar work entirely.
+// Fill sites in the display loop still call clearProjections(gap) directly so
+// no projections linger on a mid-bar fill during real-time.
+if barstate.islast and array.size(gapsArray) > 0
     // Find most recent unfilled creation bar for each projectable gap type
     int mostRecentNWOGBar = -1
     int mostRecentNDOGBar = -1
@@ -1496,113 +1549,6 @@ if floatingMode and array.size(gapsArray) > 0
         nextTradingDay = time + (daysToAdd * MILLISECONDS_PER_DAY)
         labelStr = "Upcoming RTH\n" + formatGapDate(nextTradingDay)
         drawFloatingBox(floatingPreview, previewGap.top, previewGap.bottom, na, ENTRY_NONE, leftBar, rightBar, previewColor, previewColor, rthBoundaryColor, internalLinesColor, labelStr, rthBoundaryColor, false)
-
-// Divider detection (independent of gap display toggles)
-if (showNDOGDividers or showNWOGDividers) and isValidNWOGTimeframe
-    // Use cached 1-minute data (performance optimization)
-    arrayTimes = cached_1m_times
-    arrayOpens = cached_1m_opens
-    arrayCloses = cached_1m_closes
-
-    if not na(arrayTimes) and array.size(arrayTimes) > 0
-        // Calculate lookback limit based on which dividers are enabled
-        maxGapsToShow = showNWOGDividers ? nwogLimit : ndogLimit
-        lookbackPeriod = showNWOGDividers ? MILLISECONDS_PER_WEEK : MILLISECONDS_PER_DAY
-        lookbackLimit = time - (maxGapsToShow * 3 * lookbackPeriod)
-
-        for i = 0 to array.size(arrayTimes) - 1
-            barTime = array.get(arrayTimes, i)
-
-            // Skip bars that are too old for performance
-            if barTime < lookbackLimit
-                continue
-
-            barDay = dayofweek(barTime, TIMEZONE)
-            barHour = hour(barTime, TIMEZONE)
-            barMinute = minute(barTime, TIMEZONE)
-
-            // Detect 18:00 session open Monday-Friday and Sunday
-            if ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
-                // Store divider time for NDOG (all 18:00 openings)
-                if showNDOGDividers
-                    array.push(ndogDividers.dividerTimes, barTime)
-
-                // Store divider time for NWOG (Sunday 18:00 only)
-                if showNWOGDividers and barDay == 1
-                    array.push(nwogDividers.dividerTimes, barTime)
-
-if displayNDOG and isValidNWOGTimeframe
-    // Use cached 1-minute data (performance optimization)
-    arrayTimes = cached_1m_times
-    arrayOpens = cached_1m_opens
-    arrayCloses = cached_1m_closes
-
-    if not na(arrayTimes) and array.size(arrayTimes) > 0
-        // Calculate lookback limit: only process recent days (3x buffer for safety)
-        lookbackLimit = time - (ndogLimit * 3 * MILLISECONDS_PER_DAY)
-
-        for i = 0 to array.size(arrayTimes) - 1
-            barTime = array.get(arrayTimes, i)
-
-            // Skip bars that are too old for performance
-            if barTime < lookbackLimit
-                continue
-
-            barDay = dayofweek(barTime, TIMEZONE)
-            barHour = hour(barTime, TIMEZONE)
-            barMinute = minute(barTime, TIMEZONE)
-
-            // Capture close price Monday-Friday (16:59)
-            if barDay >= 2 and barDay <= 6 and barHour == CLOSE_HOUR and barMinute == CLOSE_MINUTE
-                prevDayClosePrice := array.get(arrayCloses, i)
-
-            // Detect 18:00 session open Monday-Friday and Sunday
-            // Note: Friday→Sunday creates both NDOG and NWOG (not mutually exclusive)
-            if ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
-                if not na(prevDayClosePrice)
-                    newDayOpenPrice := array.get(arrayOpens, i)
-
-                    if newDayOpenPrice != prevDayClosePrice
-                        ndogTop = math.max(prevDayClosePrice, newDayOpenPrice)
-                        ndogBottom = math.min(prevDayClosePrice, newDayOpenPrice)
-                        ndogIsBullish = newDayOpenPrice > prevDayClosePrice  // Bullish if gapped up
-
-                        ndogGap = createGap(ndogTop, ndogBottom, GAP_TYPE_NDOG, false, na, ndogIsBullish)
-                        array.push(gapsArray, ndogGap)
-
-                        if countGapsByType(GAP_TYPE_NDOG) > ndogLimit
-                            removeOldestGap(GAP_TYPE_NDOG)
-
-                    prevDayClosePrice := na
-if displayNDOG and isValidNWOGTimeframe and array.size(gapsArray) > 0
-    // Use cached 1-minute data (performance optimization)
-    arrayTimes = cached_1m_times
-    arrayOpens = cached_1m_opens
-    arrayCloses = cached_1m_closes
-
-    if not na(arrayTimes) and array.size(arrayTimes) > 0
-        // Calculate lookback limit: only process recent days
-        lookbackLimit = time - (ndogLimit * 3 * MILLISECONDS_PER_DAY)
-
-        for i = 0 to array.size(arrayTimes) - 1
-            barTime = array.get(arrayTimes, i)
-
-            // Skip bars that are too old for performance
-            if barTime < lookbackLimit
-                continue
-
-            barDay = dayofweek(barTime, TIMEZONE)
-            barHour = hour(barTime, TIMEZONE)
-            barMinute = minute(barTime, TIMEZONE)
-
-            // Mark NDOG gaps as passed when reaching next 18:00 session (Mon-Fri + Sunday)
-            if ((barDay >= 2 and barDay <= 6) or barDay == 1) and barHour == SESSION_OPEN_HOUR and barMinute == ZERO_MINUTE
-                for j = 0 to array.size(gapsArray) - 1
-                    gap = array.get(gapsArray, j)
-                    // Only mark gaps created at least 20 hours before this session
-                    // 20 hours = 72000000 ms (handles daily ~24h and Friday→Sunday ~50h gaps)
-                    if gap.gapType == GAP_TYPE_NDOG and (barTime - gap.creationTime) >= 72000000
-                        gap.passedNextSession := true
 
 // BPR Detection
 if displayBPR
