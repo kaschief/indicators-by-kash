@@ -171,8 +171,6 @@ Wrap the lines 1378–1409 block in `if projectionsDirty`, and reset `projection
 
 - **Remove BPR feature entirely.** The Balanced Price Range gap type should come out of gaps.pine. Touch points: `displayBPR` input, `GAP_TYPE_BPR_BULLISH` / `GAP_TYPE_BPR_BEARISH` constants, BPR detection block (search "BPR Detection"), BPR branch in `getGapLabelText`, BPR filter preset, BPR color table rows, and any associated visibility/projection logic. Same total-removal pattern used for "Show 1600 Bias" and "Wick Borders" in deviations — no leftover hardcoded values, update the regression checklist to drop the BPR row.
 
-- **Bound divider array growth.** `ndogDividers.dividerTimes` and `nwogDividers.dividerTimes` are push-only and re-push the same session-open timestamps every chart bar. Rendering clamps via `min(limit, size)` so the chart looks fine, but the array balloons over time. Add `array.clear(ndogDividers.dividerTimes)` and `array.clear(nwogDividers.dividerTimes)` at the top of the master scan block (before the `for i = 0 to size-1` loop), gated by the same `masterScanActive` check. Pre-existing — not introduced by Phase 1.
-
 ---
 
 ## Regression test checklist (run after ANY Phase 1 change)
