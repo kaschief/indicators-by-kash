@@ -167,10 +167,6 @@ Wrap the lines 1378–1409 block in `if projectionsDirty`, and reset `projection
 
 ---
 
-## Backlog (cleanup, not blocking)
-
-- **Remove BPR feature entirely.** The Balanced Price Range gap type should come out of gaps.pine. Touch points: `displayBPR` input, `GAP_TYPE_BPR_BULLISH` / `GAP_TYPE_BPR_BEARISH` constants, BPR detection block (search "BPR Detection"), BPR branch in `getGapLabelText`, BPR filter preset, BPR color table rows, and any associated visibility/projection logic. Same total-removal pattern used for "Show 1600 Bias" and "Wick Borders" in deviations — no leftover hardcoded values, update the regression checklist to drop the BPR row.
-
 ---
 
 ## Regression test checklist (run after ANY Phase 1 change)
@@ -182,7 +178,6 @@ Gap creation:
 - [ ] NDOG appears at each weekday 16:59 → 18:00 transition
 - [ ] NDOG appears at Fri 16:59 → Sun 18:00 (shares geometry with NWOG)
 - [ ] RTH appears at each 09:30 session open when prior close ≠ open
-- [ ] BPR appears when FVG+ and FVG- overlap
 - [ ] FVG+ and FVG- appear per 3-bar displacement
 
 Fill behavior:
@@ -199,7 +194,6 @@ Filter modes (cycle through each and confirm correct gaps visible):
 - [ ] NDOG
 - [ ] NWOG + NDOG
 - [ ] RTH
-- [ ] BPR
 - [ ] FVG
 
 Label merging:
