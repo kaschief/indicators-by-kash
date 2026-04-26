@@ -178,7 +178,6 @@ Gap creation:
 - [ ] NDOG appears at each weekday 16:59 → 18:00 transition
 - [ ] NDOG appears at Fri 16:59 → Sun 18:00 (shares geometry with NWOG)
 - [ ] RTH appears at each 09:30 session open when prior close ≠ open
-- [ ] FVG+ and FVG- appear per 3-bar displacement
 
 Fill behavior:
 - [ ] Each gap type transitions to filled color when wick/body breaches
@@ -189,12 +188,10 @@ Fill behavior:
 Filter modes (cycle through each and confirm correct gaps visible):
 - [ ] All
 - [ ] Fresh
-- [ ] Fresh + FVGs
 - [ ] NWOG
 - [ ] NDOG
 - [ ] NWOG + NDOG
 - [ ] RTH
-- [ ] FVG
 
 Label merging:
 - [ ] When NWOG and NDOG share geometry (Sunday open), label reads "NWOG / NDOG"
