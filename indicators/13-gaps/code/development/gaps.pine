@@ -369,8 +369,8 @@ createGap(float topPrice, float bottomPrice, string gapType, bool isPreview = fa
 
     // Outer boundary lines (top and bottom edges)
     boundaryColor = gapType == GAP_TYPE_NWOG ? nwogBoundaryColor : gapType == GAP_TYPE_NDOG ? ndogBoundaryColor : gapType == GAP_TYPE_RTH ? rthBoundaryColor : na
-    topBoundaryLine = not isPreview ? line.new(leftTime, topPrice, rightTime, topPrice, xloc=xloc.bar_time, color=boundaryColor, style=line.style_solid, width=1) : na
-    bottomBoundaryLine = not isPreview ? line.new(leftTime, bottomPrice, rightTime, bottomPrice, xloc=xloc.bar_time, color=boundaryColor, style=line.style_solid, width=1) : na
+    topBoundaryLine = line.new(leftTime, topPrice, rightTime, topPrice, xloc=xloc.bar_time, color=boundaryColor, style=line.style_solid, width=1)
+    bottomBoundaryLine = line.new(leftTime, bottomPrice, rightTime, bottomPrice, xloc=xloc.bar_time, color=boundaryColor, style=line.style_solid, width=1)
 
     // Create labels for gaps
     label dateLabel = na
@@ -759,6 +759,17 @@ if not inRTH and not na(previewGap) and not na(rthClosePrice) and displayRTH
         box.set_left(previewGap.topUnfilledBox, previewLeft)
         box.set_right(previewGap.topUnfilledBox, previewRight)
 
+        if not na(previewGap.topBoundaryLine)
+            line.set_y1(previewGap.topBoundaryLine, newTop)
+            line.set_y2(previewGap.topBoundaryLine, newTop)
+            line.set_x1(previewGap.topBoundaryLine, previewLeft)
+            line.set_x2(previewGap.topBoundaryLine, previewRight)
+        if not na(previewGap.bottomBoundaryLine)
+            line.set_y1(previewGap.bottomBoundaryLine, newBottom)
+            line.set_y2(previewGap.bottomBoundaryLine, newBottom)
+            line.set_x1(previewGap.bottomBoundaryLine, previewLeft)
+            line.set_x2(previewGap.bottomBoundaryLine, previewRight)
+
         previewRange = newTop - newBottom
         if previewRange > 0
             newMid = newBottom + previewRange * CE_LEVEL
@@ -918,7 +929,106 @@ if rthStart and not na(rthClosePrice) and displayRTH
             previewGap := na
             previewStartTime := na
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// PASS A — STATE MUTATION (every bar)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Entry direction, fill detection, filled-gap cleanup with array.remove.
+// Runs on every bar so historical and live fills are tracked correctly,
+// regardless of visibility (hidden gap types still advance their state).
+// Drawing decisions (visibility filter, color dispatch, extension, projections)
+// live in PASS B below, gated on barstate.islast.
+
 if array.size(gapsArray) > 0
+    for i = array.size(gapsArray) - 1 to 0
+        gap = array.get(gapsArray, i)
+
+        // Entry direction (first time price touches the gap)
+        if gap.entryDirection == ENTRY_NONE
+            if high >= gap.bottom and low <= gap.bottom
+                gap.entryDirection := ENTRY_FROM_BELOW
+            else if low <= gap.top and high >= gap.top
+                gap.entryDirection := ENTRY_FROM_ABOVE
+
+        // Fill detection
+        if not gap.filled
+            if gap.entryDirection == ENTRY_FROM_BELOW
+                if high >= gap.bottom and high <= gap.top
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? high : math.max(gap.penetrationLevel, high)
+                if high >= gap.top
+                    gap.penetrationLevel := gap.top
+                    gap.filled := true
+                    if gap.gapType == GAP_TYPE_RTH
+                        isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
+                        if isToday
+                            rthFilledAlertMsg := "Today's RTH Gap filled"
+                        else
+                            gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
+                            gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
+                            rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
+                    clearProjections(gap)
+
+            else if gap.entryDirection == ENTRY_FROM_ABOVE
+                if low <= gap.top and low >= gap.bottom
+                    gap.penetrationLevel := na(gap.penetrationLevel) ? low : math.min(gap.penetrationLevel, low)
+                if low <= gap.bottom
+                    gap.penetrationLevel := gap.bottom
+                    gap.filled := true
+                    if gap.gapType == GAP_TYPE_RTH
+                        isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
+                        if isToday
+                            rthFilledAlertMsg := "Today's RTH Gap filled"
+                        else
+                            gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
+                            gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
+                            rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
+                    clearProjections(gap)
+
+            if not gap.filled and not na(gap.penetrationLevel)
+                if gap.entryDirection == ENTRY_FROM_BELOW
+                    if gap.penetrationLevel >= gap.top
+                        gap.filled := true
+                        if gap.gapType == GAP_TYPE_RTH
+                            isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
+                            if isToday
+                                rthFilledAlertMsg := "Today's RTH Gap filled"
+                            else
+                                gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
+                                gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
+                                rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
+                        clearProjections(gap)
+                else if gap.entryDirection == ENTRY_FROM_ABOVE
+                    if gap.penetrationLevel <= gap.bottom
+                        gap.filled := true
+                        if gap.gapType == GAP_TYPE_RTH
+                            isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
+                            if isToday
+                                rthFilledAlertMsg := "Today's RTH Gap filled"
+                            else
+                                gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
+                                gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
+                                rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
+                        clearProjections(gap)
+
+        // Filled-gap cleanup (array.remove). Reverse iter is required.
+        // Pass B will surface the next-fresh candidate via its own visibility
+        // filter; no need to scan-and-restore here.
+        if gap.filled
+            isTodayRTH = gap.gapType == GAP_TYPE_RTH and dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
+            keepTodayFilledRTH = isFreshFilter and showTodayFilledRTH and isTodayRTH
+            shouldDeleteRTH = gap.gapType == GAP_TYPE_RTH and rthHideFilled and not keepTodayFilledRTH
+            if (gap.gapType == GAP_TYPE_NWOG and nwogHideFilled) or (gap.gapType == GAP_TYPE_NDOG and ndogHideFilled) or shouldDeleteRTH
+                deleteGap(gap)
+                array.remove(gapsArray, i)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PASS B — VISIBILITY + DRAWING (last bar only)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tradingview only renders the last-bar state of any drawing object, so
+// repositioning boxes / extending lines / setting colors on intermediate
+// bars is wasted work. PASS A above already advanced fill state, so by
+// last bar gap.filled / gap.penetrationLevel are correct.
+
+if barstate.islast and array.size(gapsArray) > 0
     mostRecentUnfilledNWOGBar = -1
     mostRecentUnfilledNDOGBar = -1
     mostRecentUnfilledRTHBar = -1  // Track most recent UNFILLED RTH for floating mode
@@ -1051,91 +1161,12 @@ if array.size(gapsArray) > 0
         if skipGap
             continue
 
-        if gap.entryDirection == ENTRY_NONE
-            if high >= gap.bottom and low <= gap.bottom
-                gap.entryDirection := ENTRY_FROM_BELOW
-            else if low <= gap.top and high >= gap.top
-                gap.entryDirection := ENTRY_FROM_ABOVE
-
-        if not gap.filled
-            if gap.entryDirection == ENTRY_FROM_BELOW
-                if high >= gap.bottom and high <= gap.top
-                    gap.penetrationLevel := na(gap.penetrationLevel) ? high : math.max(gap.penetrationLevel, high)
-                if high >= gap.top
-                    gap.penetrationLevel := gap.top
-                    gap.filled := true
-                    if gap.gapType == GAP_TYPE_RTH
-                        isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
-                        if isToday
-                            rthFilledAlertMsg := "Today's RTH Gap filled"
-                        else
-                            gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
-                            gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
-                            rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
-                    clearProjections(gap)
-
-            else if gap.entryDirection == ENTRY_FROM_ABOVE
-                if low <= gap.top and low >= gap.bottom
-                    gap.penetrationLevel := na(gap.penetrationLevel) ? low : math.min(gap.penetrationLevel, low)
-                if low <= gap.bottom
-                    gap.penetrationLevel := gap.bottom
-                    gap.filled := true
-                    if gap.gapType == GAP_TYPE_RTH
-                        isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
-                        if isToday
-                            rthFilledAlertMsg := "Today's RTH Gap filled"
-                        else
-                            gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
-                            gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
-                            rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
-                    clearProjections(gap)
-
-            if not gap.filled and not na(gap.penetrationLevel)
-                if gap.entryDirection == ENTRY_FROM_BELOW
-                    if gap.penetrationLevel >= gap.top
-                        gap.filled := true
-                        if gap.gapType == GAP_TYPE_RTH
-                            isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
-                            if isToday
-                                rthFilledAlertMsg := "Today's RTH Gap filled"
-                            else
-                                gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
-                                gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
-                                rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
-                        clearProjections(gap)
-                else if gap.entryDirection == ENTRY_FROM_ABOVE
-                    if gap.penetrationLevel <= gap.bottom
-                        gap.filled := true
-                        if gap.gapType == GAP_TYPE_RTH
-                            isToday = dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
-                            if isToday
-                                rthFilledAlertMsg := "Today's RTH Gap filled"
-                            else
-                                gapMonth = getMonthName(month(gap.creationTime, TIMEZONE))
-                                gapDay = str.tostring(dayofmonth(gap.creationTime, TIMEZONE))
-                                rthFilledAlertMsg := "RTH Gap filled: " + gapMonth + " " + gapDay
-                        clearProjections(gap)
-
+        // Today's filled RTH gets thicker border for visibility (filled gaps are more faded).
+        // Filled-gap deletion is handled in PASS A above; if we reach here with a
+        // filled gap it means hide-filled is off OR keepTodayFilledRTH applies.
         if gap.filled
-            // Check if we should keep today's filled RTH in Fresh mode (use date check, not freshRTHBar)
             isTodayRTH = gap.gapType == GAP_TYPE_RTH and dayofmonth(gap.creationTime, TIMEZONE) == dayofmonth(time, TIMEZONE) and month(gap.creationTime, TIMEZONE) == month(time, TIMEZONE)
             keepTodayFilledRTH = isFreshFilter and showTodayFilledRTH and isTodayRTH
-
-            shouldDeleteRTH = gap.gapType == GAP_TYPE_RTH and rthHideFilled and not keepTodayFilledRTH
-            if (gap.gapType == GAP_TYPE_NWOG and nwogHideFilled) or (gap.gapType == GAP_TYPE_NDOG and ndogHideFilled) or shouldDeleteRTH
-                // If deleting the fresh RTH gap, find and restore the next unfilled one
-                if isFreshFilter and gap.gapType == GAP_TYPE_RTH and gap.creationBar == freshRTHBar
-                    for j = array.size(gapsArray) - 1 to 0
-                        prevGap = array.get(gapsArray, j)
-                        if prevGap.gapType == GAP_TYPE_RTH and not prevGap.filled and prevGap.creationBar != gap.creationBar
-                            freshRTHBar := prevGap.creationBar
-                            restoreGapDrawings(prevGap)
-                            break
-                deleteGap(gap)
-                array.remove(gapsArray, i)
-                continue
-
-            // Today's filled RTH gets thicker border for visibility (filled gaps are more faded)
             if keepTodayFilledRTH
                 if not na(gap.topBoundaryLine)
                     line.set_width(gap.topBoundaryLine, 2)
@@ -1343,9 +1374,11 @@ if floatingMode and array.size(gapsArray) > 0
     if not na(previewGap)
         leftBar = bar_index + COMPACT_OFFSET_RTH
         rightBar = leftBar + COMPACT_WIDTH
-        todayDow = dayofweek(time, TIMEZONE)
+        // Anchor to creation time so the date matches the non-floating label.
+        // Using current `time` causes drift as bars advance past the 16:00 creation bar.
+        todayDow = dayofweek(previewGap.creationTime, TIMEZONE)
         daysToAdd = todayDow == dayofweek.friday ? 3 : 1
-        nextTradingDay = time + (daysToAdd * MILLISECONDS_PER_DAY)
+        nextTradingDay = previewGap.creationTime + (daysToAdd * MILLISECONDS_PER_DAY)
         labelStr = "Upcoming RTH\n" + formatGapDate(nextTradingDay)
         drawFloatingBox(floatingPreview, previewGap.top, previewGap.bottom, na, ENTRY_NONE, leftBar, rightBar, previewColor, previewColor, rthBoundaryColor, internalLinesColor, labelStr, rthBoundaryColor, false)
 
