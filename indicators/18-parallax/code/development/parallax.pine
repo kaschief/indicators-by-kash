@@ -1,0 +1,463 @@
+//@version=6
+indicator("parallax •", shorttitle="parallax •", overlay=true,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// Multi-HTF statistical expansion zones.
+// Up to 4 HTF slots, each projecting Typical/Average/Distribution levels from its own open.
+// Typical = median of (H−O)/(O−L) over last N HTF candles. Average = mean. Distribution = Average ± k·σ.
+
+// CONSTANTS
+
+const string GROUP_GENERAL = "General"
+const string GROUP_SLOTS   = "HTF Slots"
+const string GROUP_DISPLAY = "Display"
+const string GROUP_ZONE    = "Zone Fill"
+const string GROUP_TABLE   = "Color Reference Table"
+
+// Grayscale palette — darker = closer tier, lighter = farther.
+// Baked transparency on slot colors only affects line draws (which use the slot color as-is); zone fill always overrides via zoneFillTransparency.
+const color SLOT1_COLOR = color.rgb(74,  74,  74)    // closest tier
+const color SLOT2_COLOR = color.rgb(128, 128, 128)
+const color SLOT3_COLOR = color.rgb(184, 184, 184)
+const color SLOT4_COLOR = color.rgb(219, 219, 219)   // farthest tier
+const int   LABEL_TEXT_TRANSPARENCY = 50             // applied to label text relative to its slot color
+
+// Time-unit seconds + ms-per-second (used by get_tf_display_label and HTF box right-edge projection).
+const int SECS_MIN       = 60
+const int SECS_HOUR      = 3600
+const int SECS_DAY       = 86400
+const int SECS_WEEK      = 604800
+const int SECS_MONTH_AVG = 2629800     // 365.25 / 12 days
+const int SECS_4_WEEKS   = 2419200     // boundary between weekly and monthly labeling
+const int MS_PER_SEC     = 1000
+
+const string LS_SOLID  = "⎯⎯⎯"
+const string LS_DASHED = "----"
+const string LS_DOTTED = "····"
+get_line_style(string s) =>
+    s == LS_DASHED ? line.style_dashed : s == LS_DOTTED ? line.style_dotted : line.style_solid
+
+get_tf_display_label(string tf) =>
+    int secs = timeframe.in_seconds(tf)
+    if secs < SECS_MIN
+        str.tostring(secs) + "s"
+    else if secs < SECS_HOUR
+        str.tostring(int(math.round(secs / float(SECS_MIN)))) + "m"
+    else if secs < SECS_DAY
+        str.tostring(int(math.round(secs / float(SECS_HOUR)))) + "H"
+    else if secs < SECS_WEEK
+        str.tostring(int(math.round(secs / float(SECS_DAY)))) + "D"
+    else if secs < SECS_4_WEEKS
+        str.tostring(int(math.round(secs / float(SECS_WEEK)))) + "W"
+    else
+        str.tostring(int(math.round(secs / float(SECS_MONTH_AVG)))) + "Mo"
+
+// AUTO PAIRING — per-slot LTF→HTF map. Each slot resolves to a successively higher tier.
+// Slot 1 = next tier above chart. Slot 2 = one above slot 1. Slot 3 = above slot 2. Slot 4 = highest.
+get_tf_pairing(string chart_tf, int slot) =>
+    if slot == 1
+        switch chart_tf
+            "30S" => [true, "5",   "5m"]
+            "1"   => [true, "15",  "15m"]
+            "2"   => [true, "30",  "30m"]
+            "3"   => [true, "30",  "30m"]
+            "4"   => [true, "30",  "30m"]
+            "5"   => [true, "60",  "1H"]
+            "10"  => [true, "60",  "1H"]
+            "15"  => [true, "240", "4H"]
+            "30"  => [true, "240", "4H"]
+            "45"  => [true, "240", "4H"]
+            "60"  => [true, "D",   "D"]
+            "120" => [true, "D",   "D"]
+            "180" => [true, "D",   "D"]
+            "240" => [true, "D",   "D"]
+            "1D"  => [true, "W",   "W"]
+            "1W"  => [true, "M",   "1Mo"]
+            =>       [false, "",   ""]
+    else if slot == 2
+        switch chart_tf
+            "30S" => [true, "15",  "15m"]
+            "1"   => [true, "60",  "1H"]
+            "2"   => [true, "60",  "1H"]
+            "3"   => [true, "60",  "1H"]
+            "4"   => [true, "60",  "1H"]
+            "5"   => [true, "240", "4H"]
+            "10"  => [true, "240", "4H"]
+            "15"  => [true, "D",   "D"]
+            "30"  => [true, "D",   "D"]
+            "45"  => [true, "D",   "D"]
+            "60"  => [true, "W",   "W"]
+            "120" => [true, "W",   "W"]
+            "180" => [true, "W",   "W"]
+            "240" => [true, "W",   "W"]
+            "1D"  => [true, "M",   "1Mo"]
+            =>       [false, "",   ""]
+    else if slot == 3
+        switch chart_tf
+            "30S" => [true, "60",  "1H"]
+            "1"   => [true, "240", "4H"]
+            "2"   => [true, "240", "4H"]
+            "3"   => [true, "240", "4H"]
+            "4"   => [true, "240", "4H"]
+            "5"   => [true, "D",   "D"]
+            "10"  => [true, "D",   "D"]
+            "15"  => [true, "W",   "W"]
+            "30"  => [true, "W",   "W"]
+            "45"  => [true, "W",   "W"]
+            "60"  => [true, "M",   "1Mo"]
+            "120" => [true, "M",   "1Mo"]
+            "180" => [true, "M",   "1Mo"]
+            "240" => [true, "M",   "1Mo"]
+            =>       [false, "",   ""]
+    else if slot == 4
+        switch chart_tf
+            "30S" => [true, "240", "4H"]
+            "1"   => [true, "D",   "D"]
+            "2"   => [true, "D",   "D"]
+            "3"   => [true, "D",   "D"]
+            "4"   => [true, "D",   "D"]
+            "5"   => [true, "W",   "W"]
+            "10"  => [true, "W",   "W"]
+            "15"  => [true, "M",   "1Mo"]
+            "30"  => [true, "M",   "1Mo"]
+            "45"  => [true, "M",   "1Mo"]
+            "60"  => [true, "3M",  "3Mo"]
+            "120" => [true, "3M",  "3Mo"]
+            "180" => [true, "3M",  "3Mo"]
+            "240" => [true, "3M",  "3Mo"]
+            =>       [false, "",   ""]
+    else
+        [false, "", ""]
+
+// INPUTS
+
+lookbackN  = input.int(100, "Lookback", group=GROUP_GENERAL, minval=10, maxval=500,
+     tooltip="Maximum HTF candles for the expansion stats. Effective N is min(this, available HTF bars).")
+
+// All 4 slots have identical shape: enable + Manual override + TF + color.
+// When Manual is off, the slot auto-pairs from the chart TF. Slot 1 = nearest higher tier; each slot above that = one tier higher.
+const string SLOT_AUTO_TOOLTIP = "Each slot auto-pairs to a successively higher tier above the chart TF. Toggle Manual to override with the picker beside it.\n\nSlot 1 example (1m chart): 15m\nSlot 2: 1H\nSlot 3: 4H\nSlot 4: D"
+
+const string SLOT_HISTORY_TOOLTIP = "Total zones visible for this slot, including the current in-progress one.\n  1 = current only\n  2 = current + 1 past\n  10 = current + 9 past"
+
+slot1Show    = input.bool(true,  "1",       inline="s1", group=GROUP_SLOTS, tooltip=SLOT_AUTO_TOOLTIP)
+slot1Manual  = input.bool(false, "Manual",  inline="s1", group=GROUP_SLOTS)
+slot1TFIn    = input.timeframe("240", "",   inline="s1", group=GROUP_SLOTS)
+slot1Color   = input.color(SLOT1_COLOR, "", inline="s1", group=GROUP_SLOTS)
+slot1History = input.int(10, "", inline="s1", group=GROUP_SLOTS, minval=1, maxval=40, tooltip=SLOT_HISTORY_TOOLTIP)
+
+slot2Show    = input.bool(false, "2",       inline="s2", group=GROUP_SLOTS)
+slot2Manual  = input.bool(false, "Manual",  inline="s2", group=GROUP_SLOTS)
+slot2TFIn    = input.timeframe("60", "",    inline="s2", group=GROUP_SLOTS)
+slot2Color   = input.color(SLOT2_COLOR, "", inline="s2", group=GROUP_SLOTS)
+slot2History = input.int(10, "", inline="s2", group=GROUP_SLOTS, minval=1, maxval=40, tooltip=SLOT_HISTORY_TOOLTIP)
+
+slot3Show    = input.bool(false, "3",       inline="s3", group=GROUP_SLOTS)
+slot3Manual  = input.bool(false, "Manual",  inline="s3", group=GROUP_SLOTS)
+slot3TFIn    = input.timeframe("D", "",     inline="s3", group=GROUP_SLOTS)
+slot3Color   = input.color(SLOT3_COLOR, "", inline="s3", group=GROUP_SLOTS)
+slot3History = input.int(10, "", inline="s3", group=GROUP_SLOTS, minval=1, maxval=40, tooltip=SLOT_HISTORY_TOOLTIP)
+
+slot4Show    = input.bool(false, "4",       inline="s4", group=GROUP_SLOTS)
+slot4Manual  = input.bool(false, "Manual",  inline="s4", group=GROUP_SLOTS)
+slot4TFIn    = input.timeframe("W", "",     inline="s4", group=GROUP_SLOTS)
+slot4Color   = input.color(SLOT4_COLOR, "", inline="s4", group=GROUP_SLOTS)
+slot4History = input.int(10, "", inline="s4", group=GROUP_SLOTS, minval=1, maxval=40, tooltip=SLOT_HISTORY_TOOLTIP)
+
+// Levels — Lines and Distribution inherit the slot's identity color. Midline has its own color (it's a reference marker, not slot-identity).
+showLines    = input.bool(true, "Lines", group=GROUP_DISPLAY,
+     tooltip="Draw the zone bounds: Typical (median) and Average (mean). Always rendered solid.")
+
+showMidline  = input.bool(false, "Midline", inline="lvl_m", group=GROUP_DISPLAY,
+     tooltip="50% line through each zone — midpoint between Typical and Average on the upper side, and again on the lower side. Two lines per slot. Color is independent so the midline can be visually distinct from slot identity.")
+midlineColor = input.color(color.new(color.rgb(99, 99, 99), 70), "", inline="lvl_m", group=GROUP_DISPLAY)
+
+showDist     = input.bool(false, "Distribution", inline="lvl_d", group=GROUP_DISPLAY,
+     tooltip="Outer band at Average ± k·σ.")
+distStyle    = input.string(LS_DASHED, "", inline="lvl_d", group=GROUP_DISPLAY, options=[LS_SOLID, LS_DASHED, LS_DOTTED])
+distSigmaK   = input.float(1.5, "σ", inline="lvl_d", group=GROUP_DISPLAY, minval=0.1, maxval=4.0, step=0.1,
+     tooltip="Distribution± = Average± ± k·σ.")
+
+showZoneFill         = input.bool(true, "Fill", inline="zone", group=GROUP_ZONE,
+     tooltip="Shaded box between Typical and Average. Independent transparency below — slot color hue is used, opacity is controlled here.")
+zoneFillTransparency = input.int(85, "Transparency", inline="zone", group=GROUP_ZONE, minval=0, maxval=100)
+
+latestOnly = input.bool(false, "Latest only", group=GROUP_GENERAL,
+     tooltip="Master override — when on, draw only the most recent (in-progress) HTF zone per slot. Ignores each slot's Past-zones setting.")
+
+const string LBL_TINY   = "Tiny"
+const string LBL_SMALL  = "Small"
+const string LBL_NORMAL = "Normal"
+const string LBL_LARGE  = "Large"
+const string LBL_HUGE   = "Huge"
+
+showLabels       = input.bool(true,  "Labels",  inline="lbl", group=GROUP_DISPLAY,
+     tooltip="Show the slot's HTF tag centered in each zone. Size scales by slot tier — closer slots smaller, farther slots larger.")
+labelHistoryAll  = input.bool(false, "All zones", inline="lbl", group=GROUP_DISPLAY,
+     tooltip="When on, label every visible zone (current + historical). When off, only the current in-progress zone is labeled.\n\nNote: has no effect when a slot's count = 1 (no history) or when Latest only is on.")
+
+// Per-slot label size — gradient from closest (small) to farthest (huge).
+const string SLOT1_LABEL_SIZE = LBL_SMALL
+const string SLOT2_LABEL_SIZE = LBL_NORMAL
+const string SLOT3_LABEL_SIZE = LBL_LARGE
+const string SLOT4_LABEL_SIZE = LBL_HUGE
+
+get_label_size(string s) =>
+    s == LBL_TINY   ? size.tiny   :
+     s == LBL_NORMAL ? size.normal :
+     s == LBL_LARGE  ? size.large  :
+     s == LBL_HUGE   ? size.huge   :
+                       size.small
+
+showTable = input.bool(false, "Show", group=GROUP_TABLE,
+     tooltip="RGB cheat-sheet for slot colors, top-right.")
+
+// HTF RESOLUTION — auto-pair when Manual is off; manual TF when Manual is on.
+// A slot only renders if its resolved TF is strictly higher than the chart TF.
+
+string CHART_TF = timeframe.period
+[s1AutoValid, s1AutoTF, s1AutoLabel] = get_tf_pairing(CHART_TF, 1)
+[s2AutoValid, s2AutoTF, s2AutoLabel] = get_tf_pairing(CHART_TF, 2)
+[s3AutoValid, s3AutoTF, s3AutoLabel] = get_tf_pairing(CHART_TF, 3)
+[s4AutoValid, s4AutoTF, s4AutoLabel] = get_tf_pairing(CHART_TF, 4)
+
+string s1TF    = slot1Manual ? slot1TFIn : (s1AutoValid ? s1AutoTF : "1D")
+bool   s1Valid = slot1Show and (slot1Manual or s1AutoValid) and timeframe.in_seconds(s1TF) > timeframe.in_seconds()
+string s1Safe  = s1Valid ? s1TF : "1D"
+string s1Label = get_tf_display_label(s1TF)
+
+string s2TF    = slot2Manual ? slot2TFIn : (s2AutoValid ? s2AutoTF : "1D")
+bool   s2Valid = slot2Show and (slot2Manual or s2AutoValid) and timeframe.in_seconds(s2TF) > timeframe.in_seconds()
+string s2Safe  = s2Valid ? s2TF : "1D"
+string s2Label = get_tf_display_label(s2TF)
+
+string s3TF    = slot3Manual ? slot3TFIn : (s3AutoValid ? s3AutoTF : "1D")
+bool   s3Valid = slot3Show and (slot3Manual or s3AutoValid) and timeframe.in_seconds(s3TF) > timeframe.in_seconds()
+string s3Safe  = s3Valid ? s3TF : "1D"
+string s3Label = get_tf_display_label(s3TF)
+
+string s4TF    = slot4Manual ? slot4TFIn : (s4AutoValid ? s4AutoTF : "1D")
+bool   s4Valid = slot4Show and (slot4Manual or s4AutoValid) and timeframe.in_seconds(s4TF) > timeframe.in_seconds()
+string s4Safe  = s4Valid ? s4TF : "1D"
+string s4Label = get_tf_display_label(s4TF)
+
+// HTF DATA — per slot, two security calls:
+// (1) lookahead_on for the in-progress current HTF candle's open (used as the projection reference)
+// (2) lookahead_off for rolling stats over the last N CLOSED HTF bars (independent of chart TF / chart bar history)
+
+// Helpers — consolidate the per-slot OHLC and stats fetches so the 4 slots don't repeat the same security tuples.
+fetch_htf_ohlc(string tf) =>
+    request.security(syminfo.tickerid, tf, [open, high, low], lookahead=barmerge.lookahead_on)
+
+fetch_htf_stats(string tf) =>
+    request.security(syminfo.tickerid, tf,
+         [ta.median(high - open, lookbackN), ta.sma(high - open, lookbackN), ta.stdev(high - open, lookbackN),
+          ta.median(open - low,  lookbackN), ta.sma(open - low,  lookbackN), ta.stdev(open - low,  lookbackN)],
+         lookahead=barmerge.lookahead_off)
+
+[s1O, s1H, s1L] = fetch_htf_ohlc(s1Safe)
+[s2O, s2H, s2L] = fetch_htf_ohlc(s2Safe)
+[s3O, s3H, s3L] = fetch_htf_ohlc(s3Safe)
+[s4O, s4H, s4L] = fetch_htf_ohlc(s4Safe)
+
+[s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL] = fetch_htf_stats(s1Safe)
+[s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL] = fetch_htf_stats(s2Safe)
+[s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL] = fetch_htf_stats(s3Safe)
+[s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL] = fetch_htf_stats(s4Safe)
+
+
+
+// SLOT STATE
+
+type SlotState
+    array<box>   histBoxes
+    array<line>  histDistLines
+    box   fillUp
+    box   fillLo
+    line  typH
+    line  typL
+    line  avgH
+    line  avgL
+    line  midUp
+    line  midDn
+    line  distP
+    line  distM
+
+new_slot() =>
+    SlotState.new(histBoxes=array.new<box>(), histDistLines=array.new<line>())
+
+var SlotState slot1 = new_slot()
+var SlotState slot2 = new_slot()
+var SlotState slot3 = new_slot()
+var SlotState slot4 = new_slot()
+
+// DRAWING HELPERS — extracted to keep update_slot / draw_slot_current concise and consistent.
+
+// Returns the bgcolor for a zone fill box (transparent-white when fill is off, since the box may still exist as a label container).
+zone_fill_color(color slotColor) =>
+    showZoneFill ? color.new(slotColor, zoneFillTransparency) : color.new(color.white, 100)
+
+// Creates a zone box with optional centered text (relay-style label-in-box). Style is identical for current and historical zones.
+make_zone_box(int leftT, float top, int rightT, float bottom, color fillClr, color slotColor, string txt, string slotLabelSize) =>
+    box.new(leftT, top, rightT, bottom,
+         bgcolor=fillClr, border_color=na, xloc=xloc.bar_time,
+         text=txt, text_color=color.new(slotColor, LABEL_TEXT_TRANSPARENCY),
+         text_size=get_label_size(slotLabelSize),
+         text_halign=text.align_center, text_valign=text.align_center)
+
+// Derives the 6 zone levels from the slot's open + stats.
+// Returns: [typicalHigh, averageHigh, typicalLow, averageLow, distPlus, distMinus]
+compute_levels(float htfO, float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL, float k) =>
+    [htfO + medHO, htfO + meanHO,
+     htfO - medOL, htfO - meanOL,
+     htfO + meanHO + k * stdHO,
+     htfO - meanOL - k * stdOL]
+
+// PARAMETERIZED LOGIC — history drawing on HTF transition.
+// Stats per HTF bar come from request.security so they don't depend on chart bar history.
+// At the moment of HTF transition, [1] reads give us:
+//   prevO        = the just-closed HTF bar's open
+//   prev*HO/*OL  = stats AS OF the start of the just-closed bar (i.e., excluding it)
+// → exactly what was used to project the just-closed bar in real time.
+
+update_slot(SlotState s, bool valid, string htfSafe, float htfO, color slotColor, string htfLabel,
+             float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
+             int historyN, string slotLabelSize) =>
+    // Enforce the cap every bar so that lowering historyN or toggling Latest only
+    // immediately trims the array (no need to wait for the next HTF transition).
+    int effectiveCap = latestOnly ? 0 : (historyN - 1) * 2
+    while array.size(s.histBoxes) > effectiveCap
+        box.delete(array.shift(s.histBoxes))
+    while array.size(s.histDistLines) > effectiveCap
+        line.delete(array.shift(s.histDistLines))
+
+    if valid and ta.change(time(htfSafe)) != 0
+        prevO      = htfO[1]
+        prevMedHO  = medHO[1]
+        prevMeanHO = meanHO[1]
+        prevStdHO  = stdHO[1]
+        prevMedOL  = medOL[1]
+        prevMeanOL = meanOL[1]
+        prevStdOL  = stdOL[1]
+
+        if effectiveCap > 0 and not na(prevO) and not na(prevMedHO) and not na(prevMedOL)
+            [h_typH, h_avgH, h_typL, h_avgL, h_distP, h_distM] = compute_levels(prevO, prevMedHO, prevMeanHO, prevStdHO, prevMedOL, prevMeanOL, prevStdOL, distSigmaK)
+            bar_l = time(htfSafe)[1]
+            bar_r = time(htfSafe)
+
+            string histText = (showLabels and labelHistoryAll) ? htfLabel : ""
+            if showZoneFill or histText != ""
+                color fillClr = zone_fill_color(slotColor)
+                array.push(s.histBoxes, make_zone_box(bar_l, h_avgH, bar_r, h_typH, fillClr, slotColor, histText, slotLabelSize))
+                array.push(s.histBoxes, make_zone_box(bar_l, h_typL, bar_r, h_avgL, fillClr, slotColor, histText, slotLabelSize))
+                while array.size(s.histBoxes) > effectiveCap
+                    box.delete(array.shift(s.histBoxes))
+
+            if showDist and not na(prevStdHO) and not na(prevStdOL)
+                array.push(s.histDistLines, line.new(bar_l, h_distP, bar_r, h_distP, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time))
+                array.push(s.histDistLines, line.new(bar_l, h_distM, bar_r, h_distM, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time))
+                while array.size(s.histDistLines) > effectiveCap
+                    line.delete(array.shift(s.histDistLines))
+
+// PARAMETERIZED LOGIC — last-bar drawing of current HTF projections
+
+draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, color slotColor, string htfLabel,
+                   float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
+                   string slotLabelSize) =>
+    // Delete prior frame's primitives unconditionally (Pine no-ops on na). Null after delete so toggling a feature off mid-session leaves no dangling handle.
+    if not na(s.fillUp)
+        box.delete(s.fillUp)
+        s.fillUp := na
+    if not na(s.fillLo)
+        box.delete(s.fillLo)
+        s.fillLo := na
+    if not na(s.typH)
+        line.delete(s.typH)
+        s.typH := na
+    if not na(s.typL)
+        line.delete(s.typL)
+        s.typL := na
+    if not na(s.avgH)
+        line.delete(s.avgH)
+        s.avgH := na
+    if not na(s.avgL)
+        line.delete(s.avgL)
+        s.avgL := na
+    if not na(s.midUp)
+        line.delete(s.midUp)
+        s.midUp := na
+    if not na(s.midDn)
+        line.delete(s.midDn)
+        s.midDn := na
+    if not na(s.distP)
+        line.delete(s.distP)
+        s.distP := na
+    if not na(s.distM)
+        line.delete(s.distM)
+        s.distM := na
+
+    if valid and not na(medHO) and not na(medOL)
+        [typicalHigh, averageHigh, typicalLow, averageLow, distPlus, distMinus] = compute_levels(htfO, medHO, meanHO, stdHO, medOL, meanOL, stdOL, distSigmaK)
+
+        leftT  = time(htfSafe)
+        rightT = time(htfSafe) + timeframe.in_seconds(htfSafe) * MS_PER_SEC
+
+        // Labels are always centered in the zone (text inside the box). Toggle controls visibility.
+        string boxText = showLabels ? htfLabel : ""
+        color  fillClr = zone_fill_color(slotColor)
+        if showZoneFill or showLabels
+            s.fillUp := make_zone_box(leftT, averageHigh, rightT, typicalHigh, fillClr, slotColor, boxText, slotLabelSize)
+            s.fillLo := make_zone_box(leftT, typicalLow,  rightT, averageLow,  fillClr, slotColor, boxText, slotLabelSize)
+
+        if showLines
+            s.typH := line.new(leftT, typicalHigh, rightT, typicalHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.typL := line.new(leftT, typicalLow,  rightT, typicalLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.avgH := line.new(leftT, averageHigh, rightT, averageHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.avgL := line.new(leftT, averageLow,  rightT, averageLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+
+        if showMidline
+            float midUpY = (typicalHigh + averageHigh) / 2
+            float midDnY = (typicalLow  + averageLow)  / 2
+            s.midUp := line.new(leftT, midUpY, rightT, midUpY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
+            s.midDn := line.new(leftT, midDnY, rightT, midDnY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
+
+        if showDist
+            s.distP := line.new(leftT, distPlus,  rightT, distPlus,  color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time)
+            s.distM := line.new(leftT, distMinus, rightT, distMinus, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time)
+
+
+// DISPATCH — every bar maintains state per slot
+
+update_slot(slot1, s1Valid, s1Safe, s1O, slot1Color, s1Label, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, slot1History, SLOT1_LABEL_SIZE)
+update_slot(slot2, s2Valid, s2Safe, s2O, slot2Color, s2Label, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, slot2History, SLOT2_LABEL_SIZE)
+update_slot(slot3, s3Valid, s3Safe, s3O, slot3Color, s3Label, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, slot3History, SLOT3_LABEL_SIZE)
+update_slot(slot4, s4Valid, s4Safe, s4O, slot4Color, s4Label, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, slot4History, SLOT4_LABEL_SIZE)
+
+if barstate.islast
+    draw_slot_current(slot1, s1Valid, s1Safe, s1O, slot1Color, s1Label, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, SLOT1_LABEL_SIZE)
+    draw_slot_current(slot2, s2Valid, s2Safe, s2O, slot2Color, s2Label, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, SLOT2_LABEL_SIZE)
+    draw_slot_current(slot3, s3Valid, s3Safe, s3O, slot3Color, s3Label, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE)
+    draw_slot_current(slot4, s4Valid, s4Safe, s4O, slot4Color, s4Label, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE)
+
+// COLOR REFERENCE TABLE
+
+addRow(table tbl, int row, string name, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
+if showTable and barstate.islast
+    var table colorTable = table.new(position.top_right, 3, 6, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    int row = 1
+    addRow(colorTable, row, "Slot 1", slot1Color)
+    row += 1
+    addRow(colorTable, row, "Slot 2", slot2Color)
+    row += 1
+    addRow(colorTable, row, "Slot 3", slot3Color)
+    row += 1
+    addRow(colorTable, row, "Slot 4", slot4Color)
+    row += 1
+    addRow(colorTable, row, "Midline", midlineColor)
