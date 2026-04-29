@@ -3,8 +3,8 @@ indicator("parallax •", shorttitle="parallax •", overlay=true,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // Multi-HTF statistical expansion zones.
-// Up to 4 HTF slots, each projecting Typical/Average/Distribution levels from its own open.
-// Typical = median of (H−O)/(O−L) over last N HTF candles. Average = mean. Distribution = Average ± k·σ.
+// Up to 4 HTF slots, each projecting Inner/Outer/Distribution levels from its own open.
+// Inner = median of (H−O)/(O−L) over last N HTF candles. Outer = mean. Distribution = Outer ± k·σ.
 
 // CONSTANTS
 
@@ -166,20 +166,20 @@ slot4History = input.int(10, "", inline="s4", group=GROUP_SLOTS, minval=1, maxva
 
 // Levels — Lines and Distribution inherit the slot's identity color. Midline has its own color (it's a reference marker, not slot-identity).
 showLines    = input.bool(true, "Lines", group=GROUP_DISPLAY,
-     tooltip="Draw the zone bounds: Typical (median) and Average (mean). Always rendered solid.")
+     tooltip="Draw the zone bounds: Inner (median) and Outer (mean). Always rendered solid.")
 
 showMidline  = input.bool(false, "Midline", inline="lvl_m", group=GROUP_DISPLAY,
-     tooltip="50% line through each zone — midpoint between Typical and Average on the upper side, and again on the lower side. Two lines per slot. Color is independent so the midline can be visually distinct from slot identity.")
+     tooltip="50% line through each zone — midpoint between Inner and Outer on the upper side, and again on the lower side. Two lines per slot. Color is independent so the midline can be visually distinct from slot identity.")
 midlineColor = input.color(color.new(color.rgb(99, 99, 99), 70), "", inline="lvl_m", group=GROUP_DISPLAY)
 
 showDist     = input.bool(false, "Distribution", inline="lvl_d", group=GROUP_DISPLAY,
-     tooltip="Outer band at Average ± k·σ.")
+     tooltip="Distribution band at Outer ± k·σ.")
 distStyle    = input.string(LS_DASHED, "", inline="lvl_d", group=GROUP_DISPLAY, options=[LS_SOLID, LS_DASHED, LS_DOTTED])
 distSigmaK   = input.float(1.5, "σ", inline="lvl_d", group=GROUP_DISPLAY, minval=0.1, maxval=4.0, step=0.1,
-     tooltip="Distribution± = Average± ± k·σ.")
+     tooltip="Distribution± = Outer± ± k·σ.")
 
 showZoneFill         = input.bool(true, "Fill", inline="zone", group=GROUP_ZONE,
-     tooltip="Shaded box between Typical and Average. Independent transparency below — slot color hue is used, opacity is controlled here.")
+     tooltip="Shaded box between Inner and Outer. Independent transparency below — slot color hue is used, opacity is controlled here.")
 zoneFillTransparency = input.int(85, "Transparency", inline="zone", group=GROUP_ZONE, minval=0, maxval=100)
 
 latestOnly = input.bool(false, "Latest only", group=GROUP_GENERAL,
@@ -274,10 +274,10 @@ type SlotState
     array<line>  histDistLines
     box   fillUp
     box   fillLo
-    line  typH
-    line  typL
-    line  avgH
-    line  avgL
+    line  innH
+    line  innL
+    line  outH
+    line  outL
     line  midUp
     line  midDn
     line  distP
@@ -306,7 +306,7 @@ make_zone_box(int leftT, float top, int rightT, float bottom, color fillClr, col
          text_halign=text.align_center, text_valign=text.align_center)
 
 // Derives the 6 zone levels from the slot's open + stats.
-// Returns: [typicalHigh, averageHigh, typicalLow, averageLow, distPlus, distMinus]
+// Returns: [innerHigh, outerHigh, innerLow, outerLow, distPlus, distMinus]
 compute_levels(float htfO, float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL, float k) =>
     [htfO + medHO, htfO + meanHO,
      htfO - medOL, htfO - meanOL,
@@ -341,15 +341,15 @@ update_slot(SlotState s, bool valid, string htfSafe, float htfO, color slotColor
         prevStdOL  = stdOL[1]
 
         if effectiveCap > 0 and not na(prevO) and not na(prevMedHO) and not na(prevMedOL)
-            [h_typH, h_avgH, h_typL, h_avgL, h_distP, h_distM] = compute_levels(prevO, prevMedHO, prevMeanHO, prevStdHO, prevMedOL, prevMeanOL, prevStdOL, distSigmaK)
+            [h_innH, h_outH, h_innL, h_outL, h_distP, h_distM] = compute_levels(prevO, prevMedHO, prevMeanHO, prevStdHO, prevMedOL, prevMeanOL, prevStdOL, distSigmaK)
             bar_l = time(htfSafe)[1]
             bar_r = time(htfSafe)
 
             string histText = (showLabels and labelHistoryAll) ? htfLabel : ""
             if showZoneFill or histText != ""
                 color fillClr = zone_fill_color(slotColor)
-                array.push(s.histBoxes, make_zone_box(bar_l, h_avgH, bar_r, h_typH, fillClr, slotColor, histText, slotLabelSize))
-                array.push(s.histBoxes, make_zone_box(bar_l, h_typL, bar_r, h_avgL, fillClr, slotColor, histText, slotLabelSize))
+                array.push(s.histBoxes, make_zone_box(bar_l, h_outH, bar_r, h_innH, fillClr, slotColor, histText, slotLabelSize))
+                array.push(s.histBoxes, make_zone_box(bar_l, h_innL, bar_r, h_outL, fillClr, slotColor, histText, slotLabelSize))
                 while array.size(s.histBoxes) > effectiveCap
                     box.delete(array.shift(s.histBoxes))
 
@@ -371,18 +371,18 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, color slo
     if not na(s.fillLo)
         box.delete(s.fillLo)
         s.fillLo := na
-    if not na(s.typH)
-        line.delete(s.typH)
-        s.typH := na
-    if not na(s.typL)
-        line.delete(s.typL)
-        s.typL := na
-    if not na(s.avgH)
-        line.delete(s.avgH)
-        s.avgH := na
-    if not na(s.avgL)
-        line.delete(s.avgL)
-        s.avgL := na
+    if not na(s.innH)
+        line.delete(s.innH)
+        s.innH := na
+    if not na(s.innL)
+        line.delete(s.innL)
+        s.innL := na
+    if not na(s.outH)
+        line.delete(s.outH)
+        s.outH := na
+    if not na(s.outL)
+        line.delete(s.outL)
+        s.outL := na
     if not na(s.midUp)
         line.delete(s.midUp)
         s.midUp := na
@@ -397,7 +397,7 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, color slo
         s.distM := na
 
     if valid and not na(medHO) and not na(medOL)
-        [typicalHigh, averageHigh, typicalLow, averageLow, distPlus, distMinus] = compute_levels(htfO, medHO, meanHO, stdHO, medOL, meanOL, stdOL, distSigmaK)
+        [innerHigh, outerHigh, innerLow, outerLow, distPlus, distMinus] = compute_levels(htfO, medHO, meanHO, stdHO, medOL, meanOL, stdOL, distSigmaK)
 
         leftT  = time(htfSafe)
         rightT = time(htfSafe) + timeframe.in_seconds(htfSafe) * MS_PER_SEC
@@ -406,18 +406,18 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, color slo
         string boxText = showLabels ? htfLabel : ""
         color  fillClr = zone_fill_color(slotColor)
         if showZoneFill or showLabels
-            s.fillUp := make_zone_box(leftT, averageHigh, rightT, typicalHigh, fillClr, slotColor, boxText, slotLabelSize)
-            s.fillLo := make_zone_box(leftT, typicalLow,  rightT, averageLow,  fillClr, slotColor, boxText, slotLabelSize)
+            s.fillUp := make_zone_box(leftT, outerHigh, rightT, innerHigh, fillClr, slotColor, boxText, slotLabelSize)
+            s.fillLo := make_zone_box(leftT, innerLow,  rightT, outerLow,  fillClr, slotColor, boxText, slotLabelSize)
 
         if showLines
-            s.typH := line.new(leftT, typicalHigh, rightT, typicalHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-            s.typL := line.new(leftT, typicalLow,  rightT, typicalLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-            s.avgH := line.new(leftT, averageHigh, rightT, averageHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-            s.avgL := line.new(leftT, averageLow,  rightT, averageLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.innH := line.new(leftT, innerHigh, rightT, innerHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.innL := line.new(leftT, innerLow,  rightT, innerLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.outH := line.new(leftT, outerHigh, rightT, outerHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+            s.outL := line.new(leftT, outerLow,  rightT, outerLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
 
         if showMidline
-            float midUpY = (typicalHigh + averageHigh) / 2
-            float midDnY = (typicalLow  + averageLow)  / 2
+            float midUpY = (innerHigh + outerHigh) / 2
+            float midDnY = (innerLow  + outerLow)  / 2
             s.midUp := line.new(leftT, midUpY, rightT, midUpY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
             s.midDn := line.new(leftT, midDnY, rightT, midDnY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
 
