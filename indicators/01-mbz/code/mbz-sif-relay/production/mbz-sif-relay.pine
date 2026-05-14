@@ -780,97 +780,13 @@ type LiquidityPoolCollection
     float max_unbreached_low
     int   last_breach_time
 
-type BackfillBatch20
-    float h1
-    float l1
-    float h2
-    float l2
-    float h3
-    float l3
-    float h4
-    float l4
-    float h5
-    float l5
-    float h6
-    float l6
-    float h7
-    float l7
-    float h8
-    float l8
-    float h9
-    float l9
-    float h10
-    float l10
-    float h11
-    float l11
-    float h12
-    float l12
-    float h13
-    float l13
-    float h14
-    float l14
-    float h15
-    float l15
-    float h16
-    float l16
-    float h17
-    float l17
-    float h18
-    float l18
-    float h19
-    float l19
-    float h20
-    float l20
-
-type BackfillBatch24
-    float h1
-    float l1
-    float h2
-    float l2
-    float h3
-    float l3
-    float h4
-    float l4
-    float h5
-    float l5
-    float h6
-    float l6
-    float h7
-    float l7
-    float h8
-    float l8
-    float h9
-    float l9
-    float h10
-    float l10
-    float h11
-    float l11
-    float h12
-    float l12
-    float h13
-    float l13
-    float h14
-    float l14
-    float h15
-    float l15
-    float h16
-    float l16
-    float h17
-    float l17
-    float h18
-    float l18
-    float h19
-    float l19
-    float h20
-    float l20
-    float h21
-    float l21
-    float h22
-    float l22
-    float h23
-    float l23
-    float h24
-    float l24
+// Returned from request.security as scalar tuples only — nested UDT series
+// retain a per-historical-bar object graph and exhaust replay memory.
+// Breach times use HTF candle open time to match detect_pool_side's ctx.t1/t2.
+type BackfillLevel
+    float h
+    float l
+    int   t
 
 delete_zone_visuals(CandleZone zone) =>
     box.delete(zone.zone_box)
@@ -2703,15 +2619,19 @@ detect_liq_pool_patterns(LiquidityPoolCollection pool, HTFContext ctx, string po
                 found_pattern := true
     found_pattern
 
-backfill_create_level(float h, float l) =>
+backfill_create_level(BackfillLevel src) =>
     PoolLevel lvl = PoolLevel.new()
-    lvl.session_high := h
-    lvl.session_low := l
+    lvl.session_high := src.h
+    lvl.session_low := src.l
     lvl.high_time := int(na)
     lvl.low_time := int(na)
     lvl.session_close_time := int(na)
     lvl.high_breached := false
     lvl.low_breached := false
+    lvl.high_breach_time := int(na)
+    lvl.low_breach_time := int(na)
+    lvl.high_first_breach_bar := int(na)
+    lvl.low_first_breach_bar := int(na)
     lvl.high_used_by_pattern_1 := false
     lvl.high_used_by_pattern_2 := false
     lvl.high_used_by_pattern_3 := false
@@ -2719,10 +2639,6 @@ backfill_create_level(float h, float l) =>
     lvl.low_used_by_pattern_2 := false
     lvl.low_used_by_pattern_3 := false
     lvl
-
-backfill_push_level(LiquidityPoolCollection pool, float h, float l) =>
-    if not na(h) and not na(l)
-        array.push(pool.levels, backfill_create_level(h, l))
 
 backfill_recompute_pointers(LiquidityPoolCollection pool) =>
     pool.first_unbreached_high_index := 0
@@ -2732,103 +2648,44 @@ backfill_recompute_pointers(LiquidityPoolCollection pool) =>
     liq_pool_recompute_min_unbreached_high(pool)
     liq_pool_recompute_max_unbreached_low(pool)
 
-backfill_inject_batch20(LiquidityPoolCollection pool, BackfillBatch20 b) =>
-    backfill_push_level(pool, b.h1,  b.l1)
-    backfill_push_level(pool, b.h2,  b.l2)
-    backfill_push_level(pool, b.h3,  b.l3)
-    backfill_push_level(pool, b.h4,  b.l4)
-    backfill_push_level(pool, b.h5,  b.l5)
-    backfill_push_level(pool, b.h6,  b.l6)
-    backfill_push_level(pool, b.h7,  b.l7)
-    backfill_push_level(pool, b.h8,  b.l8)
-    backfill_push_level(pool, b.h9,  b.l9)
-    backfill_push_level(pool, b.h10, b.l10)
-    backfill_push_level(pool, b.h11, b.l11)
-    backfill_push_level(pool, b.h12, b.l12)
-    backfill_push_level(pool, b.h13, b.l13)
-    backfill_push_level(pool, b.h14, b.l14)
-    backfill_push_level(pool, b.h15, b.l15)
-    backfill_push_level(pool, b.h16, b.l16)
-    backfill_push_level(pool, b.h17, b.l17)
-    backfill_push_level(pool, b.h18, b.l18)
-    backfill_push_level(pool, b.h19, b.l19)
-    backfill_push_level(pool, b.h20, b.l20)
+// Levels must be ordered oldest → newest; breach state is resolved against
+// later entries in the same batch.
+backfill_inject_levels(LiquidityPoolCollection pool, array<BackfillLevel> levels) =>
+    int n = array.size(levels)
+    for i = 0 to n - 1
+        BackfillLevel src = array.get(levels, i)
+        if not na(src.h) and not na(src.l)
+            PoolLevel lvl = backfill_create_level(src)
+            for j = i + 1 to n - 1
+                BackfillLevel later = array.get(levels, j)
+                if na(later.h) or na(later.l)
+                    continue
+                if not lvl.high_breached and later.h >= src.h
+                    lvl.high_breached := true
+                    lvl.high_breach_time := later.t
+                if not lvl.low_breached and later.l <= src.l
+                    lvl.low_breached := true
+                    lvl.low_breach_time := later.t
+                if lvl.high_breached and lvl.low_breached
+                    break
+            array.push(pool.levels, lvl)
+            int prev_last = na(pool.last_breach_time) ? 0 : pool.last_breach_time
+            int lvl_latest = math.max(na(lvl.high_breach_time) ? 0 : lvl.high_breach_time, na(lvl.low_breach_time) ? 0 : lvl.low_breach_time)
+            if lvl_latest > 0
+                pool.last_breach_time := math.max(prev_last, lvl_latest)
 
-backfill_inject_batch24(LiquidityPoolCollection pool, BackfillBatch24 b) =>
-    backfill_push_level(pool, b.h1,  b.l1)
-    backfill_push_level(pool, b.h2,  b.l2)
-    backfill_push_level(pool, b.h3,  b.l3)
-    backfill_push_level(pool, b.h4,  b.l4)
-    backfill_push_level(pool, b.h5,  b.l5)
-    backfill_push_level(pool, b.h6,  b.l6)
-    backfill_push_level(pool, b.h7,  b.l7)
-    backfill_push_level(pool, b.h8,  b.l8)
-    backfill_push_level(pool, b.h9,  b.l9)
-    backfill_push_level(pool, b.h10, b.l10)
-    backfill_push_level(pool, b.h11, b.l11)
-    backfill_push_level(pool, b.h12, b.l12)
-    backfill_push_level(pool, b.h13, b.l13)
-    backfill_push_level(pool, b.h14, b.l14)
-    backfill_push_level(pool, b.h15, b.l15)
-    backfill_push_level(pool, b.h16, b.l16)
-    backfill_push_level(pool, b.h17, b.l17)
-    backfill_push_level(pool, b.h18, b.l18)
-    backfill_push_level(pool, b.h19, b.l19)
-    backfill_push_level(pool, b.h20, b.l20)
-    backfill_push_level(pool, b.h21, b.l21)
-    backfill_push_level(pool, b.h22, b.l22)
-    backfill_push_level(pool, b.h23, b.l23)
-    backfill_push_level(pool, b.h24, b.l24)
-
-build_backfill_batch20(int start_offset) =>
-    BackfillBatch20.new(
-      high[start_offset + 19], low[start_offset + 19],
-      high[start_offset + 18], low[start_offset + 18],
-      high[start_offset + 17], low[start_offset + 17],
-      high[start_offset + 16], low[start_offset + 16],
-      high[start_offset + 15], low[start_offset + 15],
-      high[start_offset + 14], low[start_offset + 14],
-      high[start_offset + 13], low[start_offset + 13],
-      high[start_offset + 12], low[start_offset + 12],
-      high[start_offset + 11], low[start_offset + 11],
-      high[start_offset + 10], low[start_offset + 10],
-      high[start_offset + 9],  low[start_offset + 9],
-      high[start_offset + 8],  low[start_offset + 8],
-      high[start_offset + 7],  low[start_offset + 7],
-      high[start_offset + 6],  low[start_offset + 6],
-      high[start_offset + 5],  low[start_offset + 5],
-      high[start_offset + 4],  low[start_offset + 4],
-      high[start_offset + 3],  low[start_offset + 3],
-      high[start_offset + 2],  low[start_offset + 2],
-      high[start_offset + 1],  low[start_offset + 1],
-      high[start_offset + 0],  low[start_offset + 0])
-
-build_backfill_batch24(int start_offset) =>
-    BackfillBatch24.new(
-      high[start_offset + 23], low[start_offset + 23],
-      high[start_offset + 22], low[start_offset + 22],
-      high[start_offset + 21], low[start_offset + 21],
-      high[start_offset + 20], low[start_offset + 20],
-      high[start_offset + 19], low[start_offset + 19],
-      high[start_offset + 18], low[start_offset + 18],
-      high[start_offset + 17], low[start_offset + 17],
-      high[start_offset + 16], low[start_offset + 16],
-      high[start_offset + 15], low[start_offset + 15],
-      high[start_offset + 14], low[start_offset + 14],
-      high[start_offset + 13], low[start_offset + 13],
-      high[start_offset + 12], low[start_offset + 12],
-      high[start_offset + 11], low[start_offset + 11],
-      high[start_offset + 10], low[start_offset + 10],
-      high[start_offset + 9],  low[start_offset + 9],
-      high[start_offset + 8],  low[start_offset + 8],
-      high[start_offset + 7],  low[start_offset + 7],
-      high[start_offset + 6],  low[start_offset + 6],
-      high[start_offset + 5],  low[start_offset + 5],
-      high[start_offset + 4],  low[start_offset + 4],
-      high[start_offset + 3],  low[start_offset + 3],
-      high[start_offset + 2],  low[start_offset + 2],
-      high[start_offset + 1],  low[start_offset + 1],
-      high[start_offset + 0],  low[start_offset + 0])
+// `times` entries must be HTF candle open times; detect_pool_side compares
+// these against ctx.t1/ctx.t2 when gating pattern detection.
+backfill_inject_from_scalars(LiquidityPoolCollection pool, array<float> highs, array<float> lows, array<int> times) =>
+    int n = array.size(highs)
+    array<BackfillLevel> levels = array.new<BackfillLevel>()
+    for i = 0 to n - 1
+        BackfillLevel lvl = BackfillLevel.new()
+        lvl.h := array.get(highs, i)
+        lvl.l := array.get(lows, i)
+        lvl.t := array.get(times, i)
+        array.push(levels, lvl)
+    backfill_inject_levels(pool, levels)
 
 var LiquidityPoolCollection liq_daily_pool = liq_pool_create()
 var LiquidityPoolCollection liq_weekly_pool = liq_pool_create()
@@ -2850,12 +2707,14 @@ var LiquidityPoolCollection liq_nypm_9_pool = liq_pool_create()
 [sec_weekly_high, sec_weekly_low] = request.security(syminfo.tickerid, "W", [high, low])
 [sec_monthly_high, sec_monthly_low] = request.security(syminfo.tickerid, "M", [high, low])
 
-// ~5-call request.security budget — 6+ hits TV memory ceiling in replay.
-// These 3 backfill batches + the 2 weekly/monthly H/L fetches above consume the entire budget.
-// lookahead_on is safe here — all data read via [N] offsets (closed bars only).
-BackfillBatch20 bf_daily_1   = request.security(syminfo.tickerid, "D", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch20 bf_weekly_1  = request.security(syminfo.tickerid, "W", build_backfill_batch20(1),  lookahead=barmerge.lookahead_on)
-BackfillBatch24 bf_monthly   = request.security(syminfo.tickerid, "M", build_backfill_batch24(1),  lookahead=barmerge.lookahead_on)
+// Flat scalar tuples only — nested UDT returns retain a per-bar object graph
+// and exhaust replay memory. Offsets are constant literals on closed bars, so
+// lookahead_on is safe.
+[d_h1, d_h2, d_h3, d_h4, d_h5, d_h6, d_h7, d_h8, d_h9, d_h10, d_h11, d_h12, d_h13, d_h14, d_h15, d_h16, d_h17, d_h18, d_h19, d_h20, d_l1, d_l2, d_l3, d_l4, d_l5, d_l6, d_l7, d_l8, d_l9, d_l10, d_l11, d_l12, d_l13, d_l14, d_l15, d_l16, d_l17, d_l18, d_l19, d_l20, d_t1, d_t2, d_t3, d_t4, d_t5, d_t6, d_t7, d_t8, d_t9, d_t10, d_t11, d_t12, d_t13, d_t14, d_t15, d_t16, d_t17, d_t18, d_t19, d_t20] = request.security(syminfo.tickerid, "D", [high[20], high[19], high[18], high[17], high[16], high[15], high[14], high[13], high[12], high[11], high[10], high[9], high[8], high[7], high[6], high[5], high[4], high[3], high[2], high[1], low[20], low[19], low[18], low[17], low[16], low[15], low[14], low[13], low[12], low[11], low[10], low[9], low[8], low[7], low[6], low[5], low[4], low[3], low[2], low[1], time[20], time[19], time[18], time[17], time[16], time[15], time[14], time[13], time[12], time[11], time[10], time[9], time[8], time[7], time[6], time[5], time[4], time[3], time[2], time[1]], lookahead=barmerge.lookahead_on)
+
+[w_h1, w_h2, w_h3, w_h4, w_h5, w_h6, w_h7, w_h8, w_h9, w_h10, w_h11, w_h12, w_h13, w_h14, w_h15, w_h16, w_h17, w_h18, w_h19, w_h20, w_l1, w_l2, w_l3, w_l4, w_l5, w_l6, w_l7, w_l8, w_l9, w_l10, w_l11, w_l12, w_l13, w_l14, w_l15, w_l16, w_l17, w_l18, w_l19, w_l20, w_t1, w_t2, w_t3, w_t4, w_t5, w_t6, w_t7, w_t8, w_t9, w_t10, w_t11, w_t12, w_t13, w_t14, w_t15, w_t16, w_t17, w_t18, w_t19, w_t20] = request.security(syminfo.tickerid, "W", [high[20], high[19], high[18], high[17], high[16], high[15], high[14], high[13], high[12], high[11], high[10], high[9], high[8], high[7], high[6], high[5], high[4], high[3], high[2], high[1], low[20], low[19], low[18], low[17], low[16], low[15], low[14], low[13], low[12], low[11], low[10], low[9], low[8], low[7], low[6], low[5], low[4], low[3], low[2], low[1], time[20], time[19], time[18], time[17], time[16], time[15], time[14], time[13], time[12], time[11], time[10], time[9], time[8], time[7], time[6], time[5], time[4], time[3], time[2], time[1]], lookahead=barmerge.lookahead_on)
+
+[m_h1, m_h2, m_h3, m_h4, m_h5, m_h6, m_h7, m_h8, m_h9, m_h10, m_h11, m_h12, m_h13, m_h14, m_h15, m_h16, m_h17, m_h18, m_h19, m_h20, m_h21, m_h22, m_h23, m_h24, m_l1, m_l2, m_l3, m_l4, m_l5, m_l6, m_l7, m_l8, m_l9, m_l10, m_l11, m_l12, m_l13, m_l14, m_l15, m_l16, m_l17, m_l18, m_l19, m_l20, m_l21, m_l22, m_l23, m_l24, m_t1, m_t2, m_t3, m_t4, m_t5, m_t6, m_t7, m_t8, m_t9, m_t10, m_t11, m_t12, m_t13, m_t14, m_t15, m_t16, m_t17, m_t18, m_t19, m_t20, m_t21, m_t22, m_t23, m_t24] = request.security(syminfo.tickerid, "M", [high[24], high[23], high[22], high[21], high[20], high[19], high[18], high[17], high[16], high[15], high[14], high[13], high[12], high[11], high[10], high[9], high[8], high[7], high[6], high[5], high[4], high[3], high[2], high[1], low[24], low[23], low[22], low[21], low[20], low[19], low[18], low[17], low[16], low[15], low[14], low[13], low[12], low[11], low[10], low[9], low[8], low[7], low[6], low[5], low[4], low[3], low[2], low[1], time[24], time[23], time[22], time[21], time[20], time[19], time[18], time[17], time[16], time[15], time[14], time[13], time[12], time[11], time[10], time[9], time[8], time[7], time[6], time[5], time[4], time[3], time[2], time[1]], lookahead=barmerge.lookahead_on)
 
 is_new_exchange_daily_session() =>
     prev_time = time[1]
@@ -2991,13 +2850,22 @@ bool debug_needs_nypm_9  = pool_debug_mode == "NYPM-9"
 
 if barstate.isfirst and enable_pool_backfill and use_exchange_session
     if enable_liq_daily or debug_needs_daily
-        backfill_inject_batch20(liq_daily_pool, bf_daily_1)
+        array<float> dh = array.from(d_h1, d_h2, d_h3, d_h4, d_h5, d_h6, d_h7, d_h8, d_h9, d_h10, d_h11, d_h12, d_h13, d_h14, d_h15, d_h16, d_h17, d_h18, d_h19, d_h20)
+        array<float> dl = array.from(d_l1, d_l2, d_l3, d_l4, d_l5, d_l6, d_l7, d_l8, d_l9, d_l10, d_l11, d_l12, d_l13, d_l14, d_l15, d_l16, d_l17, d_l18, d_l19, d_l20)
+        array<int>   dt = array.from(d_t1, d_t2, d_t3, d_t4, d_t5, d_t6, d_t7, d_t8, d_t9, d_t10, d_t11, d_t12, d_t13, d_t14, d_t15, d_t16, d_t17, d_t18, d_t19, d_t20)
+        backfill_inject_from_scalars(liq_daily_pool, dh, dl, dt)
         backfill_recompute_pointers(liq_daily_pool)
     if enable_liq_weekly or debug_needs_weekly
-        backfill_inject_batch20(liq_weekly_pool, bf_weekly_1)
+        array<float> wh = array.from(w_h1, w_h2, w_h3, w_h4, w_h5, w_h6, w_h7, w_h8, w_h9, w_h10, w_h11, w_h12, w_h13, w_h14, w_h15, w_h16, w_h17, w_h18, w_h19, w_h20)
+        array<float> wl = array.from(w_l1, w_l2, w_l3, w_l4, w_l5, w_l6, w_l7, w_l8, w_l9, w_l10, w_l11, w_l12, w_l13, w_l14, w_l15, w_l16, w_l17, w_l18, w_l19, w_l20)
+        array<int>   wt = array.from(w_t1, w_t2, w_t3, w_t4, w_t5, w_t6, w_t7, w_t8, w_t9, w_t10, w_t11, w_t12, w_t13, w_t14, w_t15, w_t16, w_t17, w_t18, w_t19, w_t20)
+        backfill_inject_from_scalars(liq_weekly_pool, wh, wl, wt)
         backfill_recompute_pointers(liq_weekly_pool)
     if enable_liq_monthly or debug_needs_monthly
-        backfill_inject_batch24(liq_monthly_pool, bf_monthly)
+        array<float> mh = array.from(m_h1, m_h2, m_h3, m_h4, m_h5, m_h6, m_h7, m_h8, m_h9, m_h10, m_h11, m_h12, m_h13, m_h14, m_h15, m_h16, m_h17, m_h18, m_h19, m_h20, m_h21, m_h22, m_h23, m_h24)
+        array<float> ml = array.from(m_l1, m_l2, m_l3, m_l4, m_l5, m_l6, m_l7, m_l8, m_l9, m_l10, m_l11, m_l12, m_l13, m_l14, m_l15, m_l16, m_l17, m_l18, m_l19, m_l20, m_l21, m_l22, m_l23, m_l24)
+        array<int>   mt = array.from(m_t1, m_t2, m_t3, m_t4, m_t5, m_t6, m_t7, m_t8, m_t9, m_t10, m_t11, m_t12, m_t13, m_t14, m_t15, m_t16, m_t17, m_t18, m_t19, m_t20, m_t21, m_t22, m_t23, m_t24)
+        backfill_inject_from_scalars(liq_monthly_pool, mh, ml, mt)
         backfill_recompute_pointers(liq_monthly_pool)
 
 string asia_session_str = (nine_times_mode == NINE_MODE_NINE_ONLY ? SESSION_ASIA_9_TIME : SESSION_ASIA_TIME) + DAY_CODE_MON_SAT
