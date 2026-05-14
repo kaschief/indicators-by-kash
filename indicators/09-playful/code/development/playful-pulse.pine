@@ -195,6 +195,10 @@ SHOW_LAST_MAX_CLOSES = 50
 SHOW_LAST_MAX_RANGE = 50
 SHOW_LAST_MAX_DIVIDERS = 50
 
+// Today-mode scan tuning for unmitigated-only pool types (e.g. 16:00 closes)
+TODAY_UNMITIGATED_SCAN_MULTIPLIER = 5  // Scan N× the desired count to skip mitigated levels
+TODAY_UNMITIGATED_SCAN_FLOOR      = 5  // Minimum scan depth so default (count=1) still has headroom
+
 // Scan caps derived from show-last maxes to stay in sync
 DAILY_SCAN_CAP = SHOW_LAST_MAX_DAILY
 WEEKLY_SCAN_CAP = SHOW_LAST_MAX_WEEKLY
@@ -415,6 +419,7 @@ get_intraday_liquidity_depth_percent_3() =>
 pulseModeFilter = input.string(FILTER_WORK_RANGE_KEY_OPENS_HTF, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_TODAY, FILTER_LIQUIDITY_MAP, FILTER_WORK_RANGE_KEY_OPENS_HTF, FILTER_HTF, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_INTRADAY, FILTER_INTRADAY_PREMARKET_OVERNIGHT, FILTER_PREMARKET_OVERNIGHT, FILTER_KEY_OPENS, FILTER_HTF_OPENS, FILTER_4H_OPEN, FILTER_10AM_4H_OPEN, FILTER_1H_OPEN, FILTER_1400_1600, FILTER_RANGE_KEY_OPENS, FILTER_RANGE_BOX_MNO, FILTER_RANGE_BOX_MNO_PRE_ONS, FILTER_RANGE_BOX_1600, FILTER_1400_1600_RANGE_BOX, FILTER_RANGE_BOX, FILTER_DAYS], tooltip="Override all individual ON/OFF toggles to quickly show only specific pool types.\n\n• All: Respect individual toggles\n• Today: Range Box + 16:00 + Premarket + Overnight + HTF + MNO + 8:30 + 9:30 (last of each)\n\n─ Composite Maps ─\n• Liquidity Map: Range Box + 14:00 + 16:00 + Premarket + Overnight\n• Range Box + Key Opens: Range Box + 14:00 + 16:00 + 8:30 + 9:30\n• Range Box + Key Opens + HTF: Above + Daily + Weekly + Monthly\n\n─ HTF Pools ─\n• HTF: Daily + Weekly + Monthly\n• Daily / Weekly / Monthly: Single HTF type\n\n─ Sessions ─\n• Intraday: Asia + London + NYAM + Lunch + NYPM\n• Intraday + Premarket + Overnight: All sessions\n• Premarket + Overnight: Extended hours only\n\n─ Opens ─\n• Key Opens: 8:30 + 9:30\n• HTF Opens: Daily + Weekly + Monthly\n• 4H Open / 10am 4H Open / 1H Open: Single timeframe\n• Intraday Closes: 14:00 + 16:00\n\n─ Single ─\n• Range Box + 1600\n• Range Box + 1400 + 1600\n• Range Box\n• Days: Midnight dividers + day labels only")
 showUnmitigatedOnly = input.bool(false, "Unmitigated Only", group=GROUP_PULSE_MODE, tooltip="Show only levels that have not been breached/mitigated. Hides all breached highs/lows and mitigated price levels.")
 todayL1Bold = input.bool(false, "Bold L1 Depth in Today Mode", group=GROUP_PULSE_MODE, tooltip="In Today mode, bold L1 liquidity depth lines with width 2.")
+todayShowLast = input.int(1, "Today Show Last", minval=1, maxval=50, group=GROUP_PULSE_MODE, tooltip="In Today mode, how many of each pool type to show (per side). Default 1 = last of each. Boost to show more historical pools while still in Today mode.")
 daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip='How daily sessions are defined for liquidity pool tracking:\n\n• Exchange Session (default): 18:00-17:59 ET — matches futures/forex session boundaries. Sunday 18:00 starts Monday\'s session.\n• Calendar Day: Midnight-midnight ET — traditional calendar day boundaries.\n\n24/7 assets (crypto) force Calendar Day mode automatically.')
 includeSundayEvening = input.bool(false, "Include Sunday Evening", group=GROUP_TIME_BEHAVIOR, tooltip="Sunday 18:00-00:00 NY is thin reopening liquidity for traditional markets (NQ, ES, forex).\n\n• OFF (default): Exclude Sunday evening from tracking and breach detection. Week starts Monday 00:00.\n• ON: Include Sunday evening. Week starts Sunday 18:00 (trading week).\n\n24/7 assets (crypto) are auto-detected and ignore this setting.")
 
@@ -727,18 +732,18 @@ showWeeklyOpenFiltered = applyPulseModeFilter(POOL_TYPE_WEEKLY_OPEN, showWeeklyO
 showMonthlyOpenFiltered = applyPulseModeFilter(POOL_TYPE_MONTHLY_OPEN, showMonthlyOpen)
 showRangeBoxFiltered = applyPulseModeFilter(POOL_TYPE_RANGE_BOX, showRangeBox)
 
-// "Today" filter: override show last values to 1 (most recent only) and auto-enable liquidity depth
+// "Today" filter: override show last values to `todayShowLast` (default 1) and auto-enable liquidity depth
 isTodayFilter = pulseModeFilter == FILTER_TODAY
-effectiveDailyShowLast = isTodayFilter ? 1 : dailyShowLast
-effectiveWeeklyShowLast = isTodayFilter ? 1 : weeklyShowLast
-effectiveMonthlyShowLast = isTodayFilter ? 1 : monthlyShowLast
-effectivePoisznShowLast = isTodayFilter ? 1 : poisznShowLast
-effectiveClose1600ShowLast = isTodayFilter ? 5 : close1600ShowLast  // Scan 5 levels to find unmitigated
-effectiveClose1600MaxUnmitigated = isTodayFilter ? 1 : MAX_UNMITIGATED_UNLIMITED  // Today: show only 1 unmitigated
+effectiveDailyShowLast = isTodayFilter ? todayShowLast : dailyShowLast
+effectiveWeeklyShowLast = isTodayFilter ? todayShowLast : weeklyShowLast
+effectiveMonthlyShowLast = isTodayFilter ? todayShowLast : monthlyShowLast
+effectivePoisznShowLast = isTodayFilter ? todayShowLast : poisznShowLast
+effectiveClose1600ShowLast = isTodayFilter ? math.max(TODAY_UNMITIGATED_SCAN_FLOOR, todayShowLast * TODAY_UNMITIGATED_SCAN_MULTIPLIER) : close1600ShowLast  // Scan headroom to find unmitigated
+effectiveClose1600MaxUnmitigated = isTodayFilter ? todayShowLast : MAX_UNMITIGATED_UNLIMITED  // Today: cap unmitigated to boost count
 effectiveClose1600SkipHistoricalMitigated = isTodayFilter  // Today: only show mitigated from today
-effectiveOpenMnoShowLast = isTodayFilter ? 1 : openMnoShowLast
-effectiveOpen830ShowLast = isTodayFilter ? 1 : open830ShowLast
-effectiveOpen930ShowLast = isTodayFilter ? 1 : open930ShowLast
+effectiveOpenMnoShowLast = isTodayFilter ? todayShowLast : openMnoShowLast
+effectiveOpen830ShowLast = isTodayFilter ? todayShowLast : open830ShowLast
+effectiveOpen930ShowLast = isTodayFilter ? todayShowLast : open930ShowLast
 effectiveEnableDailyLiquidityDepth = isTodayFilter ? true : enableDailyLiquidityDepth
 effectiveEnableWeeklyLiquidityDepth = isTodayFilter ? true : enableWeeklyLiquidityDepth
 effectiveEnableMonthlyLiquidityDepth = isTodayFilter ? true : enableMonthlyLiquidityDepth
