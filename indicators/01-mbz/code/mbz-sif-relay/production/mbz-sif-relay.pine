@@ -503,7 +503,6 @@ disable_vi_suppression = input.bool(true, "Disable VI Suppression", group=GROUP_
 pool_debug_mode = input.string("Off", "Pool Debug", options=["Off", "Daily", "Weekly", "Monthly", "4h", "1h", "15m", "Asia", "London", "NYAM", "Lunch", "NYPM", "ONS", "Premarket", "Asia-9", "London-9", "NYPM-9"], group=GROUP_ADVANCED)
 show_color_table = input.bool(false, "Show Color Table", group=GROUP_ADVANCED, inline="debug_viz")
 
-
 if enable_liq_pools and not enable_liq_imm and not enable_liq_std and not enable_liq_del
     enable_liq_std := true
 
@@ -1424,6 +1423,25 @@ build_zone_label(CandleZone zone, bool show_mbz, bool show_sif, int htf_ms) =>
         float zone_range = zone.zone_top - zone.zone_bottom
         result := result + "\n" + str.tostring(zone_range, format.mintick) + " points"
     result
+
+// Dedup map keyed by "tier_index:formation_time". Prevents a zone from re-pulsing
+// its alertcondition trigger if process_htf_close re-scans it on later HTF closes.
+var map<string, bool> alerted_zone_keys = map.new<string, bool>()
+
+// Per-tier-per-direction pulse array. Index layout: (tier_index - 1) * 2 + (is_down ? 1 : 0).
+// Eight slots: Main↑, Main↓, HTF2↑, HTF2↓, HTF3↑, HTF3↓, HTF4↑, HTF4↓. Set true inside
+// set_zone_alert_trigger when a confirmed zone is seen for the first time; reset to false at
+// the start of every chart bar so each alertcondition series is true for exactly one bar per
+// confirmed zone.
+var array<bool> zone_alert_triggers = array.from(false, false, false, false, false, false, false, false)
+
+set_zone_alert_trigger(CandleZone zone, int tier_index) =>
+    if (zone.has_mbz or zone.has_sif) and not zone.is_invalidated
+        string key = str.tostring(tier_index) + ":" + str.tostring(zone.formation_time)
+        if not map.contains(alerted_zone_keys, key)
+            map.put(alerted_zone_keys, key, true)
+            int slot = (tier_index - 1) * 2 + (zone.is_bullish ? 0 : 1)
+            array.set(zone_alert_triggers, slot, true)
 
 get_pool_source_label(array<string> source_gap_types, bool show_pool_sources, bool show_gap_sources, int htf_ms, bool show_count) =>
     string highest = ""
@@ -2827,6 +2845,10 @@ process_htf_close(HTFContext ctx, float htf_close) =>
             if enable_liq_nypm
                 detect_liq_pool_patterns(liq_nypm_9_pool, ctx, POOL_SOURCE_NYPM_9, POOL_SOURCE_ID_NYPM_9)
 
+    if array.size(ctx.zone_array) > 0
+        for zone_idx = 0 to array.size(ctx.zone_array) - 1
+            set_zone_alert_trigger(array.get(ctx.zone_array, zone_idx), ctx.tier_index)
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN EXECUTION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2975,6 +2997,9 @@ if not skip_sunday_liq
             liq_pool_track_session(liq_london_9_pool, in_london_9, london_9_started, london_9_ended, LIQ_SCAN_CAP_SESSION)
         if enable_liq_nypm or debug_needs_nypm_9
             liq_pool_track_session(liq_nypm_9_pool, in_nypm_9, nypm_9_started, nypm_9_ended, LIQ_SCAN_CAP_SESSION)
+
+for tier_reset_idx = 0 to 7
+    array.set(zone_alert_triggers, tier_reset_idx, false)
 
 if HTF1_VALID
     if new_htf1
@@ -3689,3 +3714,21 @@ if show_color_table and barstate.islast
     addColorRow(color_table, row, "PO3 FVG +", po3_fvg_bull_color)
     row += 1
     addColorRow(color_table, row, "PO3 FVG −", po3_fvg_bear_color)
+
+bool main_up_zone_confirmed   = array.get(zone_alert_triggers, 0)
+bool main_down_zone_confirmed = array.get(zone_alert_triggers, 1)
+bool htf2_up_zone_confirmed   = array.get(zone_alert_triggers, 2)
+bool htf2_down_zone_confirmed = array.get(zone_alert_triggers, 3)
+bool htf3_up_zone_confirmed   = array.get(zone_alert_triggers, 4)
+bool htf3_down_zone_confirmed = array.get(zone_alert_triggers, 5)
+bool htf4_up_zone_confirmed   = array.get(zone_alert_triggers, 6)
+bool htf4_down_zone_confirmed = array.get(zone_alert_triggers, 7)
+
+alertcondition(main_up_zone_confirmed,   title="relay • Main⁺", message="Main⁺")
+alertcondition(main_down_zone_confirmed, title="relay • Main⁻", message="Main⁻")
+alertcondition(htf2_up_zone_confirmed,   title="relay • HTF2⁺", message="HTF2⁺")
+alertcondition(htf2_down_zone_confirmed, title="relay • HTF2⁻", message="HTF2⁻")
+alertcondition(htf3_up_zone_confirmed,   title="relay • HTF3⁺", message="HTF3⁺")
+alertcondition(htf3_down_zone_confirmed, title="relay • HTF3⁻", message="HTF3⁻")
+alertcondition(htf4_up_zone_confirmed,   title="relay • HTF4⁺", message="HTF4⁺")
+alertcondition(htf4_down_zone_confirmed, title="relay • HTF4⁻", message="HTF4⁻")
