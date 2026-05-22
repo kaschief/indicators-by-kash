@@ -74,6 +74,7 @@ const string LABEL_BAND3            = "3σ Band"
 const string LABEL_CUSTOM           = "Custom σ"
 const string LABEL_MULT             = "×"
 const string LABEL_LABEL            = "Label"
+const string LABEL_SIZE             = "Size"
 const string LABEL_OPACITY          = "Opacity"
 const string LABEL_EXTENSION        = "Extension"
 const string SUFFIX_VWAP   = " VWAP"
@@ -82,12 +83,25 @@ const string EXT_SESSION_ONLY = "Session only"
 const string EXT_TO_CLOSE     = "To " + EXT_CUTOFF_CLOSE_DISPLAY
 const string EXT_TO_NEXT_OPEN = "To " + EXT_CUTOFF_NEXT_OPEN_DISPLAY
 
+// Per-group label dropdown: Off, the VWAP line tag only, or every enabled band tagged too
+const string LABELS_OFF       = "Off"
+const string LABELS_VWAP_ONLY = "VWAP only"
+const string LABELS_ALL       = "All"
+
+// Per-group label font size
+const string FONT_TINY   = "Tiny"
+const string FONT_SMALL  = "Small"
+const string FONT_NORMAL = "Normal"
+const string FONT_LARGE  = "Large"
+const string FONT_HUGE   = "Huge"
+
 const string TOOLTIP_MAIN   = "Show this VWAP · centerline colour · width. Auto-hides once the chart timeframe reaches the anchor period."
-const string TOOLTIP_OPTS   = "History: 1 = current only, N = current + N−1 past · Fill: shade bands · Opacity: fill strength 0–100 · Label: name tag on the line."
+const string TOOLTIP_OPTS   = "History: 1 = current only, N = current + N−1 past · Fill: shade bands · Opacity: fill strength 0–100."
 const string TOOLTIP_BAND   = "Each band: enable · colour · width. History keeps the band lines for the last N periods too."
 const string TOOLTIP_CUSTOM = "Custom standard-deviation band: enable · colour · width · σ multiplier (any value, e.g. 1.5 or 1.28)."
 const string TOOLTIP_INTRADAY_EXTENSION = "Controls how long this intraday VWAP continues plotting after its session ends, using New York time."
 const string TOOLTIP_CUSTOM_SESSION = "Custom VWAP anchor window in New York time, e.g. " + SESSION_CUSTOM_DEFAULT + "."
+const string TOOLTIP_LABELS = "Label: Off · VWAP only (line tag) · All (VWAP + every enabled σ band, including Custom σ). Size sets the tag font for this group."
 
 // TYPES — one anchored VWAP: its config, its current-period point buffer, and its retained history
 
@@ -114,7 +128,8 @@ type VwapAnchor
     float  customMultiplier
     color  customColor
     int    customWidth
-    bool   labelEnabled
+    string labelMode
+    string labelSize
     bool   visible
     array<int>         barTimes
     array<float>       vwapValues
@@ -122,19 +137,21 @@ type VwapAnchor
     array<PeriodLines> history
     PeriodLines        currentPeriod
     label              nameLabel
+    array<label>       bandLabels
 
 new_anchor(string name) =>
-    VwapAnchor.new(name=name, barTimes=array.new<int>(), vwapValues=array.new<float>(), stdevValues=array.new<float>(), history=array.new<PeriodLines>())
+    VwapAnchor.new(name=name, barTimes=array.new<int>(), vwapValues=array.new<float>(), stdevValues=array.new<float>(), history=array.new<PeriodLines>(), bandLabels=array.new<label>())
 
-// INPUTS — per anchor: main row (Show · colour · width), options row (History · Fill), then one row per band
+// INPUTS — per anchor: main row (Show · colour · width), options row (History · Fill · Opacity), label row (Label · Size), then one row per band
 
 dailyShow        = input.bool(true, LABEL_ENABLE_DAILY, inline="d", group=GROUP_DAILY)
 dailyColor       = input.color(COLOR_DAILY_VWAP, "", inline="d", group=GROUP_DAILY)
 dailyWidth       = input.int(2, LABEL_WIDTH, minval=1, maxval=5, inline="d", group=GROUP_DAILY, tooltip=TOOLTIP_MAIN)
 dailyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="d_opt", group=GROUP_DAILY)
 dailyFill        = input.bool(true, LABEL_FILL, inline="d_opt", group=GROUP_DAILY)
-dailyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="d_opt", group=GROUP_DAILY)
-dailyLabel       = input.bool(true, LABEL_LABEL, inline="d_opt", group=GROUP_DAILY, tooltip=TOOLTIP_OPTS)
+dailyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="d_opt", group=GROUP_DAILY, tooltip=TOOLTIP_OPTS)
+dailyLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="d_lbl", group=GROUP_DAILY)
+dailyLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="d_lbl", group=GROUP_DAILY, tooltip=TOOLTIP_LABELS)
 dailyBand1       = input.bool(true,  LABEL_BAND1, inline="d1", group=GROUP_DAILY)
 dailyBand1Color  = input.color(COLOR_DAILY_ALT, "", inline="d1", group=GROUP_DAILY)
 dailyBand1Width  = input.int(1, LABEL_WIDTH, minval=1, maxval=5, inline="d1", group=GROUP_DAILY)
@@ -154,8 +171,9 @@ weeklyColor       = input.color(COLOR_WEEKLY_VWAP, "", inline="w", group=GROUP_W
 weeklyWidth       = input.int(2, LABEL_WIDTH, minval=1, maxval=5, inline="w", group=GROUP_WEEKLY, tooltip=TOOLTIP_MAIN)
 weeklyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="w_opt", group=GROUP_WEEKLY)
 weeklyFill        = input.bool(true, LABEL_FILL, inline="w_opt", group=GROUP_WEEKLY)
-weeklyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="w_opt", group=GROUP_WEEKLY)
-weeklyLabel       = input.bool(true, LABEL_LABEL, inline="w_opt", group=GROUP_WEEKLY, tooltip=TOOLTIP_OPTS)
+weeklyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="w_opt", group=GROUP_WEEKLY, tooltip=TOOLTIP_OPTS)
+weeklyLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="w_lbl", group=GROUP_WEEKLY)
+weeklyLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="w_lbl", group=GROUP_WEEKLY, tooltip=TOOLTIP_LABELS)
 weeklyBand1       = input.bool(true,  LABEL_BAND1, inline="w1", group=GROUP_WEEKLY)
 weeklyBand1Color  = input.color(COLOR_WEEKLY_ALT, "", inline="w1", group=GROUP_WEEKLY)
 weeklyBand1Width  = input.int(1, LABEL_WIDTH, minval=1, maxval=5, inline="w1", group=GROUP_WEEKLY)
@@ -176,8 +194,9 @@ nyWidth       = input.int(2, LABEL_WIDTH, minval=1, maxval=5, inline="ny", group
 nyExtension   = input.string(EXT_SESSION_ONLY, LABEL_EXTENSION, options=[EXT_SESSION_ONLY, EXT_TO_NEXT_OPEN], group=GROUP_NY, tooltip=TOOLTIP_INTRADAY_EXTENSION)
 nyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="ny_opt", group=GROUP_NY)
 nyFill        = input.bool(true, LABEL_FILL, inline="ny_opt", group=GROUP_NY)
-nyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="ny_opt", group=GROUP_NY)
-nyLabel       = input.bool(true, LABEL_LABEL, inline="ny_opt", group=GROUP_NY, tooltip=TOOLTIP_OPTS)
+nyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="ny_opt", group=GROUP_NY, tooltip=TOOLTIP_OPTS)
+nyLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="ny_lbl", group=GROUP_NY)
+nyLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="ny_lbl", group=GROUP_NY, tooltip=TOOLTIP_LABELS)
 nyBand1       = input.bool(true,  LABEL_BAND1, inline="ny1", group=GROUP_NY)
 nyBand1Color  = input.color(COLOR_NY_ALT, "", inline="ny1", group=GROUP_NY)
 nyBand1Width  = input.int(1, LABEL_WIDTH, minval=1, maxval=5, inline="ny1", group=GROUP_NY)
@@ -197,8 +216,9 @@ overnightColor       = input.color(COLOR_OVERNIGHT_VWAP, "", inline="on", group=
 overnightWidth       = input.int(2, LABEL_WIDTH, minval=1, maxval=5, inline="on", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_MAIN)
 overnightHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="on_opt", group=GROUP_OVERNIGHT)
 overnightFill        = input.bool(true, LABEL_FILL, inline="on_opt", group=GROUP_OVERNIGHT)
-overnightFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="on_opt", group=GROUP_OVERNIGHT)
-overnightLabel       = input.bool(true, LABEL_LABEL, inline="on_opt", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_OPTS)
+overnightFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="on_opt", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_OPTS)
+overnightLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="on_lbl", group=GROUP_OVERNIGHT)
+overnightLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="on_lbl", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_LABELS)
 overnightExtension   = input.string(EXT_SESSION_ONLY, LABEL_EXTENSION, options=[EXT_SESSION_ONLY, EXT_TO_CLOSE, EXT_TO_NEXT_OPEN], group=GROUP_OVERNIGHT, tooltip=TOOLTIP_INTRADAY_EXTENSION)
 overnightBand1       = input.bool(true,  LABEL_BAND1, inline="on1", group=GROUP_OVERNIGHT)
 overnightBand1Color  = input.color(COLOR_OVERNIGHT_ALT, "", inline="on1", group=GROUP_OVERNIGHT)
@@ -219,8 +239,9 @@ monthlyColor       = input.color(COLOR_MONTHLY_VWAP, "", inline="m", group=GROUP
 monthlyWidth       = input.int(2, LABEL_WIDTH, minval=1, maxval=5, inline="m", group=GROUP_MONTHLY, tooltip=TOOLTIP_MAIN)
 monthlyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="m_opt", group=GROUP_MONTHLY)
 monthlyFill        = input.bool(true, LABEL_FILL, inline="m_opt", group=GROUP_MONTHLY)
-monthlyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="m_opt", group=GROUP_MONTHLY)
-monthlyLabel       = input.bool(true, LABEL_LABEL, inline="m_opt", group=GROUP_MONTHLY, tooltip=TOOLTIP_OPTS)
+monthlyFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="m_opt", group=GROUP_MONTHLY, tooltip=TOOLTIP_OPTS)
+monthlyLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="m_lbl", group=GROUP_MONTHLY)
+monthlyLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="m_lbl", group=GROUP_MONTHLY, tooltip=TOOLTIP_LABELS)
 monthlyBand1       = input.bool(true,  LABEL_BAND1, inline="m1", group=GROUP_MONTHLY)
 monthlyBand1Color  = input.color(COLOR_MONTHLY_ALT, "", inline="m1", group=GROUP_MONTHLY)
 monthlyBand1Width  = input.int(1, LABEL_WIDTH, minval=1, maxval=5, inline="m1", group=GROUP_MONTHLY)
@@ -242,8 +263,9 @@ customPeriodSession     = input.session(SESSION_CUSTOM_DEFAULT, LABEL_SESSION, g
 customPeriodExtension   = input.string(EXT_SESSION_ONLY, LABEL_EXTENSION, options=[EXT_SESSION_ONLY, EXT_TO_CLOSE, EXT_TO_NEXT_OPEN], group=GROUP_CUSTOM_PERIOD, tooltip=TOOLTIP_INTRADAY_EXTENSION)
 customPeriodHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="cp_opt", group=GROUP_CUSTOM_PERIOD)
 customPeriodFill        = input.bool(true, LABEL_FILL, inline="cp_opt", group=GROUP_CUSTOM_PERIOD)
-customPeriodFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="cp_opt", group=GROUP_CUSTOM_PERIOD)
-customPeriodLabel       = input.bool(true, LABEL_LABEL, inline="cp_opt", group=GROUP_CUSTOM_PERIOD, tooltip=TOOLTIP_OPTS)
+customPeriodFillOpacity = input.int(OPACITY_DEFAULT, LABEL_OPACITY, minval=OPACITY_MIN, maxval=OPACITY_MAX, inline="cp_opt", group=GROUP_CUSTOM_PERIOD, tooltip=TOOLTIP_OPTS)
+customPeriodLabelMode   = input.string(LABELS_VWAP_ONLY, LABEL_LABEL, options=[LABELS_OFF, LABELS_VWAP_ONLY, LABELS_ALL], inline="cp_lbl", group=GROUP_CUSTOM_PERIOD)
+customPeriodLabelSize   = input.string(FONT_TINY, LABEL_SIZE, options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="cp_lbl", group=GROUP_CUSTOM_PERIOD, tooltip=TOOLTIP_LABELS)
 customPeriodBand1       = input.bool(true,  LABEL_BAND1, inline="cp1", group=GROUP_CUSTOM_PERIOD)
 customPeriodBand1Color  = input.color(COLOR_CUSTOM_ALT, "", inline="cp1", group=GROUP_CUSTOM_PERIOD)
 customPeriodBand1Width  = input.int(1, LABEL_WIDTH, minval=1, maxval=5, inline="cp1", group=GROUP_CUSTOM_PERIOD)
@@ -417,17 +439,48 @@ update_anchor(VwapAnchor anchor, bool shown, bool accumulating, bool isNewPeriod
         array.push(anchor.vwapValues, vwapValue)
         array.push(anchor.stdevValues, stdevValue)
 
-// Redraw the live current period and its discreet name label at the latest point
+// LABEL HELPERS — one shared line tag; the VWAP label and every band tag use the same discreet style
+
+label_font_size(string fontSize) =>
+    switch fontSize
+        FONT_SMALL  => size.small
+        FONT_NORMAL => size.normal
+        FONT_LARGE  => size.large
+        FONT_HUGE   => size.huge
+        => size.tiny
+
+new_line_label(int barTime, float price, string labelText, color textColor, string labelSize) =>
+    label.new(barTime, price, labelText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=textColor, size=labelSize, color=color.new(color.white, 100))
+
+// Tag a band's upper and lower line at the latest point, tinted to match the band line
+add_band_labels(VwapAnchor anchor, bool show, float multiplier, color bandColor) =>
+    if show
+        int   barTime    = array.last(anchor.barTimes)
+        float vwapValue  = array.last(anchor.vwapValues)
+        float stdevValue = array.last(anchor.stdevValues)
+        string labelText = anchor.name + " " + str.tostring(multiplier) + "σ"
+        array.push(anchor.bandLabels, new_line_label(barTime, vwapValue + multiplier * stdevValue, labelText, bandColor, anchor.labelSize))
+        array.push(anchor.bandLabels, new_line_label(barTime, vwapValue - multiplier * stdevValue, labelText, bandColor, anchor.labelSize))
+
+// Redraw the live current period, its name label, and (when set to All) every enabled σ band tag
 
 draw_current_period(VwapAnchor anchor) =>
     if not na(anchor.currentPeriod)
         delete_period(anchor.currentPeriod)
     label.delete(anchor.nameLabel)
+    for bandLabel in anchor.bandLabels
+        label.delete(bandLabel)
+    array.clear(anchor.bandLabels)
     anchor.currentPeriod := na
     if anchor.visible and array.size(anchor.barTimes) >= 2
         anchor.currentPeriod := build_period(anchor)
-        if anchor.labelEnabled
-            anchor.nameLabel := label.new(array.last(anchor.barTimes), array.last(anchor.vwapValues), anchor.name + SUFFIX_VWAP, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=anchor.lineColor, size=size.tiny, color=color.new(color.white, 100))
+        if anchor.labelMode != LABELS_OFF
+            anchor.nameLabel := new_line_label(array.last(anchor.barTimes), array.last(anchor.vwapValues), anchor.name + SUFFIX_VWAP, anchor.lineColor, anchor.labelSize)
+            if anchor.labelMode == LABELS_ALL
+                add_band_labels(anchor, anchor.band1Enabled, 1, anchor.band1Color)
+                add_band_labels(anchor, anchor.band2Enabled, 2, anchor.band2Color)
+                add_band_labels(anchor, anchor.band3Enabled, 3, anchor.band3Color)
+                add_band_labels(anchor, anchor.customEnabled, anchor.customMultiplier, anchor.customColor)
 
 // ANCHORS — one instance each; config copied from inputs every bar, then computed and drawn
 
@@ -443,7 +496,8 @@ daily.lineWidth := dailyWidth
 daily.historyDepth := dailyHistory
 daily.fillEnabled := dailyFill
 daily.fillOpacity := dailyFillOpacity
-daily.labelEnabled := dailyLabel
+daily.labelMode := dailyLabelMode
+daily.labelSize := label_font_size(dailyLabelSize)
 daily.band1Enabled := dailyBand1
 daily.band1Color := dailyBand1Color
 daily.band1Width := dailyBand1Width
@@ -463,7 +517,8 @@ weekly.lineWidth := weeklyWidth
 weekly.historyDepth := weeklyHistory
 weekly.fillEnabled := weeklyFill
 weekly.fillOpacity := weeklyFillOpacity
-weekly.labelEnabled := weeklyLabel
+weekly.labelMode := weeklyLabelMode
+weekly.labelSize := label_font_size(weeklyLabelSize)
 weekly.band1Enabled := weeklyBand1
 weekly.band1Color := weeklyBand1Color
 weekly.band1Width := weeklyBand1Width
@@ -483,7 +538,8 @@ monthly.lineWidth := monthlyWidth
 monthly.historyDepth := monthlyHistory
 monthly.fillEnabled := monthlyFill
 monthly.fillOpacity := monthlyFillOpacity
-monthly.labelEnabled := monthlyLabel
+monthly.labelMode := monthlyLabelMode
+monthly.labelSize := label_font_size(monthlyLabelSize)
 monthly.band1Enabled := monthlyBand1
 monthly.band1Color := monthlyBand1Color
 monthly.band1Width := monthlyBand1Width
@@ -503,7 +559,8 @@ ny.lineWidth := nyWidth
 ny.historyDepth := nyHistory
 ny.fillEnabled := nyFill
 ny.fillOpacity := nyFillOpacity
-ny.labelEnabled := nyLabel
+ny.labelMode := nyLabelMode
+ny.labelSize := label_font_size(nyLabelSize)
 ny.band1Enabled := nyBand1
 ny.band1Color := nyBand1Color
 ny.band1Width := nyBand1Width
@@ -523,7 +580,8 @@ overnight.lineWidth := overnightWidth
 overnight.historyDepth := overnightHistory
 overnight.fillEnabled := overnightFill
 overnight.fillOpacity := overnightFillOpacity
-overnight.labelEnabled := overnightLabel
+overnight.labelMode := overnightLabelMode
+overnight.labelSize := label_font_size(overnightLabelSize)
 overnight.band1Enabled := overnightBand1
 overnight.band1Color := overnightBand1Color
 overnight.band1Width := overnightBand1Width
@@ -544,7 +602,8 @@ customPeriod.lineWidth := customPeriodWidth
 customPeriod.historyDepth := customPeriodHistory
 customPeriod.fillEnabled := customPeriodFill
 customPeriod.fillOpacity := customPeriodFillOpacity
-customPeriod.labelEnabled := customPeriodLabel
+customPeriod.labelMode := customPeriodLabelMode
+customPeriod.labelSize := label_font_size(customPeriodLabelSize)
 customPeriod.band1Enabled := customPeriodBand1
 customPeriod.band1Color := customPeriodBand1Color
 customPeriod.band1Width := customPeriodBand1Width
