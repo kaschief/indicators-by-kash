@@ -116,7 +116,6 @@ isSunday = dayofweek(time, TIMEZONE) == dayofweek.sunday
 
 type GapRecord
     string gapType
-    string labelPrefixOverride
     float top
     float bottom
     bool isBullish
@@ -194,6 +193,26 @@ getNextRthDate(int timestamp) =>
     daysToAdd = timestampDow == dayofweek.friday ? 3 : 1
     timestamp + daysToAdd * MILLISECONDS_PER_DAY
 
+// Sunday opens can create both NWOG and NDOG at identical prices; NWOG owns the shared visual when enabled.
+gapsShareGeometry(GapRecord leftGap, GapRecord rightGap) =>
+    leftGap.top == rightGap.top and leftGap.bottom == rightGap.bottom
+
+hasMatchingGapType(GapRecord sourceGap, string partnerType) =>
+    found = false
+    if array.size(gaps) > 0
+        for i = 0 to array.size(gaps) - 1
+            candidate = array.get(gaps, i)
+            if candidate.gapType == partnerType and gapsShareGeometry(sourceGap, candidate)
+                found := true
+                break
+    found
+
+isSharedNdogGeometry(GapRecord gap) =>
+    gap.gapType == GAP_TYPE_NDOG and showNWOG and hasMatchingGapType(gap, GAP_TYPE_NWOG)
+
+getGapLabelPrefix(GapRecord gap) =>
+    gap.gapType == GAP_TYPE_NWOG and showNDOG and hasMatchingGapType(gap, GAP_TYPE_NDOG) ? GAP_TYPE_NWOG_NDOG : gap.gapType
+
 getFillPercent(GapRecord gap) =>
     gapRange = gap.top - gap.bottom
     if gapRange <= 0 or na(gap.penetrationLevel)
@@ -203,12 +222,9 @@ getFillPercent(GapRecord gap) =>
         math.round(math.max(0, math.min(100, rawPercent)))
 
 getGapLabel(GapRecord gap) =>
-    prefix = not na(gap.labelPrefixOverride) ? gap.labelPrefixOverride : gap.gapType
-    if prefix == ""
-        ""
-    else
-        fillSuffix = gap.filled ? " ✓" : not na(gap.penetrationLevel) ? " " + str.tostring(getFillPercent(gap), "#") + "%" : ""
-        prefix + fillSuffix + "\n" + formatGapDate(gap.creationTime)
+    prefix = getGapLabelPrefix(gap)
+    fillSuffix = gap.filled ? " ✓" : not na(gap.penetrationLevel) ? " " + str.tostring(getFillPercent(gap), "#") + "%" : ""
+    prefix + fillSuffix + "\n" + formatGapDate(gap.creationTime)
 
 getDraftLabel(DraftGap draft) =>
     LABEL_UPCOMING_RTH + "\n" + formatGapDate(getNextRthDate(draft.creationTime))
@@ -281,7 +297,6 @@ createGapRecord(string gapType, float topPrice, float bottomPrice, bool isBullis
 
     GapRecord.new(
          gapType=gapType,
-         labelPrefixOverride=na,
          top=topPrice,
          bottom=bottomPrice,
          isBullish=isBullish,
@@ -699,14 +714,11 @@ if isSessionOpen
         // NWOG on Sunday opens
         if isSunday
             nwogGap = createGapRecord(GAP_TYPE_NWOG, gapTop, gapBottom, gapIsBullish, time)
-            nwogGap.labelPrefixOverride := GAP_TYPE_NWOG_NDOG
             array.push(gaps, nwogGap)
             trimStoredGaps(GAP_TYPE_NWOG)
 
         // NDOG on every session open
         ndogGap = createGapRecord(GAP_TYPE_NDOG, gapTop, gapBottom, gapIsBullish, time)
-        if isSunday
-            ndogGap.labelPrefixOverride := ""
         array.push(gaps, ndogGap)
         trimStoredGaps(GAP_TYPE_NDOG)
 
@@ -742,7 +754,7 @@ if barstate.islast
                     mostRecentUnfilledRTH := gap.creationBar
                 else if gap.gapType == GAP_TYPE_NWOG and gap.creationBar > mostRecentUnfilledNWOG
                     mostRecentUnfilledNWOG := gap.creationBar
-                else if gap.gapType == GAP_TYPE_NDOG and gap.creationBar > mostRecentUnfilledNDOG
+                else if gap.gapType == GAP_TYPE_NDOG and not isSharedNdogGeometry(gap) and gap.creationBar > mostRecentUnfilledNDOG
                     mostRecentUnfilledNDOG := gap.creationBar
 
         displayedRTH = 0
@@ -752,6 +764,10 @@ if barstate.islast
 
         for i = array.size(gaps) - 1 to 0
             gap = array.get(gaps, i)
+            if isSharedNdogGeometry(gap)
+                hideGapDrawings(gap)
+                continue
+
             typeLimit = getDisplayLimit(gap.gapType)
             typeCount = gap.gapType == GAP_TYPE_RTH ? displayedRTH : gap.gapType == GAP_TYPE_NWOG ? displayedNWOG : displayedNDOG
             canDisplay = shouldDisplayGap(gap) and typeCount < typeLimit

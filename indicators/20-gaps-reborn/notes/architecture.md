@@ -51,6 +51,7 @@ Display and limit logic use `shouldDisplayGap(gap)` and `getDisplayLimit(gapType
    - Filled gaps extend at least to the next same-type session boundary.
    - Filled gaps that complete after that boundary extend to `fillTime`.
    - Confirmed gap labels use bar-index centering from `creationBar` to the resolved lifecycle bar so weekend/holiday gaps cannot snap labels to the right edge.
+   - Shared NWOG/NDOG geometry is owned by NWOG when NWOG is enabled: the NWOG label becomes `NWOG / NDOG`, and the duplicate NDOG drawing is suppressed before visible counts or floating selection.
 
 5. Render
    - Drawing objects are only output.
@@ -58,7 +59,7 @@ Display and limit logic use `shouldDisplayGap(gap)` and `getDisplayLimit(gapType
 
 ## Extension Plan
 
-- Harden NDOG/NWOG overlap behavior and weekend/holiday edge cases.
+- Validate NDOG/NWOG overlap behavior across toggles, limits, and hide-filled combinations.
 - Add projections, dividers, alerts, and production publishing after lifecycle validation.
 
 ## Handoff Notes
@@ -72,7 +73,7 @@ Committed baseline:
 Current working-tree increment:
 
 - RTH floating mode implemented.
-- Pre-extension hardening completed: color resolvers, box geometry extraction, per-type display/limits, renamed generic functions, NDOG/NWOG detection, event-driven next-session marking, bar-index label centering, color table matching CLAUDE.md spec.
+- Pre-extension hardening completed: color resolvers, box geometry extraction, per-type display/limits, renamed generic functions, NDOG/NWOG detection, event-driven next-session marking, bar-index label centering, dynamic NWOG/NDOG overlap ownership, color table matching CLAUDE.md spec.
 - Validate in TradingView before committing.
 
 Validation before next commit:
