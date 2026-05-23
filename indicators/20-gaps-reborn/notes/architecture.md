@@ -7,9 +7,9 @@ Goal: rebuild gaps around explicit lifecycle data, not drawing side effects.
 - RTH gaps with full lifecycle (detection, fill tracking, extension rules).
 - NWOG and NDOG detection, color dispatch, display logic, and limits are wired up.
 - RTH preview uses a separate `DraftGap`, not a stored `GapRecord`.
-- Floating mode uses a separate `FloatingGap` per type, not moved historical drawings.
+- Floating overlays use a separate `FloatingGap` per type, not moved historical drawings.
 - `Upcoming RTH` controls `DraftGap` visibility (gated on `showRTH`).
-- `Floating Mode` controls confirmed unfilled gaps. Each type has its own floating instance.
+- `Display Mode` controls historical vs floating layout: `Historical`, `Historical + Floating`, or `Floating Only`.
 - No projections or dividers in the first cut.
 
 ## Type Dispatch Architecture
@@ -40,17 +40,18 @@ Display and limit logic use `shouldDisplayGap(gap)` and `getDisplayLimit(gapType
 
 3. Selection
    - Decide which stored gaps are visible via `shouldDisplayGap` (per-type switch).
-   - Per-type visible limit counting (`displayedRTH`, `displayedNWOG`, `displayedNDOG`).
+   - Per-type visible limit counting (`displayedRTH`, `displayedNWOG`, `displayedNDOG`) applies to historical display. `Floating Only` ignores historical counts and shows only selected floating candidates.
 
 4. Layout
    - Resolve the right edge from lifecycle timestamps. Do not pre-compute future session endpoints; let actual session-open bars mark lifecycle boundaries.
-   - Floating mode changes only layout, never lifecycle state or visible counts.
+   - Display mode changes only layout, never lifecycle state.
+   - `Historical` shows normal gap drawings only. `Historical + Floating` keeps historical drawings plus compact floating overlays. `Floating Only` hides non-floating historical drawings while state continues running.
    - When the RTH draft is visible, it owns the compact RTH slot, so confirmed RTH gaps do not float during the draft.
    - Draft suppression only applies to RTH type.
    - Unfilled gaps always extend live.
    - Filled gaps extend at least to the next same-type session boundary.
    - Filled gaps that complete after that boundary extend to `fillTime`.
-   - Confirmed gap labels use bar-index centering from `creationBar` to the resolved lifecycle bar so weekend/holiday gaps cannot snap labels to the right edge.
+   - Confirmed gap labels are centered by bar count, then mapped to an actual stored bar timestamp and drawn with `xloc.bar_time`. This avoids weekend/holiday midpoint snapping without old `xloc.bar_index` anchors.
    - Shared NWOG/NDOG geometry is owned by NWOG when NWOG is enabled: the NWOG label becomes `NWOG / NDOG`, and the duplicate NDOG drawing is suppressed before visible counts or floating selection.
 
 5. Render
@@ -72,17 +73,19 @@ Committed baseline:
 
 Current working-tree increment:
 
-- RTH floating mode implemented.
-- Pre-extension hardening completed: color resolvers, box geometry extraction, per-type display/limits, renamed generic functions, NDOG/NWOG detection, event-driven next-session marking, bar-index label centering, dynamic NWOG/NDOG overlap ownership, color table matching CLAUDE.md spec.
+- Display Mode implemented with Historical, Historical + Floating, and Floating Only.
+- Pre-extension hardening completed: color resolvers, box geometry extraction, per-type display/limits, renamed generic functions, NDOG/NWOG detection, event-driven next-session marking, bar-count label centering resolved to bar-time anchors, dynamic NWOG/NDOG overlap ownership, floating-only display, color table matching CLAUDE.md spec.
 - Validate in TradingView before committing.
 
 Validation before next commit:
 
 - Toggle `Upcoming RTH` during ETH: draft should show/hide.
 - Toggle `showRTH` off: no gaps or drafts visible.
-- Toggle `Floating Mode` during RTH with an unfilled confirmed RTH gap and no draft: most recent unfilled RTH should switch between compact and historical.
+- Switch `Display Mode` to `Historical`: no floating overlays should render.
+- Switch `Display Mode` to `Historical + Floating`: selected unfilled gaps should float while non-floating historical gaps remain visible.
+- Switch `Display Mode` to `Floating Only`: only selected floating gaps should render; non-floating historical gaps should be hidden and should not consume limits.
 - Filled RTH gaps must remain historical.
-- The visible RTH count must not change when toggling floating mode.
+- Per-type visibility toggles still gate both historical and floating drawings.
 - Toggle `Hide Filled`: filled gaps disappear.
 - Color table displays all 11 color entries correctly.
 - No orphan labels, zero-width boxes, or labels snapped to the right edge on Thursday/Friday NDOGs.

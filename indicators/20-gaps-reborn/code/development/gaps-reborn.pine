@@ -30,7 +30,10 @@ const string LABEL_HIDE_FILLED = "Hide Filled"
 const string LABEL_INTERNAL_LINES = "Internal Lines"
 const string LABEL_BORDER_LABEL = "Border + Label"
 const string LABEL_UPCOMING_RTH = "Upcoming RTH"
-const string LABEL_FLOATING_MODE = "Floating Mode"
+const string LABEL_DISPLAY_MODE = "Display Mode"
+const string DISPLAY_MODE_HISTORICAL = "Historical"
+const string DISPLAY_MODE_HISTORICAL_FLOATING = "Historical + Floating"
+const string DISPLAY_MODE_FLOATING_ONLY = "Floating Only"
 
 const float CE_LEVEL = 0.50
 const float Q1_LEVEL = 0.25
@@ -65,7 +68,9 @@ const color DEFAULT_INTERNAL_LINES_COLOR = color.new(color.rgb(184, 184, 184), 4
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-floatingMode = input.bool(true, LABEL_FLOATING_MODE, group=GROUP_GENERAL, tooltip="Show the most recent unfilled confirmed RTH gap as a compact right-side box while keeping lifecycle state unchanged.")
+displayMode = input.string(DISPLAY_MODE_HISTORICAL_FLOATING, LABEL_DISPLAY_MODE, options=[DISPLAY_MODE_HISTORICAL, DISPLAY_MODE_HISTORICAL_FLOATING, DISPLAY_MODE_FLOATING_ONLY], group=GROUP_GENERAL, tooltip="Historical shows normal gap boxes only. Historical + Floating also floats the most recent unfilled gap per type. Floating Only hides non-floating historical boxes while lifecycle tracking continues.")
+useFloating = displayMode != DISPLAY_MODE_HISTORICAL
+floatingOnly = displayMode == DISPLAY_MODE_FLOATING_ONLY
 
 showRTH = input.bool(true, "RTH Gaps", group=GROUP_RTH, inline="rth")
 rthLimit = input.int(10, "", minval=1, maxval=50, group=GROUP_RTH, inline="rth")
@@ -165,6 +170,10 @@ var DraftGap rthDraft = na
 var FloatingGap floatingRTH = na
 var FloatingGap floatingNWOG = na
 var FloatingGap floatingNDOG = na
+var array<int> chartBarTimes = array.new<int>()
+
+if barstate.isnew
+    array.push(chartBarTimes, time)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEXT HELPERS
@@ -293,7 +302,7 @@ createGapRecord(string gapType, float topPrice, float bottomPrice, bool isBullis
     topBorder = line.new(eventTime, topPrice, rightTime, topPrice, xloc=xloc.bar_time, color=borderClr, style=line.style_solid, width=LINE_WIDTH_1)
     bottomBorder = line.new(eventTime, bottomPrice, rightTime, bottomPrice, xloc=xloc.bar_time, color=borderClr, style=line.style_solid, width=LINE_WIDTH_1)
 
-    gapLabel = label.new(bar_index, bottomPrice, "", xloc=xloc.bar_index, yloc=yloc.price, color=color.new(color.rgb(255, 255, 255), 100), textcolor=borderClr, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
+    gapLabel = label.new(eventTime, bottomPrice, "", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.rgb(255, 255, 255), 100), textcolor=borderClr, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
     GapRecord.new(
          gapType=gapType,
@@ -541,8 +550,8 @@ applyGapColors(GapRecord gap) =>
     line.set_color(gap.topBorderLine, borderClr)
     line.set_color(gap.bottomBorderLine, borderClr)
 
-// Labels use bar indices because time midpoints can fall into weekend or holiday closures,
-// where TradingView snaps xloc.bar_time labels to the nearest drawable bar.
+// Confirmed labels are centered by bar count, then converted to an actual bar timestamp.
+// This avoids weekend/holiday timestamp gaps without using old bar_index drawing anchors.
 resolveRightBar(GapRecord gap) =>
     liveRightBar = bar_index + RIGHT_EDGE_CUSHION
     if not gap.filled
@@ -554,10 +563,19 @@ resolveRightBar(GapRecord gap) =>
     else
         liveRightBar
 
-resolveLabelBarX(GapRecord gap) =>
+getBarTimeByIndex(int targetBar) =>
+    lastStoredBar = array.size(chartBarTimes) - 1
+    if lastStoredBar < 0
+        time
+    else
+        safeBar = math.max(0, math.min(targetBar, lastStoredBar))
+        array.get(chartBarTimes, safeBar)
+
+resolveLabelTime(GapRecord gap) =>
     rightBar = resolveRightBar(gap)
     safeRightBar = rightBar > gap.creationBar ? rightBar : gap.creationBar + 1
-    math.round((gap.creationBar + safeRightBar) / 2)
+    centeredBar = math.round((gap.creationBar + safeRightBar) / 2)
+    getBarTimeByIndex(math.min(centeredBar, bar_index))
 
 setGapRightEdge(GapRecord gap, int rightTime) =>
     box.set_left(gap.topUnfilledBox, gap.leftTime)
@@ -582,7 +600,7 @@ setGapRightEdge(GapRecord gap, int rightTime) =>
         line.set_x2(gap.q3Line, rightTime)
 
     if not na(gap.dateLabel)
-        label.set_x(gap.dateLabel, resolveLabelBarX(gap))
+        label.set_x(gap.dateLabel, resolveLabelTime(gap))
         label.set_y(gap.dateLabel, gap.bottom)
         label.set_text(gap.dateLabel, showLabels ? getGapLabel(gap) : "")
         label.set_textcolor(gap.dateLabel, getBorderColor(gap.gapType))
@@ -667,7 +685,7 @@ getDisplayLimit(string gapType) =>
         => rthLimit
 
 shouldFloatGap(GapRecord gap, int mostRecentUnfilledBar, bool hasDraft) =>
-    floatingMode and not gap.filled and gap.creationBar == mostRecentUnfilledBar and not (gap.gapType == GAP_TYPE_RTH and hasDraft)
+    useFloating and not gap.filled and gap.creationBar == mostRecentUnfilledBar and not (gap.gapType == GAP_TYPE_RTH and hasDraft)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DETECTION
@@ -768,21 +786,23 @@ if barstate.islast
                 hideGapDrawings(gap)
                 continue
 
+            canDisplay = shouldDisplayGap(gap)
+            mostRecentBar = gap.gapType == GAP_TYPE_RTH ? mostRecentUnfilledRTH : gap.gapType == GAP_TYPE_NWOG ? mostRecentUnfilledNWOG : mostRecentUnfilledNDOG
+            useFloatingLayout = canDisplay and shouldFloatGap(gap, mostRecentBar, hasRthDraft)
             typeLimit = getDisplayLimit(gap.gapType)
             typeCount = gap.gapType == GAP_TYPE_RTH ? displayedRTH : gap.gapType == GAP_TYPE_NWOG ? displayedNWOG : displayedNDOG
-            canDisplay = shouldDisplayGap(gap) and typeCount < typeLimit
+            withinHistoricalLimit = typeCount < typeLimit
 
-            if canDisplay
-                if gap.gapType == GAP_TYPE_RTH
-                    displayedRTH += 1
-                else if gap.gapType == GAP_TYPE_NWOG
-                    displayedNWOG += 1
-                else if gap.gapType == GAP_TYPE_NDOG
-                    displayedNDOG += 1
+            if canDisplay and (floatingOnly or withinHistoricalLimit)
+                if not floatingOnly
+                    if gap.gapType == GAP_TYPE_RTH
+                        displayedRTH += 1
+                    else if gap.gapType == GAP_TYPE_NWOG
+                        displayedNWOG += 1
+                    else if gap.gapType == GAP_TYPE_NDOG
+                        displayedNDOG += 1
 
-                mostRecentBar = gap.gapType == GAP_TYPE_RTH ? mostRecentUnfilledRTH : gap.gapType == GAP_TYPE_NWOG ? mostRecentUnfilledNWOG : mostRecentUnfilledNDOG
-
-                if shouldFloatGap(gap, mostRecentBar, hasRthDraft)
+                if useFloatingLayout
                     hideGapDrawings(gap)
                     if gap.gapType == GAP_TYPE_RTH
                         if na(floatingRTH)
@@ -799,6 +819,8 @@ if barstate.islast
                             floatingNDOG := createFloatingGap(gap)
                         updateFloating(floatingNDOG, gap)
                         floatingNDOGRendered := true
+                else if floatingOnly
+                    hideGapDrawings(gap)
                 else
                     applyGapColors(gap)
                     rightTime = resolveRightEdge(gap)
