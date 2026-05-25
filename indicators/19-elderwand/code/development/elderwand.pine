@@ -1,20 +1,23 @@
 //@version=6
-indicator("elderwand •", overlay=true, max_polylines_count=100)
+indicator("elderwand •", overlay=true, max_polylines_count=100, max_labels_count=100)
 
-// Anchored VWAPs drawn as polylines: per-band colour/width, real last-N history,
-// gap-safe sessions. Borders are open polylines; the fill is a borderless closed polyline.
+// Anchored VWAPs as polylines: per-band colour/width, last-N history, gap-safe sessions.
+// Polyline cap = 100 (platform max). ~8 polylines/period × 7 anchors × History can exceed it
+// → Pine silently drops the oldest. Defaults (History=1) ≈ 56; keep History modest.
 
 // CONSTANTS
 
 const string NAME_DAILY     = "Daily"
 const string NAME_WEEKLY    = "Weekly"
 const string NAME_MONTHLY   = "Monthly"
+const string NAME_QUARTERLY = "Quarterly"
+const string NAME_YEARLY    = "Yearly"
 const string NAME_NY        = "NY"
 const string NAME_OVERNIGHT = "Overnight"
 
 const string TIMEZONE          = "America/New_York"
 
-// Session metadata is centralized so input groups, session detection, and extension cutoffs stay in sync.
+// One source of truth for session windows so groups, detection, and cutoffs stay in sync.
 const string SESSION_NY             = "0930-1600"
 const string SESSION_NY_DISPLAY     = "09:30–16:00"
 const int    SESSION_NY_END_HOUR    = 16
@@ -30,6 +33,8 @@ const string GROUP_GENERAL   = "⚡ Quick Filter"
 const string GROUP_DAILY     = "☀️ " + NAME_DAILY
 const string GROUP_WEEKLY    = "🌊 " + NAME_WEEKLY
 const string GROUP_MONTHLY   = "🏔️ " + NAME_MONTHLY
+const string GROUP_QUARTERLY = "💎 " + NAME_QUARTERLY
+const string GROUP_YEARLY    = "🏛️ " + NAME_YEARLY
 const string GROUP_NY        = "🗽 " + NAME_NY + " · " + SESSION_NY_DISPLAY
 const string GROUP_OVERNIGHT = "🌙 " + NAME_OVERNIGHT + " · " + SESSION_OVERNIGHT_DISPLAY
 const string GROUP_TABLE     = "🎨 Reference Table"
@@ -39,6 +44,8 @@ const color DEFAULT_WEEKLY_COLOR    = color.rgb(41,  98,  255)
 const color DEFAULT_DAILY_COLOR     = color.rgb(255, 167, 38)
 const color DEFAULT_OVERNIGHT_COLOR = color.rgb(126, 87,  194)
 const color DEFAULT_MONTHLY_COLOR   = color.rgb(165, 214, 167)
+const color DEFAULT_QUARTERLY_COLOR = color.rgb(247, 11,  241)
+const color DEFAULT_YEARLY_COLOR    = color.rgb(128, 25,  34)
 const color DEFAULT_NY_COLOR        = color.rgb(74,  74,  74)
 const int   DEFAULT_BAND_1_SIGMA_TRANSPARENCY = 53
 const int   DEFAULT_BAND_2_SIGMA_TRANSPARENCY = 59
@@ -59,6 +66,8 @@ const float FILL_OPACITY_DEFAULT         = 0.5
 const float FILL_OPACITY_DAILY_DEFAULT   = 2.5
 const float FILL_OPACITY_WEEKLY_DEFAULT  = 3.0
 const float FILL_OPACITY_MONTHLY_DEFAULT = 8.0
+const float FILL_OPACITY_QUARTERLY_DEFAULT = 10.0
+const float FILL_OPACITY_YEARLY_DEFAULT    = 12.0
 const float FILL_OPACITY_NY_DEFAULT      = 6.0
 const float FILL_OPACITY_MIN       = 0.1
 const float FILL_OPACITY_MAX       = 100.0
@@ -70,6 +79,8 @@ const int MS_IN_DAY           = 86400000
 const string LABEL_ENABLE_DAILY     = "Enable Daily VWAP"
 const string LABEL_ENABLE_WEEKLY    = "Enable Weekly VWAP"
 const string LABEL_ENABLE_MONTHLY   = "Enable Monthly VWAP"
+const string LABEL_ENABLE_QUARTERLY = "Enable Quarterly VWAP"
+const string LABEL_ENABLE_YEARLY    = "Enable Yearly VWAP"
 const string LABEL_ENABLE_NY        = "Enable NY VWAP"
 const string LABEL_ENABLE_OVERNIGHT = "Enable Overnight VWAP"
 const string LABEL_HISTORY          = "History"
@@ -78,9 +89,11 @@ const string LABEL_BAND1            = "1σ"
 const string LABEL_BAND2            = "2σ"
 const string LABEL_BAND3            = "3σ"
 const string LABEL_LABEL            = "Label"
+const string LABEL_PRICE            = "Price"
 const string LABEL_EXTENSION        = "Extension"
 const string PREFIX_VWAP   = "★ "
 const string SUFFIX_VWAP   = " VWAP"
+const string LABEL_SEPARATOR = " • "
 
 const string EXT_SESSION_ONLY = "Session only"
 const string EXT_TO_CLOSE     = "To " + EXT_CUTOFF_CLOSE_DISPLAY
@@ -104,7 +117,7 @@ const string FILL_RANGE_NONE = "None"
 const string FILL_RANGE_1_SIGMA = "1σ to -1σ"
 const string FILL_RANGE_2_SIGMA = "2σ to -2σ"
 const string FILL_RANGE_3_SIGMA = "3σ to -3σ"
-// Quick Filter presets: All respects the per-group toggles; every other preset forces its set of anchors on and the rest off
+// Quick Filter presets: All = respect per-group toggles; others force their set on, rest off.
 const string FILTER_ALL                    = "All"
 const string FILTER_DAILY                  = "Daily"
 const string FILTER_WEEKLY                 = "Weekly"
@@ -114,19 +127,23 @@ const string FILTER_DAILY_WEEKLY_NY        = "Prep: Daily + Weekly + NY"
 const string FILTER_DAILY_WEEKLY_MONTHLY   = "Daily + Weekly + Monthly"
 const string FILTER_MONTHLY                = "Monthly"
 const string FILTER_DAILY_NY               = "Daily + NY"
+const string FILTER_QUARTERLY              = "Quarterly"
+const string FILTER_YEARLY                 = "Yearly"
+const string FILTER_QUARTERLY_YEARLY       = "Quarterly + Yearly"
+const string FILTER_MONTHLY_QUARTERLY_YEARLY = "Monthly + Quarterly + Yearly"
 const string FILTER_DAILY_WEEKLY_OVERNIGHT = "Daily + Weekly + Overnight"
 const string FILTER_DAILY_OVERNIGHT        = "Daily + Overnight"
 
-const string TOOLTIP_QUICK_FILTER = "Override every per-group Enable toggle to quickly show a preset set of anchors.\n\n• All: Respect individual Enable toggles\n• Daily: Daily only\n• Weekly: Weekly only\n• Daily + Weekly: Daily + Weekly\n• NY: NY only\n• Daily + NY: Daily + NY\n• Daily + Weekly + NY: Daily + Weekly + NY\n• Daily + Weekly + Monthly: Daily + Weekly + Monthly\n• Monthly: Monthly only\n• Daily + Weekly + Overnight: Daily + Weekly + Overnight\n• Daily + Overnight: Daily + Overnight"
+const string TOOLTIP_QUICK_FILTER = "Override every per-group Enable toggle to quickly show a preset set of anchors.\n\n• All: Respect individual Enable toggles\n• Daily: Daily only\n• Weekly: Weekly only\n• Daily + Weekly: Daily + Weekly\n• NY: NY only\n• Daily + NY: Daily + NY\n• Daily + Weekly + NY: Daily + Weekly + NY\n• Daily + Weekly + Monthly: Daily + Weekly + Monthly\n• Monthly: Monthly only\n• Daily + Weekly + Overnight: Daily + Weekly + Overnight\n• Daily + Overnight: Daily + Overnight\n• Quarterly: Quarterly only\n• Yearly: Yearly only\n• Quarterly + Yearly: Quarterly + Yearly\n• Monthly + Quarterly + Yearly: Monthly + Quarterly + Yearly"
 const string TOOLTIP_VWAP_ONLY = "Global: hide every σ band (1σ / 2σ / 3σ) and its fill across all anchors, leaving only the VWAP centerlines. Overrides each group's σ Bands choice while on."
 const string TOOLTIP_VWAP_STAR = "Prefix every VWAP centerline label with a text star that inherits the line colour (e.g. ★ Daily VWAP). Off = plain label (Daily VWAP). Does not affect σ band tags."
 const string TOOLTIP_BAND_SIDE = "Which σ bands to show for this group: All, Upper Only (above VWAP), Lower Only (below VWAP), or Sandwich (both sides, 1σ + 2σ only — drops the outer 3σ). Affects this group's band lines and tags; the centerline always stays. The global VWAP Lines Only overrides this and hides all bands."
 const string TOOLTIP_MAIN   = "Show this VWAP · colour. Auto-hides once the chart timeframe reaches the anchor period."
 const string TOOLTIP_HISTORY_FILL = "History: 1 = current only, N = current + N−1 past. Fill: None disables fill; each σ choice fills exactly that band range. The number beside Fill controls fill strength from 0.1–100."
 const string TOOLTIP_INTRADAY_EXTENSION = "Controls how long this intraday VWAP continues plotting after its session ends, using New York time."
-const string TOOLTIP_LABELS = "Label toggles all labels for this group: VWAP plus every enabled σ band. Size sets the tag font."
+const string TOOLTIP_LABELS = "Label toggles all labels for this group: VWAP plus every enabled σ band. Size sets the tag font. Price appends a text-bullet price to this group's VWAP and σ labels."
 
-// TYPES — one anchored VWAP: its config, its current-period point buffer, and its retained history
+// TYPES — one anchored VWAP: config, current-period buffer, retained history
 
 type PeriodLines
     array<polyline> polylines
@@ -148,10 +165,13 @@ type VwapAnchor
     color  band3Color
     int    band3Width
     bool   labelsEnabled
+    bool   pricesEnabled
     string labelSize
     bool   showUpper
     bool   showLower
     bool   visible
+    bool   drawVisible
+    string displayName
     array<int>         barTimes
     array<float>       vwapValues
     array<float>       stdevValues
@@ -163,9 +183,9 @@ type VwapAnchor
 new_anchor(string name) =>
     VwapAnchor.new(name=name, barTimes=array.new<int>(), vwapValues=array.new<float>(), stdevValues=array.new<float>(), history=array.new<PeriodLines>(), bandLabels=array.new<label>())
 
-// INPUTS — per anchor: main row (Show · colour), fill row (History · Fill · strength), label row (Label · Size), then one row per band
+// INPUTS — per anchor: main (Show · colour), fill (History · Fill · strength), label (Label · Size), bands
 
-quickFilter = input.string(FILTER_DAILY, "Quick Filter", options=[FILTER_ALL, FILTER_DAILY, FILTER_WEEKLY, FILTER_DAILY_WEEKLY, FILTER_NY, FILTER_DAILY_NY, FILTER_DAILY_WEEKLY_NY, FILTER_DAILY_WEEKLY_MONTHLY, FILTER_MONTHLY, FILTER_DAILY_WEEKLY_OVERNIGHT, FILTER_DAILY_OVERNIGHT], group=GROUP_GENERAL, tooltip=TOOLTIP_QUICK_FILTER)
+quickFilter = input.string(FILTER_DAILY, "Quick Filter", options=[FILTER_ALL, FILTER_DAILY, FILTER_WEEKLY, FILTER_DAILY_WEEKLY, FILTER_NY, FILTER_DAILY_NY, FILTER_DAILY_WEEKLY_NY, FILTER_DAILY_WEEKLY_MONTHLY, FILTER_MONTHLY, FILTER_DAILY_WEEKLY_OVERNIGHT, FILTER_DAILY_OVERNIGHT, FILTER_QUARTERLY, FILTER_YEARLY, FILTER_QUARTERLY_YEARLY, FILTER_MONTHLY_QUARTERLY_YEARLY], group=GROUP_GENERAL, tooltip=TOOLTIP_QUICK_FILTER)
 vwapLinesOnly = input.bool(false, "VWAP Lines Only", group=GROUP_GENERAL, tooltip=TOOLTIP_VWAP_ONLY)
 vwapLabelStar = input.bool(true, "Star on VWAP Labels", group=GROUP_GENERAL, tooltip=TOOLTIP_VWAP_STAR)
 showBands = not vwapLinesOnly
@@ -178,6 +198,7 @@ dailyFillRange   = input.string(FILL_RANGE_2_SIGMA, LABEL_FILL, options=[FILL_RA
 dailyFillOpacity = input.float(FILL_OPACITY_DAILY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="d_fill", group=GROUP_DAILY, tooltip=TOOLTIP_HISTORY_FILL)
 dailyLabels      = input.bool(true, LABEL_LABEL, inline="d_lbl", group=GROUP_DAILY)
 dailyLabelSize   = input.string(FONT_TINY, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="d_lbl", group=GROUP_DAILY, tooltip=TOOLTIP_LABELS)
+dailyPrices      = input.bool(false, LABEL_PRICE, inline="d_lbl", group=GROUP_DAILY)
 dailyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="d_bands", group=GROUP_DAILY)
 dailyBand1       = input.bool(true,  LABEL_BAND1, inline="d_bands", group=GROUP_DAILY)
 dailyBand2       = input.bool(true,  LABEL_BAND2, inline="d_bands", group=GROUP_DAILY)
@@ -190,6 +211,7 @@ weeklyFillRange   = input.string(FILL_RANGE_2_SIGMA, LABEL_FILL, options=[FILL_R
 weeklyFillOpacity = input.float(FILL_OPACITY_WEEKLY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="w_fill", group=GROUP_WEEKLY, tooltip=TOOLTIP_HISTORY_FILL)
 weeklyLabels     = input.bool(true, LABEL_LABEL, inline="w_lbl", group=GROUP_WEEKLY)
 weeklyLabelSize   = input.string(FONT_SMALL, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="w_lbl", group=GROUP_WEEKLY, tooltip=TOOLTIP_LABELS)
+weeklyPrices      = input.bool(false, LABEL_PRICE, inline="w_lbl", group=GROUP_WEEKLY)
 weeklyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="w_bands", group=GROUP_WEEKLY)
 weeklyBand1       = input.bool(true,  LABEL_BAND1, inline="w_bands", group=GROUP_WEEKLY)
 weeklyBand2       = input.bool(true,  LABEL_BAND2, inline="w_bands", group=GROUP_WEEKLY)
@@ -203,6 +225,7 @@ nyFillRange   = input.string(FILL_RANGE_2_SIGMA, LABEL_FILL, options=[FILL_RANGE
 nyFillOpacity = input.float(FILL_OPACITY_NY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="ny_fill", group=GROUP_NY, tooltip=TOOLTIP_HISTORY_FILL)
 nyLabels         = input.bool(true, LABEL_LABEL, inline="ny_lbl", group=GROUP_NY)
 nyLabelSize   = input.string(FONT_TINY, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="ny_lbl", group=GROUP_NY, tooltip=TOOLTIP_LABELS)
+nyPrices      = input.bool(false, LABEL_PRICE, inline="ny_lbl", group=GROUP_NY)
 nyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="ny_bands", group=GROUP_NY)
 nyBand1       = input.bool(true,  LABEL_BAND1, inline="ny_bands", group=GROUP_NY)
 nyBand2       = input.bool(true,  LABEL_BAND2, inline="ny_bands", group=GROUP_NY)
@@ -216,6 +239,7 @@ overnightFillRange   = input.string(FILL_RANGE_NONE, LABEL_FILL, options=[FILL_R
 overnightFillOpacity = input.float(FILL_OPACITY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="on_fill", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_HISTORY_FILL)
 overnightLabels  = input.bool(true, LABEL_LABEL, inline="on_lbl", group=GROUP_OVERNIGHT)
 overnightLabelSize   = input.string(FONT_TINY, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="on_lbl", group=GROUP_OVERNIGHT, tooltip=TOOLTIP_LABELS)
+overnightPrices      = input.bool(false, LABEL_PRICE, inline="on_lbl", group=GROUP_OVERNIGHT)
 overnightBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="on_bands", group=GROUP_OVERNIGHT)
 overnightBand1       = input.bool(true,  LABEL_BAND1, inline="on_bands", group=GROUP_OVERNIGHT)
 overnightBand2       = input.bool(true,  LABEL_BAND2, inline="on_bands", group=GROUP_OVERNIGHT)
@@ -228,10 +252,37 @@ monthlyFillRange   = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_
 monthlyFillOpacity = input.float(FILL_OPACITY_MONTHLY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="m_fill", group=GROUP_MONTHLY, tooltip=TOOLTIP_HISTORY_FILL)
 monthlyLabels    = input.bool(true, LABEL_LABEL, inline="m_lbl", group=GROUP_MONTHLY)
 monthlyLabelSize   = input.string(FONT_NORMAL, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="m_lbl", group=GROUP_MONTHLY, tooltip=TOOLTIP_LABELS)
+monthlyPrices      = input.bool(false, LABEL_PRICE, inline="m_lbl", group=GROUP_MONTHLY)
 monthlyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="m_bands", group=GROUP_MONTHLY)
 monthlyBand1       = input.bool(true,  LABEL_BAND1, inline="m_bands", group=GROUP_MONTHLY)
 monthlyBand2       = input.bool(true,  LABEL_BAND2, inline="m_bands", group=GROUP_MONTHLY)
 monthlyBand3       = input.bool(true,  LABEL_BAND3, inline="m_bands", group=GROUP_MONTHLY, tooltip=TOOLTIP_BAND_SIDE)
+
+quarterlyShow        = input.bool(true, LABEL_ENABLE_QUARTERLY, inline="q", group=GROUP_QUARTERLY)
+quarterlyColor = input.color(DEFAULT_QUARTERLY_COLOR, "", inline="q", group=GROUP_QUARTERLY, tooltip=TOOLTIP_MAIN)
+quarterlyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="q_fill", group=GROUP_QUARTERLY)
+quarterlyFillRange   = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="q_fill", group=GROUP_QUARTERLY)
+quarterlyFillOpacity = input.float(FILL_OPACITY_QUARTERLY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="q_fill", group=GROUP_QUARTERLY, tooltip=TOOLTIP_HISTORY_FILL)
+quarterlyLabels      = input.bool(true, LABEL_LABEL, inline="q_lbl", group=GROUP_QUARTERLY)
+quarterlyLabelSize   = input.string(FONT_NORMAL, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="q_lbl", group=GROUP_QUARTERLY, tooltip=TOOLTIP_LABELS)
+quarterlyPrices      = input.bool(false, LABEL_PRICE, inline="q_lbl", group=GROUP_QUARTERLY)
+quarterlyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="q_bands", group=GROUP_QUARTERLY)
+quarterlyBand1       = input.bool(true,  LABEL_BAND1, inline="q_bands", group=GROUP_QUARTERLY)
+quarterlyBand2       = input.bool(true,  LABEL_BAND2, inline="q_bands", group=GROUP_QUARTERLY)
+quarterlyBand3       = input.bool(true,  LABEL_BAND3, inline="q_bands", group=GROUP_QUARTERLY, tooltip=TOOLTIP_BAND_SIDE)
+
+yearlyShow        = input.bool(true, LABEL_ENABLE_YEARLY, inline="y", group=GROUP_YEARLY)
+yearlyColor = input.color(DEFAULT_YEARLY_COLOR, "", inline="y", group=GROUP_YEARLY, tooltip=TOOLTIP_MAIN)
+yearlyHistory     = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="y_fill", group=GROUP_YEARLY)
+yearlyFillRange   = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="y_fill", group=GROUP_YEARLY)
+yearlyFillOpacity = input.float(FILL_OPACITY_YEARLY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="y_fill", group=GROUP_YEARLY, tooltip=TOOLTIP_HISTORY_FILL)
+yearlyLabels      = input.bool(true, LABEL_LABEL, inline="y_lbl", group=GROUP_YEARLY)
+yearlyLabelSize   = input.string(FONT_NORMAL, "", options=[FONT_TINY, FONT_SMALL, FONT_NORMAL, FONT_LARGE, FONT_HUGE], inline="y_lbl", group=GROUP_YEARLY, tooltip=TOOLTIP_LABELS)
+yearlyPrices      = input.bool(false, LABEL_PRICE, inline="y_lbl", group=GROUP_YEARLY)
+yearlyBandSide    = input.string(BAND_BOTH, LABEL_BAND_SIDE, options=[BAND_BOTH, BAND_UPPER, BAND_LOWER, BAND_SANDWICH], inline="y_bands", group=GROUP_YEARLY)
+yearlyBand1       = input.bool(true,  LABEL_BAND1, inline="y_bands", group=GROUP_YEARLY)
+yearlyBand2       = input.bool(true,  LABEL_BAND2, inline="y_bands", group=GROUP_YEARLY)
+yearlyBand3       = input.bool(true,  LABEL_BAND3, inline="y_bands", group=GROUP_YEARLY, tooltip=TOOLTIP_BAND_SIDE)
 
 showTable = input.bool(false, "Show Reference Table", group=GROUP_TABLE)
 
@@ -246,6 +297,8 @@ if barstate.islast and cumulativeVolume == 0
 dayChange   = timeframe.change("D")
 weekChange  = timeframe.change("W")
 monthChange = timeframe.change("M")
+quarterChange = timeframe.change("3M")
+yearChange = timeframe.change("12M")
 inNYSession        = not na(time(timeframe.period, SESSION_NY, TIMEZONE))
 inOvernightSession = not na(time(timeframe.period, SESSION_OVERNIGHT, TIMEZONE))
 nyOpen        = inNYSession and not inNYSession[1]
@@ -255,6 +308,8 @@ chartSecs    = timeframe.in_seconds(timeframe.period)
 secsPerDay   = timeframe.in_seconds("1D")
 secsPerWeek  = timeframe.in_seconds("1W")
 secsPerMonth = timeframe.in_seconds("1M")
+secsPerQuarter = timeframe.in_seconds("3M")
+secsPerYear = timeframe.in_seconds("12M")
 
 extension_cutoff(string extension, int openedAt) =>
     int cutoff = na
@@ -289,6 +344,14 @@ vwap_monthly() =>
     bool reset = monthChange or na(hlc3[1])
     [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
     [value, upperBand - value]
+vwap_quarterly() =>
+    bool reset = quarterChange or na(hlc3[1])
+    [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
+    [value, upperBand - value]
+vwap_yearly() =>
+    bool reset = yearChange or na(hlc3[1])
+    [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
+    [value, upperBand - value]
 vwap_ny() =>
     bool reset = nyOpen or na(hlc3[1])
     [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
@@ -300,10 +363,12 @@ vwap_overnight() =>
 [dailyVwap,     dailyStdev]     = vwap_daily()
 [weeklyVwap,    weeklyStdev]    = vwap_weekly()
 [monthlyVwap,   monthlyStdev]   = vwap_monthly()
+[quarterlyVwap, quarterlyStdev] = vwap_quarterly()
+[yearlyVwap,    yearlyStdev]    = vwap_yearly()
 [nyVwap,        nyStdev]        = vwap_ny()
 [overnightVwap, overnightStdev] = vwap_overnight()
 
-// RENDER HELPERS — subsample with a stride so no polyline exceeds the 10,000-point limit
+// RENDER HELPERS — stride-subsample to stay under the 10,000-point polyline limit
 
 point_stride(int pointCount, int maxPoints) =>
     math.max(int(math.ceil(pointCount / float(maxPoints))), 1)
@@ -320,8 +385,7 @@ build_offset_line(array<int> barTimes, array<float> vwapValues, array<float> std
         array.push(points, chart.point.from_time(array.get(barTimes, count - 1), array.get(vwapValues, count - 1) + deviations * array.get(stdevValues, count - 1)))
     polyline.new(points, closed=false, xloc=xloc.bar_time, line_color=lineColor, line_width=lineWidth)
 
-// Fills between the upper edge (upperDev·σ, traced forward) and lower edge (lowerDev·σ, traced back).
-// Either edge can be 0 (the VWAP centerline) so a hidden side clips the fill to the visible half.
+// Closed band: upper edge forward + lower edge back. An edge of 0 = centerline (clips to the visible half).
 build_fill_band(array<int> barTimes, array<float> vwapValues, array<float> stdevValues, float upperDev, float lowerDev, color bandColor, float transparency) =>
     int count = array.size(barTimes)
     int stride = point_stride(count, MAX_POLYLINE_POINTS / 2)
@@ -364,7 +428,7 @@ delete_period(PeriodLines period) =>
     for line in period.polylines
         polyline.delete(line)
 
-// Archive the just-completed period into history and trim to the retained depth (current period is drawn live)
+// Archive the completed period to history, trim to depth (current period is drawn live)
 
 archive_period(VwapAnchor anchor) =>
     if array.size(anchor.barTimes) >= 2
@@ -375,7 +439,7 @@ archive_period(VwapAnchor anchor) =>
     array.clear(anchor.vwapValues)
     array.clear(anchor.stdevValues)
 
-// `shown` keeps the line drawn (incl. a finished session); `accumulating` adds new points (sessions only build inside their window)
+// shown = keep drawn (incl. finished session); accumulating = add points (only inside the session window)
 update_anchor(VwapAnchor anchor, bool shown, bool accumulating, bool isNewPeriod, float vwapValue, float stdevValue) =>
     anchor.visible := shown
     if isNewPeriod
@@ -385,7 +449,7 @@ update_anchor(VwapAnchor anchor, bool shown, bool accumulating, bool isNewPeriod
         array.push(anchor.vwapValues, vwapValue)
         array.push(anchor.stdevValues, stdevValue)
 
-// LABEL HELPERS — one shared line tag; the VWAP label and every band tag use the same discreet style
+// LABEL HELPERS — shared discreet style for the VWAP label and every band tag
 
 label_font_size(string fontSize) =>
     switch fontSize
@@ -404,19 +468,59 @@ new_line_label(int barTime, float price, string labelText, color textColor, stri
 new_band_line_label(int barTime, float price, string labelText, color bandLineColor, string labelSize) =>
     new_line_label(barTime, price, labelText, band_label_text_color(bandLineColor), labelSize)
 
-// Tag a band's upper and lower line at the latest point, tinted to match the band line
+line_label_text(VwapAnchor anchor, string baseText, float price) =>
+    baseText + (anchor.pricesEnabled ? LABEL_SEPARATOR + str.tostring(price, format.mintick) : "")
+
+has_current_points(VwapAnchor anchor) =>
+    anchor.visible and array.size(anchor.barTimes) >= 2 and array.size(anchor.vwapValues) >= 1 and array.size(anchor.stdevValues) >= 1
+
+same_tick(float left, float right) =>
+    not na(left) and not na(right) and math.abs(left - right) <= syminfo.mintick
+
+same_current_period_start(VwapAnchor higherAnchor, VwapAnchor lowerAnchor) =>
+    array.get(higherAnchor.barTimes, 0) == array.get(lowerAnchor.barTimes, 0)
+
+same_current_vwap_state(VwapAnchor higherAnchor, VwapAnchor lowerAnchor) =>
+    bool sameState = false
+    if has_current_points(higherAnchor) and has_current_points(lowerAnchor)
+        sameState := same_current_period_start(higherAnchor, lowerAnchor) and same_tick(array.last(higherAnchor.vwapValues), array.last(lowerAnchor.vwapValues)) and same_tick(array.last(higherAnchor.stdevValues), array.last(lowerAnchor.stdevValues))
+    sameState
+
+reset_duplicate_display(VwapAnchor anchor) =>
+    anchor.drawVisible := anchor.visible
+    anchor.displayName := anchor.name
+
+collapse_duplicate_into(VwapAnchor higherAnchor, VwapAnchor lowerAnchor) =>
+    if higherAnchor.drawVisible and lowerAnchor.drawVisible and same_current_vwap_state(higherAnchor, lowerAnchor)
+        higherAnchor.displayName := higherAnchor.displayName + LABEL_SEPARATOR + lowerAnchor.name
+        lowerAnchor.drawVisible := false
+
+resolve_duplicate_display(array<VwapAnchor> anchorsByPriority) =>
+    int anchorCount = array.size(anchorsByPriority)
+    if anchorCount > 0
+        for i = 0 to anchorCount - 1
+            reset_duplicate_display(array.get(anchorsByPriority, i))
+        if anchorCount > 1
+            for higherIndex = 0 to anchorCount - 2
+                VwapAnchor higherAnchor = array.get(anchorsByPriority, higherIndex)
+                for lowerIndex = higherIndex + 1 to anchorCount - 1
+                    collapse_duplicate_into(higherAnchor, array.get(anchorsByPriority, lowerIndex))
+
+// Tag the band's upper/lower line at the latest point, tinted to the band colour
 add_band_labels(VwapAnchor anchor, bool show, float multiplier, color bandColor) =>
     if show
         int   barTime    = array.last(anchor.barTimes)
         float vwapValue  = array.last(anchor.vwapValues)
         float stdevValue = array.last(anchor.stdevValues)
-        string labelText = anchor.name + " " + str.tostring(multiplier) + "σ"
+        string labelText = anchor.displayName + " " + str.tostring(multiplier) + "σ"
         if anchor.showUpper
-            array.push(anchor.bandLabels, new_band_line_label(barTime, vwapValue + multiplier * stdevValue, labelText, bandColor, anchor.labelSize))
+            float upperPrice = vwapValue + multiplier * stdevValue
+            array.push(anchor.bandLabels, new_band_line_label(barTime, upperPrice, line_label_text(anchor, labelText, upperPrice), bandColor, anchor.labelSize))
         if anchor.showLower
-            array.push(anchor.bandLabels, new_band_line_label(barTime, vwapValue - multiplier * stdevValue, labelText, bandColor, anchor.labelSize))
+            float lowerPrice = vwapValue - multiplier * stdevValue
+            array.push(anchor.bandLabels, new_band_line_label(barTime, lowerPrice, line_label_text(anchor, labelText, lowerPrice), bandColor, anchor.labelSize))
 
-// Redraw the live current period, its name label, and (when set to All) every enabled σ band tag
+// Redraw the live current period: line, name label, and every enabled σ band tag
 
 draw_current_period(VwapAnchor anchor) =>
     if not na(anchor.currentPeriod)
@@ -426,26 +530,31 @@ draw_current_period(VwapAnchor anchor) =>
         label.delete(bandLabel)
     array.clear(anchor.bandLabels)
     anchor.currentPeriod := na
-    if anchor.visible and array.size(anchor.barTimes) >= 2
+    if anchor.drawVisible and array.size(anchor.barTimes) >= 2
         anchor.currentPeriod := build_period(anchor)
         if anchor.labelsEnabled
-            anchor.nameLabel := new_line_label(array.last(anchor.barTimes), array.last(anchor.vwapValues), vwapLabelPrefix + anchor.name + SUFFIX_VWAP, anchor.lineColor, anchor.labelSize)
+            float vwapPrice = array.last(anchor.vwapValues)
+            anchor.nameLabel := new_line_label(array.last(anchor.barTimes), vwapPrice, line_label_text(anchor, vwapLabelPrefix + anchor.displayName + SUFFIX_VWAP, vwapPrice), anchor.lineColor, anchor.labelSize)
             add_band_labels(anchor, anchor.band1Enabled and showBands, BAND_1_SIGMA, anchor.band1Color)
             add_band_labels(anchor, anchor.band2Enabled and showBands, BAND_2_SIGMA, anchor.band2Color)
             add_band_labels(anchor, anchor.band3Enabled and showBands, BAND_3_SIGMA, anchor.band3Color)
 
-// ANCHORS — one instance each; config copied from inputs every bar, then computed and drawn
+// ANCHORS — one instance each; config copied from inputs each bar, then computed + drawn
 
 var VwapAnchor daily     = new_anchor(NAME_DAILY)
 var VwapAnchor weekly    = new_anchor(NAME_WEEKLY)
 var VwapAnchor monthly   = new_anchor(NAME_MONTHLY)
+var VwapAnchor quarterly = new_anchor(NAME_QUARTERLY)
+var VwapAnchor yearly    = new_anchor(NAME_YEARLY)
 var VwapAnchor ny        = new_anchor(NAME_NY)
 var VwapAnchor overnight = new_anchor(NAME_OVERNIGHT)
+var array<VwapAnchor> duplicatePriority = array.from(yearly, quarterly, monthly, weekly, daily, ny, overnight)
 
 daily.historyDepth := dailyHistory
 daily.fillOpacity := dailyFillOpacity
 daily.fillRange := dailyFillRange
 daily.labelsEnabled := dailyLabels
+daily.pricesEnabled := dailyPrices
 daily.labelSize := label_font_size(dailyLabelSize)
 daily.showUpper := dailyBandSide != BAND_LOWER
 daily.showLower := dailyBandSide != BAND_UPPER
@@ -457,6 +566,7 @@ weekly.historyDepth := weeklyHistory
 weekly.fillOpacity := weeklyFillOpacity
 weekly.fillRange := weeklyFillRange
 weekly.labelsEnabled := weeklyLabels
+weekly.pricesEnabled := weeklyPrices
 weekly.labelSize := label_font_size(weeklyLabelSize)
 weekly.showUpper := weeklyBandSide != BAND_LOWER
 weekly.showLower := weeklyBandSide != BAND_UPPER
@@ -468,6 +578,7 @@ monthly.historyDepth := monthlyHistory
 monthly.fillOpacity := monthlyFillOpacity
 monthly.fillRange := monthlyFillRange
 monthly.labelsEnabled := monthlyLabels
+monthly.pricesEnabled := monthlyPrices
 monthly.labelSize := label_font_size(monthlyLabelSize)
 monthly.showUpper := monthlyBandSide != BAND_LOWER
 monthly.showLower := monthlyBandSide != BAND_UPPER
@@ -475,10 +586,35 @@ monthly.band1Enabled := monthlyBand1
 monthly.band2Enabled := monthlyBand2
 monthly.band3Enabled := monthlyBand3 and monthlyBandSide != BAND_SANDWICH
 
+quarterly.historyDepth := quarterlyHistory
+quarterly.fillOpacity := quarterlyFillOpacity
+quarterly.fillRange := quarterlyFillRange
+quarterly.labelsEnabled := quarterlyLabels
+quarterly.pricesEnabled := quarterlyPrices
+quarterly.labelSize := label_font_size(quarterlyLabelSize)
+quarterly.showUpper := quarterlyBandSide != BAND_LOWER
+quarterly.showLower := quarterlyBandSide != BAND_UPPER
+quarterly.band1Enabled := quarterlyBand1
+quarterly.band2Enabled := quarterlyBand2
+quarterly.band3Enabled := quarterlyBand3 and quarterlyBandSide != BAND_SANDWICH
+
+yearly.historyDepth := yearlyHistory
+yearly.fillOpacity := yearlyFillOpacity
+yearly.fillRange := yearlyFillRange
+yearly.labelsEnabled := yearlyLabels
+yearly.pricesEnabled := yearlyPrices
+yearly.labelSize := label_font_size(yearlyLabelSize)
+yearly.showUpper := yearlyBandSide != BAND_LOWER
+yearly.showLower := yearlyBandSide != BAND_UPPER
+yearly.band1Enabled := yearlyBand1
+yearly.band2Enabled := yearlyBand2
+yearly.band3Enabled := yearlyBand3 and yearlyBandSide != BAND_SANDWICH
+
 ny.historyDepth := nyHistory
 ny.fillOpacity := nyFillOpacity
 ny.fillRange := nyFillRange
 ny.labelsEnabled := nyLabels
+ny.pricesEnabled := nyPrices
 ny.labelSize := label_font_size(nyLabelSize)
 ny.showUpper := nyBandSide != BAND_LOWER
 ny.showLower := nyBandSide != BAND_UPPER
@@ -490,6 +626,7 @@ overnight.historyDepth := overnightHistory
 overnight.fillOpacity := overnightFillOpacity
 overnight.fillRange := overnightFillRange
 overnight.labelsEnabled := overnightLabels
+overnight.pricesEnabled := overnightPrices
 overnight.labelSize := label_font_size(overnightLabelSize)
 overnight.showUpper := overnightBandSide != BAND_LOWER
 overnight.showLower := overnightBandSide != BAND_UPPER
@@ -497,16 +634,15 @@ overnight.band1Enabled := overnightBand1
 overnight.band2Enabled := overnightBand2
 overnight.band3Enabled := overnightBand3 and overnightBandSide != BAND_SANDWICH
 
-// 1σ and 2σ stay recessed (high transparency); 3σ is the dominant outer level (low transparency).
+// 3σ reads strongest (low transparency); 1σ/2σ stay recessed.
 band_transparency_for_multiplier(float multiplier) =>
     multiplier >= BAND_3_SIGMA ? DEFAULT_BAND_3_SIGMA_TRANSPARENCY : multiplier >= BAND_2_SIGMA ? DEFAULT_BAND_2_SIGMA_TRANSPARENCY : DEFAULT_BAND_1_SIGMA_TRANSPARENCY
 
-// Width separates 2σ/3σ from 1σ; transparency makes 3σ read strongest.
+// 2σ/3σ render wider than 1σ.
 band_width_for_multiplier(float multiplier) =>
     multiplier >= BAND_3_SIGMA ? BAND_3_SIGMA_WIDTH : multiplier >= BAND_2_SIGMA ? BAND_2_SIGMA_WIDTH : BAND_1_SIGMA_WIDTH
 
-// ANCHOR STYLE — the centerline carries the group's identity: full-saturation colour plus the width tier.
-// Bands share the colour at increasing transparency; 3σ breaks that pattern to read as the dominant outer level.
+// ANCHOR STYLE — centerline = full colour + width tier; bands reuse the colour at rising transparency (3σ excepted).
 apply_anchor_style(VwapAnchor anchor, color anchorColor, int width) =>
     anchor.lineColor := anchorColor
     anchor.lineWidth := width
@@ -520,10 +656,12 @@ apply_anchor_style(VwapAnchor anchor, color anchorColor, int width) =>
 apply_anchor_style(daily,        dailyColor,     VWAP_WIDTH_DEFAULT)
 apply_anchor_style(weekly,       weeklyColor,    VWAP_WIDTH_WEEKLY)
 apply_anchor_style(monthly,      monthlyColor,   VWAP_WIDTH_DEFAULT)
+apply_anchor_style(quarterly,    quarterlyColor, VWAP_WIDTH_DEFAULT)
+apply_anchor_style(yearly,       yearlyColor,    VWAP_WIDTH_DEFAULT)
 apply_anchor_style(ny,           nyColor,        VWAP_WIDTH_DEFAULT)
 apply_anchor_style(overnight,    overnightColor, VWAP_WIDTH_DEFAULT)
 
-// QUICK FILTER — resolve each anchor's effective enable: All respects the per-group toggle; every other preset forces its set on and the rest off
+// QUICK FILTER — resolve each anchor's effective enable: All respects per-group toggles; presets force their set on, rest off
 
 in_quick_filter(string name) =>
     switch quickFilter
@@ -535,6 +673,10 @@ in_quick_filter(string name) =>
         FILTER_DAILY_WEEKLY_NY        => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_NY
         FILTER_DAILY_WEEKLY_MONTHLY   => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_MONTHLY
         FILTER_MONTHLY                => name == NAME_MONTHLY
+        FILTER_QUARTERLY              => name == NAME_QUARTERLY
+        FILTER_YEARLY                 => name == NAME_YEARLY
+        FILTER_QUARTERLY_YEARLY       => name == NAME_QUARTERLY or name == NAME_YEARLY
+        FILTER_MONTHLY_QUARTERLY_YEARLY => name == NAME_MONTHLY or name == NAME_QUARTERLY or name == NAME_YEARLY
         FILTER_DAILY_WEEKLY_OVERNIGHT => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_OVERNIGHT
         FILTER_DAILY_OVERNIGHT        => name == NAME_DAILY or name == NAME_OVERNIGHT
         => false
@@ -545,12 +687,16 @@ filter_enabled(string name, bool individualShow) =>
 dailyEnabled        = filter_enabled(NAME_DAILY,         dailyShow)
 weeklyEnabled       = filter_enabled(NAME_WEEKLY,        weeklyShow)
 monthlyEnabled      = filter_enabled(NAME_MONTHLY,       monthlyShow)
+quarterlyEnabled    = filter_enabled(NAME_QUARTERLY,     quarterlyShow)
+yearlyEnabled       = filter_enabled(NAME_YEARLY,        yearlyShow)
 nyEnabled           = filter_enabled(NAME_NY,            nyShow)
 overnightEnabled    = filter_enabled(NAME_OVERNIGHT,     overnightShow)
 
 dailyShown     = dailyEnabled     and chartSecs < secsPerDay
 weeklyShown    = weeklyEnabled    and chartSecs < secsPerWeek
 monthlyShown   = monthlyEnabled   and chartSecs < secsPerMonth
+quarterlyShown = quarterlyEnabled and chartSecs < secsPerQuarter
+yearlyShown    = yearlyEnabled    and chartSecs < secsPerYear
 nyShown        = nyEnabled        and chartSecs < secsPerDay
 overnightShown = overnightEnabled and chartSecs < secsPerDay
 nyAccumulating = nyShown and (inNYSession or within_extension(nyExtensionCutoff))
@@ -559,18 +705,23 @@ overnightAccumulating = overnightShown and (inOvernightSession or within_extensi
 update_anchor(daily,     dailyShown,     dailyShown,                            dayChange,     dailyVwap,     dailyStdev)
 update_anchor(weekly,    weeklyShown,    weeklyShown,                           weekChange,    weeklyVwap,    weeklyStdev)
 update_anchor(monthly,   monthlyShown,   monthlyShown,                          monthChange,   monthlyVwap,   monthlyStdev)
+update_anchor(quarterly, quarterlyShown, quarterlyShown,                        quarterChange, quarterlyVwap, quarterlyStdev)
+update_anchor(yearly,    yearlyShown,    yearlyShown,                           yearChange,    yearlyVwap,    yearlyStdev)
 update_anchor(ny,        nyShown,        nyAccumulating,                        nyOpen,        nyVwap,        nyStdev)
 update_anchor(overnight, overnightShown, overnightAccumulating,                 overnightOpen, overnightVwap, overnightStdev)
 
 if barstate.islast
+    resolve_duplicate_display(duplicatePriority)
     draw_current_period(daily)
     draw_current_period(weekly)
     draw_current_period(monthly)
+    draw_current_period(quarterly)
+    draw_current_period(yearly)
     draw_current_period(ny)
     draw_current_period(overnight)
 
 // REFERENCE TABLE — one row per active line/band: colour (RGB + transparency) and width.
-// count_visible_rows and add_anchor_rows MUST use identical inclusion predicates or the table overflows.
+// count_visible_rows and add_anchor_rows MUST share inclusion predicates or the table overflows.
 
 add_ref_row(table tbl, int row, string label, color clr, int width, string fillRange, string fillOpacity) =>
     table.cell(tbl, 0, row, label, text_size=size.small, text_color=color.black)
@@ -599,7 +750,7 @@ add_anchor_rows(table tbl, int row, string name, bool show, VwapAnchor anchor) =
     r
 
 if showTable and barstate.islast
-    int visibleRows = 1 + count_visible_rows(dailyEnabled, daily) + count_visible_rows(weeklyEnabled, weekly) + count_visible_rows(monthlyEnabled, monthly) + count_visible_rows(nyEnabled, ny) + count_visible_rows(overnightEnabled, overnight)
+    int visibleRows = 1 + count_visible_rows(daily.drawVisible, daily) + count_visible_rows(weekly.drawVisible, weekly) + count_visible_rows(monthly.drawVisible, monthly) + count_visible_rows(quarterly.drawVisible, quarterly) + count_visible_rows(yearly.drawVisible, yearly) + count_visible_rows(ny.drawVisible, ny) + count_visible_rows(overnight.drawVisible, overnight)
     var table refTable = table.new(position.top_right, 6, math.max(visibleRows, 1), bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
     table.cell(refTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(refTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -608,8 +759,10 @@ if showTable and barstate.islast
     table.cell(refTable, 4, 0, "Fill", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(refTable, 5, 0, "Opacity", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     int row = 1
-    row := add_anchor_rows(refTable, row, NAME_DAILY,     dailyEnabled,     daily)
-    row := add_anchor_rows(refTable, row, NAME_WEEKLY,    weeklyEnabled,    weekly)
-    row := add_anchor_rows(refTable, row, NAME_MONTHLY,   monthlyEnabled,   monthly)
-    row := add_anchor_rows(refTable, row, NAME_NY,        nyEnabled,        ny)
-    row := add_anchor_rows(refTable, row, NAME_OVERNIGHT, overnightEnabled, overnight)
+    row := add_anchor_rows(refTable, row, daily.displayName,     daily.drawVisible,     daily)
+    row := add_anchor_rows(refTable, row, weekly.displayName,    weekly.drawVisible,    weekly)
+    row := add_anchor_rows(refTable, row, monthly.displayName,   monthly.drawVisible,   monthly)
+    row := add_anchor_rows(refTable, row, quarterly.displayName, quarterly.drawVisible, quarterly)
+    row := add_anchor_rows(refTable, row, yearly.displayName,    yearly.drawVisible,    yearly)
+    row := add_anchor_rows(refTable, row, ny.displayName,        ny.drawVisible,        ny)
+    row := add_anchor_rows(refTable, row, overnight.displayName, overnight.drawVisible, overnight)
