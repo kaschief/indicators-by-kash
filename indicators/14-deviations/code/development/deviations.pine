@@ -103,6 +103,8 @@ type SessionData
     int provisionalLowTime
     line highPendingLine
     line lowPendingLine
+    label highPendingLabel
+    label lowPendingLabel
     // Deviation extension (extends deviation zones beyond session end)
     int deviationExtendMs
     bool dev1HitUpper
@@ -195,6 +197,8 @@ MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 1
 MITIGATION_618_LINE_WIDTH = 1
 MITIGATION_PENDING_LINE_WIDTH = 1
+PENDING_LABEL_TRANSPARENCY_REDUCTION = 55.0
+PENDING_LABEL_TRANSPARENCY_MAX = 12.0
 
 // Mute overnight color
 const color DEFAULT_OVERNIGHT_MUTE_COLOR = color.new(color.rgb(255, 255, 255), 20)
@@ -283,6 +287,7 @@ maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_
 // ═══════════════════════════════════════════════════════════════════════════
 
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
+showPendingLabels = input.bool(false, "Label Provisional Lines", group=GROUP_MITIGATION, tooltip="Adds a right-edge session label to provisional (dashed) mitigation lines so you can identify which session each dashed line belongs to on a busy chart.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Labels
@@ -707,6 +712,21 @@ draw_provisional_breach_lines(int origin_time, float level, color mit_color) =>
     pending_line = line.new(time, level, time, level, color=mit_color, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
     [solid_line, pending_line]
 
+// Label a dashed pending line at its right edge while it's still open; remove it once mitigated
+resolve_pending_label(bool keep, label lbl, line pending, float level, string txt, color lineClr) =>
+    label result = lbl
+    if keep and not na(pending)
+        color txtClr = color.new(lineClr, math.min(PENDING_LABEL_TRANSPARENCY_MAX, math.max(0.0, color.t(lineClr) - PENDING_LABEL_TRANSPARENCY_REDUCTION)))
+        if na(result)
+            result := label.new(line.get_x2(pending), level, txt, style=label.style_label_left, textcolor=txtClr, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
+        else
+            label.set_x(result, line.get_x2(pending))
+            label.set_y(result, level)
+    else if not na(result)
+        label.delete(result)
+        result := na
+    result
+
 // Convert a bar offset to a time offset (used for xloc.bar_time drawing)
 timeWithOffset(int baseTime, int barOffset) =>
     baseTime + barOffset * BAR_MS
@@ -897,6 +917,10 @@ deleteSession(SessionData sess) =>
         line.delete(sess.highPendingLine)
     if not na(sess.lowPendingLine)
         line.delete(sess.lowPendingLine)
+    if not na(sess.highPendingLabel)
+        label.delete(sess.highPendingLabel)
+    if not na(sess.lowPendingLabel)
+        label.delete(sess.lowPendingLabel)
     // Delete unmitigated lines and labels
     if not na(sess.highUnmitigatedLine)
         line.delete(sess.highUnmitigatedLine)
@@ -1146,6 +1170,8 @@ if validTimeframe
                      provisionalLowTime=na,
                      highPendingLine=na,
                      lowPendingLine=na,
+                     highPendingLabel=na,
+                     lowPendingLabel=na,
                      deviationExtendMs=getSessionExtendMs(i),
                      dev1HitUpper=false,
                      dev1HitLower=false,
@@ -1388,6 +1414,11 @@ if validTimeframe and array.size(sessions) > 0
                 // Extend pending line during overnight (before 05:00 confirmation window)
                 if sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated
                     line.set_x2(sess.lowPendingLine, time)
+
+            // Right-edge session labels on still-open dashed pending lines; removed once mitigated (Unmitigated mode labels these itself)
+            if mitigationMode == SESSION_MITIGATED
+                sess.highPendingLabel := resolve_pending_label(showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
+                sess.lowPendingLabel := resolve_pending_label(showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
 
             // === CONSOLIDATED POST-MITIGATION CLEANUP (single check replaces duplicates) ===
             // Delete unmitigated line/label when HIGH is mitigated
