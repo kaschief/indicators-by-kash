@@ -1,5 +1,5 @@
 //@version=6
-indicator("parallax •", shorttitle="parallax •", overlay=true,
+indicator("parallax •", overlay=true,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // Multi-HTF statistical expansion zones.
@@ -14,6 +14,7 @@ const string GROUP_DISPLAY    = "Display"
 const string GROUP_ZONE       = "Zone Fill"
 const string GROUP_FIB        = "Fibonacci"
 const string GROUP_FIB_LEVELS = "Fibonacci Levels"
+const string GROUP_FIB_LABELS = "Fibonacci Labels"
 const string GROUP_TABLE      = "Color Reference Table"
 
 const float FIB_LEVEL_0   = 0.0
@@ -243,6 +244,20 @@ showFib0   = input.bool(true, "0",     inline="fib_0",   group=GROUP_FIB_LEVELS)
 fibColor0  = input.color(DEFAULT_FIB_0_COLOR,   "", inline="fib_0",   group=GROUP_FIB_LEVELS)
 fibWidth0  = input.int(FIB_DEFAULT_WIDTH, "", minval=FIB_MIN_WIDTH, maxval=FIB_MAX_WIDTH, inline="fib_0",   group=GROUP_FIB_LEVELS)
 
+// ─── Fibonacci Labels ───
+
+const string FL_OFF = "Off"
+const string FL_KEY = "Key"
+const string FL_ALL = "All"
+
+fibLabelLevels   = input.string(FL_OFF, "Levels", options=[FL_OFF, FL_KEY, FL_ALL], inline="fl_head", group=GROUP_FIB_LABELS)
+fibLabelTfPrefix = input.bool(true, "TF prefix", inline="fl_head", group=GROUP_FIB_LABELS,
+     tooltip="Pins a label to each fib line at the live candle so you can tell which line is which slot/level.\n\nLevels — Off · Key (0.786, 0.295) · All (every visible level).\nSlots — tick which slots get labelled.\nTF prefix — \"1W • 0.5\" vs just \"0.5\".")
+fibLabelSlot1 = input.bool(false, "1", inline="fl_slots", group=GROUP_FIB_LABELS)
+fibLabelSlot2 = input.bool(false, "2", inline="fl_slots", group=GROUP_FIB_LABELS)
+fibLabelSlot3 = input.bool(true,  "3", inline="fl_slots", group=GROUP_FIB_LABELS)
+fibLabelSlot4 = input.bool(true,  "4", inline="fl_slots", group=GROUP_FIB_LABELS, tooltip="Which slots get labelled — tick the ones you need to tell apart.")
+
 showMidline  = input.bool(false, "Midline", inline="lvl_m", group=GROUP_DISPLAY,
      tooltip="50% line through each zone — midpoint between Inner and Outer on the upper side, and again on the lower side. Two lines per slot. Color is independent so the midline can be visually distinct from slot identity.")
 midlineColor = input.color(color.new(color.rgb(99, 99, 99), 70), "", inline="lvl_m", group=GROUP_DISPLAY)
@@ -400,12 +415,13 @@ type SlotState
     line  midDn
     line  distP
     line  distM
-    array<line> fibLines      // current-zone fib level lines (up to 9)
-    array<line> histFibLines  // historical fib level lines, capped at (fibHistory - 1) × 9 per slot
+    array<line>  fibLines      // current-zone fib level lines (up to 9)
+    array<line>  histFibLines  // historical fib level lines, capped at (fibHistory - 1) × 9 per slot
+    array<label> fibLabels     // current-zone right-edge fib labels (up to 9)
 
 new_slot() =>
     SlotState.new(histBoxes=array.new<box>(), histDistLines=array.new<line>(),
-         fibLines=array.new<line>(), histFibLines=array.new<line>())
+         fibLines=array.new<line>(), histFibLines=array.new<line>(), fibLabels=array.new<label>())
 
 var SlotState slot1 = new_slot()
 var SlotState slot2 = new_slot()
@@ -432,14 +448,20 @@ compute_levels(float htfO, float medHO, float meanHO, float stdHO, float medOL, 
      htfO - meanOL - k * stdOL]
 
 // Pushes one line per visible fib level into `target`. Anchors define 0% / 100% of the fib range.
-push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost) =>
+push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost,
+               array<label> labelTarget, string tfLabel, bool drawLabels) =>
     if not na(anchorHigh) and not na(anchorLow)
         float fibRange = anchorHigh - anchorLow
 
-        shows  = array.from(showFib100, showFib786, showFib705, showFib618, showFib50, showFib382, showFib295, showFib214, showFib0)
-        levels = array.from(FIB_LEVEL_100, FIB_LEVEL_786, FIB_LEVEL_705, FIB_LEVEL_618, FIB_LEVEL_50, FIB_LEVEL_382, FIB_LEVEL_295, FIB_LEVEL_214, FIB_LEVEL_0)
-        colors = array.from(fibColor100, fibColor786, fibColor705, fibColor618, fibColor50, fibColor382, fibColor295, fibColor214, fibColor0)
-        widths = array.from(fibWidth100, fibWidth786, fibWidth705, fibWidth618, fibWidth50, fibWidth382, fibWidth295, fibWidth214, fibWidth0)
+        shows      = array.from(showFib100, showFib786, showFib705, showFib618, showFib50, showFib382, showFib295, showFib214, showFib0)
+        levels     = array.from(FIB_LEVEL_100, FIB_LEVEL_786, FIB_LEVEL_705, FIB_LEVEL_618, FIB_LEVEL_50, FIB_LEVEL_382, FIB_LEVEL_295, FIB_LEVEL_214, FIB_LEVEL_0)
+        colors     = array.from(fibColor100, fibColor786, fibColor705, fibColor618, fibColor50, fibColor382, fibColor295, fibColor214, fibColor0)
+        widths     = array.from(fibWidth100, fibWidth786, fibWidth705, fibWidth618, fibWidth50, fibWidth382, fibWidth295, fibWidth214, fibWidth0)
+        ratioTexts = array.from("1.0", "0.786", "0.705", "0.618", "0.5", "0.382", "0.295", "0.214", "0")
+        // "Key" = 0.786, 0.295.
+        isKeyLevel = array.from(false, true, false, false, false, false, true, false, false)
+
+        bool keyOnly = fibLabelLevels == FL_KEY
 
         for i = 0 to 8
             if array.get(shows, i)
@@ -449,8 +471,16 @@ push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, floa
                 color clr     = color.new(baseClr, math.min(int(color.t(baseClr)) + transparencyBoost, 95))
                 array.push(target, line.new(leftT, price, rightT, price, color=clr, style=line.style_dotted, width=array.get(widths, i), xloc=xloc.bar_time))
 
-draw_slot_fib(SlotState s, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost) =>
-    push_fib_lines(s.fibLines, leftT, rightT, anchorHigh, anchorLow, transparencyBoost)
+                if drawLabels and (not keyOnly or array.get(isKeyLevel, i))
+                    // Tint label text to match its line, but clamp transparency so it stays legible.
+                    color  txtClr  = color.new(baseClr, math.min(int(color.t(baseClr)), 50))
+                    string lblText = fibLabelTfPrefix ? tfLabel + " • " + array.get(ratioTexts, i) : array.get(ratioTexts, i)
+                    array.push(labelTarget, label.new(rightT, price, lblText,
+                         xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white, 100),
+                         textcolor=txtClr, size=size.small))
+
+draw_slot_fib(SlotState s, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost, string tfLabel, bool drawLabels) =>
+    push_fib_lines(s.fibLines, leftT, rightT, anchorHigh, anchorLow, transparencyBoost, s.fibLabels, tfLabel, drawLabels)
 
 // On HTF transition, [1] reads give us the just-closed bar's open + the stats as of its
 // start (i.e. excluding it) — exactly what was used to project that bar in real time.
@@ -504,13 +534,13 @@ update_slot(SlotState s, bool valid, string htfSafe, float htfO, float runHigh, 
                 float prevRunLow    = runLow[1]
                 float histAnchorHigh = fibTrailing ? math.max(h_outH, prevRunHigh) : h_outH
                 float histAnchorLow  = fibTrailing ? math.min(h_outL, prevRunLow)  : h_outL
-                push_fib_lines(s.histFibLines, bar_l, bar_r, histAnchorHigh, histAnchorLow, fibFade)
+                push_fib_lines(s.histFibLines, bar_l, bar_r, histAnchorHigh, histAnchorLow, fibFade, s.fibLabels, htfLabel, false)
                 while array.size(s.histFibLines) > fibHistCap
                     line.delete(array.shift(s.histFibLines))
 
 draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, float htfH, float htfL, color slotColor, string htfLabel,
                    float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
-                   string slotLabelSize, bool fibEnabled, int fibTransparencyBoost) =>
+                   string slotLabelSize, bool fibEnabled, int fibTransparencyBoost, bool labelSlotEnabled) =>
     // Null after delete so toggling a feature off mid-session leaves no dangling handle.
     if not na(s.fillUp)
         box.delete(s.fillUp)
@@ -544,6 +574,8 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, float htf
         s.distM := na
     while array.size(s.fibLines) > 0
         line.delete(array.pop(s.fibLines))
+    while array.size(s.fibLabels) > 0
+        label.delete(array.pop(s.fibLabels))
 
     if valid and not na(medHO) and not na(medOL)
         [innerHigh, outerHigh, innerLow, outerLow, distPlus, distMinus] = compute_levels(htfO, medHO, meanHO, stdHO, medOL, meanOL, stdOL, distSigmaK)
@@ -576,7 +608,7 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, float htfO, float htf
         if fibEnabled
             float fibAnchorHigh = fibTrailing ? math.max(outerHigh, htfH) : outerHigh
             float fibAnchorLow  = fibTrailing ? math.min(outerLow,  htfL) : outerLow
-            draw_slot_fib(s, leftT, rightT, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost)
+            draw_slot_fib(s, leftT, rightT, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, get_tf_display_label(htfSafe), labelSlotEnabled)
 
 
 // DISPATCH — every bar maintains state per slot
@@ -586,11 +618,17 @@ update_slot(slot2, s2Valid, s2Safe, s2O, s2RunHigh, s2RunLow, slot2Color, s2Zone
 update_slot(slot3, s3Valid, s3Safe, s3O, s3RunHigh, s3RunLow, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, slot3History, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE)
 update_slot(slot4, s4Valid, s4Safe, s4O, s4RunHigh, s4RunLow, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, slot4History, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE)
 
+bool fibLabelsOn = fibLabelLevels != FL_OFF
+bool fibLabel1On = fibLabelsOn and fibLabelSlot1
+bool fibLabel2On = fibLabelsOn and fibLabelSlot2
+bool fibLabel3On = fibLabelsOn and fibLabelSlot3
+bool fibLabel4On = fibLabelsOn and fibLabelSlot4
+
 if barstate.islast
-    draw_slot_current(slot1, s1Valid, s1Safe, s1O, s1RunHigh, s1RunLow, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE)
-    draw_slot_current(slot2, s2Valid, s2Safe, s2O, s2RunHigh, s2RunLow, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE)
-    draw_slot_current(slot3, s3Valid, s3Safe, s3O, s3RunHigh, s3RunLow, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE)
-    draw_slot_current(slot4, s4Valid, s4Safe, s4O, s4RunHigh, s4RunLow, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE)
+    draw_slot_current(slot1, s1Valid, s1Safe, s1O, s1RunHigh, s1RunLow, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE, fibLabel1On)
+    draw_slot_current(slot2, s2Valid, s2Safe, s2O, s2RunHigh, s2RunLow, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE, fibLabel2On)
+    draw_slot_current(slot3, s3Valid, s3Safe, s3O, s3RunHigh, s3RunLow, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLabel3On)
+    draw_slot_current(slot4, s4Valid, s4Safe, s4O, s4RunHigh, s4RunLow, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLabel4On)
 
 // COLOR REFERENCE TABLE
 
