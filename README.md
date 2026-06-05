@@ -61,7 +61,6 @@ indicators-by-kash/
 │   │   └── code/development/adr.pine
 │   └── 17-fvg-atlas/
 │       └── code/development/fvg-atlas.pine
-├── apps/
 ├── PORTFOLIO.md
 └── README.md
 ```
