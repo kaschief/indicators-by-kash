@@ -112,6 +112,7 @@ rthPreviewColor = input.color(DEFAULT_RTH_PREVIEW_COLOR, "", group=GROUP_RTH, in
 rthBorderColor = input.color(DEFAULT_RTH_BORDER_COLOR, LABEL_BORDER_LABEL, group=GROUP_RTH, inline="rth_border")
 hideFilledRTH = input.bool(false, LABEL_HIDE_FILLED, group=GROUP_RTH, inline="rth_border")
 preserveTodayFilledRTH = input.bool(true, "Preserve Today", group=GROUP_RTH, inline="rth_today", tooltip="Keep the current trading day RTH gap visible in its anchored historical position even after it fills. This is a display exception, not a floating rule: in Floating Only it stays anchored while a still-open RTH continues to float.")
+nearestRTHCount = input.int(0, "Float Nearest Unfilled", minval=0, maxval=10, group=GROUP_RTH, inline="rth_nearest", tooltip="Floats the N unfilled RTH gaps closest to price (either direction), in addition to the most-recent RTH float. 0 = off. Requires a floating Display Mode.")
 
 showNWOGInput = input.bool(true, "NWOG Gaps", group=GROUP_NWOG, inline="nwog")
 nwogLimit = input.int(10, "", minval=1, maxval=50, group=GROUP_NWOG, inline="nwog")
@@ -207,6 +208,7 @@ var DraftGap rthDraft = na
 var FloatingGap floatingRTH = na
 var FloatingGap floatingNWOG = na
 var FloatingGap floatingNDOG = na
+var array<FloatingGap> nearestRTHFloats = array.new<FloatingGap>()
 var array<int> chartBarTimes = array.new<int>()
 var int chartBarTimesOffset = 0
 
@@ -790,6 +792,7 @@ if barstate.islast
     floatingRTHRendered = false
     floatingNWOGRendered = false
     floatingNDOGRendered = false
+    nearestRTHRendered = 0
 
     // Floating selection tracks only still-open gaps per type. Filled gaps never float;
     // preserved filled-today RTH is a separate anchored-display exception, handled in the render branch.
@@ -807,6 +810,33 @@ if barstate.islast
             else if not gap.filled and gap.gapType == GapType.ndog and not isSharedNdogGeometry(gap) and gap.creationBar > mostRecentUnfilledNDOG
                 mostRecentUnfilledNDOG := gap.creationBar
 
+        // Nearest-to-price RTH selection: rank still-open RTH gaps by absolute distance to price
+        // (0 when price sits inside the gap), then keep the N closest. Direction-agnostic by design —
+        // the trader should not have to reason about above vs below. Gated to floating Display Modes,
+        // since this is a float; the most-recent unfilled RTH is excluded so it is never drawn twice.
+        nearestRTHBars = array.new<int>()
+        if useFloating and showRTH and nearestRTHCount > 0
+            candidateIdx = array.new<int>()
+            candidateDist = array.new<float>()
+            for i = 0 to array.size(gaps) - 1
+                gap = array.get(gaps, i)
+                if gap.gapType == GapType.rth and not gap.filled and gap.creationBar != mostRecentUnfilledRTH
+                    float dist = close <= gap.top and close >= gap.bottom ? 0.0 : math.min(math.abs(close - gap.top), math.abs(close - gap.bottom))
+                    array.push(candidateIdx, i)
+                    array.push(candidateDist, dist)
+            int picks = math.min(nearestRTHCount, array.size(candidateIdx))
+            if picks > 0
+                for n = 1 to picks
+                    float minDist = 1e18
+                    int minPos = -1
+                    for j = 0 to array.size(candidateDist) - 1
+                        if array.get(candidateDist, j) < minDist
+                            minDist := array.get(candidateDist, j)
+                            minPos := j
+                    if minPos >= 0
+                        array.push(nearestRTHBars, array.get(gaps, array.get(candidateIdx, minPos)).creationBar)
+                        array.set(candidateDist, minPos, 1e18)
+
         displayedRTH = 0
         displayedNWOG = 0
         displayedNDOG = 0
@@ -818,13 +848,15 @@ if barstate.islast
 
             canDisplay = shouldDisplayGap(gap)
             mostRecentBar = gap.gapType == GapType.rth ? mostRecentUnfilledRTH : gap.gapType == GapType.nwog ? mostRecentUnfilledNWOG : mostRecentUnfilledNDOG
-            useFloatingLayout = canDisplay and shouldFloatGap(gap, mostRecentBar)
+            isNearestRTHFloat = gap.gapType == GapType.rth and array.includes(nearestRTHBars, gap.creationBar)
+            useFloatingLayout = canDisplay and (shouldFloatGap(gap, mostRecentBar) or isNearestRTHFloat)
             typeLimit = getDisplayLimit(gap.gapType)
             typeCount = gap.gapType == GapType.rth ? displayedRTH : gap.gapType == GapType.nwog ? displayedNWOG : displayedNDOG
             withinHistoricalLimit = typeCount < typeLimit
 
-            if canDisplay and (floatingOnly or withinHistoricalLimit)
-                if not floatingOnly
+            // Nearest floats bypass the historical limit — they are pinned by proximity to price, not recency.
+            if canDisplay and (floatingOnly or withinHistoricalLimit or isNearestRTHFloat)
+                if not floatingOnly and withinHistoricalLimit
                     if gap.gapType == GapType.rth
                         displayedRTH += 1
                     else if gap.gapType == GapType.nwog
@@ -834,7 +866,12 @@ if barstate.islast
 
                 if useFloatingLayout
                     releaseGapDrawings(gap)
-                    if gap.gapType == GapType.rth
+                    if isNearestRTHFloat
+                        if array.size(nearestRTHFloats) <= nearestRTHRendered
+                            array.push(nearestRTHFloats, createFloatingGap(gap))
+                        updateFloating(array.get(nearestRTHFloats, nearestRTHRendered), gap)
+                        nearestRTHRendered += 1
+                    else if gap.gapType == GapType.rth
                         if na(floatingRTH)
                             floatingRTH := createFloatingGap(gap)
                         updateFloating(floatingRTH, gap)
@@ -866,6 +903,11 @@ if barstate.islast
         hideFloatingDrawings(floatingNWOG)
     if not floatingNDOGRendered and not na(floatingNDOG)
         hideFloatingDrawings(floatingNDOG)
+
+    // Hide any nearest-float pool slots not claimed this bar (count dropped or feature toggled off).
+    if array.size(nearestRTHFloats) > nearestRTHRendered
+        for i = nearestRTHRendered to array.size(nearestRTHFloats) - 1
+            hideFloatingDrawings(array.get(nearestRTHFloats, i))
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
