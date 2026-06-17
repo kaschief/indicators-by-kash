@@ -460,12 +460,13 @@ add_band(PeriodLines period, VwapAnchor anchor, bool lineEnabled, bool fillEnabl
         float lowerDev = anchor.showLower ? -deviations : 0.0
         array.push(period.polylines, build_fill_band(anchor.barTimes, anchor.vwapValues, anchor.stdevValues, upperDev, lowerDev, bandColor, 100 - anchor.fillOpacity))
 
-build_period(VwapAnchor anchor, bool suppressFill) =>
+build_period(VwapAnchor anchor, bool drawLines, string fillRange) =>
     PeriodLines period = PeriodLines.new(array.new<polyline>())
-    array.push(period.polylines, build_offset_line(anchor.barTimes, anchor.vwapValues, anchor.stdevValues, 0, anchor.lineColor, anchor.lineWidth))
-    add_band(period, anchor, anchor.band1Enabled and showBands, not suppressFill and showBands and anchor.fillRange == FILL_RANGE_1_SIGMA, BAND_1_SIGMA, anchor.band1Color, anchor.band1Width)
-    add_band(period, anchor, anchor.band2Enabled and showBands, not suppressFill and showBands and anchor.fillRange == FILL_RANGE_2_SIGMA, BAND_2_SIGMA, anchor.band2Color, anchor.band2Width)
-    add_band(period, anchor, anchor.band3Enabled and showBands, not suppressFill and showBands and anchor.fillRange == FILL_RANGE_3_SIGMA, BAND_3_SIGMA, anchor.band3Color, anchor.band3Width)
+    if drawLines
+        array.push(period.polylines, build_offset_line(anchor.barTimes, anchor.vwapValues, anchor.stdevValues, 0, anchor.lineColor, anchor.lineWidth))
+    add_band(period, anchor, drawLines and anchor.band1Enabled and showBands, showBands and fillRange == FILL_RANGE_1_SIGMA, BAND_1_SIGMA, anchor.band1Color, anchor.band1Width)
+    add_band(period, anchor, drawLines and anchor.band2Enabled and showBands, showBands and fillRange == FILL_RANGE_2_SIGMA, BAND_2_SIGMA, anchor.band2Color, anchor.band2Width)
+    add_band(period, anchor, drawLines and anchor.band3Enabled and showBands, showBands and fillRange == FILL_RANGE_3_SIGMA, BAND_3_SIGMA, anchor.band3Color, anchor.band3Width)
     period
 
 delete_period(PeriodLines period) =>
@@ -474,20 +475,19 @@ delete_period(PeriodLines period) =>
 
 // Archive the completed period to history, trim to depth (current period is drawn live)
 
-archive_period(VwapAnchor anchor, bool suppressFill) =>
+archive_period(VwapAnchor anchor, string fillRange) =>
     if array.size(anchor.barTimes) >= 2
-        array.push(anchor.history, build_period(anchor, suppressFill))
+        array.push(anchor.history, build_period(anchor, true, fillRange))
         while array.size(anchor.history) > anchor.historyDepth - 1
             delete_period(array.shift(anchor.history))
     array.clear(anchor.barTimes)
     array.clear(anchor.vwapValues)
     array.clear(anchor.stdevValues)
 
-// FILL OWNERSHIP — in an overlap, only the highest-priority anchor with fill enabled draws the fill.
-// A lower anchor suppresses its own fill when a higher-priority anchor coincides over its span AND has
-// fill enabled. If every higher coinciding anchor has fill off, the lower keeps its fill (the fallback).
-// Both anchors share a period start and identical VWAP/stdev while coinciding, so matching the start and
-// the value at the last shared bar is sufficient to confirm the whole span coincides.
+// FILL OWNERSHIP — coinciding anchors share one fill: the anchor with the WIDEST fill range owns it
+// (ties broken by priority), everyone else draws none. The owner's fill renders even when its line is
+// collapsed away as a duplicate, so the widest fill always shows. Coincidence: same period start and
+// same VWAP/stdev at the last shared bar (identical inputs ⇒ the whole span coincides).
 
 periods_coincide(VwapAnchor lower, VwapAnchor higher) =>
     int lowerCount  = array.size(lower.barTimes)
@@ -501,23 +501,37 @@ periods_coincide(VwapAnchor lower, VwapAnchor higher) =>
 anchor_fill_enabled(VwapAnchor anchor) =>
     anchor.visible and showBands and anchor.fillRange != FILL_RANGE_NONE
 
-// Walk the shared ranking high→low until we reach this anchor; suppress if any earlier (higher) anchor
-// coincides over this span and has fill enabled.
-fill_suppressed_by_higher(VwapAnchor anchor, array<VwapAnchor> byPriority) =>
-    bool suppress = false
-    for higher in byPriority
-        if higher.name == anchor.name
-            break
-        if anchor_fill_enabled(higher) and periods_coincide(anchor, higher)
-            suppress := true
-            break
-    suppress
+fill_rank(string fillRange) =>
+    switch fillRange
+        FILL_RANGE_1_SIGMA => 1
+        FILL_RANGE_2_SIGMA => 2
+        FILL_RANGE_3_SIGMA => 3
+        => 0
+
+// The fill this anchor should draw: its own range if it holds the widest fill among coinciding anchors
+// and no higher-priority coinciding anchor ties that width; otherwise none.
+owned_fill_range(VwapAnchor anchor, array<VwapAnchor> byPriority) =>
+    string result = FILL_RANGE_NONE
+    if anchor_fill_enabled(anchor)
+        int selfRank = fill_rank(anchor.fillRange)
+        bool outranked = false
+        bool passedSelf = false
+        for other in byPriority
+            if other.name == anchor.name
+                passedSelf := true
+            else if anchor_fill_enabled(other) and periods_coincide(anchor, other)
+                int otherRank = fill_rank(other.fillRange)
+                // A wider coincider owns it; an equal-width one owns it only if higher priority (before self)
+                if otherRank > selfRank or (otherRank == selfRank and not passedSelf)
+                    outranked := true
+        result := outranked ? FILL_RANGE_NONE : anchor.fillRange
+    result
 
 // shown = keep drawn (incl. finished session); accumulating = add points (only inside the session window)
 update_anchor(VwapAnchor anchor, bool shown, bool accumulating, bool isNewPeriod, float vwapValue, float stdevValue, array<VwapAnchor> byPriority) =>
     anchor.visible := shown
     if isNewPeriod
-        archive_period(anchor, fill_suppressed_by_higher(anchor, byPriority))
+        archive_period(anchor, owned_fill_range(anchor, byPriority))
     if accumulating and not na(vwapValue) and not na(stdevValue)
         array.push(anchor.barTimes, time)
         array.push(anchor.vwapValues, vwapValue)
@@ -596,7 +610,7 @@ add_band_labels(VwapAnchor anchor, bool show, float multiplier, color bandColor)
 
 // Redraw the live current period: line, name label, and every enabled σ band tag
 
-draw_current_period(VwapAnchor anchor, bool suppressFill) =>
+draw_current_period(VwapAnchor anchor, string fillRange) =>
     if not na(anchor.currentPeriod)
         delete_period(anchor.currentPeriod)
     label.delete(anchor.nameLabel)
@@ -604,9 +618,11 @@ draw_current_period(VwapAnchor anchor, bool suppressFill) =>
         label.delete(bandLabel)
     array.clear(anchor.bandLabels)
     anchor.currentPeriod := na
-    if anchor.drawVisible and array.size(anchor.barTimes) >= 2
-        anchor.currentPeriod := build_period(anchor, suppressFill)
-        if anchor.labelsEnabled
+    // Draw when the line is visible, OR when this anchor owns a fill even though its line is collapsed away
+    bool hasOwnedFill = showBands and fillRange != FILL_RANGE_NONE
+    if (anchor.drawVisible or hasOwnedFill) and array.size(anchor.barTimes) >= 2
+        anchor.currentPeriod := build_period(anchor, anchor.drawVisible, fillRange)
+        if anchor.drawVisible and anchor.labelsEnabled
             float vwapPrice = array.last(anchor.vwapValues)
             anchor.nameLabel := new_line_label(array.last(anchor.barTimes), vwapPrice, line_label_text(anchor, PREFIX_VWAP + anchor.displayName + SUFFIX_VWAP, vwapPrice), anchor.lineColor, anchor.labelSize)
             add_band_labels(anchor, anchor.band1Enabled and showBands, BAND_1_SIGMA, anchor.band1Color)
@@ -904,14 +920,14 @@ if rollingShown and barstate.isconfirmed and not na(hlc3) and not na(volume)
 
 if barstate.islast
     resolve_duplicate_display(duplicatePriority)
-    draw_current_period(daily,     fill_suppressed_by_higher(daily,     duplicatePriority))
-    draw_current_period(weekly,    fill_suppressed_by_higher(weekly,    duplicatePriority))
-    draw_current_period(monthly,   fill_suppressed_by_higher(monthly,   duplicatePriority))
-    draw_current_period(quarterly, fill_suppressed_by_higher(quarterly, duplicatePriority))
-    draw_current_period(yearly,    fill_suppressed_by_higher(yearly,    duplicatePriority))
-    draw_current_period(ny,        fill_suppressed_by_higher(ny,        duplicatePriority))
-    draw_current_period(mno,       fill_suppressed_by_higher(mno,       duplicatePriority))
-    draw_current_period(rolling,   fill_suppressed_by_higher(rolling,   duplicatePriority))
+    draw_current_period(daily,     owned_fill_range(daily,     duplicatePriority))
+    draw_current_period(weekly,    owned_fill_range(weekly,    duplicatePriority))
+    draw_current_period(monthly,   owned_fill_range(monthly,   duplicatePriority))
+    draw_current_period(quarterly, owned_fill_range(quarterly, duplicatePriority))
+    draw_current_period(yearly,    owned_fill_range(yearly,    duplicatePriority))
+    draw_current_period(ny,        owned_fill_range(ny,        duplicatePriority))
+    draw_current_period(mno,       owned_fill_range(mno,       duplicatePriority))
+    draw_current_period(rolling,   owned_fill_range(rolling,   duplicatePriority))
 
 // REFERENCE TABLE — one row per active line/band: colour (RGB + transparency) and width.
 // count_visible_rows and add_anchor_rows MUST share inclusion predicates or the table overflows.
