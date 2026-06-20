@@ -1,9 +1,7 @@
 //@version=6
 indicator("elderwand •", overlay=true, max_polylines_count=100, max_labels_count=100)
 
-// Anchored VWAPs as polylines: per-band colour/width, last-N history, gap-safe sessions.
-// Polyline cap = 100 (platform max). ~8 polylines/period × 7 anchors × History can exceed it
-// → Pine silently drops the oldest. Defaults (History=1) ≈ 56; keep History modest.
+// max_polylines_count=100 is the platform cap; high History can exceed it and Pine silently drops the oldest.
 
 // CONSTANTS
 
@@ -25,7 +23,7 @@ const int    ROLLING_SESSIONS_MAX     = 60
 // One source of truth for session windows so groups, detection, and cutoffs stay in sync.
 const string SESSION_NY             = "0930-1600"
 const string SESSION_NY_DISPLAY     = "09:30–16:00"
-// 18:00 ET CME reopen edge — drives Daily Holiday Mode and NY's "to next open" extension.
+// 18:00 ET CME reopen edge — drives Skip Holiday Resets and NY's "to next open" extension.
 // Only the 18:00 rising edge matters here, so the end time is arbitrary.
 const string SESSION_DAILY_REOPEN   = "1800-0930"
 const int    REOPEN_HOUR_18         = 18
@@ -224,7 +222,7 @@ dailyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "
 dailyBand1Choice = input.string(BAND_OFF, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="d_bands", group=GROUP_DAILY)
 dailyBand2Choice = input.string(DAILY_BAND_2_SIGMA_WIDTH, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="d_bands", group=GROUP_DAILY)
 dailyBand3Choice = input.string(DAILY_BAND_3_SIGMA_WIDTH, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="d_bands", group=GROUP_DAILY, tooltip=TOOLTIP_BAND_WIDTH)
-dailyHolidayMode = input.bool(true, "Holiday Mode", group=GROUP_DAILY, tooltip="Anchors the Daily VWAP to the 18:00 ET reopen instead of TradingView's daily bar. On CME holidays (e.g. Memorial Day) TradingView merges the shortened session into one 'D' bar, so the Daily VWAP would otherwise not restart at the post-holiday 18:00 reopen — this forces it to.")
+dailySkipHolidayResets = input.bool(true, "Skip Holiday Resets", group=GROUP_DAILY, tooltip="Anchors the Daily VWAP to the 18:00 ET reopen instead of TradingView's daily bar. On CME holidays (e.g. Memorial Day) TradingView merges the shortened session into one 'D' bar, so the Daily VWAP would otherwise not restart at the post-holiday 18:00 reopen — this forces it to.")
 
 weeklyShow        = input.bool(true, LABEL_ENABLE_WEEKLY, inline="w", group=GROUP_WEEKLY)
 weeklyColor = input.color(DEFAULT_WEEKLY_COLOR, "", inline="w", group=GROUP_WEEKLY, tooltip=TOOLTIP_MAIN)
@@ -239,6 +237,7 @@ weeklyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", 
 weeklyBand1Choice = input.string(BAND_OFF, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="w_bands", group=GROUP_WEEKLY)
 weeklyBand2Choice = input.string(WEEKLY_BAND_2_SIGMA_WIDTH, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="w_bands", group=GROUP_WEEKLY)
 weeklyBand3Choice = input.string(WEEKLY_BAND_3_SIGMA_WIDTH, "", options=[BAND_OFF, "1", "2", "3", "4", "5"], inline="w_bands", group=GROUP_WEEKLY, tooltip=TOOLTIP_BAND_WIDTH)
+weeklySkipHolidayResets = input.bool(true, "Skip Holiday Resets", group=GROUP_WEEKLY, tooltip="Anchors the Weekly VWAP to the Sunday 18:00 ET CME reopen instead of TradingView's weekly bar. On weeks with a Friday holiday (e.g. Juneteenth) TradingView may end the weekly bar early, causing the Weekly VWAP to reset mid-week — this forces it to restart only at the true Sunday reopen.")
 
 mnoShow        = input.bool(true, LABEL_ENABLE_MNO, inline="mn", group=GROUP_MNO)
 mnoColor = input.color(DEFAULT_MNO_COLOR, "", inline="mn", group=GROUP_MNO, tooltip=TOOLTIP_MAIN)
@@ -348,9 +347,11 @@ dailyReopenOpen = inDailyReopen and not inDailyReopen[1]
 // rolling over. This is dynamic across 24/7 and session-based assets, and naturally skips no-data
 // holidays while counting half-days exactly once. Drives both the MNO reset and the rolling window.
 mnoOpen    = na(time[1]) or dayofmonth(time, TIMEZONE) != dayofmonth(time[1], TIMEZONE)
-// Holiday Mode: anchor the Daily VWAP to the 18:00 ET reopen so it restarts even when
+// Skip Holiday Resets: anchor the Daily VWAP to the 18:00 ET reopen so it restarts even when
 // TradingView merges a holiday session into one "D" bar (timeframe.change("D") wouldn't fire).
-dailyChange     = dailyHolidayMode ? dailyReopenOpen : dayChange
+dailyChange      = dailySkipHolidayResets ? dailyReopenOpen : dayChange
+weeklyReopenOpen = dailyReopenOpen and dayofweek(time, TIMEZONE) == dayofweek.sunday
+weeklyChange     = weeklySkipHolidayResets ? weeklyReopenOpen : weekChange
 
 chartSecs    = timeframe.in_seconds(timeframe.period)
 secsPerDay   = timeframe.in_seconds("1D")
@@ -381,7 +382,7 @@ vwap_daily() =>
     [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
     [value, upperBand - value]
 vwap_weekly() =>
-    bool reset = weekChange or na(hlc3[1])
+    bool reset = weeklyChange or na(hlc3[1])
     [value, upperBand, _] = ta.vwap(hlc3, reset, 1)
     [value, upperBand - value]
 vwap_monthly() =>
@@ -876,7 +877,7 @@ rollingShown   = rollingEnabled   and chartSecs <= secsPerDay
 nyAccumulating = nyShown and (inNYSession or within_extension(nyExtensionCutoff))
 
 update_anchor(daily,     dailyShown,     dailyShown,                            dailyChange,   dailyVwap,     dailyStdev,    duplicatePriority)
-update_anchor(weekly,    weeklyShown,    weeklyShown,                           weekChange,    weeklyVwap,    weeklyStdev,   duplicatePriority)
+update_anchor(weekly,    weeklyShown,    weeklyShown,                           weeklyChange,  weeklyVwap,    weeklyStdev,   duplicatePriority)
 update_anchor(monthly,   monthlyShown,   monthlyShown,                          monthChange,   monthlyVwap,   monthlyStdev,  duplicatePriority)
 update_anchor(quarterly, quarterlyShown, quarterlyShown,                        quarterChange, quarterlyVwap, quarterlyStdev, duplicatePriority)
 update_anchor(yearly,    yearlyShown,    yearlyShown,                           yearChange,    yearlyVwap,    yearlyStdev,   duplicatePriority)
