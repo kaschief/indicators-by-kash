@@ -15,7 +15,7 @@ Indicator title: `revelio • development` — keep the dev suffix during develo
 Four anchors: **RTH, Weekly, New Day Open, Monthly**. Each has parallel `var array` state + a `SessionStyle` built from its inputs.
 - `processSession(...)` — accumulates confirmed bars per anchor; on period boundaries calls `finalizePeriod(...)`.
 - `finalizePeriod(...)` — builds a `Profile`, and (RTH only) handles **short-session merging** before committing to the ring.
-- `renderProfile(Profile, SessionStyle)` — draws histogram (filled polylines), session box, and the level lines+labels at `barstate.islast`. All drawings tracked in `drawnBoxes/Lines/Polylines/Labels` and cleared each render.
+- `renderProfile(Profile, SessionStyle, developingProfileActive)` — draws histogram (filled polylines), session box, and the level lines+labels at `barstate.islast`. The developing flag only recolors the live RTH VAH/VAL + POC + aPOC before cutoff. All drawings tracked in `drawnBoxes/Lines/Polylines/Labels` and cleared each render.
 - `buildProfile(...)` — bins bars into rows → POC, Value Area (VAH/VAL), alternate POC.
 - Merge/normal-span state is **RTH-only**; the 3 continuous anchors pass `mergeDepth=0, combineShorts=false` and share inert `mergeUnused*` buffers.
 
@@ -29,6 +29,7 @@ Four anchors: **RTH, Weekly, New Day Open, Monthly**. Each has parallel `var arr
 7. **Price labels (Task 4)** — ALL sessions now. Per-session inputs on a `*_labels` row: `Price Labels` toggle (default on), bg colour, size (Tiny/Small/Normal/Large/Huge via `toLabelSize`), and a rightward `offset` (bars). Drawn by `drawLevel` only when `style.showLevelLabels and extendRight` (i.e. open/untouched extended levels: POC, VAH, VAL, aPOC). Label placed at `bar_index + offset`, `style_label_left`. Bg colour is in the colour table.
 8. **Detailed Label Names (latest Task 2)** — **global** toggle `showLevelLabelNames` (Display group, default on). Recency labels are date-first, e.g. `Today's VAH • 23456.7` / `Grand Daily VAH • 23456.7`; explicit dates are level-first, e.g. `POC Jun 25 • …`. Helpers: `sessionReference(startTime)` → `LABEL_TODAY` / `LABEL_YESTERDAY` / `Mon DD` (NY date, mirrors Gaps' `monthName`); `BRAND_BULLET = "•"`; level-name constants `LABEL_VAH/LABEL_VAL/LABEL_POC/LABEL_ALTERNATE_POC`.
 9. **Removed "Always Extend"** (`LEVEL_ALWAYS`) entirely — constant, all 4 extension-mode dropdowns/tooltips, and the `levelEndpoint` branch. Now `extendRight` strictly means "extended AND untouched."
+10. **Developing RTH profile styling (Task 6)** — RTH-only `Enable Developing Profile` row adds developing VAH/L colour, developing POC colour, developing aPOC colour, and NY cutoff HH:MM. Applies only to the live RTH profile while before cutoff; VAH/VAL + POC + aPOC lines and labels inherit developing colours. Completed RTH and all non-RTH profiles are unchanged. Colour table includes the three developing colours when enabled.
 
 Key signature: `drawLevel(startTime, endTime, price, lineColor, lineWidth, styleName, extendRight, labelColor, levelName, SessionStyle style)`.
 
@@ -42,9 +43,6 @@ Restated behaviour to confirm with user before coding:
 - "Opened beyond it" measured by the session's **opening price** vs the level, or **any intrabar trade** through it during the open?
 
 Touches `updateMitigation(...)` and/or `levelEndpoint`. RTH mitigation currently gated by `sameSessionOnly and not inWindowNow`.
-
-### Task 6 — active developing RTH value-area styling (NOT started; RTH only first)
-Separate style controls for **today's still-developing** RTH VAH/VAL + POC vs completed historical levels. The developing profile is rendered in `renderSession` via the live `buildProfile(...)` path. Idea: detect "is this the live/developing profile" and apply alternate colour/width/style. Add RTH inputs for Active VAH/VAL + Active POC; extend `SessionStyle` (or pass a flag into `renderProfile`/`drawLevel`). Keep colour table in sync.
 
 ### New Day merge (NOT started; design with user first)
 Extend Short Session Merge to New Day. **Do NOT reuse the span-based detector** — futures early-close holidays trade ~83% of a normal day (too close to full). Needs a **close-time detector** ("did the day stop trading materially before the normal session close?"). The merge *mechanic* (`finalizePeriod`, modes) is already anchor-agnostic; New Day just needs its own detector + inputs + state refs (currently passes inert `mergeUnused*`).
