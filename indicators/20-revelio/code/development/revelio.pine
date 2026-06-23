@@ -1,0 +1,936 @@
+//@version=6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INDICATOR SETUP
+// ═══════════════════════════════════════════════════════════════════════════════
+INDICATOR_MAX_LINES = 500
+INDICATOR_MAX_LABELS = 500
+INDICATOR_MAX_BOXES = 500
+INDICATOR_MAX_POLYLINES = 100
+INDICATOR_TITLE = 'revelio • development'
+
+indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS, max_boxes_count=INDICATOR_MAX_BOXES, max_polylines_count=INDICATOR_MAX_POLYLINES, max_bars_back=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+NY_TIMEZONE = "America/New_York"
+UTC_TIMEZONE = "GMT+0"
+
+// Session specification (RTH has a daily gap; the 24h sessions are anchored by NY calendar below)
+RTH_SESSION = "0930-1600:23456"      // Regular cash session, Mon-Fri (session-based assets)
+RTH_SESSION_ALL_DAYS = "0930-1600:1234567"  // Same 09:30-16:00 NY window every day (24/7 assets)
+WEEKLY_REOPEN_SESSION = "1800-0930"  // Sunday 18:00 NY futures reopen edge
+SUNDAY_REOPEN_START_HOUR = 18
+SECONDS_PER_WEEK = 604800
+ASSET_DETECTION_MAX_LOOKBACK = 4999
+MS_IN_DAY = 86400000
+
+// Brand bullet used between a level's name and its price in detailed labels.
+BRAND_BULLET = "•"
+
+START_TIME_UNSET = -1
+
+// Level extension / mitigation modes
+LEVEL_PERIOD = "Session Only"
+LEVEL_BREACH_ANY = "Until Touched"
+LEVEL_BREACH_SAME = "Same-Session Touch"
+
+// A session whose bar-span is below this fraction of the longest session seen is treated as
+// an early close / holiday half-day and merged per the selected mode.
+HOLIDAY_MERGE_SPAN_FRACTION = 0.75
+
+// Short-session merge modes (how early closes / holiday half-days combine), ordered least-to-most
+// merging. "Earliest" = the oldest short of a run (chart-left). Real CME holiday clusters are at most
+// two consecutive short sessions, so these cover the whole option space.
+MERGE_OFF = "Off"
+MERGE_EARLIEST = "Earliest Into Previous Full Session"
+MERGE_ALL = "All Into Previous Full Session"
+MERGE_COMBINE = "Combine Shorts"
+
+// Line styles
+STYLE_SOLID = "Solid"
+STYLE_DASHED = "Dashed"
+STYLE_DOTTED = "Dotted"
+
+// Label sizes
+LABEL_SIZE_TINY = "Tiny"
+LABEL_SIZE_SMALL = "Small"
+LABEL_SIZE_NORMAL = "Normal"
+LABEL_SIZE_LARGE = "Large"
+LABEL_SIZE_HUGE = "Huge"
+
+// Nearest-alternate-POC qualification (volume-only): a secondary node "competes" when
+// it is nearly as heavy as the POC — that volume near-tie is what lets a timeframe /
+// HD-resolution change tip which node is #1 and move the POC onto it. Price distance is
+// deliberately NOT a factor: two near-equal nodes can sit at opposite ends of the profile
+// and the POC will still flip between them.
+ALTERNATE_POC_WINDOW_FRAC = 0.03  // ignore rows within this fraction of total rows around the POC (its own shoulder)
+ALTERNATE_POC_MIN_RATIO = 0.90    // candidate volume must be ≥ this fraction of POC volume to qualify
+
+// Session group labels (each session contains volume profiles)
+GROUP_DISPLAY = "⚙️ Display"
+GROUP_RTH = "🗽 RTH"
+GROUP_WEEKLY = "📅 Weekly"
+GROUP_NEW_DAY_OPEN = "🌅 New Day Open"
+GROUP_MONTHLY = "🗓️ Monthly"
+GROUP_UTILITY = "🎨 Utility"
+
+// Plain session labels reused where emojis would add noise.
+SESSION_RTH = "RTH"
+SESSION_WEEKLY = "Weekly"
+SESSION_NEW_DAY_OPEN = "New Day Open"
+SESSION_MONTHLY = "Monthly"
+
+// Input labels reused across every session (change once, applies everywhere)
+LABEL_ENABLE_RTH = "Enable RTH Session"
+LABEL_ENABLE_WEEKLY = "Enable Weekly Session"
+LABEL_ENABLE_NEW_DAY_OPEN = "Enable New Day Open Session"
+LABEL_ENABLE_MONTHLY = "Enable Monthly Session"
+LABEL_DIM_TOUCHED = "Fade Mitigated Levels"
+LABEL_DIM_PERCENT = "%"
+LABEL_VALUE_AREA_HIGH_LOW = "VAH/L"
+LABEL_VAH = "VAH"
+LABEL_VAL = "VAL"
+LABEL_POC = "POC"
+LABEL_ALTERNATE_POC = "aPOC"
+LABEL_VALUE_AREA = "Value"
+LABEL_HISTOGRAM_INSIDE = "In"
+LABEL_HISTOGRAM_OUTSIDE = "Out"
+LABEL_SESSION_BOX = "Session Box"
+LABEL_SHORT_SESSION_MERGE = "Merge Short Session"
+LABEL_LEVEL_LABELS = "Price Labels"
+LABEL_LEVEL_LABEL_NAMES = "Detailed Label Names"
+LABEL_TODAY = "Today's"
+LABEL_YESTERDAY = "Grand Daily"
+LABEL_TABLE_SETTING = "Setting"
+LABEL_TABLE_RGB = "RGB"
+LABEL_TABLE_TRANSPARENCY = "Trans"
+LABEL_TABLE_WIDTH = "Width"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — RTH session
+// ═══════════════════════════════════════════════════════════════════════════════
+rthEnabled = input.bool(true, LABEL_ENABLE_RTH, inline="rth_top", group=GROUP_RTH, tooltip="Build a volume profile for each Regular Trading Hours cash session (09:30–16:00 New York time, Mon–Fri).")
+rthExtensionMode = input.string(LEVEL_BREACH_SAME, "", options=[LEVEL_PERIOD, LEVEL_BREACH_ANY, LEVEL_BREACH_SAME], inline="rth_top", group=GROUP_RTH, tooltip="How the POC and Value Area High / Low extend after the session closes:\n• Session Only — stays within its session\n• Until Touched — extends right, stops at the first bar that trades through it\n• Same-Session Touch — stops only when a later RTH session trades through it")
+rthProfilesToShow = input.int(10, "", minval=1, maxval=50, inline="rth_top", group=GROUP_RTH, tooltip="How many recent profiles this session keeps and draws.")
+rthShowValueArea = input.bool(true, LABEL_VALUE_AREA_HIGH_LOW, inline="rth_value_area", group=GROUP_RTH)
+rthValueAreaColor = input.color(color.new(#2962ff, 20), "", inline="rth_value_area", group=GROUP_RTH)
+rthValueAreaWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="rth_value_area", group=GROUP_RTH)
+rthValueAreaStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="rth_value_area", group=GROUP_RTH)
+rthShowPoc = input.bool(true, LABEL_POC, inline="rth_poc", group=GROUP_RTH)
+rthPocColor = input.color(color.new(#2962ff, 0), "", inline="rth_poc", group=GROUP_RTH)
+rthPocWidth = input.string("2", "", options=["1", "2", "3", "4", "5"], inline="rth_poc", group=GROUP_RTH)
+rthPocStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="rth_poc", group=GROUP_RTH)
+rthShowAlternatePoc = input.bool(false, LABEL_ALTERNATE_POC, inline="rth_altpoc", group=GROUP_RTH, tooltip="Also mark the alternate POC: a secondary node nearly as heavy as the main POC (by volume), so the POC could shift onto it at a different timeframe or HD resolution. Hidden when no qualifying node exists.")
+rthAlternatePocColor = input.color(color.new(#2962ff, 0), "", inline="rth_altpoc", group=GROUP_RTH)
+rthAlternatePocWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="rth_altpoc", group=GROUP_RTH)
+rthAlternatePocStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="rth_altpoc", group=GROUP_RTH)
+rthDimTouched = input.bool(true, LABEL_DIM_TOUCHED, inline="rth_dim", group=GROUP_RTH, tooltip="Fade levels that have already been touched (mitigated) so untouched, still-active levels keep full strength. Only meaningful in the 'Until Touched' modes.")
+rthDimPercent = input.int(85, LABEL_DIM_PERCENT, minval=0, maxval=100, inline="rth_dim", group=GROUP_RTH)
+rthShowHistogram = input.bool(true, LABEL_VALUE_AREA, inline="rth_hist", group=GROUP_RTH)
+rthHistogramInsideColor = input.color(color.new(#2962ff, 55), LABEL_HISTOGRAM_INSIDE, inline="rth_hist", group=GROUP_RTH)
+rthHistogramOutsideColor = input.color(color.new(#2962ff, 80), LABEL_HISTOGRAM_OUTSIDE, inline="rth_hist", group=GROUP_RTH)
+rthShowSessionBox = input.bool(true, LABEL_SESSION_BOX, inline="rth_box", group=GROUP_RTH)
+rthSessionBoxColor = input.color(color.new(#2962ff, 90), "", inline="rth_box", group=GROUP_RTH)
+rthMergeMode = input.string(MERGE_ALL, LABEL_SHORT_SESSION_MERGE, options=[MERGE_OFF, MERGE_EARLIEST, MERGE_ALL, MERGE_COMBINE], inline="rth_merge", group=GROUP_RTH, tooltip="How short sessions (early closes / holiday half-days) are handled. A session counts as short when its bar span is under 75% of the longest RTH session seen.\n• Off — every short session stands alone\n• Earliest Into Previous Full Session — only the earliest (oldest) short folds into the prior full session; later shorts stand alone\n• All Into Previous Full Session — all consecutive shorts fold into the prior full session\n• Combine Shorts — consecutive shorts merge into one block, leaving the prior full session intact")
+rthShowLevelLabels = input.bool(true, LABEL_LEVEL_LABELS, inline="rth_labels", group=GROUP_RTH, tooltip="Show a price tag at the right edge for each open, untouched level still extending to the right (POC, Value Area High / Low, alternate POC). Touched levels and non-extending levels get no tag.")
+rthLevelLabelBgColor = input.color(color.new(color.white, 10), "", inline="rth_labels", group=GROUP_RTH)
+rthLevelLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="rth_labels", group=GROUP_RTH)
+rthLevelLabelOffset = input.int(0, "", minval=0, maxval=100, inline="rth_labels", group=GROUP_RTH, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — Weekly session
+// ═══════════════════════════════════════════════════════════════════════════════
+weeklyEnabled = input.bool(false, LABEL_ENABLE_WEEKLY, inline="weekly_top", group=GROUP_WEEKLY, tooltip="Build a volume profile for each week. Futures-style symbols use the Sunday 18:00 New York reopen; crypto / 24/7 assets use Monday 00:00 UTC.")
+weeklyExtensionMode = input.string(LEVEL_BREACH_ANY, "", options=[LEVEL_PERIOD, LEVEL_BREACH_ANY], inline="weekly_top", group=GROUP_WEEKLY, tooltip="How the POC and Value Area High / Low extend after the week closes:\n• Session Only — stays within its week\n• Until Touched — extends right, stops at the first bar that trades through it")
+weeklyProfilesToShow = input.int(4, "", minval=1, maxval=50, inline="weekly_top", group=GROUP_WEEKLY, tooltip="How many recent profiles this session keeps and draws.")
+weeklyShowValueArea = input.bool(true, LABEL_VALUE_AREA_HIGH_LOW, inline="weekly_value_area", group=GROUP_WEEKLY)
+weeklyValueAreaColor = input.color(color.new(#4caf50, 20), "", inline="weekly_value_area", group=GROUP_WEEKLY)
+weeklyValueAreaWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="weekly_value_area", group=GROUP_WEEKLY)
+weeklyValueAreaStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="weekly_value_area", group=GROUP_WEEKLY)
+weeklyShowPoc = input.bool(true, LABEL_POC, inline="weekly_poc", group=GROUP_WEEKLY)
+weeklyPocColor = input.color(color.new(#4caf50, 0), "", inline="weekly_poc", group=GROUP_WEEKLY)
+weeklyPocWidth = input.string("2", "", options=["1", "2", "3", "4", "5"], inline="weekly_poc", group=GROUP_WEEKLY)
+weeklyPocStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="weekly_poc", group=GROUP_WEEKLY)
+weeklyShowAlternatePoc = input.bool(false, LABEL_ALTERNATE_POC, inline="weekly_altpoc", group=GROUP_WEEKLY, tooltip="Also mark the alternate POC: a secondary node nearly as heavy as the main POC (by volume), so the POC could shift onto it at a different timeframe or HD resolution. Hidden when no qualifying node exists.")
+weeklyAlternatePocColor = input.color(color.new(#4caf50, 0), "", inline="weekly_altpoc", group=GROUP_WEEKLY)
+weeklyAlternatePocWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="weekly_altpoc", group=GROUP_WEEKLY)
+weeklyAlternatePocStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="weekly_altpoc", group=GROUP_WEEKLY)
+weeklyDimTouched = input.bool(true, LABEL_DIM_TOUCHED, inline="weekly_dim", group=GROUP_WEEKLY, tooltip="Fade levels that have already been touched (mitigated) so untouched, still-active levels keep full strength. Only meaningful in the 'Until Touched' modes.")
+weeklyDimPercent = input.int(85, LABEL_DIM_PERCENT, minval=0, maxval=100, inline="weekly_dim", group=GROUP_WEEKLY)
+weeklyShowHistogram = input.bool(true, LABEL_VALUE_AREA, inline="weekly_hist", group=GROUP_WEEKLY)
+weeklyHistogramInsideColor = input.color(color.new(#4caf50, 55), LABEL_HISTOGRAM_INSIDE, inline="weekly_hist", group=GROUP_WEEKLY)
+weeklyHistogramOutsideColor = input.color(color.new(#4caf50, 80), LABEL_HISTOGRAM_OUTSIDE, inline="weekly_hist", group=GROUP_WEEKLY)
+weeklyShowSessionBox = input.bool(true, LABEL_SESSION_BOX, inline="weekly_box", group=GROUP_WEEKLY)
+weeklySessionBoxColor = input.color(color.new(#4caf50, 90), "", inline="weekly_box", group=GROUP_WEEKLY)
+weeklyShowLevelLabels = input.bool(true, LABEL_LEVEL_LABELS, inline="weekly_labels", group=GROUP_WEEKLY, tooltip="Show a price tag at the right edge for each open, untouched level still extending to the right (POC, Value Area High / Low, alternate POC). Touched levels and non-extending levels get no tag.")
+weeklyLevelLabelBgColor = input.color(color.new(color.white, 10), "", inline="weekly_labels", group=GROUP_WEEKLY)
+weeklyLevelLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="weekly_labels", group=GROUP_WEEKLY)
+weeklyLevelLabelOffset = input.int(0, "", minval=0, maxval=100, inline="weekly_labels", group=GROUP_WEEKLY, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — New Day Open session
+// ═══════════════════════════════════════════════════════════════════════════════
+newDayOpenEnabled = input.bool(false, LABEL_ENABLE_NEW_DAY_OPEN, inline="newDayOpen_top", group=GROUP_NEW_DAY_OPEN, tooltip="Build a volume profile for each new trading day. Futures-style symbols use the 18:00 New York Globex open; crypto / 24/7 assets use 00:00 UTC.")
+newDayOpenExtensionMode = input.string(LEVEL_BREACH_ANY, "", options=[LEVEL_PERIOD, LEVEL_BREACH_ANY, LEVEL_BREACH_SAME], inline="newDayOpen_top", group=GROUP_NEW_DAY_OPEN, tooltip="How the POC and Value Area High / Low extend after the period closes. 'Same session' means only a later New Day Open period can mitigate the level.")
+newDayOpenProfilesToShow = input.int(10, "", minval=1, maxval=50, inline="newDayOpen_top", group=GROUP_NEW_DAY_OPEN, tooltip="How many recent profiles this session keeps and draws.")
+newDayOpenShowValueArea = input.bool(true, LABEL_VALUE_AREA_HIGH_LOW, inline="newDayOpen_value_area", group=GROUP_NEW_DAY_OPEN)
+newDayOpenValueAreaColor = input.color(color.new(#ff9800, 20), "", inline="newDayOpen_value_area", group=GROUP_NEW_DAY_OPEN)
+newDayOpenValueAreaWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="newDayOpen_value_area", group=GROUP_NEW_DAY_OPEN)
+newDayOpenValueAreaStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="newDayOpen_value_area", group=GROUP_NEW_DAY_OPEN)
+newDayOpenShowPoc = input.bool(true, LABEL_POC, inline="newDayOpen_poc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenPocColor = input.color(color.new(#ff9800, 0), "", inline="newDayOpen_poc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenPocWidth = input.string("2", "", options=["1", "2", "3", "4", "5"], inline="newDayOpen_poc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenPocStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="newDayOpen_poc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenShowAlternatePoc = input.bool(false, LABEL_ALTERNATE_POC, inline="newDayOpen_altpoc", group=GROUP_NEW_DAY_OPEN, tooltip="Also mark the alternate POC: a secondary node nearly as heavy as the main POC (by volume), so the POC could shift onto it at a different timeframe or HD resolution. Hidden when no qualifying node exists.")
+newDayOpenAlternatePocColor = input.color(color.new(#ff9800, 0), "", inline="newDayOpen_altpoc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenAlternatePocWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="newDayOpen_altpoc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenAlternatePocStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="newDayOpen_altpoc", group=GROUP_NEW_DAY_OPEN)
+newDayOpenDimTouched = input.bool(true, LABEL_DIM_TOUCHED, inline="newDayOpen_dim", group=GROUP_NEW_DAY_OPEN, tooltip="Fade levels that have already been touched (mitigated) so untouched, still-active levels keep full strength. Only meaningful in the 'Until Touched' modes.")
+newDayOpenDimPercent = input.int(85, LABEL_DIM_PERCENT, minval=0, maxval=100, inline="newDayOpen_dim", group=GROUP_NEW_DAY_OPEN)
+newDayOpenShowHistogram = input.bool(true, LABEL_VALUE_AREA, inline="newDayOpen_hist", group=GROUP_NEW_DAY_OPEN)
+newDayOpenHistogramInsideColor = input.color(color.new(#ff9800, 55), LABEL_HISTOGRAM_INSIDE, inline="newDayOpen_hist", group=GROUP_NEW_DAY_OPEN)
+newDayOpenHistogramOutsideColor = input.color(color.new(#ff9800, 80), LABEL_HISTOGRAM_OUTSIDE, inline="newDayOpen_hist", group=GROUP_NEW_DAY_OPEN)
+newDayOpenShowSessionBox = input.bool(true, LABEL_SESSION_BOX, inline="newDayOpen_box", group=GROUP_NEW_DAY_OPEN)
+newDayOpenSessionBoxColor = input.color(color.new(#ff9800, 90), "", inline="newDayOpen_box", group=GROUP_NEW_DAY_OPEN)
+newDayOpenShowLevelLabels = input.bool(true, LABEL_LEVEL_LABELS, inline="newDayOpen_labels", group=GROUP_NEW_DAY_OPEN, tooltip="Show a price tag at the right edge for each open, untouched level still extending to the right (POC, Value Area High / Low, alternate POC). Touched levels and non-extending levels get no tag.")
+newDayOpenLevelLabelBgColor = input.color(color.new(color.white, 10), "", inline="newDayOpen_labels", group=GROUP_NEW_DAY_OPEN)
+newDayOpenLevelLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="newDayOpen_labels", group=GROUP_NEW_DAY_OPEN)
+newDayOpenLevelLabelOffset = input.int(0, "", minval=0, maxval=100, inline="newDayOpen_labels", group=GROUP_NEW_DAY_OPEN, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — Monthly session
+// ═══════════════════════════════════════════════════════════════════════════════
+monthlyEnabled = input.bool(false, LABEL_ENABLE_MONTHLY, inline="monthly_top", group=GROUP_MONTHLY, tooltip="Build a volume profile for each calendar month. Crypto / 24/7 assets use UTC months; other symbols use New York months.")
+monthlyExtensionMode = input.string(LEVEL_BREACH_ANY, "", options=[LEVEL_PERIOD, LEVEL_BREACH_ANY], inline="monthly_top", group=GROUP_MONTHLY, tooltip="How the POC and Value Area High / Low extend after the month closes:\n• Session Only — stays within its month\n• Until Touched — extends right, stops at the first bar that trades through it")
+monthlyProfilesToShow = input.int(3, "", minval=1, maxval=50, inline="monthly_top", group=GROUP_MONTHLY, tooltip="How many recent profiles this session keeps and draws.")
+monthlyShowValueArea = input.bool(true, LABEL_VALUE_AREA_HIGH_LOW, inline="monthly_value_area", group=GROUP_MONTHLY)
+monthlyValueAreaColor = input.color(color.new(#e91e63, 20), "", inline="monthly_value_area", group=GROUP_MONTHLY)
+monthlyValueAreaWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="monthly_value_area", group=GROUP_MONTHLY)
+monthlyValueAreaStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="monthly_value_area", group=GROUP_MONTHLY)
+monthlyShowPoc = input.bool(true, LABEL_POC, inline="monthly_poc", group=GROUP_MONTHLY)
+monthlyPocColor = input.color(color.new(#e91e63, 0), "", inline="monthly_poc", group=GROUP_MONTHLY)
+monthlyPocWidth = input.string("2", "", options=["1", "2", "3", "4", "5"], inline="monthly_poc", group=GROUP_MONTHLY)
+monthlyPocStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="monthly_poc", group=GROUP_MONTHLY)
+monthlyShowAlternatePoc = input.bool(false, LABEL_ALTERNATE_POC, inline="monthly_altpoc", group=GROUP_MONTHLY, tooltip="Also mark the alternate POC: a secondary node nearly as heavy as the main POC (by volume), so the POC could shift onto it at a different timeframe or HD resolution. Hidden when no qualifying node exists.")
+monthlyAlternatePocColor = input.color(color.new(#e91e63, 0), "", inline="monthly_altpoc", group=GROUP_MONTHLY)
+monthlyAlternatePocWidth = input.string("1", "", options=["1", "2", "3", "4", "5"], inline="monthly_altpoc", group=GROUP_MONTHLY)
+monthlyAlternatePocStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="monthly_altpoc", group=GROUP_MONTHLY)
+monthlyDimTouched = input.bool(true, LABEL_DIM_TOUCHED, inline="monthly_dim", group=GROUP_MONTHLY, tooltip="Fade levels that have already been touched (mitigated) so untouched, still-active levels keep full strength. Only meaningful in the 'Until Touched' modes.")
+monthlyDimPercent = input.int(85, LABEL_DIM_PERCENT, minval=0, maxval=100, inline="monthly_dim", group=GROUP_MONTHLY)
+monthlyShowHistogram = input.bool(true, LABEL_VALUE_AREA, inline="monthly_hist", group=GROUP_MONTHLY)
+monthlyHistogramInsideColor = input.color(color.new(#e91e63, 55), LABEL_HISTOGRAM_INSIDE, inline="monthly_hist", group=GROUP_MONTHLY)
+monthlyHistogramOutsideColor = input.color(color.new(#e91e63, 80), LABEL_HISTOGRAM_OUTSIDE, inline="monthly_hist", group=GROUP_MONTHLY)
+monthlyShowSessionBox = input.bool(true, LABEL_SESSION_BOX, inline="monthly_box", group=GROUP_MONTHLY)
+monthlySessionBoxColor = input.color(color.new(#e91e63, 90), "", inline="monthly_box", group=GROUP_MONTHLY)
+monthlyShowLevelLabels = input.bool(true, LABEL_LEVEL_LABELS, inline="monthly_labels", group=GROUP_MONTHLY, tooltip="Show a price tag at the right edge for each open, untouched level still extending to the right (POC, Value Area High / Low, alternate POC). Touched levels and non-extending levels get no tag.")
+monthlyLevelLabelBgColor = input.color(color.new(color.white, 10), "", inline="monthly_labels", group=GROUP_MONTHLY)
+monthlyLevelLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="monthly_labels", group=GROUP_MONTHLY)
+monthlyLevelLabelOffset = input.int(0, "", minval=0, maxval=100, inline="monthly_labels", group=GROUP_MONTHLY, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — Display
+// ═══════════════════════════════════════════════════════════════════════════════
+profileRows = input.int(250, "Rows per profile (level precision)", minval=10, maxval=500, tooltip="Vertical resolution used to CALCULATE the POC and Value Area High / Low: the price range is sliced into this many rows and volume is tallied per row. Higher = more precise levels. These rows do NOT affect drawing cost — the histogram silhouette is sampled separately (see 'Histogram smoothness'). Keep this high for accurate levels.", group=GROUP_DISPLAY)
+histogramSmoothing = input.int(7, "Histogram smoothing", minval=1, maxval=51, tooltip="Width of the moving-average window (in calculation rows) used to smooth the histogram silhouette. 1 = raw per-row shape (jagged); higher = smoother curve. The full row resolution is always traced as a single filled polyline, so this never costs drawing boxes.", group=GROUP_DISPLAY)
+valueAreaPercent = input.float(70.0, "Value area %", minval=1.0, maxval=100.0, step=0.5, tooltip="The Value Area is the band, centered on the POC, holding this percentage of total volume. Value Area High / Low are its edges. 70% is the market-profile standard.", group=GROUP_DISPLAY)
+intrabarResolution = input.string("Auto", "HD resolution (intrabar data)", options=["Auto", "1S", "5S", "15S", "1", "3", "5", "15"], tooltip="Lower timeframe pulled from inside each chart bar to build the profile and detect breaches. Smaller = more precise. 'Auto' picks a sensible sub-timeframe from the chart timeframe.", group=GROUP_DISPLAY)
+histogramWidthPercent = input.float(25.0, "Histogram Percentage Width", minval=1.0, maxval=100.0, step=1.0, tooltip="Width of the longest histogram row as a percentage of its profile period. Percentage sizing keeps every profile readable across chart timeframes.", group=GROUP_DISPLAY)
+showLevelLabelNames = input.bool(true, LABEL_LEVEL_LABEL_NAMES, tooltip="When on, open-level price tags also show the session reference and level name. Recency labels stay date-first, e.g. \"Grand Daily VAH • 23456.7\"; explicit date labels are level-first, e.g. \"VAH Jun 25 • 23456.7\". When off, tags show only the price. Applies to every session's Price Labels.", group=GROUP_DISPLAY)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — Utility
+// ═══════════════════════════════════════════════════════════════════════════════
+showColorTable = input.bool(false, "Color table", tooltip="Show a reference table (top-right) listing every color's RGB, transparency and line width.", group=GROUP_UTILITY)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+type Profile
+    int startTime
+    int endTime
+    float priceLow
+    float priceHigh
+    int rowCount
+    array<float> rowVolumes
+    int pocRow
+    int valueAreaLowRow
+    int valueAreaHighRow
+    float pocPrice
+    float valueAreaHighPrice
+    float valueAreaLowPrice
+    int pocBreachTime
+    int valueAreaHighBreachTime
+    int valueAreaLowBreachTime
+    bool hasAlternatePoc
+    float alternatePocPrice
+    int alternatePocBreachTime
+    bool isValid
+
+type SessionStyle
+    string extensionMode
+    bool dimTouched
+    float dimFraction
+    bool showPoc
+    color pocColor
+    int pocWidth
+    string pocStyle
+    bool showAlternatePoc
+    color alternatePocColor
+    int alternatePocWidth
+    string alternatePocStyle
+    bool showValueArea
+    color valueAreaColor
+    int valueAreaWidth
+    string valueAreaStyle
+    bool showHistogram
+    color histogramInsideColor
+    color histogramOutsideColor
+    bool showSessionBox
+    color sessionBoxColor
+    bool showLevelLabels
+    color levelLabelBgColor
+    string levelLabelSize
+    int levelLabelOffset
+    bool showLevelLabelNames
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTIONS — calculation (parameterized, reused for every anchor)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+autoIntrabarTimeframe() =>
+    chartSeconds = timeframe.in_seconds(timeframe.period)
+    chartSeconds <= 60 ? "1S" : chartSeconds <= 15 * 60 ? "1" : chartSeconds <= 60 * 60 ? "5" : chartSeconds <= 4 * 60 * 60 ? "15" : "60"
+
+selectedIntrabarTimeframe() =>
+    intrabarResolution == "Auto" ? autoIntrabarTimeframe() : intrabarResolution
+
+clampRow(float rawRow, int rowCount) =>
+    math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
+
+toLabelSize(string sizeName) =>
+    sizeName == LABEL_SIZE_TINY ? size.tiny : sizeName == LABEL_SIZE_NORMAL ? size.normal : sizeName == LABEL_SIZE_LARGE ? size.large : sizeName == LABEL_SIZE_HUGE ? size.huge : size.small
+
+monthName(int monthNumber) =>
+    switch monthNumber
+        1 => "Jan"
+        2 => "Feb"
+        3 => "Mar"
+        4 => "Apr"
+        5 => "May"
+        6 => "Jun"
+        7 => "Jul"
+        8 => "Aug"
+        9 => "Sep"
+        10 => "Oct"
+        11 => "Nov"
+        => "Dec"
+
+// Human reference for a profile's date: today / grand daily for the two most recent NY calendar
+// days, otherwise an abbreviated month + day (matching the Gaps indicator's date style).
+// Returns [referenceText, isRecency]. Recency labels read date-first;
+// an explicit date ("Jun 25") reads level-first. isRecency lets the caller order them accordingly.
+sessionReference(int profileStartTime) =>
+    int profileMidnight = timestamp(NY_TIMEZONE, year(profileStartTime, NY_TIMEZONE), month(profileStartTime, NY_TIMEZONE), dayofmonth(profileStartTime, NY_TIMEZONE), 0, 0)
+    int todayMidnight = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
+    int dayDiff = int(math.round((todayMidnight - profileMidnight) / MS_IN_DAY))
+    bool isRecency = dayDiff == 0 or dayDiff == 1
+    string referenceText = dayDiff == 0 ? LABEL_TODAY : dayDiff == 1 ? LABEL_YESTERDAY : monthName(month(profileStartTime, NY_TIMEZONE)) + " " + str.tostring(dayofmonth(profileStartTime, NY_TIMEZONE))
+    [referenceText, isRecency]
+
+toLineStyle(string styleName) =>
+    styleName == STYLE_DASHED ? line.style_dashed : styleName == STYLE_DOTTED ? line.style_dotted : line.style_solid
+
+isTrueWeekendBar(int barTime) =>
+    int barDay = dayofweek(barTime, NY_TIMEZONE)
+    int barHour = hour(barTime, NY_TIMEZONE)
+    barDay == dayofweek.saturday or (barDay == dayofweek.sunday and barHour < SUNDAY_REOPEN_START_HOUR)
+
+calendarDayStart(string timezone) =>
+    ta.change(dayofmonth(time, timezone)) != 0
+
+shiftedCalendarDayStart(string timezone, int timeShiftMilliseconds) =>
+    ta.change(dayofmonth(time + timeShiftMilliseconds, timezone)) != 0
+
+calendarWeekStart(string timezone) =>
+    ta.change(weekofyear(time, timezone)) != 0
+
+calendarMonthStart(string timezone) =>
+    ta.change(month(time, timezone)) != 0
+
+selectAssetCalendarStart(bool useUtcCalendar, bool utcStart, bool marketStart) =>
+    useUtcCalendar ? utcStart : marketStart
+
+// Append a confirmed bar's volume-by-price into the accumulator. Uses lower-tf sub-bars
+// when available (HD); falls back to the chart bar so every session builds consistently.
+appendBarVolume(array<float> highs, array<float> lows, array<float> volumes, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float chartHigh, float chartLow, float chartVolume) =>
+    int intrabarCount = array.size(intrabarVolumes)
+    bool appended = false
+    if intrabarCount > 0
+        for intrabarIndex = 0 to intrabarCount - 1
+            float subVolume = array.get(intrabarVolumes, intrabarIndex)
+            float subHigh = array.get(intrabarHighs, intrabarIndex)
+            float subLow = array.get(intrabarLows, intrabarIndex)
+            if not na(subVolume) and subVolume > 0 and not na(subHigh) and not na(subLow)
+                array.push(highs, subHigh)
+                array.push(lows, subLow)
+                array.push(volumes, subVolume)
+                appended := true
+    if not appended and not na(chartVolume) and chartVolume > 0 and not na(chartHigh) and not na(chartLow)
+        array.push(highs, chartHigh)
+        array.push(lows, chartLow)
+        array.push(volumes, chartVolume)
+
+// Bin one period's raw bars into rows and derive POC + value area + level prices.
+buildProfile(array<float> highs, array<float> lows, array<float> volumes, int rowCount, float valueAreaPercent, int startTime, int endTime) =>
+    Profile profile = Profile.new(startTime, endTime, na, na, rowCount, array.new<float>(rowCount, 0.0), 0, 0, 0, na, na, na, na, na, na, false, na, na, false)
+    int barCount = array.size(volumes)
+    if barCount > 0
+        float rawHigh = array.max(highs)
+        float rawLow = array.min(lows)
+        float priceSpan = math.max(rawHigh - rawLow, syminfo.mintick * rowCount)
+        float profileLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+        float rowHeight = priceSpan / rowCount
+
+        for barIndex = 0 to barCount - 1
+            float barHigh = array.get(highs, barIndex)
+            float barLow = array.get(lows, barIndex)
+            float barVolume = array.get(volumes, barIndex)
+            int firstRow = clampRow((barLow - profileLow) / rowHeight, rowCount)
+            int lastRow = clampRow((barHigh - profileLow) / rowHeight, rowCount)
+            int rowsTouched = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = barVolume / rowsTouched
+            for rowIndex = firstRow to lastRow
+                array.set(profile.rowVolumes, rowIndex, array.get(profile.rowVolumes, rowIndex) + volumePerRow)
+
+        float totalVolume = 0.0
+        float maxRowVolume = 0.0
+        int pocRow = 0
+        for rowIndex = 0 to rowCount - 1
+            float rowVolume = array.get(profile.rowVolumes, rowIndex)
+            totalVolume += rowVolume
+            if rowVolume > maxRowVolume
+                maxRowVolume := rowVolume
+                pocRow := rowIndex
+
+        int valueAreaLowRow = pocRow
+        int valueAreaHighRow = pocRow
+        float accumulatedVolume = array.get(profile.rowVolumes, pocRow)
+        float targetVolume = totalVolume * valueAreaPercent * 0.01
+        while accumulatedVolume < targetVolume and (valueAreaLowRow > 0 or valueAreaHighRow < rowCount - 1)
+            float volumeBelow = valueAreaLowRow > 0 ? array.get(profile.rowVolumes, valueAreaLowRow - 1) : -1.0
+            float volumeAbove = valueAreaHighRow < rowCount - 1 ? array.get(profile.rowVolumes, valueAreaHighRow + 1) : -1.0
+            if volumeAbove >= volumeBelow
+                valueAreaHighRow += 1
+                accumulatedVolume += math.max(volumeAbove, 0)
+            else
+                valueAreaLowRow -= 1
+                accumulatedVolume += math.max(volumeBelow, 0)
+
+        // Nearest alternate POC (volume-only): the heaviest secondary node outside the
+        // POC's own shoulder. It qualifies purely when it is nearly as heavy as the POC —
+        // that near-tie is what lets a small data / resolution change move the POC onto it.
+        // Distance is intentionally not considered.
+        int pocShoulder = math.max(1, int(math.round(rowCount * ALTERNATE_POC_WINDOW_FRAC)))
+        int alternateRow = -1
+        float alternateVolume = 0.0
+        for rowIndex = 0 to rowCount - 1
+            if math.abs(rowIndex - pocRow) > pocShoulder
+                float rowVolume = array.get(profile.rowVolumes, rowIndex)
+                if rowVolume > alternateVolume
+                    alternateVolume := rowVolume
+                    alternateRow := rowIndex
+        bool hasAlternatePoc = false
+        float alternatePocPrice = na
+        if alternateRow >= 0 and maxRowVolume > 0 and alternateVolume / maxRowVolume >= ALTERNATE_POC_MIN_RATIO
+            hasAlternatePoc := true
+            alternatePocPrice := profileLow + (alternateRow + 0.5) * rowHeight
+
+        profile.priceLow := profileLow
+        profile.priceHigh := profileLow + priceSpan
+        profile.pocRow := pocRow
+        profile.valueAreaLowRow := valueAreaLowRow
+        profile.valueAreaHighRow := valueAreaHighRow
+        profile.pocPrice := profileLow + (pocRow + 0.5) * rowHeight
+        profile.valueAreaHighPrice := profileLow + (valueAreaHighRow + 1) * rowHeight
+        profile.valueAreaLowPrice := profileLow + valueAreaLowRow * rowHeight
+        profile.hasAlternatePoc := hasAlternatePoc
+        profile.alternatePocPrice := alternatePocPrice
+        profile.isValid := totalVolume > 0
+    profile
+
+// Right end + extend flag for a level line given its anchor's extension mode.
+levelEndpoint(int endTime, int breachTime, string extensionMode) =>
+    int rightEdge = endTime
+    bool extendRight = false
+    if extensionMode == LEVEL_BREACH_ANY or extensionMode == LEVEL_BREACH_SAME
+        if na(breachTime)
+            extendRight := true
+        else
+            rightEdge := breachTime
+    [rightEdge, extendRight]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTIONS — rendering
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<box> drawnBoxes = array.new<box>()
+var array<line> drawnLines = array.new<line>()
+var array<polyline> drawnPolylines = array.new<polyline>()
+var array<label> drawnLabels = array.new<label>()
+
+clearDrawings() =>
+    if array.size(drawnBoxes) > 0
+        for boxIndex = 0 to array.size(drawnBoxes) - 1
+            box.delete(array.get(drawnBoxes, boxIndex))
+        array.clear(drawnBoxes)
+    if array.size(drawnLines) > 0
+        for lineIndex = 0 to array.size(drawnLines) - 1
+            line.delete(array.get(drawnLines, lineIndex))
+        array.clear(drawnLines)
+    if array.size(drawnPolylines) > 0
+        for polylineIndex = 0 to array.size(drawnPolylines) - 1
+            polyline.delete(array.get(drawnPolylines, polylineIndex))
+        array.clear(drawnPolylines)
+    if array.size(drawnLabels) > 0
+        for labelIndex = 0 to array.size(drawnLabels) - 1
+            label.delete(array.get(drawnLabels, labelIndex))
+        array.clear(drawnLabels)
+
+// Draw a level line, and — when it is still extending right (open / untouched) and labels are on —
+// tag it at the right edge (last bar + offset), where the eye lands at the end of the extended line.
+// Detailed labels keep recency words date-first ("Grand Daily VAH") but put level names
+// first for explicit dates ("VAH Jun 25") so scanning starts with the level type.
+drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidth, string styleName, bool extendRight, color labelColor, string levelName, SessionStyle style) =>
+    array.push(drawnLines, line.new(x1=startTime, y1=price, x2=endTime, y2=price, xloc=xloc.bar_time, extend=extendRight ? extend.right : extend.none, color=lineColor, width=lineWidth, style=toLineStyle(styleName)))
+    if style.showLevelLabels and extendRight
+        string priceText = str.tostring(price, format.mintick)
+        [referenceText, isRecencyReference] = sessionReference(startTime)
+        string detailedText = isRecencyReference ? referenceText + " " + levelName + " " + BRAND_BULLET + " " + priceText : levelName + " " + referenceText + " " + BRAND_BULLET + " " + priceText
+        string labelText = style.showLevelLabelNames ? detailedText : priceText
+        array.push(drawnLabels, label.new(bar_index + style.levelLabelOffset, price, labelText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=labelColor, size=toLabelSize(style.levelLabelSize), color=style.levelLabelBgColor))
+
+// Fade a level's colour by scaling its visible opacity. dimFraction 0.5 halves opacity;
+// scaling (rather than adding transparency) keeps it well-behaved at any base transparency.
+dimLevelColor(color baseColor, bool touched, bool dimTouched, float dimFraction) =>
+    touched and dimTouched ? color.new(baseColor, 100 - (100 - color.t(baseColor)) * (1 - dimFraction)) : baseColor
+
+// Trace one contiguous histogram run as a closed, filled polyline. Straight
+// (non-curved) segments hug the true stepped silhouette exactly — a curved spline
+// overshoots each point, ballooning the fill and bleeding adjacent runs into each
+// other. The border is transparent so only the fill shows, and a whole run of rows
+// collapses into a single drawing object (off the box budget).
+pushHistogramPolyline(array<chart.point> points, color fillColor) =>
+    if array.size(points) >= 3
+        array.push(drawnPolylines, polyline.new(points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(fillColor, 100), fill_color=fillColor))
+
+renderProfile(Profile profile, SessionStyle style) =>
+    if profile.isValid
+        float priceRange = profile.priceHigh - profile.priceLow
+
+        // Histogram is traced at full calculation-row resolution as closed filled
+        // polylines (one per contiguous inside / outside value-area run). A light
+        // moving-average smooths the per-row volume so the silhouette reads as a clean
+        // curve. The whole profile is a couple of polyline objects, off the box budget.
+        if style.showHistogram
+            int rowCount = profile.rowCount
+            int halfWindow = int(math.floor(histogramSmoothing / 2))
+            array<float> smoothedVolumes = array.new<float>(rowCount, 0.0)
+            float maxSmoothedVolume = 0.0
+            for rowIndex = 0 to rowCount - 1
+                float windowSum = 0.0
+                int windowCount = 0
+                for offset = -halfWindow to halfWindow
+                    int neighborRow = rowIndex + offset
+                    if neighborRow >= 0 and neighborRow < rowCount
+                        windowSum += array.get(profile.rowVolumes, neighborRow)
+                        windowCount += 1
+                float smoothedVolume = windowCount > 0 ? windowSum / windowCount : 0.0
+                array.set(smoothedVolumes, rowIndex, smoothedVolume)
+                maxSmoothedVolume := math.max(maxSmoothedVolume, smoothedVolume)
+            if maxSmoothedVolume > 0
+                float rowHeight = priceRange / rowCount
+                int baselineTime = profile.startTime
+                int profileMilliseconds = math.max(1, profile.endTime - profile.startTime)
+                int histogramWidthMilliseconds = math.max(1, int(math.round(profileMilliseconds * histogramWidthPercent * 0.01)))
+                array<chart.point> points = array.new<chart.point>()
+                bool runStarted = false
+                bool runInsideVa = false
+                for rowIndex = 0 to rowCount - 1
+                    bool insideVa = rowIndex >= profile.valueAreaLowRow and rowIndex <= profile.valueAreaHighRow
+                    float rowBottom = profile.priceLow + rowIndex * rowHeight
+                    float rowVolume = array.get(smoothedVolumes, rowIndex)
+                    int widthMilliseconds = int(math.round(rowVolume / maxSmoothedVolume * histogramWidthMilliseconds))
+                    int outerTime = baselineTime + widthMilliseconds
+                    // Value-area membership flipped: close the current run on the baseline and start a new one at the same boundary.
+                    if runStarted and insideVa != runInsideVa
+                        array.push(points, chart.point.from_time(baselineTime, rowBottom))
+                        pushHistogramPolyline(points, runInsideVa ? style.histogramInsideColor : style.histogramOutsideColor)
+                        points := array.new<chart.point>()
+                        runStarted := false
+                    if not runStarted
+                        runStarted := true
+                        runInsideVa := insideVa
+                        array.push(points, chart.point.from_time(baselineTime, rowBottom))
+                    array.push(points, chart.point.from_time(outerTime, rowBottom + rowHeight / 2))
+                    if rowIndex == rowCount - 1
+                        array.push(points, chart.point.from_time(baselineTime, rowBottom + rowHeight))
+                        pushHistogramPolyline(points, runInsideVa ? style.histogramInsideColor : style.histogramOutsideColor)
+
+        if style.showSessionBox
+            array.push(drawnBoxes, box.new(left=profile.startTime, top=profile.priceHigh, right=profile.endTime, bottom=profile.priceLow, xloc=xloc.bar_time, border_width=0, bgcolor=style.sessionBoxColor))
+
+        // Levels keep their chosen styling; touched (mitigated) levels are optionally
+        // faded so the untouched, still-active ones stand out.
+        if style.showPoc
+            [pocRight, pocExtend] = levelEndpoint(profile.endTime, profile.pocBreachTime, style.extensionMode)
+            color pocColor = dimLevelColor(style.pocColor, not na(profile.pocBreachTime), style.dimTouched, style.dimFraction)
+            drawLevel(profile.startTime, pocRight, profile.pocPrice, pocColor, style.pocWidth, style.pocStyle, pocExtend, style.pocColor, LABEL_POC, style)
+        if style.showAlternatePoc and profile.hasAlternatePoc
+            [alternateRight, alternateExtend] = levelEndpoint(profile.endTime, profile.alternatePocBreachTime, style.extensionMode)
+            color alternateColor = dimLevelColor(style.alternatePocColor, not na(profile.alternatePocBreachTime), style.dimTouched, style.dimFraction)
+            drawLevel(profile.startTime, alternateRight, profile.alternatePocPrice, alternateColor, style.alternatePocWidth, style.alternatePocStyle, alternateExtend, style.alternatePocColor, LABEL_ALTERNATE_POC, style)
+        if style.showValueArea
+            [valueAreaHighRight, valueAreaHighExtend] = levelEndpoint(profile.endTime, profile.valueAreaHighBreachTime, style.extensionMode)
+            color vahColor = dimLevelColor(style.valueAreaColor, not na(profile.valueAreaHighBreachTime), style.dimTouched, style.dimFraction)
+            drawLevel(profile.startTime, valueAreaHighRight, profile.valueAreaHighPrice, vahColor, style.valueAreaWidth, style.valueAreaStyle, valueAreaHighExtend, style.valueAreaColor, LABEL_VAH, style)
+            [valueAreaLowRight, valueAreaLowExtend] = levelEndpoint(profile.endTime, profile.valueAreaLowBreachTime, style.extensionMode)
+            color valColor = dimLevelColor(style.valueAreaColor, not na(profile.valueAreaLowBreachTime), style.dimTouched, style.dimFraction)
+            drawLevel(profile.startTime, valueAreaLowRight, profile.valueAreaLowPrice, valColor, style.valueAreaWidth, style.valueAreaStyle, valueAreaLowExtend, style.valueAreaColor, LABEL_VAL, style)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTIONS — anchor engine
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Finalize one accumulated period into a Profile and commit it to the ring. A period whose bar-span
+// is an outlier-short fraction of the longest period seen (an early close / holiday half-day) folds
+// into the current merge base, up to mergeDepth consecutive shorts. The base differs by mode:
+// "into previous" uses the prior full session as the base; "combine shorts" uses the first short of a
+// run as the base (full sessions stay standalone and reset the base). "Normal" span is self-calibrated
+// from the longest period seen, so no session length is hardcoded. The base period's raw bars stay in
+// the pending buffer so they can be recombined.
+finalizePeriod(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, int endTime, int lastBarTime, int keepProfiles, array<Profile> profiles, int mergeDepth, bool combineShorts, array<int> normalSpanRef, array<float> pendingHighs, array<float> pendingLows, array<float> pendingVolumes, array<int> pendingStartRef, array<int> foldCountRef) =>
+    if array.size(barVolumes) > 0
+        int periodSpan = lastBarTime - startTime
+        int normalSpan = array.get(normalSpanRef, 0)
+        bool isShortPeriod = mergeDepth > 0 and normalSpan > 0 and periodSpan < int(normalSpan * HOLIDAY_MERGE_SPAN_FRACTION)
+        bool canMerge = isShortPeriod and array.get(foldCountRef, 0) < mergeDepth and array.size(pendingVolumes) > 0 and array.size(profiles) > 0
+        if canMerge
+            array.concat(pendingHighs, barHighs)
+            array.concat(pendingLows, barLows)
+            array.concat(pendingVolumes, barVolumes)
+            Profile merged = buildProfile(pendingHighs, pendingLows, pendingVolumes, profileRows, valueAreaPercent, array.get(pendingStartRef, 0), endTime)
+            if merged.isValid
+                array.pop(profiles)
+                array.push(profiles, merged)
+                while array.size(profiles) > keepProfiles
+                    array.shift(profiles)
+            array.set(foldCountRef, 0, array.get(foldCountRef, 0) + 1)
+        else
+            Profile profile = buildProfile(barHighs, barLows, barVolumes, profileRows, valueAreaPercent, startTime, endTime)
+            if profile.isValid
+                array.push(profiles, profile)
+                while array.size(profiles) > keepProfiles
+                    array.shift(profiles)
+                // Calibrate the normal (full) session span from non-merged periods. Drives short-period
+                // detection. Short periods never exceed normalSpan, so they never inflate it.
+                if periodSpan > normalSpan
+                    array.set(normalSpanRef, 0, periodSpan)
+                if mergeDepth > 0
+                    // Establish the base that following shorts fold into. "Combine": the first short of
+                    // a run is the base (seeded with one fold). "Into previous": a full session is the
+                    // base. A full session in combine mode clears the base so the next short starts fresh.
+                    bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
+                    if becomesBase
+                        array.clear(pendingHighs)
+                        array.clear(pendingLows)
+                        array.clear(pendingVolumes)
+                        array.concat(pendingHighs, barHighs)
+                        array.concat(pendingLows, barLows)
+                        array.concat(pendingVolumes, barVolumes)
+                        array.set(pendingStartRef, 0, startTime)
+                        array.set(foldCountRef, 0, combineShorts ? 1 : 0)
+                    else if combineShorts and not isShortPeriod
+                        array.clear(pendingHighs)
+                        array.clear(pendingLows)
+                        array.clear(pendingVolumes)
+                        array.set(foldCountRef, 0, 0)
+        array.clear(barHighs)
+        array.clear(barLows)
+        array.clear(barVolumes)
+
+// Accumulate confirmed bars per anchor, finalize finished periods into a ring.
+processSession(bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<Profile> profiles, array<int> periodStartRef, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, int mergeDepth, bool combineShorts, array<int> normalSpanRef, array<float> pendingHighs, array<float> pendingLows, array<float> pendingVolumes, array<int> pendingStartRef, array<int> periodLastBarRef, array<int> foldCountRef) =>
+    if enabled
+        bool shouldStart = periodStart or (array.get(periodStartRef, 0) == START_TIME_UNSET and inWindow)
+
+        if periodEnd and array.size(barVolumes) > 0
+            // End the profile at its actual last traded bar, not the bar where RTH is first detected
+            // out of session. On early-close / holiday days there is a data gap after the session, so
+            // that out-of-session bar is hours or days later and would balloon the box and histogram.
+            finalizePeriod(barHighs, barLows, barVolumes, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles, mergeDepth, combineShorts, normalSpanRef, pendingHighs, pendingLows, pendingVolumes, pendingStartRef, foldCountRef)
+
+        if shouldStart
+            if array.size(barVolumes) > 0
+                finalizePeriod(barHighs, barLows, barVolumes, array.get(periodStartRef, 0), time[1], array.get(periodLastBarRef, 0), keepProfiles, profiles, mergeDepth, combineShorts, normalSpanRef, pendingHighs, pendingLows, pendingVolumes, pendingStartRef, foldCountRef)
+            array.set(periodStartRef, 0, time)
+
+        if inWindow and barstate.isconfirmed
+            appendBarVolume(barHighs, barLows, barVolumes, intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume)
+            array.set(periodLastBarRef, 0, time)
+
+// Stamp the breach time of each level once price (lower-tf high/low) trades through it.
+updateMitigation(array<Profile> profiles, bool active, bool sameSessionOnly, bool inWindowNow, array<float> intrabarHighs, array<float> intrabarLows) =>
+    if active and array.size(profiles) > 0 and not (sameSessionOnly and not inWindowNow)
+        float breachHigh = array.size(intrabarHighs) > 0 ? array.max(intrabarHighs) : high
+        float breachLow = array.size(intrabarLows) > 0 ? array.min(intrabarLows) : low
+        if not na(breachHigh) and not na(breachLow)
+            for profileIndex = 0 to array.size(profiles) - 1
+                Profile profile = array.get(profiles, profileIndex)
+                if time > profile.endTime
+                    if na(profile.pocBreachTime) and breachLow < profile.pocPrice and breachHigh > profile.pocPrice
+                        profile.pocBreachTime := time
+                    if na(profile.valueAreaHighBreachTime) and breachLow < profile.valueAreaHighPrice and breachHigh > profile.valueAreaHighPrice
+                        profile.valueAreaHighBreachTime := time
+                    if na(profile.valueAreaLowBreachTime) and breachLow < profile.valueAreaLowPrice and breachHigh > profile.valueAreaLowPrice
+                        profile.valueAreaLowBreachTime := time
+                    if profile.hasAlternatePoc and na(profile.alternatePocBreachTime) and breachLow < profile.alternatePocPrice and breachHigh > profile.alternatePocPrice
+                        profile.alternatePocBreachTime := time
+
+renderSession(bool enabled, array<Profile> profiles, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<int> periodStartRef, SessionStyle style) =>
+    if enabled
+        int profileCount = array.size(profiles)
+        if profileCount > 0
+            for profileIndex = 0 to profileCount - 1
+                renderProfile(array.get(profiles, profileIndex), style)
+        if array.size(barVolumes) > 0
+            Profile liveProfile = buildProfile(barHighs, barLows, barVolumes, profileRows, valueAreaPercent, array.get(periodStartRef, 0), time)
+            renderProfile(liveProfile, style)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+addColorRow(table colorTable, int row, string name, color swatchColor, string widthText) =>
+    table.cell(colorTable, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(colorTable, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(swatchColor)), int(color.g(swatchColor)), int(color.b(swatchColor))), text_size=size.small, text_color=color.black)
+    table.cell(colorTable, 2, row, str.tostring(int(color.t(swatchColor))), text_size=size.small, text_color=color.black)
+    table.cell(colorTable, 3, row, widthText, text_size=size.small, text_color=color.black)
+
+colorRowsForSession(bool enabled, SessionStyle style) =>
+    int rows = 0
+    if enabled
+        if style.showValueArea
+            rows += 1
+        if style.showPoc
+            rows += 1
+        if style.showAlternatePoc
+            rows += 1
+        if style.showHistogram
+            rows += 2
+        if style.showSessionBox
+            rows += 1
+        if style.showLevelLabels
+            rows += 1
+    rows
+
+addSessionColorRows(table colorTable, int row, string sessionName, bool enabled, SessionStyle style) =>
+    int nextRow = row
+    if enabled
+        if style.showValueArea
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_VALUE_AREA_HIGH_LOW, style.valueAreaColor, str.tostring(style.valueAreaWidth))
+            nextRow += 1
+        if style.showPoc
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_POC, style.pocColor, str.tostring(style.pocWidth))
+            nextRow += 1
+        if style.showAlternatePoc
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_ALTERNATE_POC, style.alternatePocColor, str.tostring(style.alternatePocWidth))
+            nextRow += 1
+        if style.showHistogram
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_VALUE_AREA + " " + LABEL_HISTOGRAM_INSIDE, style.histogramInsideColor, "")
+            nextRow += 1
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_VALUE_AREA + " " + LABEL_HISTOGRAM_OUTSIDE, style.histogramOutsideColor, "")
+            nextRow += 1
+        if style.showSessionBox
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_SESSION_BOX, style.sessionBoxColor, "")
+            nextRow += 1
+        if style.showLevelLabels
+            addColorRow(colorTable, nextRow, sessionName + " " + LABEL_LEVEL_LABELS, style.levelLabelBgColor, "")
+            nextRow += 1
+    nextRow
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+var table colorTable = na
+
+var array<float> rthBarHighs = array.new<float>()
+var array<float> rthBarLows = array.new<float>()
+var array<float> rthBarVolumes = array.new<float>()
+var array<Profile> rthProfiles = array.new<Profile>()
+var array<int> rthStartRef = array.new<int>(1, START_TIME_UNSET)
+var array<float> rthPendingHighs = array.new<float>()
+var array<float> rthPendingLows = array.new<float>()
+var array<float> rthPendingVolumes = array.new<float>()
+var array<int> rthPendingStartRef = array.new<int>(1, START_TIME_UNSET)
+var array<int> rthLastBarRef = array.new<int>(1, START_TIME_UNSET)
+var array<int> rthNormalSpanRef = array.new<int>(1, 0)
+var array<int> rthFoldCountRef = array.new<int>(1, 0)
+
+// Merge and the last-bar end-time correction are RTH-only for now; the continuous anchors pass
+// these inert buffers. Their merge flag is false, so the pending arrays stay untouched, and the
+// span / last-bar refs are written but never read (no merge, no session-gap end-time to correct).
+var array<float> mergeUnusedHighs = array.new<float>()
+var array<float> mergeUnusedLows = array.new<float>()
+var array<float> mergeUnusedVolumes = array.new<float>()
+var array<int> mergeUnusedStartRef = array.new<int>(1, START_TIME_UNSET)
+var array<int> mergeUnusedLastBarRef = array.new<int>(1, START_TIME_UNSET)
+var array<int> mergeUnusedNormalSpanRef = array.new<int>(1, 0)
+var array<int> mergeUnusedFoldCountRef = array.new<int>(1, 0)
+
+var array<float> weeklyBarHighs = array.new<float>()
+var array<float> weeklyBarLows = array.new<float>()
+var array<float> weeklyBarVolumes = array.new<float>()
+var array<Profile> weeklyProfiles = array.new<Profile>()
+var array<int> weeklyStartRef = array.new<int>(1, START_TIME_UNSET)
+
+var array<float> newDayOpenBarHighs = array.new<float>()
+var array<float> newDayOpenBarLows = array.new<float>()
+var array<float> newDayOpenBarVolumes = array.new<float>()
+var array<Profile> newDayOpenProfiles = array.new<Profile>()
+var array<int> newDayOpenStartRef = array.new<int>(1, START_TIME_UNSET)
+
+var array<float> monthlyBarHighs = array.new<float>()
+var array<float> monthlyBarLows = array.new<float>()
+var array<float> monthlyBarVolumes = array.new<float>()
+var array<Profile> monthlyProfiles = array.new<Profile>()
+var array<int> monthlyStartRef = array.new<int>(1, START_TIME_UNSET)
+
+var bool isTwentyFourSevenAsset = false
+var bool assetClassificationReady = false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════════════════════════════
+rthStyle = SessionStyle.new(rthExtensionMode, rthDimTouched, rthDimPercent / 100.0, rthShowPoc, rthPocColor, int(str.tonumber(rthPocWidth)), rthPocStyle, rthShowAlternatePoc, rthAlternatePocColor, int(str.tonumber(rthAlternatePocWidth)), rthAlternatePocStyle, rthShowValueArea, rthValueAreaColor, int(str.tonumber(rthValueAreaWidth)), rthValueAreaStyle, rthShowHistogram, rthHistogramInsideColor, rthHistogramOutsideColor, rthShowSessionBox, rthSessionBoxColor, rthShowLevelLabels, rthLevelLabelBgColor, rthLevelLabelSize, rthLevelLabelOffset, showLevelLabelNames)
+weeklyStyle = SessionStyle.new(weeklyExtensionMode, weeklyDimTouched, weeklyDimPercent / 100.0, weeklyShowPoc, weeklyPocColor, int(str.tonumber(weeklyPocWidth)), weeklyPocStyle, weeklyShowAlternatePoc, weeklyAlternatePocColor, int(str.tonumber(weeklyAlternatePocWidth)), weeklyAlternatePocStyle, weeklyShowValueArea, weeklyValueAreaColor, int(str.tonumber(weeklyValueAreaWidth)), weeklyValueAreaStyle, weeklyShowHistogram, weeklyHistogramInsideColor, weeklyHistogramOutsideColor, weeklyShowSessionBox, weeklySessionBoxColor, weeklyShowLevelLabels, weeklyLevelLabelBgColor, weeklyLevelLabelSize, weeklyLevelLabelOffset, showLevelLabelNames)
+newDayOpenStyle = SessionStyle.new(newDayOpenExtensionMode, newDayOpenDimTouched, newDayOpenDimPercent / 100.0, newDayOpenShowPoc, newDayOpenPocColor, int(str.tonumber(newDayOpenPocWidth)), newDayOpenPocStyle, newDayOpenShowAlternatePoc, newDayOpenAlternatePocColor, int(str.tonumber(newDayOpenAlternatePocWidth)), newDayOpenAlternatePocStyle, newDayOpenShowValueArea, newDayOpenValueAreaColor, int(str.tonumber(newDayOpenValueAreaWidth)), newDayOpenValueAreaStyle, newDayOpenShowHistogram, newDayOpenHistogramInsideColor, newDayOpenHistogramOutsideColor, newDayOpenShowSessionBox, newDayOpenSessionBoxColor, newDayOpenShowLevelLabels, newDayOpenLevelLabelBgColor, newDayOpenLevelLabelSize, newDayOpenLevelLabelOffset, showLevelLabelNames)
+monthlyStyle = SessionStyle.new(monthlyExtensionMode, monthlyDimTouched, monthlyDimPercent / 100.0, monthlyShowPoc, monthlyPocColor, int(str.tonumber(monthlyPocWidth)), monthlyPocStyle, monthlyShowAlternatePoc, monthlyAlternatePocColor, int(str.tonumber(monthlyAlternatePocWidth)), monthlyAlternatePocStyle, monthlyShowValueArea, monthlyValueAreaColor, int(str.tonumber(monthlyValueAreaWidth)), monthlyValueAreaStyle, monthlyShowHistogram, monthlyHistogramInsideColor, monthlyHistogramOutsideColor, monthlyShowSessionBox, monthlySessionBoxColor, monthlyShowLevelLabels, monthlyLevelLabelBgColor, monthlyLevelLabelSize, monthlyLevelLabelOffset, showLevelLabelNames)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATA & BOUNDARIES
+// ═══════════════════════════════════════════════════════════════════════════════
+intrabarTimeframe = selectedIntrabarTimeframe()
+[intrabarHighs, intrabarLows, intrabarVolumes] = request.security_lower_tf(syminfo.tickerid, intrabarTimeframe, [high, low, volume], ignore_invalid_timeframe=true)
+
+// Classify 24/7 assets by watching for true weekend bars incrementally. Traditional futures
+// may print from Sunday 18:00 NY onward, so only Saturday and early-Sunday bars prove 24/7
+// trading. Each bar is an O(1) check; if a full week elapses with no weekend bar, the asset
+// is session-based. No backward scan, and the result is only marked ready once it is real.
+if not assetClassificationReady
+    if syminfo.type == "crypto"
+        isTwentyFourSevenAsset := true
+        assetClassificationReady := true
+    else if isTrueWeekendBar(time)
+        isTwentyFourSevenAsset := true
+        assetClassificationReady := true
+    else
+        int barsInWeek = math.max(1, int(math.ceil(SECONDS_PER_WEEK / timeframe.in_seconds(timeframe.period))))
+        int observationWindow = math.min(ASSET_DETECTION_MAX_LOOKBACK, barsInWeek)
+        if bar_index >= observationWindow
+            isTwentyFourSevenAsset := false
+            assetClassificationReady := true
+
+// RTH uses the NYSE cash window. Session-based assets keep the Mon-Fri mask; 24/7 assets apply
+// the same 09:30-16:00 NY window every day so weekends also build an RTH profile. Both windows are
+// const strings (time() requires that); the boolean is selected by the asset classification.
+rthInSessionWeekday = not na(time(timeframe.period, RTH_SESSION, NY_TIMEZONE))
+rthInSessionAllDays = not na(time(timeframe.period, RTH_SESSION_ALL_DAYS, NY_TIMEZONE))
+rthInSession = isTwentyFourSevenAsset ? rthInSessionAllDays : rthInSessionWeekday
+rthSessionStart = rthInSession and not rthInSession[1]
+rthSessionEnd = not rthInSession and rthInSession[1]
+
+// New Day Open, Weekly and Monthly are continuous anchors, so they have no session gap
+// to detect an "entry" from. Futures-style symbols keep the NY trading-day anchors;
+// crypto / 24/7 assets use UTC calendar boundaries for new-day, weekly and monthly
+// profiles.
+SIX_HOURS_MS = 6 * 60 * 60 * 1000
+useUtcCalendarAnchors = isTwentyFourSevenAsset
+utcDayStart = calendarDayStart(UTC_TIMEZONE)
+futuresNewDayOpenStart = shiftedCalendarDayStart(NY_TIMEZONE, SIX_HOURS_MS)
+newDayOpenDayStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcDayStart, futuresNewDayOpenStart)
+utcWeekStart = calendarWeekStart(UTC_TIMEZONE)
+weeklyReopenInSession = not na(time(timeframe.period, WEEKLY_REOPEN_SESSION, NY_TIMEZONE))
+futuresWeekStart = weeklyReopenInSession and not weeklyReopenInSession[1] and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday
+weeklyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcWeekStart, futuresWeekStart)
+utcMonthStart = calendarMonthStart(UTC_TIMEZONE)
+nyMonthStart = calendarMonthStart(NY_TIMEZONE)
+monthlyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcMonthStart, nyMonthStart)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROCESS
+// ═══════════════════════════════════════════════════════════════════════════════
+// Map the RTH merge mode to its two engine controls: fold depth (consecutive shorts) and whether
+// shorts combine with each other (vs folding into the prior full session). "Fold All" uses depth 2,
+// which covers every real CME holiday cluster.
+rthMergeCombine = rthMergeMode == MERGE_COMBINE
+rthMergeDepth = rthMergeMode == MERGE_OFF ? 0 : rthMergeMode == MERGE_EARLIEST ? 1 : 2
+
+processSession(rthEnabled, rthProfilesToShow, rthInSession, rthSessionStart, rthSessionEnd, rthBarHighs, rthBarLows, rthBarVolumes, rthProfiles, rthStartRef, intrabarHighs, intrabarLows, intrabarVolumes, rthMergeDepth, rthMergeCombine, rthNormalSpanRef, rthPendingHighs, rthPendingLows, rthPendingVolumes, rthPendingStartRef, rthLastBarRef, rthFoldCountRef)
+processSession(weeklyEnabled, weeklyProfilesToShow, true, weeklyPeriodStart, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyProfiles, weeklyStartRef, intrabarHighs, intrabarLows, intrabarVolumes, 0, false, mergeUnusedNormalSpanRef, mergeUnusedHighs, mergeUnusedLows, mergeUnusedVolumes, mergeUnusedStartRef, mergeUnusedLastBarRef, mergeUnusedFoldCountRef)
+processSession(newDayOpenEnabled, newDayOpenProfilesToShow, true, newDayOpenDayStart, false, newDayOpenBarHighs, newDayOpenBarLows, newDayOpenBarVolumes, newDayOpenProfiles, newDayOpenStartRef, intrabarHighs, intrabarLows, intrabarVolumes, 0, false, mergeUnusedNormalSpanRef, mergeUnusedHighs, mergeUnusedLows, mergeUnusedVolumes, mergeUnusedStartRef, mergeUnusedLastBarRef, mergeUnusedFoldCountRef)
+processSession(monthlyEnabled, monthlyProfilesToShow, true, monthlyPeriodStart, false, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyProfiles, monthlyStartRef, intrabarHighs, intrabarLows, intrabarVolumes, 0, false, mergeUnusedNormalSpanRef, mergeUnusedHighs, mergeUnusedLows, mergeUnusedVolumes, mergeUnusedStartRef, mergeUnusedLastBarRef, mergeUnusedFoldCountRef)
+
+rthMitigationActive = rthEnabled and (rthExtensionMode == LEVEL_BREACH_ANY or rthExtensionMode == LEVEL_BREACH_SAME)
+weeklyMitigationActive = weeklyEnabled and weeklyExtensionMode == LEVEL_BREACH_ANY
+newDayOpenMitigationActive = newDayOpenEnabled and (newDayOpenExtensionMode == LEVEL_BREACH_ANY or newDayOpenExtensionMode == LEVEL_BREACH_SAME)
+monthlyMitigationActive = monthlyEnabled and monthlyExtensionMode == LEVEL_BREACH_ANY
+
+if barstate.isconfirmed
+    updateMitigation(rthProfiles, rthMitigationActive, rthExtensionMode == LEVEL_BREACH_SAME, rthInSession, intrabarHighs, intrabarLows)
+    updateMitigation(weeklyProfiles, weeklyMitigationActive, false, true, intrabarHighs, intrabarLows)
+    updateMitigation(newDayOpenProfiles, newDayOpenMitigationActive, newDayOpenExtensionMode == LEVEL_BREACH_SAME, true, intrabarHighs, intrabarLows)
+    updateMitigation(monthlyProfiles, monthlyMitigationActive, false, true, intrabarHighs, intrabarLows)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════════════════════
+if barstate.islast
+    clearDrawings()
+    renderSession(rthEnabled, rthProfiles, rthBarHighs, rthBarLows, rthBarVolumes, rthStartRef, rthStyle)
+    renderSession(weeklyEnabled, weeklyProfiles, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyStartRef, weeklyStyle)
+    renderSession(newDayOpenEnabled, newDayOpenProfiles, newDayOpenBarHighs, newDayOpenBarLows, newDayOpenBarVolumes, newDayOpenStartRef, newDayOpenStyle)
+    renderSession(monthlyEnabled, monthlyProfiles, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyStartRef, monthlyStyle)
+
+    if showColorTable
+        int colorTableRows = 1
+        colorTableRows += colorRowsForSession(rthEnabled, rthStyle)
+        colorTableRows += colorRowsForSession(weeklyEnabled, weeklyStyle)
+        colorTableRows += colorRowsForSession(newDayOpenEnabled, newDayOpenStyle)
+        colorTableRows += colorRowsForSession(monthlyEnabled, monthlyStyle)
+
+        if not na(colorTable)
+            table.delete(colorTable)
+        colorTable := table.new(position.top_right, 4, colorTableRows, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+        table.cell(colorTable, 0, 0, LABEL_TABLE_SETTING, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+        table.cell(colorTable, 1, 0, LABEL_TABLE_RGB, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+        table.cell(colorTable, 2, 0, LABEL_TABLE_TRANSPARENCY, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+        table.cell(colorTable, 3, 0, LABEL_TABLE_WIDTH, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+        int row = 1
+        row := addSessionColorRows(colorTable, row, SESSION_RTH, rthEnabled, rthStyle)
+        row := addSessionColorRows(colorTable, row, SESSION_WEEKLY, weeklyEnabled, weeklyStyle)
+        row := addSessionColorRows(colorTable, row, SESSION_NEW_DAY_OPEN, newDayOpenEnabled, newDayOpenStyle)
+        row := addSessionColorRows(colorTable, row, SESSION_MONTHLY, monthlyEnabled, monthlyStyle)
+    else if not na(colorTable)
+        table.delete(colorTable)
+        colorTable := na
+
+// TODO for Claude for continuous anchors:
+// New Day Open, Weekly and Monthly currently finalize the previous profile from
+// the period-start path in processSession(), which uses time[1].
+// That makes completed continuous profiles end one chart bar before the true
+// boundary (for example, 23:55 instead of 00:00 on a 5m chart). Prefer adding an
+// explicit boundary-end choice to processSession(), or splitting continuous
+// calendar periods into their own engine, so RTH keeps its gap-based behavior
+// while continuous anchors end at the actual new-period time.
