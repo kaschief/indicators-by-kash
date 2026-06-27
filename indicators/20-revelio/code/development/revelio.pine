@@ -28,8 +28,8 @@ ASSET_DETECTION_MAX_LOOKBACK = 4999
 // Brand bullet used between a level's name and its price in detailed labels.
 BRAND_BULLET = "•"
 
-// Trailing mid-dot that quietly marks a swept level on its chart label.
-SWEPT_MARK = "·"
+// Checkmark that quietly identifies a swept level on its chart label.
+SWEPT_CHECKMARK = "✓"
 
 START_TIME_UNSET = -1
 
@@ -46,6 +46,14 @@ HOLIDAY_MERGE_SPAN_FRACTION = 0.75
 PROFILE_ROWS = 250
 HISTOGRAM_SMOOTHING = 7
 HISTOGRAM_WIDTH_PERCENT = 25.0
+
+// Per-period sample arrays are compacted into a fine histogram once they pass the
+// threshold, keeping them well under Pine's 100,000-element array cap on long anchors
+// (weekly/monthly/globex) at fine intrabar resolutions (1S on 1-minute charts). The
+// working grid is much finer than PROFILE_ROWS so repeated compaction does not degrade
+// the final profile.
+SAMPLE_COMPACT_THRESHOLD = 60000
+SAMPLE_COMPACT_ROWS = 6000
 
 // Default "Curated Show Last" counts for the limited views, per cadence.
 DEFAULT_CURATED_RTH_GLOBEX_COUNT = 10
@@ -255,7 +263,6 @@ rthDevelopingCutoffMinute = input.int(30, ":", minval=0, maxval=59, inline="rth_
 rthShowSweptReminders = input.bool(true, LABEL_SWEPT_REMINDER, group=GROUP_RTH_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER)
 rthShowSweptReminderDate = input.bool(false, LABEL_SWEPT_REMINDER_DATE, group=GROUP_RTH_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER_DATE)
 rthSweptContinuationWidth = input.string("1", LABEL_SWEPT_CONTINUATION_LINE_WIDTH, options=["1", "2", "3", "4", "5"], group=GROUP_RTH_SWEPT, tooltip=TOOLTIP_SWEPT_CONTINUATION_LINE_WIDTH)
-rthSweptKeepDays = input.int(1, LABEL_RTH_SWEPT_KEEP, minval=0, maxval=365, group=GROUP_RTH_SWEPT, tooltip=TOOLTIP_RTH_SWEPT_KEEP)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Weekly session
@@ -290,7 +297,6 @@ weeklyLevelLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TI
 weeklyShowSweptReminders = input.bool(true, LABEL_SWEPT_REMINDER, group=GROUP_WEEKLY_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER)
 weeklyShowSweptReminderDate = input.bool(false, LABEL_SWEPT_REMINDER_DATE, group=GROUP_WEEKLY_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER_DATE)
 weeklySweptContinuationWidth = input.string("2", LABEL_SWEPT_CONTINUATION_LINE_WIDTH, options=["1", "2", "3", "4", "5"], group=GROUP_WEEKLY_SWEPT, tooltip=TOOLTIP_SWEPT_CONTINUATION_LINE_WIDTH)
-weeklySweptKeepWeeks = input.int(1, LABEL_WEEKLY_SWEPT_KEEP, minval=0, maxval=104, group=GROUP_WEEKLY_SWEPT, tooltip=TOOLTIP_WEEKLY_SWEPT_KEEP)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Globex session
@@ -359,7 +365,6 @@ monthlyLevelLabelSize = input.string(LABEL_SIZE_NORMAL, "", options=[LABEL_SIZE_
 monthlyShowSweptReminders = input.bool(true, LABEL_SWEPT_REMINDER, group=GROUP_MONTHLY_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER)
 monthlyShowSweptReminderDate = input.bool(false, LABEL_SWEPT_REMINDER_DATE, group=GROUP_MONTHLY_SWEPT, tooltip=TOOLTIP_SWEPT_REMINDER_DATE)
 monthlySweptContinuationWidth = input.string("3", LABEL_SWEPT_CONTINUATION_LINE_WIDTH, options=["1", "2", "3", "4", "5"], group=GROUP_MONTHLY_SWEPT, tooltip=TOOLTIP_SWEPT_CONTINUATION_LINE_WIDTH)
-monthlySweptKeepMonths = input.int(1, LABEL_MONTHLY_SWEPT_KEEP, minval=0, maxval=60, group=GROUP_MONTHLY_SWEPT, tooltip=TOOLTIP_MONTHLY_SWEPT_KEEP)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Display
@@ -375,6 +380,9 @@ levelLabelBgColor = input.color(color.new(color.rgb(249, 248, 248), 25), LABEL_L
 sweepConfirmMarginPercent = input.float(5.0, LABEL_SWEEP_CONFIRM_MARGIN, minval=0.0, maxval=50.0, step=0.5, inline="sweep_global", tooltip=TOOLTIP_SWEEP_MARGIN, group=GROUP_SWEEP)
 sweptContinuationLineFadePercent = input.int(75, LABEL_SWEPT_CONTINUATION_LINE_FADE, minval=0, maxval=100, inline="sweep_global", tooltip=TOOLTIP_SWEPT_CONTINUATION_LINE_FADE, group=GROUP_SWEEP)
 sweptLabelTextFadePercent = input.int(50, LABEL_SWEPT_LABEL_TEXT_FADE, minval=0, maxval=100, inline="sweep_global", tooltip=TOOLTIP_SWEPT_LABEL_TEXT_FADE, group=GROUP_SWEEP)
+rthSweptKeepDays = input.int(1, LABEL_RTH_SWEPT_KEEP, minval=0, maxval=365, tooltip=TOOLTIP_RTH_SWEPT_KEEP, group=GROUP_SWEEP)
+weeklySweptKeepWeeks = input.int(1, LABEL_WEEKLY_SWEPT_KEEP, minval=0, maxval=104, tooltip=TOOLTIP_WEEKLY_SWEPT_KEEP, group=GROUP_SWEEP)
+monthlySweptKeepMonths = input.int(1, LABEL_MONTHLY_SWEPT_KEEP, minval=0, maxval=60, tooltip=TOOLTIP_MONTHLY_SWEPT_KEEP, group=GROUP_SWEEP)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Utility
@@ -517,6 +525,45 @@ isBeforeNyCutoff(int cutoffHour, int cutoffMinute) =>
     int cutoffMinutes = cutoffHour * 60 + cutoffMinute
     currentMinutes < cutoffMinutes
 
+// Collapse a period's raw samples into a fine fixed-row histogram in place, replacing each
+// occupied row with one representative point sample (price = row center, volume = row total).
+// Bounds storage by row count instead of bar count; binning matches buildProfile so the
+// finalized profile is unchanged within histogram resolution.
+compactSamples(array<float> highs, array<float> lows, array<float> volumes) =>
+    int sampleCount = array.size(volumes)
+    if sampleCount > 0
+        float rawHigh = array.max(highs)
+        float rawLow = array.min(lows)
+        float priceSpan = math.max(rawHigh - rawLow, syminfo.mintick * SAMPLE_COMPACT_ROWS)
+        float compactLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+        float rowHeight = priceSpan / SAMPLE_COMPACT_ROWS
+        array<float> rowVolumes = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
+        for sampleIndex = 0 to sampleCount - 1
+            float sampleHigh = array.get(highs, sampleIndex)
+            float sampleLow = array.get(lows, sampleIndex)
+            float sampleVolume = array.get(volumes, sampleIndex)
+            int firstRow = clampRow((sampleLow - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int lastRow = clampRow((sampleHigh - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int rowsTouched = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = sampleVolume / rowsTouched
+            for rowIndex = firstRow to lastRow
+                array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + volumePerRow)
+        array.clear(highs)
+        array.clear(lows)
+        array.clear(volumes)
+        for rowIndex = 0 to SAMPLE_COMPACT_ROWS - 1
+            float rowVolume = array.get(rowVolumes, rowIndex)
+            if rowVolume > 0
+                float rowPrice = compactLow + (rowIndex + 0.5) * rowHeight
+                array.push(highs, rowPrice)
+                array.push(lows, rowPrice)
+                array.push(volumes, rowVolume)
+
+// Keep a period's sample arrays bounded; compact only once they pass the threshold.
+compactIfNeeded(array<float> highs, array<float> lows, array<float> volumes) =>
+    if array.size(volumes) > SAMPLE_COMPACT_THRESHOLD
+        compactSamples(highs, lows, volumes)
+
 // Append a confirmed bar's volume-by-price into the accumulator. Uses lower-tf sub-bars
 // when available (HD); falls back to the chart bar so every session builds consistently.
 appendBarVolume(array<float> highs, array<float> lows, array<float> volumes, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float chartHigh, float chartLow, float chartVolume) =>
@@ -536,6 +583,7 @@ appendBarVolume(array<float> highs, array<float> lows, array<float> volumes, arr
         array.push(highs, chartHigh)
         array.push(lows, chartLow)
         array.push(volumes, chartVolume)
+    compactIfNeeded(highs, lows, volumes)
 
 // Bin one period's raw bars into rows and derive POC + value area + level prices.
 buildProfile(array<float> highs, array<float> lows, array<float> volumes, int rowCount, float valueAreaPercent, int startTime, int endTime) =>
@@ -661,7 +709,7 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
         array.push(drawnLines, line.new(x1=endTime, y1=price, x2=time, y2=price, xloc=xloc.bar_time, extend=extend.right, color=sweptContinuationColor, width=style.sweptContinuationWidth, style=line.style_dashed))
     if style.levelLabelMode != LABEL_MODE_OFF and (extendRight or sweptDenote)
         string priceText = str.tostring(price, format.mintick)
-        string statePart = sweptDenote ? " " + SWEPT_MARK : ""
+        string statePart = sweptDenote ? " " + SWEPT_CHECKMARK : ""
         string dateText = style.labelMonthOnly ? monthName(month(startTime, NY_TIMEZONE)) : monthName(month(startTime, NY_TIMEZONE)) + " " + str.tostring(dayofmonth(startTime, NY_TIMEZONE))
         string nameText = isLive ? style.labelLive + " " + levelName : isLast ? style.labelLast + " " + levelName : style.labelAnchor + " " + levelName + " " + dateText
         string detailsText = nameText + statePart
@@ -828,6 +876,7 @@ finalizePeriod(array<float> barHighs, array<float> barLows, array<float> barVolu
             array.concat(pendingHighs, barHighs)
             array.concat(pendingLows, barLows)
             array.concat(pendingVolumes, barVolumes)
+            compactIfNeeded(pendingHighs, pendingLows, pendingVolumes)
             Profile merged = buildProfile(pendingHighs, pendingLows, pendingVolumes, PROFILE_ROWS, valueAreaPercent, array.get(pendingStartRef, 0), endTime)
             if merged.isValid
                 array.pop(profiles)
