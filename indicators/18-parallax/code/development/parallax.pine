@@ -45,7 +45,7 @@ const color DEFAULT_FIB_0_COLOR   = color.new(color.rgb(74,  74,  74),  65)
 const color SLOT1_COLOR = color.rgb(74,  74,  74)
 const color SLOT2_COLOR = color.rgb(128, 128, 128)
 const color SLOT3_COLOR = color.new(color.rgb(206, 147, 216), 90)
-const color SLOT4_COLOR = color.rgb(219, 219, 219)
+const color SLOT4_COLOR = color.rgb(178, 235, 242)
 const int   LABEL_TEXT_TRANSPARENCY = 50
 
 const int SECS_MIN       = 60
@@ -321,7 +321,7 @@ const string HOLIDAY_OFF    = "Off"
 const string HOLIDAY_EXTEND = "Extend"
 const string HOLIDAY_NATIVE = "Native"
 holidayMode = input.string(HOLIDAY_NATIVE, "Holiday Mode", options=[HOLIDAY_OFF, HOLIDAY_EXTEND, HOLIDAY_NATIVE], group=GROUP_GENERAL,
-     tooltip="Handles the daily zone when TradingView merges a holiday session into one 'D' bar (e.g. Memorial Day), which otherwise leaves the day after with no range. Daily slots only.\n  Off — TradingView's merged bar.\n  Extend — stretch the merged zone to the live edge so there's no gap (keeps the merged range).\n  Native — force a fresh daily zone at the 18:00 ET reopen; open is read from the chart, band widths reuse the latest daily stats.")
+     tooltip="Handles holiday sessions that TradingView merges or shifts (e.g. Memorial Day merging into one 'D' bar, or a Friday Juneteenth breaking a 'W' bar early), which otherwise leaves the zone misaligned.\n  Off — TradingView's native bar.\n  Extend — stretch the merged daily zone to the live edge so there's no gap (keeps the merged range). Daily slots only.\n  Native — force a fresh daily zone at the 18:00 ET reopen and a fresh weekly zone at the Sunday 18:00 ET reopen; open is read from the chart, band widths reuse the latest stats.")
 
 const string TAG_OFF    = "Off"
 const string TAG_PLAIN  = "Show"
@@ -464,6 +464,22 @@ else
     nativeRunHigh := math.max(nativeRunHigh, high)
     nativeRunLow  := math.min(nativeRunLow,  low)
 
+// NATIVE WEEKLY SESSION — rolls at the Sunday 18:00 ET reopen, ignoring TradingView's
+// holiday-shifted "W" bar (e.g. a Friday Juneteenth would otherwise break the week early).
+bool nativeNewWeek = nativeNewDay and dayofweek(time, NATIVE_TZ) == dayofweek.sunday
+var int   nativeWeekStartT  = na
+var float nativeWeekOpen    = na
+var float nativeWeekRunHigh = na
+var float nativeWeekRunLow  = na
+if nativeNewWeek or na(nativeWeekStartT)
+    nativeWeekStartT  := time
+    nativeWeekOpen    := open
+    nativeWeekRunHigh := high
+    nativeWeekRunLow  := low
+else
+    nativeWeekRunHigh := math.max(nativeWeekRunHigh, high)
+    nativeWeekRunLow  := math.min(nativeWeekRunLow,  low)
+
 
 
 // SLOT STATE
@@ -553,13 +569,17 @@ draw_slot_fib(SlotState s, int leftT, int rightT, float anchorHigh, float anchor
 // Resolves a slot's rollover signal + zone anchors + effective open/run-high/low, applying the
 // daily holiday override. Returns [transitionNow, zoneStart, curLeft, curRight, open, runHigh, runLow].
 resolve_slot_timing(string safe, float normOpen, float normRunHigh, float normRunLow,
-                    bool nNewDay, int nDayStart, float nOpen, float nRunHigh, float nRunLow) =>
+                    bool nNewDay, int nDayStart, float nOpen, float nRunHigh, float nRunLow,
+                    bool nNewWeek, int nWeekStart, float nwOpen, float nwRunHigh, float nwRunLow) =>
     bool isDaily   = timeframe.in_seconds(safe) == SECS_DAY
+    bool isWeekly  = timeframe.in_seconds(safe) == SECS_WEEK
     int  normStart = time(safe)
     int  normRight = normStart + timeframe.in_seconds(safe) * MS_PER_SEC
     bool normTrans = ta.change(time(safe)) != 0
     if isDaily and holidayMode == HOLIDAY_NATIVE
         [nNewDay, nDayStart, nDayStart, nDayStart + SECS_DAY * MS_PER_SEC, nOpen, nRunHigh, nRunLow]
+    else if isWeekly and holidayMode == HOLIDAY_NATIVE
+        [nNewWeek, nWeekStart, nWeekStart, nWeekStart + SECS_WEEK * MS_PER_SEC, nwOpen, nwRunHigh, nwRunLow]
     else if isDaily and holidayMode == HOLIDAY_EXTEND
         [normTrans, normStart, normStart, (normRight > time ? normRight : time), normOpen, normRunHigh, normRunLow]
     else
@@ -696,10 +716,10 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, int curLeft, int curR
 
 // DISPATCH — every bar maintains state per slot
 
-[s1Trans, s1Start, s1CurL, s1CurR, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow)
-[s2Trans, s2Start, s2CurL, s2CurR, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow)
-[s3Trans, s3Start, s3CurL, s3CurR, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow)
-[s4Trans, s4Start, s4CurL, s4CurR, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow)
+[s1Trans, s1Start, s1CurL, s1CurR, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s2Trans, s2Start, s2CurL, s2CurR, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s3Trans, s3Start, s3CurL, s3CurR, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s4Trans, s4Start, s4CurL, s4CurR, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
 
 update_slot(slot1, s1Valid, s1Trans, s1Start, s1OEff, s1RHi, s1RLo, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, slot1History, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE)
 update_slot(slot2, s2Valid, s2Trans, s2Start, s2OEff, s2RHi, s2RLo, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, slot2History, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE)
