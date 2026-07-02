@@ -79,8 +79,8 @@ type SessionData
     int lowMitigationBar
     line highMitigationLine
     line lowMitigationLine
-    label highMitigationLabel
-    label lowMitigationLabel
+    array<label> highMitigationReminders
+    array<label> lowMitigationReminders
     // Unmitigated level lines
     line highUnmitigatedLine
     line lowUnmitigatedLine
@@ -116,10 +116,6 @@ type SessionData
     label lowPendingLabel
     // Deviation extension (extends deviation zones beyond session end)
     int deviationExtendMs
-    bool dev1HitUpper
-    bool dev1HitLower
-    line dev1HitTickUpper
-    line dev1HitTickLower
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI STRING CONSTANTS
@@ -154,12 +150,15 @@ LABEL_DEVIATION_LABELS = "Dev. Label"
 LABEL_OFFSET = "Offset"
 LABEL_SHOW_ONLY = "Show Only"
 LABEL_HIDDEN_CANDLES = "Hidden Candles"
+LABEL_MOST_RECENT_ONLY = "Most Recent Only"
+TOOLTIP_MOST_RECENT_ONLY = "Narrows Show Only to a single occurrence: mutes every EARLIER copy of the chosen window too, leaving only the current NY date's occurrence lit, so today's price action reads in isolation. Deviation zones, lines and labels stay fully visible.\n\nMutes on the candle level only, so 'most recent' follows the calendar date — while a session is live this is the latest occurrence; with no session today (weekend/holiday) nothing in the window is lit until the next one opens.\n\nOff = every day's window stays lit."
 TOOLTIP_SHOW_ONLY = "Keep only the chosen NY-time window lit and grey out (recolor body, wick and outline) every candle outside it, every day, so the deviation zones read cleanly without manually changing chart colors. The color picker sets the hidden-candle color; the dropdown picks WHICH session stays visible (each is paired with its inverse so the opposite side can be isolated):\n• Overnight (16:00–05:00) — the standard overnight\n• Day Session (05:00–16:00) — inverse of Overnight (default: greys the overnight)\n• Non-RTH (16:00–09:30) — everything outside regular hours\n• RTH (09:30–16:00) — the regular trading hours cash session\n• Globex (18:00–09:30) — Globex open through the next cash open\n• Non-Globex (09:30–18:00) — inverse of Globex\n\nIntraday only — no effect above the 1-hour timeframe."
 LABEL_MITIGATION = "Mitigation"
 LABEL_RETRACE_50 = "0.5"
 LABEL_RETRACE_618 = "0.618"
 LABEL_RETRACE_COLOR = "Retracement Label"
 LABEL_RETRACE_BG = "Background"
+LABEL_MITIGATION_REMINDER = "Add Mitigation Reminder Labels"
 BRAND_BULLET = " • "
 LABEL_EXTEND = "Extend"
 LABEL_EXTEND_CUSTOM = "Custom"
@@ -235,6 +234,10 @@ PENDING_LABEL_TRANSPARENCY_REDUCTION = 55.0
 PENDING_LABEL_TRANSPARENCY_MAX = 12.0
 COLOR_TABLE_MAX_ROWS = 60
 
+// Reminder spacing = one tag per session-length spanned, floored so short sessions stay sparse; hard cap.
+MITIGATION_REMINDER_MIN_SPAN_MS = 8 * 60 * 60 * 1000
+MITIGATION_REMINDER_MAX_PER_LINE = 2
+
 // Show Only — color the hidden (greyed) candles take
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 0)
 
@@ -242,9 +245,10 @@ const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 0)
 // Tooltips
 TOOLTIP_MAX_SESSIONS = "Max number of sessions to display per opening type"
 TOOLTIP_SHOW_SESSION_NAMES = "Show session name labels"
-TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION = "Add the session name to mitigation markers for the key sessions (Rafael, Asia Open, IVB).\n\n• 0.5 / 0.618 labels stay bare and use the session's retracement label colors.\n• The mitigated high/low line gets a session-name label at its midpoint (e.g. asia open).\n\nOff = high/low lines stay unlabelled."
+TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION = "Add the session name to mitigation markers for the key sessions (Rafael, Asia Open, IVB).\n\n• 0.5 / 0.618 labels stay bare and use the session's retracement label colors.\n• The mitigated high/low line gets a session-name label (at its midpoint, or tiled along it when Add Mitigation Reminder Labels is on, e.g. asia open).\n\nOff = high/low lines stay unlabelled."
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
+TOOLTIP_MITIGATION_REMINDER = "Repeat the key session's name sparsely along its mitigated high/low line, so a faded line stays identifiable when you scroll away from its midpoint. Spacing scales with the session's own length and stays sparse (sublinear).\n\nOff = one name at the line's midpoint only."
 
 // Option values
 OPT_HIDDEN = "Hidden"
@@ -327,6 +331,7 @@ maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_
 showOnlyEnabled = input.bool(true, LABEL_SHOW_ONLY, inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 visibleWindow = input.string(SHOW_DAY, "", options=[SHOW_OVERNIGHT, SHOW_DAY, SHOW_PM_TO_NY, SHOW_RTH, SHOW_GLOBEX_TO_NY, SHOW_NY_TO_GLOBEX], inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
+showOnlyMostRecent = input.bool(false, LABEL_MOST_RECENT_ONLY, inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY + "\n\n———\n\n" + LABEL_MOST_RECENT_ONLY + "\n" + TOOLTIP_MOST_RECENT_ONLY)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Mitigation
@@ -341,6 +346,7 @@ showPendingLabels = input.bool(true, "Label Provisional Lines", group=GROUP_MITI
 
 showLabels = input.bool(false, LABEL_SHOW_SESSION_NAMES, group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
 showSessionNameOnMitigation = input.bool(true, "Show Session Name on Key Mitigations", group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION)
+showMitigationReminders = input.bool(true, LABEL_MITIGATION_REMINDER, group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_MITIGATION_REMINDER)
 labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, inline="label_colors", group=GROUP_SESSION_LABELS)
 labelsBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), "Background", inline="label_colors", group=GROUP_SESSION_LABELS, tooltip="Background color for session and deviation labels. Key-session 0.5 and 0.618 labels use their session-specific controls instead. Set transparency to 100 for no background.")
 
@@ -352,10 +358,6 @@ enableDeviationGlow = input.bool(false, "Deviation Glow", group=GROUP_DISPLAY, t
 glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1)
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Time window in hours. Touches older than this will not show the darkening effect.")
 quickCheckMode = input.bool(true, "Quick Check", group=GROUP_DISPLAY, tooltip="Hide deviations for Rafael, 1800, and 2203 - show core only")
-dev1Hit = input.bool(false, "Mark 1800 1W", inline="dev1", group=GROUP_DISPLAY, tooltip="Draw a tick at the left edge of the 06:00–09:00 box at the previous 1800 (Asia Open) 1.0 deviation level once price wicks it during the window. Upper/lower are tracked separately. Independent of whether 1800 deviations are drawn.")
-dev1HitColor = input.color(color.new(color.rgb(247, 82, 95), 0), "", inline="dev1", group=GROUP_DISPLAY)
-dev1HitTickBars = input.int(10, "Length", inline="dev1", group=GROUP_DISPLAY, minval=1, maxval=50)
-dev1HitExtendHours = input.float(0.0, "Hours After", group=GROUP_DISPLAY, minval=0.0, maxval=6.0, step=0.25, tooltip="Hours past 09:00 to keep detecting 1800 1W hits. 0 = only inside 06:00–09:00. 1.5 = up to 10:30. 3 = up to 12:00.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Intraday Sessions
@@ -785,21 +787,25 @@ resolve_pending_label(bool keep, label lbl, line pending, float level, string tx
         result := na
     result
 
-// Name a confirmed mitigation line at its midpoint; cleared when off or the line is gone.
-resolve_mitigation_label(bool keep, label lbl, line mitLine, float level, string txt) =>
-    label result = lbl
-    if keep and not na(mitLine)
-        int center = int((line.get_x1(mitLine) + line.get_x2(mitLine)) / 2)
-        if na(result)
-            result := label.new(center, level, txt, style=label.style_label_center, textcolor=labelColor, size=size.tiny, color=labelsBgColor, xloc=xloc.bar_time)
-        else
-            label.set_x(result, center)
-            label.set_y(result, level)
-            label.set_text(result, txt)
-    else if not na(result)
-        label.delete(result)
-        result := na
-    result
+// Repeat off = one name at the line midpoint; repeat on = name tiled along the line, one tag per ~session
+// length spanned (floored so short sessions don't crowd; sqrt-sparse so long lines don't crowd). Rebuilt each bar.
+resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, float level, string txt, bool repeat, int sessionMs) =>
+    if not keep or na(mitLine)
+        for lbl in reminders
+            label.delete(lbl)
+        array.clear(reminders)
+    else if array.size(reminders) == 0
+        // Confirmed mitigation lines never move, so build the tags once instead of rebuilding every bar.
+        int x1 = line.get_x1(mitLine)
+        int runMs = line.get_x2(mitLine) - x1
+        if runMs > 0
+            int count = 1
+            if repeat and sessionMs > 0
+                float tagSpanMs = math.max(sessionMs, MITIGATION_REMINDER_MIN_SPAN_MS)
+                count := math.min(MITIGATION_REMINDER_MAX_PER_LINE, math.max(1, int(math.round(math.sqrt(runMs / tagSpanMs)))))
+            for placement = 1 to count
+                int tagTime = x1 + int(runMs * (placement - 0.5) / count)
+                array.push(reminders, label.new(tagTime, level, txt, style=label.style_label_center, textcolor=labelColor, size=size.tiny, color=labelsBgColor, xloc=xloc.bar_time))
 
 shouldShowMitigationName(SessionData sess, bool isHigh) =>
     if sess.sessionIndex == IDX_IVB
@@ -997,10 +1003,12 @@ deleteSession(SessionData sess) =>
         line.delete(sess.highMitigationLine)
     if not na(sess.lowMitigationLine)
         line.delete(sess.lowMitigationLine)
-    if not na(sess.highMitigationLabel)
-        label.delete(sess.highMitigationLabel)
-    if not na(sess.lowMitigationLabel)
-        label.delete(sess.lowMitigationLabel)
+    for lbl in sess.highMitigationReminders
+        label.delete(lbl)
+    array.clear(sess.highMitigationReminders)
+    for lbl in sess.lowMitigationReminders
+        label.delete(lbl)
+    array.clear(sess.lowMitigationReminders)
     if not na(sess.midMitigationLine)
         line.delete(sess.midMitigationLine)
     if not na(sess.midMitigationLabel)
@@ -1027,10 +1035,6 @@ deleteSession(SessionData sess) =>
         line.delete(sess.lowUnmitigatedLine)
     if not na(sess.lowUnmitigatedLabel)
         label.delete(sess.lowUnmitigatedLabel)
-    if not na(sess.dev1HitTickUpper)
-        line.delete(sess.dev1HitTickUpper)
-    if not na(sess.dev1HitTickLower)
-        line.delete(sess.dev1HitTickLower)
 
 // Clear live drawings from active session (keeps session data, just removes visuals for redraw)
 clearLiveDrawings(SessionData sess) =>
@@ -1147,13 +1151,9 @@ isOn30sTimeframe = timeframe.period == "30S"
 current30sDetectionDate = dayofmonth(time, NY_TIMEZONE)
 needToCapture30sData = na(stored30sDate) or stored30sDate != current30sDetectionDate
 
-// Fetch all 30S candles within each higher timeframe bar (only when needed)
-// Note: request.security_lower_tf must be called unconditionally, but we skip processing if not needed
-ltfHighs = request.security_lower_tf(syminfo.tickerid, "30S", high)
-ltfLows = request.security_lower_tf(syminfo.tickerid, "30S", low)
-ltfOpens = request.security_lower_tf(syminfo.tickerid, "30S", open)
-ltfCloses = request.security_lower_tf(syminfo.tickerid, "30S", close)
-ltfTimes = request.security_lower_tf(syminfo.tickerid, "30S", time)
+// Fetch all 30S candles within each higher timeframe bar (only when needed). One tuple request keeps this to
+// a single lower-timeframe fetch instead of five (must be called unconditionally; processing skipped if unused).
+[ltfHighs, ltfLows, ltfOpens, ltfCloses, ltfTimes] = request.security_lower_tf(syminfo.tickerid, "30S", [high, low, open, close, time])
 
 // Confirmed (closed) 30m close + its bar-open time, for IVB mitigation. close[1] + lookahead_on
 // is the no-repaint idiom: returns only fully-closed 30m values. Single tuple request keeps it to one security call.
@@ -1254,8 +1254,8 @@ if validTimeframe
                      lowMitigationBar=na,
                      highMitigationLine=na,
                      lowMitigationLine=na,
-                     highMitigationLabel=na,
-                     lowMitigationLabel=na,
+                     highMitigationReminders=array.new<label>(),
+                     lowMitigationReminders=array.new<label>(),
                      highUnmitigatedLine=na,
                      lowUnmitigatedLine=na,
                      highUnmitigatedLabel=na,
@@ -1282,11 +1282,7 @@ if validTimeframe
                      lowPendingLine=na,
                      highPendingLabel=na,
                      lowPendingLabel=na,
-                     deviationExtendMs=getSessionExtendMs(i),
-                     dev1HitUpper=false,
-                     dev1HitLower=false,
-                     dev1HitTickUpper=na,
-                     dev1HitTickLower=na
+                     deviationExtendMs=getSessionExtendMs(i)
                  )
 
                 array.push(activeSessions, newSession)
@@ -1573,8 +1569,10 @@ if validTimeframe and array.size(sessions) > 0
                 sess.highPendingLabel := resolve_pending_label(showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
                 sess.lowPendingLabel := resolve_pending_label(showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
                 bool wantMitigationName = showSessionNameOnMitigation and sess.isKeySession
-                sess.highMitigationLabel := resolve_mitigation_label(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationLabel, sess.highMitigationLine, sess.dominantHigh, str.lower(sess.chartLabel))
-                sess.lowMitigationLabel := resolve_mitigation_label(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationLabel, sess.lowMitigationLine, sess.dominantLow, str.lower(sess.chartLabel))
+                string mitigationTxt = str.lower(sess.chartLabel)
+                int mitigationSessionMs = sess.actualEndTime - sess.startTime
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders, mitigationSessionMs)
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.dominantLow, mitigationTxt, showMitigationReminders, mitigationSessionMs)
 
             // === CONSOLIDATED POST-MITIGATION CLEANUP (single check replaces duplicates) ===
             // Delete unmitigated line/label when HIGH is mitigated
@@ -1754,47 +1752,6 @@ if validTimeframe and array.size(sessions) > 0
                     label.delete(sessB.lowUnmitigatedLabel)
                     sessB.lowUnmitigatedLabel := na
 
-// 1800 1.0 DEV HIT MARKER (in 6-9 window, optionally extended past 09:00)
-if validTimeframe and dev1Hit and array.size(sessions) > 0
-    SessionData earlySess = na
-    if array.size(activeSessions) > 0
-        for s in activeSessions
-            if s.sessionIndex == IDX_NY_EARLY
-                earlySess := s
-                break
-
-    // Extension window: fall back to today's finalized NY Early session
-    if na(earlySess) and dev1HitExtendHours > 0
-        extendMs = int(dev1HitExtendHours * 60 * 60 * 1000)
-        for k = array.size(sessions) - 1 to 0
-            candidate = array.get(sessions, k)
-            if candidate.sessionIndex == IDX_NY_EARLY
-                if isSameCalendarDay(candidate.startTime, time) and time <= candidate.actualEndTime + extendMs
-                    earlySess := candidate
-                break
-
-    if not na(earlySess)
-        SessionData latestAsia = na
-        for k = array.size(sessions) - 1 to 0
-            candidate = array.get(sessions, k)
-            if candidate.sessionIndex == IDX_ASIA_OPEN
-                latestAsia := candidate
-                break
-
-        if not na(latestAsia) and not na(latestAsia.wickHigh) and not na(latestAsia.wickLow)
-            asiaWickHeight = latestAsia.wickHigh - latestAsia.wickLow
-            upperDev1 = latestAsia.wickHigh + asiaWickHeight
-            lowerDev1 = latestAsia.wickLow - asiaWickHeight
-            tickStart = earlySess.startTime - dev1HitTickBars * BAR_MS
-
-            if not earlySess.dev1HitUpper and high >= upperDev1
-                earlySess.dev1HitUpper := true
-                earlySess.dev1HitTickUpper := line.new(tickStart, upperDev1, earlySess.startTime, upperDev1, color=dev1HitColor, style=line.style_solid, width=2, xloc=xloc.bar_time)
-
-            if not earlySess.dev1HitLower and low <= lowerDev1
-                earlySess.dev1HitLower := true
-                earlySess.dev1HitTickLower := line.new(tickStart, lowerDev1, earlySess.startTime, lowerDev1, color=dev1HitColor, style=line.style_solid, width=2, xloc=xloc.bar_time)
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 5: DEVIATION GLOW - Darken deviation zones when price touches them
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1950,10 +1907,6 @@ if validTimeframe and showColorTable and barstate.islast
     if opening_0600_0900 != OPT_HIDDEN and isInFilter(IDX_NY_EARLY)
         currentRow += addSessionColorRows(colorTable, currentRow, "NY Early", opening_0600_0900_coreColor, opening_0600_0900_deviationColor, opening_0600_0900_mitigationColor, opening_0600_0900_mitigation)
 
-    if dev1Hit
-        addSingleColorRow(colorTable, currentRow, "1800 1W Mark", dev1HitColor)
-        currentRow += 1
-
     if opening_1600_0500 != OPT_HIDDEN and isInFilter(IDX_OVERNIGHT)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1600_0500, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, opening_1600_0500_mitigationColor, opening_1600_0500_mitigation)
 
@@ -2002,14 +1955,14 @@ if validTimeframe and showColorTable and barstate.islast
 // The dropdown picks one recurring NY-time window to keep visible; a bar is greyed when it falls OUTSIDE
 // that window. Windows are evaluated from const session strings (time() needs consts) and selected by mode.
 showOnlyTimeframeAllowed = timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
-inVisibleOvernight = not na(time(timeframe.period, SESSION_WINDOW_OVERNIGHT, NY_TIMEZONE))
-inVisibleDay = not na(time(timeframe.period, SESSION_WINDOW_DAY, NY_TIMEZONE))
-inVisiblePmToNy = not na(time(timeframe.period, SESSION_WINDOW_PM_TO_NY, NY_TIMEZONE))
-inVisibleRth = not na(time(timeframe.period, SESSION_WINDOW_RTH, NY_TIMEZONE))
-inVisibleGlobexToNy = not na(time(timeframe.period, SESSION_WINDOW_GLOBEX_TO_NY, NY_TIMEZONE))
-inVisibleNyToGlobex = not na(time(timeframe.period, SESSION_WINDOW_NY_TO_GLOBEX, NY_TIMEZONE))
-inVisibleWindow = visibleWindow == SHOW_DAY ? inVisibleDay : visibleWindow == SHOW_PM_TO_NY ? inVisiblePmToNy : visibleWindow == SHOW_RTH ? inVisibleRth : visibleWindow == SHOW_GLOBEX_TO_NY ? inVisibleGlobexToNy : visibleWindow == SHOW_NY_TO_GLOBEX ? inVisibleNyToGlobex : inVisibleOvernight
-hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not inVisibleWindow
+// Pick the chosen window first, then do ONE session lookup per bar instead of evaluating all six.
+activeShowOnlySession = visibleWindow == SHOW_DAY ? SESSION_WINDOW_DAY : visibleWindow == SHOW_PM_TO_NY ? SESSION_WINDOW_PM_TO_NY : visibleWindow == SHOW_RTH ? SESSION_WINDOW_RTH : visibleWindow == SHOW_GLOBEX_TO_NY ? SESSION_WINDOW_GLOBEX_TO_NY : visibleWindow == SHOW_NY_TO_GLOBEX ? SESSION_WINDOW_NY_TO_GLOBEX : SESSION_WINDOW_OVERNIGHT
+inVisibleWindow = not na(time(timeframe.period, activeShowOnlySession, NY_TIMEZONE))
+// Most Recent Only narrows the lit window to the current NY calendar day; only pay the date math when it's on.
+bool inMostRecentDay = true
+if showOnlyMostRecent
+    inMostRecentDay := dayofmonth(time, NY_TIMEZONE) == dayofmonth(timenow, NY_TIMEZONE) and month(time, NY_TIMEZONE) == month(timenow, NY_TIMEZONE) and year(time, NY_TIMEZONE) == year(timenow, NY_TIMEZONE)
+hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not (inVisibleWindow and (not showOnlyMostRecent or inMostRecentDay))
 
 plotcandle(hideThisBar ? open : na, high, low, close, color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
 
