@@ -37,6 +37,9 @@ type SessionConfig
     bool isKeySession
     color retraceLabelTextColor
     color retraceLabelBgColor
+    bool retraceCapAt1600
+    bool showRetracement
+    string retracementMode
 
 type SessionData
     int sessionIndex
@@ -96,6 +99,7 @@ type SessionData
     bool retrace618Mitigated
     line retrace618Line
     label retrace618Label
+    int ivbReentrySide  // 0 = undetermined, 1 = re-entering from above, -1 = from below
     // Alerts
     bool enableAlert
     // Delayed mitigation (evaluate only from 05:00 onward)
@@ -103,6 +107,9 @@ type SessionData
     bool isKeySession
     color retraceLabelTextColor
     color retraceLabelBgColor
+    bool retraceCapAt1600
+    bool showRetracement
+    string retracementMode
     // Midnight-crossing session (e.g., 21:30-01:29) - extends same-day logic to next calendar day
     bool crossesMidnight
     // Provisional mitigation tracking (overnight breach pending 05:00 confirmation)
@@ -130,7 +137,7 @@ GROUP_INTRADAY = "Intraday Sessions"
 GROUP_2130_0129 = "Key Session: Rafael (21:30–01:29)"
 GROUP_1600_0500 = "Extended Opening: Overnight (16:00–05:00)"
 GROUP_0500_0915 = "Extended Opening: Premarket (05:00–09:15)"
-GROUP_0600_0900 = "Extended Opening: NY Early Hours (06:00–09:00)"
+GROUP_0600_0900 = "Key Session: NY Early Hours (06:00–09:00)"
 GROUP_0930_0945 = "Extended Opening: NY Open 15m (09:30–09:45)"
 GROUP_0930_1000 = "Key Session: IVB (09:30–10:00)"
 GROUP_0930_093030 = "Extended Opening: 30s Opening (09:30:00–09:30:30)"
@@ -158,6 +165,10 @@ LABEL_RETRACE_50 = "0.5"
 LABEL_RETRACE_618 = "0.618"
 LABEL_RETRACE_COLOR = "Retracement Label"
 LABEL_RETRACE_BG = "Background"
+LABEL_SHOW_RETRACEMENT = "Show 0.5 / 0.618 Labels"
+LABEL_RETRACEMENT_MODE = "Retracement Mode"
+TOOLTIP_SHOW_RETRACEMENT = "Show this session's 0.5 and 0.618 retracement labels when price returns to those levels after an extreme is taken."
+TOOLTIP_RETRACEMENT_MODE = "Standard: the 0.5 / 0.618 retracement qualifies as soon as price returns to the level after a session extreme is taken (normal key-session behavior).\n\nIVB-based: the retracement qualifies only after IVB has first left/taken one side of its range (a wick is enough — no full mitigation needed) and price LATER touches the level. IVB must be enabled and included by the active Quick Filter. The IVB exit candle itself never counts as the retracement."
 LABEL_MITIGATION_REMINDER = "Add Mitigation Reminder Labels"
 BRAND_BULLET = " • "
 LABEL_EXTEND = "Extend"
@@ -277,12 +288,16 @@ IDX_IVB = 14
 SESSION_MITIGATED = "Mitigated"
 SESSION_UNMITIGATED = "Unmitigated"
 
+RETRACE_MODE_STANDARD = "Standard"
+RETRACE_MODE_IVB = "IVB-based"
+
 // Quick filter presets
 FILTER_ALL = "All"
 FILTER_RAFAEL = "Rafael"
 FILTER_RAFAEL_1800 = "Rafael + 1800"
 FILTER_RAFAEL_1800_EARLY = "☾ Rafael + 1800 + Early"
 FILTER_RAFAEL_1800_EARLY_IVB = "Rafael + 1800 + Early + IVB"
+FILTER_NY_EARLY_IVB = "NY Early + IVB"
 FILTER_RAFAEL_1800_EARLY_2203 = "Rafael + 1800 + Early + 2203"
 FILTER_RAFAEL_1800_EARLY_OVERNIGHT = "Rafael + 1800 + Early + Overnight"
 FILTER_FULL_NYAM = "Full NYAM"
@@ -322,7 +337,7 @@ DEV_J_IVB = "0.25:0.5, 1:1.5"                                    // IVB (09:30-1
 // INPUTS - General Settings
 // ═══════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_RAFAEL_1800_EARLY_2203, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_FULL_NYAM, FILTER_NYAM_LITE, FILTER_RAFAEL_1800_NYAM_LITE, FILTER_RAFAEL_1800_2203_NYAM_LITE, FILTER_RAFAEL_1800_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT, FILTER_INTRADAY, FILTER_1800, FILTER_1800_EARLY, FILTER_0800_0850, FILTER_1845_2203, FILTER_IVB], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
+quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_RAFAEL_1800_EARLY_2203, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_FULL_NYAM, FILTER_NYAM_LITE, FILTER_RAFAEL_1800_NYAM_LITE, FILTER_RAFAEL_1800_2203_NYAM_LITE, FILTER_RAFAEL_1800_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT, FILTER_INTRADAY, FILTER_1800, FILTER_1800_EARLY, FILTER_0800_0850, FILTER_1845_2203, FILTER_IVB, FILTER_NY_EARLY_IVB], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
 maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
 showOnlyEnabled = input.bool(true, LABEL_SHOW_ONLY, inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
@@ -412,22 +427,6 @@ opening_1400_1415_deviationColor = input.color(color.new(color.rgb(186, 104, 200
 opening_1400_1415_mitigationColor = input.color(color.new(color.rgb(156, 39, 176), 60), LABEL_MITIGATION, inline="1415_2", group=GROUP_INTRADAY)
 opening_1400_1415_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="1415_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
 opening_1400_1415_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="1415_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 06:00-09:00
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_0600_0900 = input.string(DEV_B_NY_EARLY, "Deviations", group=GROUP_0600_0900)
-
-opening_0600_0900 = input.string(OPT_WICK, SESSION_EXTENDED_0600_0900, inline="0600_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
-opening_0600_0900_offset = input.bool(false, LABEL_OFFSET, inline="0600_1", group=GROUP_0600_0900)
-opening_0600_0900_mitigation = input.bool(true, LABEL_MITIGATION, inline="0600_1", group=GROUP_0600_0900)
-opening_0600_0900_extend = input.string(EXTEND_6H, LABEL_EXTEND, inline="0600_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_0600_0900)
-opening_0600_0900_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="0600_extend", group=GROUP_0600_0900, minval=0.5, maxval=24, step=0.5)
-opening_0600_0900_coreColor = input.color(color.new(color.rgb(178, 235, 242), 90), LABEL_CORE, inline="0600_2", group=GROUP_0600_0900)
-opening_0600_0900_deviationColor = input.color(color.new(color.rgb(77, 208, 225), 85), LABEL_DEVIATIONS, inline="0600_2", group=GROUP_0600_0900)
-opening_0600_0900_mitigationColor = input.color(color.new(color.rgb(178, 235, 242), 0), LABEL_MITIGATION, inline="0600_2", group=GROUP_0600_0900)
-opening_0600_0900_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0600_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
-opening_0600_0900_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0600_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0600_0900)
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 16:00-05:00
 // ═══════════════════════════════════════════════════════════════════════════
@@ -568,6 +567,27 @@ opening_2130_0129_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POS
 opening_2130_0129_delayedMitigation = input.bool(true, "Delay Mitigation Until 05:00", group=GROUP_2130_0129, tooltip="Overnight touches show as provisional (dashed) until 05:00.")
 
 // ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - Key Session: NY Early Hours (06:00-09:00)
+// ═══════════════════════════════════════════════════════════════════════════
+
+deviations_0600_0900 = input.string(DEV_B_NY_EARLY, "Deviations", group=GROUP_0600_0900)
+
+opening_0600_0900 = input.string(OPT_WICK, SESSION_EXTENDED_0600_0900, inline="0600_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
+opening_0600_0900_offset = input.bool(false, LABEL_OFFSET, inline="0600_1", group=GROUP_0600_0900)
+opening_0600_0900_mitigation = input.bool(true, LABEL_MITIGATION, inline="0600_1", group=GROUP_0600_0900)
+opening_0600_0900_extend = input.string(EXTEND_6H, LABEL_EXTEND, inline="0600_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_0600_0900)
+opening_0600_0900_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="0600_extend", group=GROUP_0600_0900, minval=0.5, maxval=24, step=0.5)
+opening_0600_0900_coreColor = input.color(color.new(color.rgb(178, 235, 242), 90), LABEL_CORE, inline="0600_2", group=GROUP_0600_0900)
+opening_0600_0900_deviationColor = input.color(color.new(color.rgb(77, 208, 225), 85), LABEL_DEVIATIONS, inline="0600_2", group=GROUP_0600_0900)
+opening_0600_0900_mitigationColor = input.color(color.new(color.rgb(178, 235, 242), 0), LABEL_MITIGATION, inline="0600_2", group=GROUP_0600_0900)
+opening_0600_0900_retraceLabelTextColor = input.color(color.new(color.rgb(46, 46, 46), 40), LABEL_RETRACE_COLOR, inline="0600_retrace_colors", group=GROUP_0600_0900, tooltip=TOOLTIP_RETRACE_TEXT_COLOR)
+opening_0600_0900_retraceLabelBgColor = input.color(color.new(color.rgb(77, 208, 225), 75), LABEL_RETRACE_BG, inline="0600_retrace_colors", group=GROUP_0600_0900, tooltip=TOOLTIP_RETRACE_BG_COLOR)
+opening_0600_0900_showRetracement = input.bool(true, LABEL_SHOW_RETRACEMENT, inline="0600_retrace_mode", group=GROUP_0600_0900, tooltip=TOOLTIP_SHOW_RETRACEMENT)
+opening_0600_0900_retracementMode = input.string(RETRACE_MODE_IVB, LABEL_RETRACEMENT_MODE, options=[RETRACE_MODE_STANDARD, RETRACE_MODE_IVB], inline="0600_retrace_mode", group=GROUP_0600_0900, tooltip=TOOLTIP_RETRACEMENT_MODE)
+opening_0600_0900_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0600_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0600_0900)
+opening_0600_0900_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0600_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0600_0900)
+
+// ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Key Session: IVB (09:30-10:00)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -661,6 +681,10 @@ skipsBodyCore(int idx) =>
 skipsBodyDeviations(int idx) =>
     idx == IDX_30S_OPENING
 
+// Key sessions whose mitigated high/low line should NOT carry the session-name reminder.
+skipsMitigationName(int idx) =>
+    idx == IDX_NY_EARLY
+
 // Parsing helpers
 parseTimeToMinutes(string timeStr) =>
     hour = str.tonumber(str.substring(timeStr, 0, 2))
@@ -748,6 +772,18 @@ alwaysTrackMitigation(int idx) =>
         IDX_ASIA_OPEN => true   // 1800 (18:00-21:00)
         IDX_1845_2203 => true   // 2203 (18:45-22:03)
         => false
+
+// Earliest time an IVB left/took one side of its range on refStartTime's day (na if none yet).
+// The NY Early IVB-mode retracement touch must land strictly after this, excluding the IVB exit candle.
+ivbBreachTimeForDay(int refStartTime) =>
+    int earliest = na
+    for s in sessions
+        if s.sessionIndex == IDX_IVB and isSameCalendarDay(s.startTime, refStartTime)
+            if s.provisionalHighMitigated and (na(earliest) or s.provisionalHighTime < earliest)
+                earliest := s.provisionalHighTime
+            if s.provisionalLowMitigated and (na(earliest) or s.provisionalLowTime < earliest)
+                earliest := s.provisionalLowTime
+    earliest
 
 // Draw confirmed mitigation line - extend pending line (if provisional) or draw new solid line
 // When provisional: just extends pending line, returns na (solid line already in highMitigationLine)
@@ -964,6 +1000,8 @@ isInFilter(int idx) =>
         idx == IDX_1845_2203
     else if quickFilter == FILTER_IVB
         idx == IDX_IVB
+    else if quickFilter == FILTER_NY_EARLY_IVB
+        idx == IDX_NY_EARLY or idx == IDX_IVB
     else
         true
 
@@ -1105,21 +1143,21 @@ if na(cachedDeviations_intraday)
 // ═══════════════════════════════════════════════════════════════════════════
 
 var array<SessionConfig> sessionConfigs = array.from(
-    SessionConfig.new(opening_2000_2015, opening_2000_2015_offset, opening_2000_2015_showLabels, 1200, 1215, opening_2000_2015_coreColor, opening_2000_2015_deviationColor, SESSION_INTRADAY_2015, CHART_LABEL_2015, opening_2000_2015_labelPosition, opening_2000_2015_mitigation, opening_2000_2015_mitigationColor, opening_2000_2015_alert, false, opening_2000_2015_extend, opening_2000_2015_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, opening_2130_0129_alert, opening_2130_0129_delayedMitigation, opening_2130_0129_extend, opening_2130_0129_extendCustom, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor),
-    SessionConfig.new(opening_0200_0215, opening_0200_0215_offset, opening_0200_0215_showLabels, 120, 135, opening_0200_0215_coreColor, opening_0200_0215_deviationColor, SESSION_INTRADAY_0215, CHART_LABEL_0215, opening_0200_0215_labelPosition, opening_0200_0215_mitigation, opening_0200_0215_mitigationColor, opening_0200_0215_alert, false, opening_0200_0215_extend, opening_0200_0215_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0900_0915, opening_0900_0915_offset, opening_0900_0915_showLabels, 540, 555, opening_0900_0915_coreColor, opening_0900_0915_deviationColor, SESSION_INTRADAY_0915, CHART_LABEL_0915, opening_0900_0915_labelPosition, opening_0900_0915_mitigation, opening_0900_0915_mitigationColor, opening_0900_0915_alert, false, opening_0900_0915_extend, opening_0900_0915_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_1200_1230, opening_1200_1230_offset, opening_1200_1230_showLabels, 720, 750, opening_1200_1230_coreColor, opening_1200_1230_deviationColor, SESSION_INTRADAY_1230, CHART_LABEL_1230, opening_1200_1230_labelPosition, opening_1200_1230_mitigation, opening_1200_1230_mitigationColor, opening_1200_1230_alert, false, opening_1200_1230_extend, opening_1200_1230_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_1400_1415, opening_1400_1415_offset, opening_1400_1415_showLabels, 840, 855, opening_1400_1415_coreColor, opening_1400_1415_deviationColor, SESSION_INTRADAY_1415, CHART_LABEL_1415, opening_1400_1415_labelPosition, opening_1400_1415_mitigation, opening_1400_1415_mitigationColor, opening_1400_1415_alert, false, opening_1400_1415_extend, opening_1400_1415_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, opening_0600_0900_alert, false, opening_0600_0900_extend, opening_0600_0900_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_1600_0500, opening_1600_0500_offset, opening_1600_0500_showLabels, 960, 300, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, SESSION_EXTENDED_1600_0500, CHART_LABEL_1600_0500, opening_1600_0500_labelPosition, opening_1600_0500_mitigation, opening_1600_0500_mitigationColor, opening_1600_0500_alert, false, opening_1600_0500_extend, opening_1600_0500_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, opening_0500_0915_alert, false, opening_0500_0915_extend, opening_0500_0915_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0930_0945, opening_0930_0945_offset, opening_0930_0945_showLabels, 570, 585, opening_0930_0945_coreColor, opening_0930_0945_deviationColor, SESSION_EXTENDED_0930_0945, CHART_LABEL_0930_0945, opening_0930_0945_labelPosition, opening_0930_0945_mitigation, opening_0930_0945_mitigationColor, opening_0930_0945_alert, false, opening_0930_0945_extend, opening_0930_0945_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_alert, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, opening_1800_2100_extendCustom, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor),
-    SessionConfig.new(opening_0930_093030, opening_0930_093030_offset, opening_0930_093030_showLabels, 570, 570, opening_0930_093030_coreColor, opening_0930_093030_deviationColor, SESSION_EXTENDED_0930_093030, CHART_LABEL_0930_093030, opening_0930_093030_labelPosition, opening_0930_093030_mitigation, opening_0930_093030_mitigationColor, opening_0930_093030_alert, false, opening_0930_093030_extend, opening_0930_093030_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0800_0850, opening_0800_0850_offset, opening_0800_0850_showLabels, 480, 530, opening_0800_0850_coreColor, opening_0800_0850_deviationColor, SESSION_EXTENDED_0800_0850, CHART_LABEL_0800_0850, opening_0800_0850_labelPosition, opening_0800_0850_mitigation, opening_0800_0850_mitigationColor, opening_0800_0850_alert, false, opening_0800_0850_extend, opening_0800_0850_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_1845_2203, opening_1845_2203_offset, opening_1845_2203_showLabels, 1125, 1323, opening_1845_2203_coreColor, opening_1845_2203_deviationColor, SESSION_EXTENDED_1845_2203, CHART_LABEL_1845_2203, opening_1845_2203_labelPosition, opening_1845_2203_mitigation, opening_1845_2203_mitigationColor, opening_1845_2203_alert, opening_1845_2203_delayedMitigation, opening_1845_2203_extend, opening_1845_2203_extendCustom, false, labelColor, labelsBgColor),
-    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, 570, 600, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, opening_0930_1000_alert, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor)
+    SessionConfig.new(opening_2000_2015, opening_2000_2015_offset, opening_2000_2015_showLabels, 1200, 1215, opening_2000_2015_coreColor, opening_2000_2015_deviationColor, SESSION_INTRADAY_2015, CHART_LABEL_2015, opening_2000_2015_labelPosition, opening_2000_2015_mitigation, opening_2000_2015_mitigationColor, opening_2000_2015_alert, false, opening_2000_2015_extend, opening_2000_2015_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, opening_2130_0129_alert, opening_2130_0129_delayedMitigation, opening_2130_0129_extend, opening_2130_0129_extendCustom, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0200_0215, opening_0200_0215_offset, opening_0200_0215_showLabels, 120, 135, opening_0200_0215_coreColor, opening_0200_0215_deviationColor, SESSION_INTRADAY_0215, CHART_LABEL_0215, opening_0200_0215_labelPosition, opening_0200_0215_mitigation, opening_0200_0215_mitigationColor, opening_0200_0215_alert, false, opening_0200_0215_extend, opening_0200_0215_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0900_0915, opening_0900_0915_offset, opening_0900_0915_showLabels, 540, 555, opening_0900_0915_coreColor, opening_0900_0915_deviationColor, SESSION_INTRADAY_0915, CHART_LABEL_0915, opening_0900_0915_labelPosition, opening_0900_0915_mitigation, opening_0900_0915_mitigationColor, opening_0900_0915_alert, false, opening_0900_0915_extend, opening_0900_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1200_1230, opening_1200_1230_offset, opening_1200_1230_showLabels, 720, 750, opening_1200_1230_coreColor, opening_1200_1230_deviationColor, SESSION_INTRADAY_1230, CHART_LABEL_1230, opening_1200_1230_labelPosition, opening_1200_1230_mitigation, opening_1200_1230_mitigationColor, opening_1200_1230_alert, false, opening_1200_1230_extend, opening_1200_1230_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1400_1415, opening_1400_1415_offset, opening_1400_1415_showLabels, 840, 855, opening_1400_1415_coreColor, opening_1400_1415_deviationColor, SESSION_INTRADAY_1415, CHART_LABEL_1415, opening_1400_1415_labelPosition, opening_1400_1415_mitigation, opening_1400_1415_mitigationColor, opening_1400_1415_alert, false, opening_1400_1415_extend, opening_1400_1415_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, opening_0600_0900_alert, false, opening_0600_0900_extend, opening_0600_0900_extendCustom, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
+    SessionConfig.new(opening_1600_0500, opening_1600_0500_offset, opening_1600_0500_showLabels, 960, 300, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, SESSION_EXTENDED_1600_0500, CHART_LABEL_1600_0500, opening_1600_0500_labelPosition, opening_1600_0500_mitigation, opening_1600_0500_mitigationColor, opening_1600_0500_alert, false, opening_1600_0500_extend, opening_1600_0500_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, opening_0500_0915_alert, false, opening_0500_0915_extend, opening_0500_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0930_0945, opening_0930_0945_offset, opening_0930_0945_showLabels, 570, 585, opening_0930_0945_coreColor, opening_0930_0945_deviationColor, SESSION_EXTENDED_0930_0945, CHART_LABEL_0930_0945, opening_0930_0945_labelPosition, opening_0930_0945_mitigation, opening_0930_0945_mitigationColor, opening_0930_0945_alert, false, opening_0930_0945_extend, opening_0930_0945_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_alert, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, opening_1800_2100_extendCustom, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0930_093030, opening_0930_093030_offset, opening_0930_093030_showLabels, 570, 570, opening_0930_093030_coreColor, opening_0930_093030_deviationColor, SESSION_EXTENDED_0930_093030, CHART_LABEL_0930_093030, opening_0930_093030_labelPosition, opening_0930_093030_mitigation, opening_0930_093030_mitigationColor, opening_0930_093030_alert, false, opening_0930_093030_extend, opening_0930_093030_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0800_0850, opening_0800_0850_offset, opening_0800_0850_showLabels, 480, 530, opening_0800_0850_coreColor, opening_0800_0850_deviationColor, SESSION_EXTENDED_0800_0850, CHART_LABEL_0800_0850, opening_0800_0850_labelPosition, opening_0800_0850_mitigation, opening_0800_0850_mitigationColor, opening_0800_0850_alert, false, opening_0800_0850_extend, opening_0800_0850_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1845_2203, opening_1845_2203_offset, opening_1845_2203_showLabels, 1125, 1323, opening_1845_2203_coreColor, opening_1845_2203_deviationColor, SESSION_EXTENDED_1845_2203, CHART_LABEL_1845_2203, opening_1845_2203_labelPosition, opening_1845_2203_mitigation, opening_1845_2203_mitigationColor, opening_1845_2203_alert, opening_1845_2203_delayedMitigation, opening_1845_2203_extend, opening_1845_2203_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, 570, 600, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, opening_0930_1000_alert, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1264,11 +1302,15 @@ if validTimeframe
                      retrace618Mitigated=false,
                      retrace618Line=na,
                      retrace618Label=na,
+                     ivbReentrySide=0,
                      enableAlert=cfg.alert,
                      delayedMitigation=cfg.delayedMitigation,
                      isKeySession=cfg.isKeySession,
                      retraceLabelTextColor=cfg.retraceLabelTextColor,
                      retraceLabelBgColor=cfg.retraceLabelBgColor,
+                     retraceCapAt1600=cfg.retraceCapAt1600,
+                     showRetracement=cfg.showRetracement,
+                     retracementMode=cfg.retracementMode,
                      crossesMidnight=crossesMidnight,
                      provisionalHighMitigated=false,
                      provisionalLowMitigated=false,
@@ -1424,6 +1466,9 @@ if validTimeframe and array.size(activeSessions) > 0
 // PHASE 4: MITIGATION DETECTION - Check for breaches on completed sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
+// IVB-based retracement requires IVB enabled and in the active filter.
+ivbFeatureAvailable = opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
+
 if validTimeframe and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
@@ -1440,7 +1485,7 @@ if validTimeframe and array.size(sessions) > 0
             canEvaluateMitigation = shouldTrackMitigation and (not sess.delayedMitigation or (barMinutes >= PREMARKET_START_MIN and barMinutes < CLOSE_1600_MIN))
             // Provisional window = genuine overnight only (formation evening + next day pre-05:00). Excludes the next day's post-RTH hours so a holiday-delayed revisit confirms (caps the dash) instead of staying pending past 05:00 — see crossesMidnight sessions (Rafael) where an empty holiday RTH window left the dash running.
             isInOvernightWindow = sess.delayedMitigation and not canEvaluateMitigation and (isOnSessionStartDay or isInNextDayOvernightWindow)
-            canEvaluateRetraceMitigation = sess.sessionIndex != IDX_IVB or (shouldTrackMitigation and barMinutes < CLOSE_1600_MIN)
+            canEvaluateRetraceMitigation = not sess.retraceCapAt1600 or (shouldTrackMitigation and barMinutes < CLOSE_1600_MIN)
 
             // === HIGH MITIGATION LOGIC ===
             if not sess.highMitigated
@@ -1564,7 +1609,7 @@ if validTimeframe and array.size(sessions) > 0
             if mitigationMode == SESSION_MITIGATED
                 sess.highPendingLabel := resolve_pending_label(showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
                 sess.lowPendingLabel := resolve_pending_label(showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
-                bool wantMitigationName = showSessionNameOnMitigation and sess.isKeySession
+                bool wantMitigationName = showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex)
                 string mitigationTxt = str.lower(sess.chartLabel)
                 int mitigationSessionMs = sess.actualEndTime - sess.startTime
                 resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders, mitigationSessionMs)
@@ -1585,8 +1630,8 @@ if validTimeframe and array.size(sessions) > 0
                 label.delete(sess.lowUnmitigatedLabel)
                 sess.lowUnmitigatedLabel := na
 
-            // Calculate 61.8% retracement (once, on first extreme mitigated only)
-            if sess.isKeySession and na(sess.retraceLevel618)
+            // Standard mode anchors 0.618 off the first extreme taken; IVB mode anchors off re-entry direction below.
+            if sess.isKeySession and sess.retracementMode != RETRACE_MODE_IVB and na(sess.retraceLevel618)
                 if sess.highMitigated and not sess.lowMitigated
                     sess.retraceLevel618 := sess.wickHigh - sess.wickHeight * 0.618
                 else if sess.lowMitigated and not sess.highMitigated
@@ -1668,17 +1713,31 @@ if validTimeframe and array.size(sessions) > 0
                             else
                                 line.set_x2(sess.lowUnmitigatedLine, time)
                                 label.set_x(sess.lowUnmitigatedLabel, time)
+            // IVB mode gates the retracement on a prior IVB breach; the last excursion before price
+            // returns sets the re-entry direction that anchors the 0.618.
+            bool retraceGateOpen = sess.retracementMode != RETRACE_MODE_IVB
+            if sess.retracementMode == RETRACE_MODE_IVB
+                int ivbBreach = ivbBreachTimeForDay(sess.startTime)
+                retraceGateOpen := ivbFeatureAvailable and not na(ivbBreach) and time > ivbBreach
+                if retraceGateOpen and not na(sess.wickHigh)
+                    if high > sess.wickHigh
+                        sess.ivbReentrySide := 1
+                    else if low < sess.wickLow
+                        sess.ivbReentrySide := -1
+                if sess.ivbReentrySide != 0 and not sess.retrace618Mitigated
+                    sess.retraceLevel618 := sess.ivbReentrySide == 1 ? sess.wickHigh - sess.wickHeight * 0.618 : sess.wickLow + sess.wickHeight * 0.618
+            bool canDrawRetrace = sess.showRetracement and retraceGateOpen
+
             // Check for 50% mitigation (only after an extreme has been mitigated, only in Mitigated mode)
             // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and (sess.highMitigated or sess.lowMitigated) and not sess.midMitigated and not na(sess.midLevel)
+            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and (sess.highMitigated or sess.lowMitigated) and not sess.midMitigated and not na(sess.midLevel)
                 // Determine retracement direction: which extreme was mitigated first?
                 bool lowWasFirst = sess.lowMitigated and (not sess.highMitigated or sess.lowMitigationBar < sess.highMitigationBar)
                 firstMitigationBar = lowWasFirst ? nz(sess.lowMitigationBar, 0) : nz(sess.highMitigationBar, 0)
                 // Only check on bars AFTER the mitigation bar (not the same bar)
                 if bar_index > firstMitigationBar
-                    // LOW first = retracing UP = high must reach UP to midLevel
-                    // HIGH first = retracing DOWN = low must reach DOWN to midLevel
-                    bool retraceCondition = lowWasFirst ? high >= sess.midLevel : low <= sess.midLevel
+                    // IVB mode requires an actual touch (range contains the level) since the gate can open with price already past it.
+                    bool retraceCondition = sess.retracementMode == RETRACE_MODE_IVB ? (low <= sess.midLevel and high >= sess.midLevel) : (lowWasFirst ? high >= sess.midLevel : low <= sess.midLevel)
                     if retraceCondition
                         sess.midMitigated := true
                         sess.midMitigationLine := line.new(sess.actualEndTime, sess.midLevel, time, sess.midLevel, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_50_LINE_WIDTH, xloc=xloc.bar_time)
@@ -1691,7 +1750,7 @@ if validTimeframe and array.size(sessions) > 0
                             alert(alertMsg, alert.freq_once_per_bar)
 
             // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
+            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
                 // Determine direction: if 61.8% level is above midLevel, LOW was first (retracing UP)
                 bool lowWasFirst618 = sess.retraceLevel618 > sess.midLevel
                 // Get the FIRST mitigation bar (whichever extreme was mitigated first)
@@ -1699,9 +1758,8 @@ if validTimeframe and array.size(sessions) > 0
                 firstMitigationBar618 = lowWasFirstCalc ? nz(sess.lowMitigationBar, 0) : nz(sess.highMitigationBar, 0)
                 // Only check on bars AFTER the mitigation bar (not the same bar)
                 if bar_index > firstMitigationBar618
-                    // LOW first = retracing UP = high must reach UP to level
-                    // HIGH first = retracing DOWN = low must reach DOWN to level
-                    bool retraceCondition618 = lowWasFirst618 ? high >= sess.retraceLevel618 : low <= sess.retraceLevel618
+                    // IVB mode requires an actual touch (range contains the level), not a bar already past it.
+                    bool retraceCondition618 = sess.retracementMode == RETRACE_MODE_IVB ? (low <= sess.retraceLevel618 and high >= sess.retraceLevel618) : (lowWasFirst618 ? high >= sess.retraceLevel618 : low <= sess.retraceLevel618)
                     if retraceCondition618
                         sess.retrace618Mitigated := true
                         sess.retrace618Line := line.new(sess.actualEndTime, sess.retraceLevel618, time, sess.retraceLevel618, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
@@ -1866,6 +1924,11 @@ addSessionStyleColorRow(table tbl, int row, string sessionName, string styleName
     table.cell(tbl, 2, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
     table.cell(tbl, 3, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
+addRetracementColorRows(table tbl, int startRow, string sessionName, color textClr, color bgClr) =>
+    addSessionStyleColorRow(tbl, startRow, sessionName, "Retracement Text", textClr)
+    addSessionStyleColorRow(tbl, startRow + 1, sessionName, "Retracement Bg", bgClr)
+    2
+
 if validTimeframe and showColorTable and barstate.islast
     var table colorTable = table.new(position.top_right, 4, COLOR_TABLE_MAX_ROWS, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
@@ -1883,10 +1946,7 @@ if validTimeframe and showColorTable and barstate.islast
 
     if opening_2130_0129 != OPT_HIDDEN and isInFilter(IDX_0129)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_0129, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, opening_2130_0129_mitigationColor, opening_2130_0129_mitigation)
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_INTRADAY_0129, "Retracement Text", opening_2130_0129_retraceLabelTextColor)
-        currentRow += 1
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_INTRADAY_0129, "Retracement Bg", opening_2130_0129_retraceLabelBgColor)
-        currentRow += 1
+        currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_INTRADAY_0129, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor)
 
     if opening_0200_0215 != OPT_HIDDEN and isInFilter(IDX_0215)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_0215, opening_0200_0215_coreColor, opening_0200_0215_deviationColor, opening_0200_0215_mitigationColor, opening_0200_0215_mitigation)
@@ -1902,6 +1962,7 @@ if validTimeframe and showColorTable and barstate.islast
 
     if opening_0600_0900 != OPT_HIDDEN and isInFilter(IDX_NY_EARLY)
         currentRow += addSessionColorRows(colorTable, currentRow, "NY Early", opening_0600_0900_coreColor, opening_0600_0900_deviationColor, opening_0600_0900_mitigationColor, opening_0600_0900_mitigation)
+        currentRow += addRetracementColorRows(colorTable, currentRow, "NY Early", opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor)
 
     if opening_1600_0500 != OPT_HIDDEN and isInFilter(IDX_OVERNIGHT)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1600_0500, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, opening_1600_0500_mitigationColor, opening_1600_0500_mitigation)
@@ -1914,17 +1975,11 @@ if validTimeframe and showColorTable and barstate.islast
 
     if opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, opening_0930_1000_mitigationColor, opening_0930_1000_mitigation)
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_EXTENDED_0930_1000, "Retracement Text", opening_0930_1000_retraceLabelTextColor)
-        currentRow += 1
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_EXTENDED_0930_1000, "Retracement Bg", opening_0930_1000_retraceLabelBgColor)
-        currentRow += 1
+        currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor)
 
     if opening_1800_2100 != OPT_HIDDEN and isInFilter(IDX_ASIA_OPEN)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1800_2100, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, opening_1800_2100_mitigationColor, opening_1800_2100_mitigation)
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_EXTENDED_1800_2100, "Retracement Text", opening_1800_2100_retraceLabelTextColor)
-        currentRow += 1
-        addSessionStyleColorRow(colorTable, currentRow, SESSION_EXTENDED_1800_2100, "Retracement Bg", opening_1800_2100_retraceLabelBgColor)
-        currentRow += 1
+        currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_EXTENDED_1800_2100, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor)
 
     if opening_0930_093030 != OPT_HIDDEN and isInFilter(IDX_30S_OPENING)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_093030, opening_0930_093030_coreColor, opening_0930_093030_deviationColor, opening_0930_093030_mitigationColor, opening_0930_093030_mitigation)
