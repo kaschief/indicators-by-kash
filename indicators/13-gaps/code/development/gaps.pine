@@ -43,6 +43,7 @@ const color DEFAULT_RTH_UNFILLED_COLOR = color.new(color.rgb(76, 175, 80), 85)
 const color DEFAULT_RTH_FILLED_COLOR = color.new(color.rgb(99, 99, 99), 95)
 const color DEFAULT_RTH_PREVIEW_COLOR = color.new(color.rgb(255, 152, 0), 85)
 const color DEFAULT_RTH_BORDER_COLOR = color.rgb(128, 128, 128)
+const color UPCOMING_RTH_COLOR = color.rgb(255, 193, 7)
 
 const color DEFAULT_NWOG_UNFILLED_COLOR = color.new(color.rgb(41, 98, 255), 70)
 const color DEFAULT_NWOG_FILLED_COLOR = color.new(color.rgb(99, 99, 99), 90)
@@ -113,6 +114,7 @@ rthBorderColor = input.color(DEFAULT_RTH_BORDER_COLOR, LABEL_BORDER_LABEL, group
 hideFilledRTH = input.bool(false, LABEL_HIDE_FILLED, group=GROUP_RTH, inline="rth_border")
 preserveTodayFilledRTH = input.bool(true, "Preserve Today", group=GROUP_RTH, inline="rth_today", tooltip="Keep the current trading day RTH gap visible in its anchored historical position even after it fills. This is a display exception, not a floating rule: in Floating Only it stays anchored while a still-open RTH continues to float.")
 nearestRTHCount = input.int(0, "Float Nearest Unfilled", minval=0, maxval=10, group=GROUP_RTH, inline="rth_nearest", tooltip="Floats the N unfilled RTH gaps closest to price (either direction), in addition to the most-recent RTH float. 0 = off. Requires a floating Display Mode.")
+rthFloatDistinctColors = input.bool(true, "Distinct Float Colors", group=GROUP_RTH, inline="rth_distinct", tooltip="Give each floating RTH gap its own border and label color, cycled from a fixed palette, so nested floats in the column can be told apart. Off = every RTH float uses the RTH border color.")
 
 showNWOGInput = input.bool(true, "NWOG Gaps", group=GROUP_NWOG, inline="nwog")
 nwogLimit = input.int(10, "", minval=1, maxval=50, group=GROUP_NWOG, inline="nwog")
@@ -294,6 +296,14 @@ getBorderColor(GapType gapType) =>
         GapType.ndog => ndogBorderColor
         => rthBorderColor
 
+floatPaletteColor(int slot) =>
+    switch slot % 5
+        0 => color.rgb(76, 175, 80)
+        1 => color.rgb(156, 39, 176)
+        2 => color.rgb(0, 150, 136)
+        3 => color.rgb(121, 85, 72)
+        => color.rgb(183, 28, 28)
+
 getFloatOffset(GapType gapType) =>
     switch gapType
         GapType.nwog => FLOAT_OFFSET_NWOG
@@ -361,8 +371,8 @@ createRthDraft(float closePrice) =>
     leftBar = bar_index + DRAFT_OFFSET_RTH
     rightBar = leftBar + DRAFT_WIDTH
     bodyBox = box.new(leftBar, draftTop, rightBar, draftBottom, xloc=xloc.bar_index, bgcolor=rthPreviewColor, border_color=na)
-    topBorder = line.new(leftBar, draftTop, rightBar, draftTop, xloc=xloc.bar_index, color=rthBorderColor, style=line.style_solid)
-    bottomBorder = line.new(leftBar, draftBottom, rightBar, draftBottom, xloc=xloc.bar_index, color=rthBorderColor, style=line.style_solid)
+    topBorder = line.new(leftBar, draftTop, rightBar, draftTop, xloc=xloc.bar_index, color=UPCOMING_RTH_COLOR, style=line.style_solid)
+    bottomBorder = line.new(leftBar, draftBottom, rightBar, draftBottom, xloc=xloc.bar_index, color=UPCOMING_RTH_COLOR, style=line.style_solid)
     draftLabel = label.new(math.round((leftBar + rightBar) / 2), draftBottom, "", xloc=xloc.bar_index, yloc=yloc.price, color=LABEL_BG_TRANSPARENT, textcolor=rthBorderColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
     DraftGap.new(
@@ -465,13 +475,13 @@ updateRthDraft(DraftGap draft, float closePrice) =>
     line.set_x2(draft.topBorderLine, rightBar)
     line.set_y1(draft.topBorderLine, draft.top)
     line.set_y2(draft.topBorderLine, draft.top)
-    line.set_color(draft.topBorderLine, rthBorderColor)
+    line.set_color(draft.topBorderLine, UPCOMING_RTH_COLOR)
 
     line.set_x1(draft.bottomBorderLine, leftBar)
     line.set_x2(draft.bottomBorderLine, rightBar)
     line.set_y1(draft.bottomBorderLine, draft.bottom)
     line.set_y2(draft.bottomBorderLine, draft.bottom)
-    line.set_color(draft.bottomBorderLine, rthBorderColor)
+    line.set_color(draft.bottomBorderLine, UPCOMING_RTH_COLOR)
 
     label.set_x(draft.dateLabel, centerBar)
     label.set_y(draft.dateLabel, draft.bottom)
@@ -489,7 +499,7 @@ hideFloatingDrawings(FloatingGap floating) =>
     line.set_color(floating.bottomBorderLine, na)
     label.set_text(floating.dateLabel, "")
 
-updateFloating(FloatingGap floating, GapRecord gap) =>
+updateFloating(FloatingGap floating, GapRecord gap, color borderOverride = na) =>
     leftBar = bar_index + getFloatOffset(gap.gapType)
     rightBar = leftBar + FLOAT_WIDTH
     centerBar = math.round((leftBar + rightBar) / 2)
@@ -500,7 +510,7 @@ updateFloating(FloatingGap floating, GapRecord gap) =>
     [tTop, tBot, fTop, fBot, bTop, bBot] = getBoxGeometry(gap.entryDirection, gap.penetrationLevel, gap.top, gap.bottom)
     unfilledClr = getUnfilledColor(gap.gapType)
     filledClr = getFilledColor(gap.gapType)
-    borderClr = getBorderColor(gap.gapType)
+    borderClr = na(borderOverride) ? getBorderColor(gap.gapType) : borderOverride
 
     box.set_left(floating.topUnfilledBox, leftBar)
     box.set_right(floating.topUnfilledBox, rightBar)
@@ -550,7 +560,7 @@ updateFloating(FloatingGap floating, GapRecord gap) =>
     label.set_x(floating.dateLabel, centerBar)
     label.set_y(floating.dateLabel, gap.bottom)
     label.set_text(floating.dateLabel, showLabels ? getGapLabel(gap) : "")
-    label.set_textcolor(floating.dateLabel, borderClr)
+    label.set_textcolor(floating.dateLabel, getBorderColor(gap.gapType))
 
 applyGapColors(GapRecord gap) =>
     [tTop, tBot, fTop, fBot, bTop, bBot] = getBoxGeometry(gap.entryDirection, gap.penetrationLevel, gap.top, gap.bottom)
@@ -869,12 +879,12 @@ if barstate.islast
                     if isNearestRTHFloat
                         if array.size(nearestRTHFloats) <= nearestRTHRendered
                             array.push(nearestRTHFloats, createFloatingGap(gap))
-                        updateFloating(array.get(nearestRTHFloats, nearestRTHRendered), gap)
+                        updateFloating(array.get(nearestRTHFloats, nearestRTHRendered), gap, rthFloatDistinctColors ? floatPaletteColor(nearestRTHRendered + 1) : na)
                         nearestRTHRendered += 1
                     else if gap.gapType == GapType.rth
                         if na(floatingRTH)
                             floatingRTH := createFloatingGap(gap)
-                        updateFloating(floatingRTH, gap)
+                        updateFloating(floatingRTH, gap, rthFloatDistinctColors ? floatPaletteColor(0) : na)
                         floatingRTHRendered := true
                     else if gap.gapType == GapType.nwog
                         if na(floatingNWOG)
