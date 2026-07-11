@@ -133,7 +133,7 @@ type SessionData
 // Group names
 GROUP_GENERAL = "General"
 GROUP_MITIGATION = "Mitigation"
-GROUP_SESSION_LABELS = "Session Labels"
+GROUP_LABELS = "Labels"
 GROUP_DISPLAY = "Display"
 GROUP_INTRADAY = "Intraday Sessions"
 GROUP_2130_0129 = "Key Session: Rafael (21:30–01:29)"
@@ -351,22 +351,24 @@ showOnlyMostRecent = input.bool(false, LABEL_MOST_RECENT_ONLY, inline="show_only
 // ═══════════════════════════════════════════════════════════════════════════
 
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
-showPendingLabels = input.bool(true, "Label Provisional Lines", group=GROUP_MITIGATION, tooltip="Adds a right-edge session label to provisional (dashed) mitigation lines so you can identify which session each dashed line belongs to on a busy chart.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Labels
 // ═══════════════════════════════════════════════════════════════════════════
 
-showLabels = input.bool(false, LABEL_SHOW_SESSION_NAMES, group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
-showSessionNameOnMitigation = input.bool(true, "Show Session Name on Key Mitigations", group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION)
-showMitigationReminders = input.bool(true, LABEL_MITIGATION_REMINDER, group=GROUP_SESSION_LABELS, tooltip=TOOLTIP_MITIGATION_REMINDER)
-labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, inline="label_colors", group=GROUP_SESSION_LABELS)
-labelsBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), "Background", inline="label_colors", group=GROUP_SESSION_LABELS, tooltip="Background color for session and deviation labels. Key-session 0.5 and 0.618 labels use their session-specific controls instead. Set transparency to 100 for no background.")
+showAllLabels = input.bool(true, "Show All Labels", group=GROUP_LABELS, tooltip="Master label switch. Off hides every chart label while preserving all label settings below, so turning it back on restores the same label configuration.")
+showSessionNames = input.bool(false, LABEL_SHOW_SESSION_NAMES, group=GROUP_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
+showPendingLabels = input.bool(true, "Label Provisional Lines", group=GROUP_LABELS, tooltip="Adds a right-edge session label to provisional (dashed) mitigation lines so you can identify which session each dashed line belongs to on a busy chart.")
+showSessionNameOnMitigation = input.bool(true, "Show Session Name on Key Mitigations", group=GROUP_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION)
+showMitigationReminders = input.bool(true, LABEL_MITIGATION_REMINDER, group=GROUP_LABELS, tooltip=TOOLTIP_MITIGATION_REMINDER)
+labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, inline="label_colors", group=GROUP_LABELS)
+labelsBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), "Background", inline="label_colors", group=GROUP_LABELS, tooltip="Background color for session and deviation labels. Key-session 0.5 and 0.618 labels use their session-specific controls instead. Set transparency to 100 for no background.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Display
 // ═══════════════════════════════════════════════════════════════════════════
 
+showAllLines = input.bool(true, "Show All Lines", group=GROUP_DISPLAY, tooltip="Master line switch. Off hides deviation levels, mitigation lines, provisional lines, unmitigated extensions and retracement lines while leaving boxes visible. Calculations and alerts continue normally.")
 enableDeviationGlow = input.bool(false, "Deviation Glow", group=GROUP_DISPLAY, tooltip="Darken deviation zones when price touches them. The darkening only persists while the touch is within the configured time window.")
 glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1)
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Time window in hours. Touches older than this will not show the darkening effect.")
@@ -794,9 +796,11 @@ ivbBreachTimeForDay(int refStartTime) =>
 // Draw confirmed mitigation line - extend pending line (if provisional) or draw new solid line
 // When provisional: just extends pending line, returns na (solid line already in highMitigationLine)
 // When not provisional: creates new solid line and returns it
-draw_confirmed_mitigation_line(bool was_provisional, line pending_line, int origin_time, float level, color mit_color) =>
+draw_confirmed_mitigation_line(bool enabled, bool was_provisional, line pending_line, int origin_time, float level, color mit_color) =>
     line result = na
-    if was_provisional and not na(pending_line)
+    if not enabled
+        result := na
+    else if was_provisional and not na(pending_line)
         line.set_x2(pending_line, time)
         // Don't return the pending line - solid line is already stored in highMitigationLine
     else
@@ -805,9 +809,12 @@ draw_confirmed_mitigation_line(bool was_provisional, line pending_line, int orig
 
 // Draw provisional breach lines - solid from origin to breach, dashed pending from breach
 // Returns tuple of [solid_line, pending_line]
-draw_provisional_breach_lines(int origin_time, float level, color mit_color) =>
-    solid_line = line.new(origin_time, level, time, level, color=mit_color, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-    pending_line = line.new(time, level, time, level, color=mit_color, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
+draw_provisional_breach_lines(bool enabled, int origin_time, float level, color mit_color) =>
+    line solid_line = na
+    line pending_line = na
+    if enabled
+        solid_line := line.new(origin_time, level, time, level, color=mit_color, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
+        pending_line := line.new(time, level, time, level, color=mit_color, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
     [solid_line, pending_line]
 
 // Label a dashed pending line at its right edge while it's still open; remove it once mitigated
@@ -891,7 +898,7 @@ parseDeviationZones(string deviationStr) =>
     zones
 
 // Drawing helper - unified function for all deviation zones (singles and ranges)
-drawDeviations(SessionData sess, float high, float low, float height, array<DeviationZone> zones, color deviationColor, color lineColor, bool showLabels, string labelPosition, color labelColor, string suffix, int startBarOffset, int endBarOffset, bool drawAbove, bool drawBelow) =>
+drawDeviations(SessionData sess, float high, float low, float height, array<DeviationZone> zones, color deviationColor, color lineColor, bool showLines, bool showLabels, string labelPosition, color labelColor, string suffix, int startBarOffset, int endBarOffset, bool drawAbove, bool drawBelow) =>
     if array.size(zones) > 0 and (drawAbove or drawBelow)
         // Pre-compute label positioning (shared across all labels)
         baseLabelTime = labelPosition == "Left" ? sess.startTime : sess.endTime
@@ -921,13 +928,13 @@ drawDeviations(SessionData sess, float high, float low, float height, array<Devi
                 // Draw single level as line + label
                 dev = zone.outerLevel
 
-                if drawAbove
+                if drawAbove and showLines
                     aboveLevel = high + (height * dev)
                     sess.lines.push(line.new(timeWithOffset(sess.startTime, startBarOffset), aboveLevel, timeWithOffset(sess.endTime, endBarOffset) + nz(sess.deviationExtendMs, 0), aboveLevel, color=lineColor, style=line.style_dotted, width=1, xloc=xloc.bar_time))
                     if showLabels
                         sess.labels.push(label.new(labelX, aboveLevel, toSansSerif("+" + str.tostring(dev) + suffix), style=labelStyle, color=labelsBgColor, textcolor=labelColor, size=size.tiny, xloc=xloc.bar_time))
 
-                if drawBelow
+                if drawBelow and showLines
                     belowLevel = low - (height * dev)
                     sess.lines.push(line.new(timeWithOffset(sess.startTime, startBarOffset), belowLevel, timeWithOffset(sess.endTime, endBarOffset) + nz(sess.deviationExtendMs, 0), belowLevel, color=lineColor, style=line.style_dotted, width=1, xloc=xloc.bar_time))
                     if showLabels
@@ -1027,10 +1034,10 @@ drawCoreWithDeviations(SessionData sess, float highPrice, float lowPrice, float 
         zones = getCachedZones(sess.sessionIndex)
 
         // Determine whether to show labels based on dropdown value and body/wick type
-        showLbls = sess.deviationLabelsMode == OPT_BOTH or (sess.deviationLabelsMode == OPT_BODY and isBody) or (sess.deviationLabelsMode == OPT_WICK and not isBody)
+        showLbls = showAllLabels and (sess.deviationLabelsMode == OPT_BOTH or (sess.deviationLabelsMode == OPT_BODY and isBody) or (sess.deviationLabelsMode == OPT_WICK and not isBody))
 
         // Draw all deviation zones (turning point zones get special color)
-        drawDeviations(sess, highPrice, lowPrice, height, zones, sess.deviationColor, color.new(labelColor, DEVIATION_LINE_OPACITY), showLbls, labelPos, labelColor, suffix, startOffset, endOffset, true, true)
+        drawDeviations(sess, highPrice, lowPrice, height, zones, sess.deviationColor, color.new(labelColor, DEVIATION_LINE_OPACITY), showAllLines, showLbls, labelPos, labelColor, suffix, startOffset, endOffset, true, true)
 
 deleteSession(SessionData sess) =>
     if not na(sess.bodyBox)
@@ -1126,7 +1133,7 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
     if sess.deviationMode == OPT_WICK or sess.deviationMode == OPT_BOTH
         drawCoreWithDeviations(sess, sess.wickHigh, sess.wickLow, wickHeight, false)
 
-    if showLabels
+    if showAllLabels and showSessionNames
         labelX = int(math.round((sess.startTime + sess.endTime) / 2))
         labelY = sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow
         labelStyle = sess.labelPosition == OPT_ABOVE ? label.style_label_down : label.style_label_up
@@ -1449,7 +1456,7 @@ if validTimeframe and array.size(activeSessions) > 0
                 drawCoreWithDeviations(sess, sess.wickHigh, sess.wickLow, wickHeight, false)
 
             // Draw session name label
-            if showLabels
+            if showAllLabels and showSessionNames
                 labelX = int(math.round((sess.startTime + sess.endTime) / 2))
                 labelY = sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow
                 labelStyle = sess.labelPosition == OPT_ABOVE ? label.style_label_down : label.style_label_up
@@ -1510,7 +1517,7 @@ if validTimeframe and array.size(sessions) > 0
                         sess.provisionalHighMitigated := true
                         sess.provisionalHighTime := time
                         if mitigationMode == SESSION_MITIGATED
-                            [solid, pending] = draw_provisional_breach_lines(sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                            [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                             sess.highMitigationLine := solid
                             sess.highPendingLine := pending
                     if sess.provisionalHighMitigated and not na(htf30mClose) and htf30mClose > sess.dominantHigh and isSameCalendarDay(sess.startTime, htf30mTime)
@@ -1530,7 +1537,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.highMitigated := true
                     sess.highMitigationBar := bar_index
                     if mitigationMode == SESSION_MITIGATED
-                        line temp = draw_confirmed_mitigation_line(sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                        line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                         if not na(temp)
                             sess.highMitigationLine := temp
                     if sess.enableAlert
@@ -1542,7 +1549,7 @@ if validTimeframe and array.size(sessions) > 0
                         sess.provisionalHighMitigated := true
                         sess.provisionalHighTime := time
                         if mitigationMode == SESSION_MITIGATED
-                            [solid, pending] = draw_provisional_breach_lines(sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                            [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                             sess.highMitigationLine := solid
                             sess.highPendingLine := pending
 
@@ -1551,7 +1558,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.highMitigated := true
                     sess.highMitigationBar := bar_index
                     if alwaysTrackMitigation(sess.sessionIndex) and mitigationMode == SESSION_MITIGATED
-                        line temp = draw_confirmed_mitigation_line(sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
+                        line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                         if not na(temp)
                             sess.highMitigationLine := temp
                     if sess.enableAlert
@@ -1569,7 +1576,7 @@ if validTimeframe and array.size(sessions) > 0
                         sess.provisionalLowMitigated := true
                         sess.provisionalLowTime := time
                         if mitigationMode == SESSION_MITIGATED
-                            [solid, pending] = draw_provisional_breach_lines(sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                            [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                             sess.lowMitigationLine := solid
                             sess.lowPendingLine := pending
                     if sess.provisionalLowMitigated and not na(htf30mClose) and htf30mClose < sess.dominantLow and isSameCalendarDay(sess.startTime, htf30mTime)
@@ -1589,7 +1596,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.lowMitigated := true
                     sess.lowMitigationBar := bar_index
                     if mitigationMode == SESSION_MITIGATED
-                        line temp = draw_confirmed_mitigation_line(sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                        line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                         if not na(temp)
                             sess.lowMitigationLine := temp
                     if sess.enableAlert
@@ -1601,7 +1608,7 @@ if validTimeframe and array.size(sessions) > 0
                         sess.provisionalLowMitigated := true
                         sess.provisionalLowTime := time
                         if mitigationMode == SESSION_MITIGATED
-                            [solid, pending] = draw_provisional_breach_lines(sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                            [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                             sess.lowMitigationLine := solid
                             sess.lowPendingLine := pending
 
@@ -1610,7 +1617,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.lowMitigated := true
                     sess.lowMitigationBar := bar_index
                     if alwaysTrackMitigation(sess.sessionIndex) and mitigationMode == SESSION_MITIGATED
-                        line temp = draw_confirmed_mitigation_line(sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
+                        line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                         if not na(temp)
                             sess.lowMitigationLine := temp
                     if sess.enableAlert
@@ -1622,9 +1629,9 @@ if validTimeframe and array.size(sessions) > 0
 
             // Right-edge session labels on still-open dashed pending lines; removed once mitigated (Unmitigated mode labels these itself)
             if mitigationMode == SESSION_MITIGATED
-                sess.highPendingLabel := resolve_pending_label(showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
-                sess.lowPendingLabel := resolve_pending_label(showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
-                bool wantMitigationName = showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex)
+                sess.highPendingLabel := resolve_pending_label(showAllLines and showAllLabels and showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
+                sess.lowPendingLabel := resolve_pending_label(showAllLines and showAllLabels and showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
+                bool wantMitigationName = showAllLines and showAllLabels and showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex)
                 string mitigationTxt = str.lower(sess.chartLabel)
                 int mitigationSessionMs = sess.actualEndTime - sess.startTime
                 resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders, mitigationSessionMs)
@@ -1653,7 +1660,7 @@ if validTimeframe and array.size(sessions) > 0
                     sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
 
             // Unmitigated mode: cleanup stale lines and draw for tracked sessions
-            if mitigationMode == SESSION_UNMITIGATED
+            if mitigationMode == SESSION_UNMITIGATED and showAllLines
                 // Clean up HIGH pending line if: mitigated, not provisional, or outside tracking window
                 bool shouldShowHighPending = not sess.highMitigated and sess.provisionalHighMitigated and shouldTrackMitigation
                 if not shouldShowHighPending and not na(sess.highPendingLine)
@@ -1691,19 +1698,22 @@ if validTimeframe and array.size(sessions) > 0
                                 else
                                     sess.highUnmitigatedLine := line.new(sess.highTime, sess.dominantHigh, sess.provisionalHighTime, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
                                 sess.highPendingLine := line.new(sess.provisionalHighTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
-                                if na(sess.highUnmitigatedLabel)
+                                if showAllLabels and na(sess.highUnmitigatedLabel)
                                     sess.highUnmitigatedLabel := label.new(time, sess.dominantHigh, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
                             else
                                 line.set_x2(sess.highPendingLine, time)
-                            label.set_x(sess.highUnmitigatedLabel, time)
+                            if not na(sess.highUnmitigatedLabel)
+                                label.set_x(sess.highUnmitigatedLabel, time)
                         else
                             // Not provisionally mitigated: solid line to current time
                             if na(sess.highUnmitigatedLine)
                                 sess.highUnmitigatedLine := line.new(sess.highTime, sess.dominantHigh, time, sess.dominantHigh, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                                sess.highUnmitigatedLabel := label.new(time, sess.dominantHigh, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
+                                if showAllLabels
+                                    sess.highUnmitigatedLabel := label.new(time, sess.dominantHigh, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
                             else
                                 line.set_x2(sess.highUnmitigatedLine, time)
-                                label.set_x(sess.highUnmitigatedLabel, time)
+                                if not na(sess.highUnmitigatedLabel)
+                                    label.set_x(sess.highUnmitigatedLabel, time)
                     // Low unmitigated line and label
                     if not sess.lowMitigated
                         if sess.provisionalLowMitigated
@@ -1715,19 +1725,22 @@ if validTimeframe and array.size(sessions) > 0
                                 else
                                     sess.lowUnmitigatedLine := line.new(sess.lowTime, sess.dominantLow, sess.provisionalLowTime, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
                                 sess.lowPendingLine := line.new(sess.provisionalLowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
-                                if na(sess.lowUnmitigatedLabel)
+                                if showAllLabels and na(sess.lowUnmitigatedLabel)
                                     sess.lowUnmitigatedLabel := label.new(time, sess.dominantLow, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
                             else
                                 line.set_x2(sess.lowPendingLine, time)
-                            label.set_x(sess.lowUnmitigatedLabel, time)
+                            if not na(sess.lowUnmitigatedLabel)
+                                label.set_x(sess.lowUnmitigatedLabel, time)
                         else
                             // Not provisionally mitigated: solid line to current time
                             if na(sess.lowUnmitigatedLine)
                                 sess.lowUnmitigatedLine := line.new(sess.lowTime, sess.dominantLow, time, sess.dominantLow, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-                                sess.lowUnmitigatedLabel := label.new(time, sess.dominantLow, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
+                                if showAllLabels
+                                    sess.lowUnmitigatedLabel := label.new(time, sess.dominantLow, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
                             else
                                 line.set_x2(sess.lowUnmitigatedLine, time)
-                                label.set_x(sess.lowUnmitigatedLabel, time)
+                                if not na(sess.lowUnmitigatedLabel)
+                                    label.set_x(sess.lowUnmitigatedLabel, time)
             // The gate controls timing only; the 0.618 anchor is set above, off the first extreme taken.
             bool retraceGateOpen = sess.retracementMode != RETRACE_MODE_IVB
             if sess.retracementMode == RETRACE_MODE_IVB
@@ -1760,9 +1773,10 @@ if validTimeframe and array.size(sessions) > 0
                     bool retraceCondition = retraceArmed and (lowWasFirst ? high >= sess.midLevel : low <= sess.midLevel)
                     if retraceCondition
                         sess.midMitigated := true
-                        sess.midMitigationLine := line.new(sess.actualEndTime, sess.midLevel, time, sess.midLevel, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_50_LINE_WIDTH, xloc=xloc.bar_time)
-                        if sess.isKeySession
-                            sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                        if showAllLines
+                            sess.midMitigationLine := line.new(sess.actualEndTime, sess.midLevel, time, sess.midLevel, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_50_LINE_WIDTH, xloc=xloc.bar_time)
+                            if showAllLabels and sess.isKeySession
+                                sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                         if sess.enableAlert
                             alertMsg = lowWasFirst ? sess.sessionName + ALERT_MID_MITIGATED_FROM_BELOW : sess.sessionName + ALERT_MID_MITIGATED_FROM_ABOVE
                             alert(alertMsg, alert.freq_once_per_bar)
@@ -1782,14 +1796,16 @@ if validTimeframe and array.size(sessions) > 0
                     bool retraceCondition618 = armed618 and (lowWasFirst618 ? high >= sess.retraceLevel618 : low <= sess.retraceLevel618)
                     if retraceCondition618
                         sess.retrace618Mitigated := true
-                        sess.retrace618Line := line.new(sess.actualEndTime, sess.retraceLevel618, time, sess.retraceLevel618, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
-                        sess.retrace618Labels := tile_line_labels(sess.retrace618Line, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                        if showAllLines
+                            sess.retrace618Line := line.new(sess.actualEndTime, sess.retraceLevel618, time, sess.retraceLevel618, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
+                            if showAllLabels
+                                sess.retrace618Labels := tile_line_labels(sess.retrace618Line, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                         if sess.enableAlert
                             alertMsg618 = lowWasFirst618 ? sess.sessionName + ALERT_618_MITIGATED_FROM_BELOW : sess.sessionName + ALERT_618_MITIGATED_FROM_ABOVE
                             alert(alertMsg618, alert.freq_once_per_bar)
 
     // Combine overlapping unmitigated labels (only on last bar for performance)
-    if barstate.islast and mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
+    if barstate.islast and showAllLines and showAllLabels and mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
         LABEL_OVERLAP_PCT = 0.005  // 0.005% of price tolerance
         // Combine HIGH labels at same price
         for i = 0 to array.size(sessions) - 2
