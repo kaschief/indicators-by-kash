@@ -30,7 +30,6 @@ type SessionConfig
     string labelPosition     // OPT_ABOVE, OPT_BELOW
     bool mitigation
     color mitigationColor
-    bool alert
     bool delayedMitigation
     string extend            // EXTEND_OFF, EXTEND_6H, etc.
     float extendCustom
@@ -101,9 +100,9 @@ type SessionData
     line retrace618Line
     array<label> retrace618Labels
     bool retrace618Armed
+    // Set once both extremes are reached: the retracement is complete, so its 0.5 / 0.618 marks are faded.
+    bool retraceFaded
     int ivbReentrySide  // 0 = undetermined, 1 = re-entering from above, -1 = from below
-    // Alerts
-    bool enableAlert
     // Delayed mitigation (evaluate only from 05:00 onward)
     bool delayedMitigation
     bool isKeySession
@@ -135,17 +134,12 @@ GROUP_GENERAL = "General"
 GROUP_MITIGATION = "Mitigation"
 GROUP_LABELS = "Labels"
 GROUP_DISPLAY = "Display"
-GROUP_INTRADAY = "Intraday Sessions"
 GROUP_2130_0129 = "Key Session: Rafael (21:30–01:29)"
 GROUP_1600_0500 = "Extended Opening: Overnight (16:00–05:00)"
 GROUP_0500_0915 = "Extended Opening: Premarket (05:00–09:15)"
 GROUP_0600_0900 = "Key Session: NY Early Hours (06:00–09:00)"
-GROUP_0930_0945 = "Extended Opening: NY Open 15m (09:30–09:45)"
 GROUP_0930_1000 = "Key Session: IVB (09:30–10:00)"
-GROUP_0930_093030 = "Extended Opening: 30s Opening (09:30:00–09:30:30)"
 GROUP_1800_2100 = "Key Session: Asia Open (18:00–21:00)"
-GROUP_0800_0850 = "Extended Opening: News Release (08:00–08:50)"
-GROUP_1845_2203 = "Extended Opening: Evening Range (18:45–22:03)"
 GROUP_COLOR_TABLE = "Color Reference Table"
 
 // Common input labels
@@ -177,38 +171,20 @@ LABEL_EXTEND = "Extend"
 LABEL_EXTEND_CUSTOM = "Custom"
 
 // Session UI labels (shown in settings panel)
-SESSION_INTRADAY_2015 = "20:15"
 SESSION_INTRADAY_0129 = "Rafael"
-SESSION_INTRADAY_0215 = "02:15"
-SESSION_INTRADAY_0915 = "09:15"
-SESSION_INTRADAY_1230 = "12:30"
-SESSION_INTRADAY_1415 = "14:15"
 SESSION_EXTENDED_1600_0500 = "Overnight"
 SESSION_EXTENDED_0500_0915 = "Premarket"
 SESSION_EXTENDED_0600_0900 = "NY Early Hours"
-SESSION_EXTENDED_0930_0945 = "NY Open 15m"
 SESSION_EXTENDED_0930_1000 = "IVB"
-SESSION_EXTENDED_0930_093030 = "30s Opening"
 SESSION_EXTENDED_1800_2100 = "Asia Open"
-SESSION_EXTENDED_0800_0850 = "News Release"
-SESSION_EXTENDED_1845_2203 = "Evening Range"
 
 // Chart labels (shown on the chart - can be different/multi-line)
-CHART_LABEL_2015 = "20:15"
 CHART_LABEL_0129 = "Rafael"
-CHART_LABEL_0215 = "02:15"
-CHART_LABEL_0915 = "09:15"
-CHART_LABEL_1230 = "12:30"
-CHART_LABEL_1415 = "14:15"
 CHART_LABEL_1600_0500 = "Overnight"
 CHART_LABEL_0500_0915 = "Premarket"
 CHART_LABEL_0600_0900 = "NY Early Hours"
-CHART_LABEL_0930_0945 = "NY Open 15m"
 CHART_LABEL_0930_1000 = "IVB"
-CHART_LABEL_0930_093030 = "30s Opening"
 CHART_LABEL_1800_2100 = "Asia Open"
-CHART_LABEL_0800_0850 = "News Release"
-CHART_LABEL_1845_2203 = "Evening Range"
 
 // Timezone
 NY_TIMEZONE = "America/New_York"
@@ -226,14 +202,6 @@ SHOW_FROM_0500 = "● ● RTH"
 SHOW_FROM_0830 = "● RTH"
 SHOW_RTH = "RTH"
 
-// Alert messages
-ALERT_HIGH_MITIGATED = " High Mitigated"
-ALERT_LOW_MITIGATED = " Low Mitigated"
-ALERT_MID_MITIGATED_FROM_ABOVE = " 50% Mitigated from Above"
-ALERT_MID_MITIGATED_FROM_BELOW = " 50% Mitigated from Below"
-ALERT_618_MITIGATED_FROM_ABOVE = " 61.8% Mitigated from Above"
-ALERT_618_MITIGATED_FROM_BELOW = " 61.8% Mitigated from Below"
-
 // Style constants
 MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 1
@@ -243,9 +211,11 @@ PENDING_LABEL_TRANSPARENCY_REDUCTION = 55.0
 PENDING_LABEL_TRANSPARENCY_MAX = 12.0
 COLOR_TABLE_MAX_ROWS = 60
 
-// Reminder spacing = one tag per session-length spanned, floored so short sessions stay sparse; hard cap.
-MITIGATION_REMINDER_MIN_SPAN_MS = 4 * 60 * 60 * 1000
-MITIGATION_REMINDER_MAX_PER_LINE = 2
+// Reminder density keys off a line's absolute length, not the session period, so physical chart distance
+// drives spacing uniformly (matches Revelio). Floored sqrt over an 8h base: a line earns a 2nd tag past
+// ~1.3 days, a 3rd past ~3 days. Cap holds the ceiling at 3 tags per line.
+MITIGATION_REMINDER_BASE_MS = 8 * 60 * 60 * 1000
+MITIGATION_REMINDER_MAX_PER_LINE = 3
 
 // Show Only — color the hidden (greyed) candles take
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
@@ -257,7 +227,8 @@ TOOLTIP_SHOW_SESSION_NAMES = "Show session name labels"
 TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION = "Add the session name to mitigation markers for the key sessions (Rafael, Asia Open, IVB).\n\n• 0.5 / 0.618 labels stay bare and use the session's retracement label colors.\n• The mitigated high/low line gets a session-name label (at its midpoint, or tiled along it when Add Mitigation Reminder Labels is on, e.g. asia open).\n\nOff = high/low lines stay unlabelled."
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
-TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nSpacing scales with the session's own length and stays sparse (sublinear).\n\nOff = one label at each line's midpoint only."
+TOOLTIP_FADE_RETRACE = "Once BOTH of a session's extremes have been reached, its 0.5 / 0.618 retracement is complete — the range is fully traversed and those levels are no longer actionable. This fades the completed 0.5 / 0.618 line and labels by Fade % so your eye skips them.\n\nWindow-aware: same-day sessions (e.g. IVB) only qualify when the second extreme is reached the same day; perpetually-tracked sessions (Rafael, Asia Open, Evening Range) qualify whenever it eventually happens.\n\nOff = completed retracements keep their normal colors."
+TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nDensity keys off each line's own length and stays sparse (sublinear): most lines get a single tag, and only long extensions earn a second.\n\nOff = one label at each line's midpoint only."
 
 // Option values
 OPT_HIDDEN = "Hidden"
@@ -270,21 +241,12 @@ OPT_ABOVE = "Above"
 OPT_BELOW = "Below"
 
 // Session indices
-IDX_2015 = 0
-IDX_0129 = 1
-IDX_0215 = 2
-IDX_0915 = 3
-IDX_1230 = 4
-IDX_1415 = 5
-IDX_NY_EARLY = 6
-IDX_OVERNIGHT = 7
-IDX_PREMARKET = 8
-IDX_NY_OPEN_15M = 9
-IDX_ASIA_OPEN = 10
-IDX_30S_OPENING = 11
-IDX_0800_0850 = 12
-IDX_1845_2203 = 13
-IDX_IVB = 14
+IDX_0129 = 0
+IDX_NY_EARLY = 1
+IDX_OVERNIGHT = 2
+IDX_PREMARKET = 3
+IDX_ASIA_OPEN = 4
+IDX_IVB = 5
 
 // Global mitigation display mode
 SESSION_MITIGATED = "Mitigated"
@@ -295,24 +257,14 @@ RETRACE_MODE_IVB = "IVB-based"
 
 // Quick filter presets
 FILTER_ALL = "All"
-FILTER_RAFAEL = "Rafael"
 FILTER_RAFAEL_1800 = "Rafael + 1800"
 FILTER_RAFAEL_1800_EARLY = "☾ Rafael + 1800 + Early"
 FILTER_RAFAEL_1800_EARLY_IVB = "Rafael + 1800 + Early + IVB"
 FILTER_NY_EARLY_IVB = "NY Early + IVB"
-FILTER_RAFAEL_1800_EARLY_2203 = "Rafael + 1800 + Early + 2203"
 FILTER_RAFAEL_1800_EARLY_OVERNIGHT = "Rafael + 1800 + Early + Overnight"
-FILTER_FULL_NYAM = "Full NYAM"
-FILTER_NYAM_LITE = "NYAM Lite"
-FILTER_RAFAEL_1800_NYAM_LITE = "Work: Rafael + 1800 + NYAM Lite"
-FILTER_RAFAEL_1800_2203_NYAM_LITE = "Deep: Rafael + 1800 + 2203 + NYAM Lite"
 FILTER_1800 = "1800 Range"
 FILTER_1800_EARLY = "1800 + Early"
-FILTER_RAFAEL_1800_FULL_NYAM = "Rafael + 1800 + Full NYAM"
-FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT = "Rafael + 1800 + Full NYAM + Overnight"
-FILTER_INTRADAY = "Intraday"
-FILTER_0800_0850 = "News Release"
-FILTER_1845_2203 = "Evening Range"
+FILTER_RAFAEL_1800_EARLY_PREMARKET_OVERNIGHT = "Rafael + 1800 + Early + Premarket + Overnight"
 FILTER_IVB = "IVB"
 FILTER_PREP2 = "★ Rafael + 1800 + Early + IVB + Premarket"
 
@@ -327,19 +279,15 @@ EXTEND_CUSTOM = "Custom"
 DEV_A_PREMARKET = "0.25:0.5, 0.75:1"                     // Premarket (05:00-09:15)
 DEV_B_NY_EARLY = "0.25:0.5, 1.33:1.66"                   // NY Early Hours (06:00-09:00)
 DEV_C_ASIA = "0.25:0.5, 1:1.25, 1.33:1.66"              // Asia Open (18:00-21:00)
-DEV_D_NY_OPEN_15M = "1, 2:2.5"                           // NY Open 15m (09:30-09:45)
-DEV_E_30S_OPENING = "1:1.25, 2:2.156, 2.33:2.5, 4:4.5"  // 30s Opening (09:30:00-09:30:30)
-DEV_F_INTRADAY = "1, 2:2.5, 4:4.5, 6:6.5"               // Intraday sessions
 DEV_G_OVERNIGHT = "0.25:0.5, 0.75:1, 1.25:1.5"          // Overnight (16:00-05:00)
 DEV_H_RAFAEL = "0.5:1, 2:2.5, 3, 4:4.5"  // Rafael (21:30-01:29)
-DEV_I_NEWS_EVENING = "0.25:0.5, 1:1.25, 1.33:1.66, 2:2.5, 4:4.5"  // News Release (08:00-08:50), Evening Range (18:45-22:03)
 DEV_J_IVB = "0.25:0.5, 1:1.5"                                    // IVB (09:30-10:00)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - General Settings
 // ═══════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_RAFAEL_1800_EARLY_2203, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_FULL_NYAM, FILTER_NYAM_LITE, FILTER_RAFAEL_1800_NYAM_LITE, FILTER_RAFAEL_1800_2203_NYAM_LITE, FILTER_RAFAEL_1800_FULL_NYAM, FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT, FILTER_INTRADAY, FILTER_1800, FILTER_1800_EARLY, FILTER_0800_0850, FILTER_1845_2203, FILTER_IVB, FILTER_NY_EARLY_IVB], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
+quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_RAFAEL_1800_EARLY_PREMARKET_OVERNIGHT, FILTER_1800, FILTER_1800_EARLY, FILTER_IVB, FILTER_NY_EARLY_IVB], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
 maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
 showOnlyEnabled = input.bool(true, LABEL_SHOW_ONLY, inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
@@ -363,74 +311,19 @@ showSessionNameOnMitigation = input.bool(true, "Show Session Name on Key Mitigat
 showMitigationReminders = input.bool(true, LABEL_MITIGATION_REMINDER, group=GROUP_LABELS, tooltip=TOOLTIP_MITIGATION_REMINDER)
 labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, inline="label_colors", group=GROUP_LABELS)
 labelsBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), "Background", inline="label_colors", group=GROUP_LABELS, tooltip="Background color for session and deviation labels. Key-session 0.5 and 0.618 labels use their session-specific controls instead. Set transparency to 100 for no background.")
+fadeCompletedRetracements = input.bool(true, "Fade Completed Retracement Levels", inline="fade", group=GROUP_LABELS, tooltip=TOOLTIP_FADE_RETRACE)
+completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fade", group=GROUP_LABELS, tooltip="How far to fade each completed 0.5 / 0.618 line and label toward invisible once its retracement completes.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Display
 // ═══════════════════════════════════════════════════════════════════════════
 
-showAllLines = input.bool(true, "Show All Lines", group=GROUP_DISPLAY, tooltip="Master line switch. Off hides deviation levels, mitigation lines, provisional lines, unmitigated extensions and retracement lines while leaving boxes visible. Calculations and alerts continue normally.")
+showAllLines = input.bool(true, "Show All Lines", group=GROUP_DISPLAY, tooltip="Master line switch. Off hides deviation levels, mitigation lines, provisional lines, unmitigated extensions and retracement lines while leaving boxes visible. Calculations continue normally.")
 enableDeviationGlow = input.bool(false, "Deviation Glow", group=GROUP_DISPLAY, tooltip="Darken deviation zones when price touches them. The darkening only persists while the touch is within the configured time window.")
 glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1)
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Time window in hours. Touches older than this will not show the darkening effect.")
-quickCheckMode = input.bool(true, "Quick Check", group=GROUP_DISPLAY, tooltip="Hide deviations for Rafael, 1800, and 2203 - show core only")
+quickCheckMode = input.bool(true, "Quick Check", group=GROUP_DISPLAY, tooltip="Hide deviations for Rafael and 1800 - show core only")
 
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - Intraday Sessions
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_intraday = input.string(DEV_F_INTRADAY, "Deviations", group=GROUP_INTRADAY)
-
-opening_2000_2015 = input.string(OPT_WICK, SESSION_INTRADAY_2015, inline="2015_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_2000_2015_offset = input.bool(false, LABEL_OFFSET, inline="2015_1", group=GROUP_INTRADAY)
-opening_2000_2015_mitigation = input.bool(true, LABEL_MITIGATION, inline="2015_1", group=GROUP_INTRADAY)
-opening_2000_2015_extend = input.string(EXTEND_6H, LABEL_EXTEND, inline="2015_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_INTRADAY)
-opening_2000_2015_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="2015_extend", group=GROUP_INTRADAY, minval=0.5, maxval=24, step=0.5)
-opening_2000_2015_coreColor = input.color(color.new(color.rgb(255, 235, 59), 85), LABEL_CORE, inline="2015_2", group=GROUP_INTRADAY)
-opening_2000_2015_deviationColor = input.color(color.new(color.rgb(255, 235, 59), 80), LABEL_DEVIATIONS, inline="2015_2", group=GROUP_INTRADAY)
-opening_2000_2015_mitigationColor = input.color(color.new(color.rgb(251, 192, 45), 50), LABEL_MITIGATION, inline="2015_2", group=GROUP_INTRADAY)
-opening_2000_2015_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="2015_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_2000_2015_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="2015_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
-
-opening_0200_0215 = input.string(OPT_WICK, SESSION_INTRADAY_0215, inline="0215_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_0200_0215_offset = input.bool(false, LABEL_OFFSET, inline="0215_1", group=GROUP_INTRADAY)
-opening_0200_0215_mitigation = input.bool(true, LABEL_MITIGATION, inline="0215_1", group=GROUP_INTRADAY)
-opening_0200_0215_extend = input.string(EXTEND_6H, LABEL_EXTEND, inline="0215_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_INTRADAY)
-opening_0200_0215_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="0215_extend", group=GROUP_INTRADAY, minval=0.5, maxval=24, step=0.5)
-opening_0200_0215_coreColor = input.color(color.new(color.rgb(144, 191, 249), 85), LABEL_CORE, inline="0215_2", group=GROUP_INTRADAY)
-opening_0200_0215_deviationColor = input.color(color.new(color.rgb(144, 191, 249), 70), LABEL_DEVIATIONS, inline="0215_2", group=GROUP_INTRADAY)
-opening_0200_0215_mitigationColor = input.color(color.new(color.rgb(33, 150, 243), 50), LABEL_MITIGATION, inline="0215_2", group=GROUP_INTRADAY)
-opening_0200_0215_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0215_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_0200_0215_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0215_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
-opening_0900_0915 = input.string(OPT_WICK, SESSION_INTRADAY_0915, inline="0915_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_0900_0915_offset = input.bool(false, LABEL_OFFSET, inline="0915_1", group=GROUP_INTRADAY)
-opening_0900_0915_mitigation = input.bool(true, LABEL_MITIGATION, inline="0915_1", group=GROUP_INTRADAY)
-opening_0900_0915_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="0915_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_INTRADAY)
-opening_0900_0915_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="0915_extend", group=GROUP_INTRADAY, minval=0.5, maxval=24, step=0.5)
-opening_0900_0915_coreColor = input.color(color.new(color.rgb(255, 183, 77), 90), LABEL_CORE, inline="0915_2", group=GROUP_INTRADAY)
-opening_0900_0915_deviationColor = input.color(color.new(color.rgb(255, 183, 77), 90), LABEL_DEVIATIONS, inline="0915_2", group=GROUP_INTRADAY)
-opening_0900_0915_mitigationColor = input.color(color.new(color.rgb(255, 152, 0), 0), LABEL_MITIGATION, inline="0915_2", group=GROUP_INTRADAY)
-opening_0900_0915_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0915_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_0900_0915_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0915_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
-opening_1200_1230 = input.string(OPT_HIDDEN, SESSION_INTRADAY_1230, inline="1230_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_1200_1230_offset = input.bool(false, LABEL_OFFSET, inline="1230_1", group=GROUP_INTRADAY)
-opening_1200_1230_mitigation = input.bool(true, LABEL_MITIGATION, inline="1230_1", group=GROUP_INTRADAY)
-opening_1200_1230_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="1230_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_INTRADAY)
-opening_1200_1230_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="1230_extend", group=GROUP_INTRADAY, minval=0.5, maxval=24, step=0.5)
-opening_1200_1230_coreColor = input.color(color.new(color.rgb(0, 150, 136), 95), LABEL_CORE, inline="1230_2", group=GROUP_INTRADAY)
-opening_1200_1230_deviationColor = input.color(color.new(color.rgb(0, 150, 136), 92), LABEL_DEVIATIONS, inline="1230_2", group=GROUP_INTRADAY)
-opening_1200_1230_mitigationColor = input.color(color.new(color.rgb(0, 150, 136), 50), LABEL_MITIGATION, inline="1230_2", group=GROUP_INTRADAY)
-opening_1200_1230_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="1230_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_1200_1230_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="1230_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
-opening_1400_1415 = input.string(OPT_HIDDEN, SESSION_INTRADAY_1415, inline="1415_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_1400_1415_offset = input.bool(false, LABEL_OFFSET, inline="1415_1", group=GROUP_INTRADAY)
-opening_1400_1415_mitigation = input.bool(true, LABEL_MITIGATION, inline="1415_1", group=GROUP_INTRADAY)
-opening_1400_1415_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="1415_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_INTRADAY)
-opening_1400_1415_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="1415_extend", group=GROUP_INTRADAY, minval=0.5, maxval=24, step=0.5)
-opening_1400_1415_coreColor = input.color(color.new(color.rgb(206, 147, 216), 92), LABEL_CORE, inline="1415_2", group=GROUP_INTRADAY)
-opening_1400_1415_deviationColor = input.color(color.new(color.rgb(186, 104, 200), 90), LABEL_DEVIATIONS, inline="1415_2", group=GROUP_INTRADAY)
-opening_1400_1415_mitigationColor = input.color(color.new(color.rgb(156, 39, 176), 60), LABEL_MITIGATION, inline="1415_2", group=GROUP_INTRADAY)
-opening_1400_1415_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="1415_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_INTRADAY)
-opening_1400_1415_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="1415_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_INTRADAY)
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - 16:00-05:00
 // ═══════════════════════════════════════════════════════════════════════════
@@ -463,73 +356,6 @@ opening_0500_0915_deviationColor = input.color(color.new(color.rgb(77, 243, 8), 
 opening_0500_0915_mitigationColor = input.color(color.new(color.rgb(77, 243, 8), 20), LABEL_MITIGATION, inline="0500_2", group=GROUP_0500_0915)
 opening_0500_0915_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0500_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0500_0915)
 opening_0500_0915_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POSITION, inline="0500_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0500_0915)
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 09:30-09:45
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_0930_0945 = input.string(DEV_D_NY_OPEN_15M, "Deviations", group=GROUP_0930_0945)
-
-opening_0930_0945 = input.string(OPT_CORE, SESSION_EXTENDED_0930_0945, inline="0930_0945_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_0945)
-opening_0930_0945_offset = input.bool(false, LABEL_OFFSET, inline="0930_0945_1", group=GROUP_0930_0945)
-opening_0930_0945_mitigation = input.bool(true, LABEL_MITIGATION, inline="0930_0945_1", group=GROUP_0930_0945)
-opening_0930_0945_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="0930_0945_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_0930_0945)
-opening_0930_0945_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="0930_0945_extend", group=GROUP_0930_0945, minval=0.5, maxval=24, step=0.5)
-opening_0930_0945_coreColor = input.color(color.new(color.rgb(128, 222, 234), 90), LABEL_CORE, inline="0930_0945_2", group=GROUP_0930_0945)
-opening_0930_0945_deviationColor = input.color(color.new(color.rgb(176, 224, 245), 85), LABEL_DEVIATIONS, inline="0930_0945_2", group=GROUP_0930_0945)
-opening_0930_0945_mitigationColor = input.color(color.new(color.rgb(70, 176, 210), 0), LABEL_MITIGATION, inline="0930_0945_2", group=GROUP_0930_0945)
-opening_0930_0945_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0930_0945_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_0945)
-opening_0930_0945_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0930_0945_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_0945)
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 09:30:00-09:30:30 (30s Opening)
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_0930_093030 = input.string(DEV_E_30S_OPENING, "Deviations", group=GROUP_0930_093030)
-
-opening_0930_093030 = input.string(OPT_WICK, SESSION_EXTENDED_0930_093030, inline="0930_093030_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_093030)
-opening_0930_093030_offset = input.bool(false, LABEL_OFFSET, inline="0930_093030_1", group=GROUP_0930_093030)
-opening_0930_093030_mitigation = input.bool(true, LABEL_MITIGATION, inline="0930_093030_1", group=GROUP_0930_093030)
-opening_0930_093030_extend = input.string(EXTEND_CUSTOM, LABEL_EXTEND, inline="0930_093030_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_0930_093030)
-opening_0930_093030_extendCustom = input.float(2, LABEL_EXTEND_CUSTOM, inline="0930_093030_extend", group=GROUP_0930_093030, minval=0.5, maxval=24, step=0.5)
-opening_0930_093030_coreColor = input.color(color.new(color.rgb(54, 58, 69), 90), LABEL_CORE, inline="0930_093030_2", group=GROUP_0930_093030)
-opening_0930_093030_deviationColor = input.color(color.new(color.rgb(41, 98, 255), 94), LABEL_DEVIATIONS, inline="0930_093030_2", group=GROUP_0930_093030)
-opening_0930_093030_mitigationColor = input.color(color.new(color.rgb(0, 0, 0), 0), LABEL_MITIGATION, inline="0930_093030_2", group=GROUP_0930_093030)
-opening_0930_093030_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0930_093030_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_093030)
-opening_0930_093030_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0930_093030_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_093030)
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 08:00-08:50
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_0800_0850 = input.string(DEV_I_NEWS_EVENING, "Deviations", group=GROUP_0800_0850)
-
-opening_0800_0850 = input.string(OPT_WICK, SESSION_EXTENDED_0800_0850, inline="0800_0850_1", options=[OPT_HIDDEN, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0800_0850)
-opening_0800_0850_offset = input.bool(false, LABEL_OFFSET, inline="0800_0850_1", group=GROUP_0800_0850)
-opening_0800_0850_mitigation = input.bool(true, LABEL_MITIGATION, inline="0800_0850_1", group=GROUP_0800_0850)
-opening_0800_0850_extend = input.string(EXTEND_CUSTOM, LABEL_EXTEND, inline="0800_0850_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_0800_0850)
-opening_0800_0850_extendCustom = input.float(4, LABEL_EXTEND_CUSTOM, inline="0800_0850_extend", group=GROUP_0800_0850, minval=0.5, maxval=24, step=0.5)
-opening_0800_0850_coreColor = input.color(color.new(color.rgb(126, 87, 194), 96), LABEL_CORE, inline="0800_0850_2", group=GROUP_0800_0850)
-opening_0800_0850_deviationColor = input.color(color.new(color.rgb(126, 87, 194), 94), LABEL_DEVIATIONS, inline="0800_0850_2", group=GROUP_0800_0850)
-opening_0800_0850_mitigationColor = input.color(color.new(color.rgb(126, 87, 194), 0), LABEL_MITIGATION, inline="0800_0850_2", group=GROUP_0800_0850)
-opening_0800_0850_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0800_0850_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0800_0850)
-opening_0800_0850_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0800_0850_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0800_0850)
-
-// ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - 18:45-22:03
-// ═══════════════════════════════════════════════════════════════════════════
-
-deviations_1845_2203 = input.string(DEV_I_NEWS_EVENING, "Deviations", group=GROUP_1845_2203)
-
-opening_1845_2203 = input.string(OPT_CORE, SESSION_EXTENDED_1845_2203, inline="1845_2203_1", options=[OPT_HIDDEN, OPT_CORE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1845_2203)
-opening_1845_2203_offset = input.bool(false, LABEL_OFFSET, inline="1845_2203_1", group=GROUP_1845_2203)
-opening_1845_2203_mitigation = input.bool(true, LABEL_MITIGATION, inline="1845_2203_1", group=GROUP_1845_2203)
-opening_1845_2203_extend = input.string(EXTEND_OFF, LABEL_EXTEND, inline="1845_2203_extend", options=[EXTEND_OFF, EXTEND_6H, EXTEND_12H, EXTEND_NEXT, EXTEND_CUSTOM], group=GROUP_1845_2203)
-opening_1845_2203_extendCustom = input.float(8, LABEL_EXTEND_CUSTOM, inline="1845_2203_extend", group=GROUP_1845_2203, minval=0.5, maxval=24, step=0.5)
-opening_1845_2203_coreColor = input.color(color.new(color.rgb(255, 105, 180), 90), LABEL_CORE, inline="1845_2203_2", group=GROUP_1845_2203)
-opening_1845_2203_deviationColor = input.color(color.new(color.rgb(255, 105, 180), 85), LABEL_DEVIATIONS, inline="1845_2203_2", group=GROUP_1845_2203)
-opening_1845_2203_mitigationColor = input.color(color.new(color.rgb(255, 105, 180), 0), LABEL_MITIGATION, inline="1845_2203_2", group=GROUP_1845_2203)
-opening_1845_2203_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="1845_2203_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1845_2203)
-opening_1845_2203_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="1845_2203_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_1845_2203)
-opening_1845_2203_delayedMitigation = input.bool(true, "Delay Mitigation Until 05:00", group=GROUP_1845_2203, tooltip="Overnight touches show as provisional (dashed) until 05:00.")
-
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Key Session: Asia Open (18:00-21:00)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -611,27 +437,6 @@ opening_0930_1000_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, in
 opening_0930_1000_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0930_1000_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_1000)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// INPUTS - Alerts
-// ═══════════════════════════════════════════════════════════════════════════
-
-GROUP_ALERTS = "Alerts"
-opening_2000_2015_alert = input.bool(true, SESSION_INTRADAY_2015, inline="alerts_1", group=GROUP_ALERTS)
-opening_2130_0129_alert = input.bool(true, SESSION_INTRADAY_0129, inline="alerts_1", group=GROUP_ALERTS)
-opening_0200_0215_alert = input.bool(true, SESSION_INTRADAY_0215, inline="alerts_1", group=GROUP_ALERTS)
-opening_0900_0915_alert = input.bool(true, SESSION_INTRADAY_0915, inline="alerts_2", group=GROUP_ALERTS)
-opening_1200_1230_alert = input.bool(true, SESSION_INTRADAY_1230, inline="alerts_2", group=GROUP_ALERTS)
-opening_1400_1415_alert = input.bool(true, SESSION_INTRADAY_1415, inline="alerts_2", group=GROUP_ALERTS)
-opening_0600_0900_alert = input.bool(true, SESSION_EXTENDED_0600_0900, inline="alerts_3", group=GROUP_ALERTS)
-opening_1600_0500_alert = input.bool(true, SESSION_EXTENDED_1600_0500, inline="alerts_3", group=GROUP_ALERTS)
-opening_0500_0915_alert = input.bool(true, SESSION_EXTENDED_0500_0915, inline="alerts_3", group=GROUP_ALERTS)
-opening_0930_0945_alert = input.bool(true, SESSION_EXTENDED_0930_0945, inline="alerts_4", group=GROUP_ALERTS)
-opening_0930_1000_alert = input.bool(true, SESSION_EXTENDED_0930_1000, inline="alerts_4", group=GROUP_ALERTS)
-opening_0930_093030_alert = input.bool(true, SESSION_EXTENDED_0930_093030, inline="alerts_4", group=GROUP_ALERTS)
-opening_1800_2100_alert = input.bool(true, SESSION_EXTENDED_1800_2100, inline="alerts_4", group=GROUP_ALERTS)
-opening_0800_0850_alert = input.bool(true, SESSION_EXTENDED_0800_0850, inline="alerts_5", group=GROUP_ALERTS)
-opening_1845_2203_alert = input.bool(true, SESSION_EXTENDED_1845_2203, inline="alerts_5", group=GROUP_ALERTS)
-
-// ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Color Reference Table
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -645,17 +450,12 @@ var array<SessionData> sessions = array.new<SessionData>()
 var array<SessionData> activeSessions = array.new<SessionData>()
 
 // Cached parsed deviation zones (Pine Script doesn't support nested collections)
-var array<DeviationZone> cachedDeviations_intraday = na
 var array<DeviationZone> cachedDeviations_0129 = na
 var array<DeviationZone> cachedDeviations_ny_early = na
 var array<DeviationZone> cachedDeviations_overnight = na
 var array<DeviationZone> cachedDeviations_premarket = na
-var array<DeviationZone> cachedDeviations_ny_open_15m = na
 var array<DeviationZone> cachedDeviations_ivb = na
 var array<DeviationZone> cachedDeviations_asia_open = na
-var array<DeviationZone> cachedDeviations_30s_opening = na
-var array<DeviationZone> cachedDeviations_0800_0850 = na
-var array<DeviationZone> cachedDeviations_1845_2203 = na
 
 // Deviation Glow: Global tracking using string keys (avoids UDT array complexity)
 var map<string, int> glowTouchTimes = map.new<string, int>()      // boxKey -> touch timestamp
@@ -675,15 +475,7 @@ BAR_MS = int(timeframe.in_seconds() * 1000)
 
 // Sessions that show deviations only (no core boxes)
 skipsCore(int idx) =>
-    idx == IDX_OVERNIGHT or idx == IDX_PREMARKET or idx == IDX_0800_0850
-
-// Sessions that skip body core (wick-only sessions)
-skipsBodyCore(int idx) =>
-    idx == IDX_30S_OPENING or skipsCore(idx)
-
-// Sessions that skip body deviations (wick deviations only)
-skipsBodyDeviations(int idx) =>
-    idx == IDX_30S_OPENING
+    idx == IDX_OVERNIGHT or idx == IDX_PREMARKET
 
 // Key sessions whose mitigated high/low line should NOT carry the session-name reminder.
 skipsMitigationName(int idx) =>
@@ -700,8 +492,8 @@ isSameCalendarDay(int t1, int t2) =>
     dayofmonth(t1, NY_TIMEZONE) == dayofmonth(t2, NY_TIMEZONE) and month(t1, NY_TIMEZONE) == month(t2, NY_TIMEZONE) and year(t1, NY_TIMEZONE) == year(t2, NY_TIMEZONE)
 
 // Check if a bar is within a session's time window (handles midnight-crossing sessions)
-isInSessionTime(int idx, int minutes, int seconds, int startMin, int endMin, bool crossesMidnight) =>
-    idx == IDX_30S_OPENING ? (minutes == 570 and seconds < 30) : (crossesMidnight ? (minutes >= startMin or minutes <= endMin) : (minutes >= startMin and minutes <= endMin))
+isInSessionTime(int minutes, int startMin, int endMin, bool crossesMidnight) =>
+    crossesMidnight ? (minutes >= startMin or minutes <= endMin) : (minutes >= startMin and minutes <= endMin)
 
 toSansSerif(string inputStr) =>
     result = inputStr
@@ -750,21 +542,12 @@ getExtendHours(string preset, float customHours) =>
 // Get extension milliseconds for a session by index
 getSessionExtendMs(int idx) =>
     [preset, custom] = switch idx
-        IDX_2015 => [opening_2000_2015_extend, opening_2000_2015_extendCustom]
         IDX_0129 => [opening_2130_0129_extend, opening_2130_0129_extendCustom]
-        IDX_0215 => [opening_0200_0215_extend, opening_0200_0215_extendCustom]
-        IDX_0915 => [opening_0900_0915_extend, opening_0900_0915_extendCustom]
-        IDX_1230 => [opening_1200_1230_extend, opening_1200_1230_extendCustom]
-        IDX_1415 => [opening_1400_1415_extend, opening_1400_1415_extendCustom]
         IDX_NY_EARLY => [opening_0600_0900_extend, opening_0600_0900_extendCustom]
         IDX_OVERNIGHT => [opening_1600_0500_extend, opening_1600_0500_extendCustom]
         IDX_PREMARKET => [opening_0500_0915_extend, opening_0500_0915_extendCustom]
-        IDX_NY_OPEN_15M => [opening_0930_0945_extend, opening_0930_0945_extendCustom]
         IDX_IVB => [opening_0930_1000_extend, opening_0930_1000_extendCustom]
         IDX_ASIA_OPEN => [opening_1800_2100_extend, opening_1800_2100_extendCustom]
-        IDX_30S_OPENING => [opening_0930_093030_extend, opening_0930_093030_extendCustom]
-        IDX_0800_0850 => [opening_0800_0850_extend, opening_0800_0850_extendCustom]
-        IDX_1845_2203 => [opening_1845_2203_extend, opening_1845_2203_extendCustom]
         => [EXTEND_OFF, 0.0]
     int(getExtendHours(preset, custom) * 60 * 60 * 1000)
 
@@ -774,7 +557,6 @@ alwaysTrackMitigation(int idx) =>
     switch idx
         IDX_0129 => true        // Rafael (21:30-01:29)
         IDX_ASIA_OPEN => true   // 1800 (18:00-21:00)
-        IDX_1845_2203 => true   // 2203 (18:45-22:03)
         => false
 
 // Earliest time an IVB left/took one side of its range on refStartTime's day (na if none yet).
@@ -832,30 +614,46 @@ resolve_pending_label(bool keep, label lbl, line pending, float level, string tx
         result := na
     result
 
-// Repeat off = one tag at the line midpoint; repeat on = sqrt-sparse tiling so long lines don't crowd.
-tile_line_labels(line target, float level, string txt, bool repeat, int sessionMs, color txtColor, color bgColor) =>
+// Floored sqrt density: reminder count grows sublinearly with a run's length, capped. Shared by every
+// reminder system so spacing stays consistent.
+reminderPlacements(int runMs, int spacingMs, int maxCount) =>
+    math.min(maxCount, math.max(1, int(math.floor(math.sqrt(float(runMs) / math.max(1, spacingMs))))))
+
+// Repeat off = one tag at the line midpoint; repeat on = sqrt-sparse tiling keyed off the line's own
+// absolute length, so physical chart distance drives density uniformly and long lines don't crowd.
+tile_line_labels(line target, float level, string txt, bool repeat, color txtColor, color bgColor) =>
     array<label> tags = array.new<label>()
     int x1 = line.get_x1(target)
     int runMs = line.get_x2(target) - x1
     if runMs > 0
-        int count = 1
-        if repeat and sessionMs > 0
-            float tagSpanMs = math.max(sessionMs, MITIGATION_REMINDER_MIN_SPAN_MS)
-            count := math.min(MITIGATION_REMINDER_MAX_PER_LINE, math.max(1, int(math.round(math.sqrt(runMs / tagSpanMs)))))
+        int count = repeat ? reminderPlacements(runMs, MITIGATION_REMINDER_BASE_MS, MITIGATION_REMINDER_MAX_PER_LINE) : 1
         for placement = 1 to count
             int tagTime = x1 + int(runMs * (placement - 0.5) / count)
             array.push(tags, label.new(tagTime, level, txt, style=label.style_label_center, textcolor=txtColor, size=size.tiny, color=bgColor, xloc=xloc.bar_time))
     tags
 
-resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, float level, string txt, bool repeat, int sessionMs) =>
+resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, float level, string txt, bool repeat) =>
     if not keep or na(mitLine)
         for lbl in reminders
             label.delete(lbl)
         array.clear(reminders)
     else if array.size(reminders) == 0
         // Confirmed mitigation lines never move, so build the tags once instead of rebuilding every bar.
-        for lbl in tile_line_labels(mitLine, level, txt, repeat, sessionMs, labelColor, labelsBgColor)
+        for lbl in tile_line_labels(mitLine, level, txt, repeat, labelColor, labelsBgColor)
             array.push(reminders, lbl)
+
+// Push a color's transparency toward fully invisible by pct (0 = unchanged, 100 = invisible).
+fadeToward100(color c, float pct) =>
+    color.new(c, color.t(c) + (100.0 - color.t(c)) * pct / 100.0)
+
+// Fade a completed retracement's line + tiled labels toward invisible so they read as inactive. Base
+// colors are passed in because Pine can't read a line's current color back.
+fadeRetraceElements(line ln, array<label> lbls, color baseLineColor, color baseTextColor, color baseBgColor) =>
+    if not na(ln)
+        line.set_color(ln, fadeToward100(baseLineColor, completedRetraceFade))
+    for lbl in lbls
+        label.set_textcolor(lbl, fadeToward100(baseTextColor, completedRetraceFade))
+        label.set_color(lbl, fadeToward100(baseBgColor, completedRetraceFade))
 
 shouldShowMitigationName(SessionData sess, bool isHigh) =>
     if sess.sessionIndex == IDX_IVB
@@ -966,22 +764,16 @@ getCachedZones(int sessionIdx) =>
         IDX_NY_EARLY => cachedDeviations_ny_early
         IDX_OVERNIGHT => cachedDeviations_overnight
         IDX_PREMARKET => cachedDeviations_premarket
-        IDX_NY_OPEN_15M => cachedDeviations_ny_open_15m
         IDX_IVB => cachedDeviations_ivb
         IDX_ASIA_OPEN => cachedDeviations_asia_open
-        IDX_30S_OPENING => cachedDeviations_30s_opening
-        IDX_0800_0850 => cachedDeviations_0800_0850
-        IDX_1845_2203 => cachedDeviations_1845_2203
-        => cachedDeviations_intraday
+        => na
 
 isQuickCheckSession(int idx) =>
-    idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_1845_2203
+    idx == IDX_0129 or idx == IDX_ASIA_OPEN
 
 isInFilter(int idx) =>
     if quickFilter == FILTER_ALL
         true
-    else if quickFilter == FILTER_RAFAEL
-        idx == IDX_0129
     else if quickFilter == FILTER_RAFAEL_1800
         idx == IDX_0129 or idx == IDX_ASIA_OPEN
     else if quickFilter == FILTER_RAFAEL_1800_EARLY
@@ -990,32 +782,14 @@ isInFilter(int idx) =>
         idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_IVB
     else if quickFilter == FILTER_PREP2
         idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_IVB or idx == IDX_PREMARKET
-    else if quickFilter == FILTER_RAFAEL_1800_EARLY_2203
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_1845_2203
     else if quickFilter == FILTER_RAFAEL_1800_EARLY_OVERNIGHT
         idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY or idx == IDX_OVERNIGHT
     else if quickFilter == FILTER_1800
         idx == IDX_ASIA_OPEN
     else if quickFilter == FILTER_1800_EARLY
         idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY
-    else if quickFilter == FILTER_INTRADAY
-        idx == IDX_2015 or idx == IDX_0215 or idx == IDX_0915 or idx == IDX_1230 or idx == IDX_1415
-    else if quickFilter == FILTER_FULL_NYAM
-        idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_NYAM_LITE
-        idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_RAFAEL_1800_NYAM_LITE
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_RAFAEL_1800_2203_NYAM_LITE
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_1845_2203 or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0915 or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_RAFAEL_1800_FULL_NYAM_OVERNIGHT
-        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_OVERNIGHT or idx == IDX_PREMARKET or idx == IDX_NY_EARLY or idx == IDX_0800_0850 or idx == IDX_0915 or idx == IDX_NY_OPEN_15M or idx == IDX_30S_OPENING
-    else if quickFilter == FILTER_0800_0850
-        idx == IDX_0800_0850
-    else if quickFilter == FILTER_1845_2203
-        idx == IDX_1845_2203
+    else if quickFilter == FILTER_RAFAEL_1800_EARLY_PREMARKET_OVERNIGHT
+        idx == IDX_0129 or idx == IDX_ASIA_OPEN or idx == IDX_OVERNIGHT or idx == IDX_PREMARKET or idx == IDX_NY_EARLY
     else if quickFilter == FILTER_IVB
         idx == IDX_IVB
     else if quickFilter == FILTER_NY_EARLY_IVB
@@ -1024,7 +798,7 @@ isInFilter(int idx) =>
         true
 
 drawCoreWithDeviations(SessionData sess, float highPrice, float lowPrice, float height, bool isBody) =>
-    // Quick check mode: skip deviations for Rafael, 1800, 2203
+    // Quick check mode: skip deviations for Rafael, 1800
     bool skipDeviations = quickCheckMode and isQuickCheckSession(sess.sessionIndex)
     if not skipDeviations
         [startOffset, endOffset] = calculateOffsets(sess, isBody)
@@ -1119,14 +893,12 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
     wickHeight = sess.wickHigh - sess.wickLow
 
     // Draw core boxes
-    if not skipsBodyCore(sess.sessionIndex)
-        sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
-
     if not skipsCore(sess.sessionIndex)
+        sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
         sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
 
     // Draw body deviations if mode is Body or Both
-    if (sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH) and not skipsBodyDeviations(sess.sessionIndex)
+    if sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH
         drawCoreWithDeviations(sess, sess.bodyHigh, sess.bodyLow, bodyHeight, true)
 
     // Draw wick deviations if mode is Wick or Both
@@ -1144,40 +916,26 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-if na(cachedDeviations_intraday)
+if na(cachedDeviations_0129)
     // Parse and cache all deviation zones
-    cachedDeviations_intraday := parseDeviationZones(deviations_intraday)
     cachedDeviations_0129 := parseDeviationZones(deviations_2130_0129)
     cachedDeviations_ny_early := parseDeviationZones(deviations_0600_0900)
     cachedDeviations_overnight := parseDeviationZones(deviations_1600_0500)
     cachedDeviations_premarket := parseDeviationZones(deviations_0500_0915)
-    cachedDeviations_ny_open_15m := parseDeviationZones(deviations_0930_0945)
     cachedDeviations_ivb := parseDeviationZones(deviations_0930_1000)
     cachedDeviations_asia_open := parseDeviationZones(deviations_1800_2100)
-    cachedDeviations_30s_opening := parseDeviationZones(deviations_0930_093030)
-    cachedDeviations_0800_0850 := parseDeviationZones(deviations_0800_0850)
-    cachedDeviations_1845_2203 := parseDeviationZones(deviations_1845_2203)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION CONFIGURATION - Single array replaces 14 parallel arrays
 // ═══════════════════════════════════════════════════════════════════════════
 
 var array<SessionConfig> sessionConfigs = array.from(
-    SessionConfig.new(opening_2000_2015, opening_2000_2015_offset, opening_2000_2015_showLabels, 1200, 1215, opening_2000_2015_coreColor, opening_2000_2015_deviationColor, SESSION_INTRADAY_2015, CHART_LABEL_2015, opening_2000_2015_labelPosition, opening_2000_2015_mitigation, opening_2000_2015_mitigationColor, opening_2000_2015_alert, false, opening_2000_2015_extend, opening_2000_2015_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, opening_2130_0129_alert, opening_2130_0129_delayedMitigation, opening_2130_0129_extend, opening_2130_0129_extendCustom, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0200_0215, opening_0200_0215_offset, opening_0200_0215_showLabels, 120, 135, opening_0200_0215_coreColor, opening_0200_0215_deviationColor, SESSION_INTRADAY_0215, CHART_LABEL_0215, opening_0200_0215_labelPosition, opening_0200_0215_mitigation, opening_0200_0215_mitigationColor, opening_0200_0215_alert, false, opening_0200_0215_extend, opening_0200_0215_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0900_0915, opening_0900_0915_offset, opening_0900_0915_showLabels, 540, 555, opening_0900_0915_coreColor, opening_0900_0915_deviationColor, SESSION_INTRADAY_0915, CHART_LABEL_0915, opening_0900_0915_labelPosition, opening_0900_0915_mitigation, opening_0900_0915_mitigationColor, opening_0900_0915_alert, false, opening_0900_0915_extend, opening_0900_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1200_1230, opening_1200_1230_offset, opening_1200_1230_showLabels, 720, 750, opening_1200_1230_coreColor, opening_1200_1230_deviationColor, SESSION_INTRADAY_1230, CHART_LABEL_1230, opening_1200_1230_labelPosition, opening_1200_1230_mitigation, opening_1200_1230_mitigationColor, opening_1200_1230_alert, false, opening_1200_1230_extend, opening_1200_1230_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1400_1415, opening_1400_1415_offset, opening_1400_1415_showLabels, 840, 855, opening_1400_1415_coreColor, opening_1400_1415_deviationColor, SESSION_INTRADAY_1415, CHART_LABEL_1415, opening_1400_1415_labelPosition, opening_1400_1415_mitigation, opening_1400_1415_mitigationColor, opening_1400_1415_alert, false, opening_1400_1415_extend, opening_1400_1415_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, opening_0600_0900_alert, false, opening_0600_0900_extend, opening_0600_0900_extendCustom, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
-    SessionConfig.new(opening_1600_0500, opening_1600_0500_offset, opening_1600_0500_showLabels, 960, 300, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, SESSION_EXTENDED_1600_0500, CHART_LABEL_1600_0500, opening_1600_0500_labelPosition, opening_1600_0500_mitigation, opening_1600_0500_mitigationColor, opening_1600_0500_alert, false, opening_1600_0500_extend, opening_1600_0500_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, opening_0500_0915_alert, false, opening_0500_0915_extend, opening_0500_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0930_0945, opening_0930_0945_offset, opening_0930_0945_showLabels, 570, 585, opening_0930_0945_coreColor, opening_0930_0945_deviationColor, SESSION_EXTENDED_0930_0945, CHART_LABEL_0930_0945, opening_0930_0945_labelPosition, opening_0930_0945_mitigation, opening_0930_0945_mitigationColor, opening_0930_0945_alert, false, opening_0930_0945_extend, opening_0930_0945_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_alert, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, opening_1800_2100_extendCustom, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0930_093030, opening_0930_093030_offset, opening_0930_093030_showLabels, 570, 570, opening_0930_093030_coreColor, opening_0930_093030_deviationColor, SESSION_EXTENDED_0930_093030, CHART_LABEL_0930_093030, opening_0930_093030_labelPosition, opening_0930_093030_mitigation, opening_0930_093030_mitigationColor, opening_0930_093030_alert, false, opening_0930_093030_extend, opening_0930_093030_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0800_0850, opening_0800_0850_offset, opening_0800_0850_showLabels, 480, 530, opening_0800_0850_coreColor, opening_0800_0850_deviationColor, SESSION_EXTENDED_0800_0850, CHART_LABEL_0800_0850, opening_0800_0850_labelPosition, opening_0800_0850_mitigation, opening_0800_0850_mitigationColor, opening_0800_0850_alert, false, opening_0800_0850_extend, opening_0800_0850_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1845_2203, opening_1845_2203_offset, opening_1845_2203_showLabels, 1125, 1323, opening_1845_2203_coreColor, opening_1845_2203_deviationColor, SESSION_EXTENDED_1845_2203, CHART_LABEL_1845_2203, opening_1845_2203_labelPosition, opening_1845_2203_mitigation, opening_1845_2203_mitigationColor, opening_1845_2203_alert, opening_1845_2203_delayedMitigation, opening_1845_2203_extend, opening_1845_2203_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, 570, 600, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, opening_0930_1000_alert, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
+    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, opening_2130_0129_delayedMitigation, opening_2130_0129_extend, opening_2130_0129_extendCustom, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, opening_0600_0900_extendCustom, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
+    SessionConfig.new(opening_1600_0500, opening_1600_0500_offset, opening_1600_0500_showLabels, 960, 300, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, SESSION_EXTENDED_1600_0500, CHART_LABEL_1600_0500, opening_1600_0500_labelPosition, opening_1600_0500_mitigation, opening_1600_0500_mitigationColor, false, opening_1600_0500_extend, opening_1600_0500_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, opening_0500_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, opening_1800_2100_extendCustom, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, 570, 600, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1186,59 +944,16 @@ var array<SessionConfig> sessionConfigs = array.from(
 
 barMinutes = validTimeframe ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
 prevBarMinutes = validTimeframe ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
-barSeconds = validTimeframe ? second(time, NY_TIMEZONE) : 0
-prevBarSeconds = validTimeframe ? second(time[1], NY_TIMEZONE) : 0
 currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 30S OPENING DATA - Fetch actual 30-second candle data
+// 30M DATA - Confirmed close for IVB mitigation
 // ═══════════════════════════════════════════════════════════════════════════
-
-// Store the 09:30:00 30S candle data
-var float stored30sHigh = na
-var float stored30sLow = na
-var float stored30sOpen = na
-var float stored30sClose = na
-var int stored30sDate = na
-
-isOn30sTimeframe = timeframe.period == "30S"
-current30sDetectionDate = dayofmonth(time, NY_TIMEZONE)
-needToCapture30sData = na(stored30sDate) or stored30sDate != current30sDetectionDate
-
-// Fetch all 30S candles within each higher timeframe bar (only when needed). One tuple request keeps this to
-// a single lower-timeframe fetch instead of five (must be called unconditionally; processing skipped if unused).
-[ltfHighs, ltfLows, ltfOpens, ltfCloses, ltfTimes] = request.security_lower_tf(syminfo.tickerid, "30S", [high, low, open, close, time])
 
 // Confirmed (closed) 30m close + its bar-open time, for IVB mitigation. close[1] + lookahead_on
 // is the no-repaint idiom: returns only fully-closed 30m values. Single tuple request keeps it to one security call.
 // Note: on a 30m chart this confirms one bar later than on lower TFs (the close is only known after the bar closes).
 [htf30mClose, htf30mTime] = request.security(syminfo.tickerid, "30", [close[1], time[1]], lookahead=barmerge.lookahead_on)
-
-// Capture 30S candle data (only if we don't have today's data yet)
-if needToCapture30sData
-    if isOn30sTimeframe
-        // On 30S timeframe: use current bar directly when at 09:30:00
-        if barMinutes == 570 and barSeconds == 0
-            stored30sHigh := high
-            stored30sLow := low
-            stored30sOpen := open
-            stored30sClose := close
-            stored30sDate := current30sDetectionDate
-    else
-        // On higher timeframes: search through all 30S candles in this bar
-        if array.size(ltfTimes) > 0
-            for i = 0 to array.size(ltfTimes) - 1
-                ltfTime = array.get(ltfTimes, i)
-                ltfMinutes = hour(ltfTime, NY_TIMEZONE) * 60 + minute(ltfTime, NY_TIMEZONE)
-                ltfSeconds = second(ltfTime, NY_TIMEZONE)
-                // Found the 09:30:00 30S candle
-                if ltfMinutes == 570 and ltfSeconds == 0
-                    stored30sHigh := array.get(ltfHighs, i)
-                    stored30sLow := array.get(ltfLows, i)
-                    stored30sOpen := array.get(ltfOpens, i)
-                    stored30sClose := array.get(ltfCloses, i)
-                    stored30sDate := current30sDetectionDate
-                    break
 
 // Time windows used by mitigation logic
 PREMARKET_START_MIN = array.get(sessionConfigs, IDX_PREMARKET).startMin  // 300 = 05:00
@@ -1253,20 +968,15 @@ if validTimeframe
             crossesMidnight = cfg.endMin < cfg.startMin
 
             // Check if we're entering this session
-            currentlyInSession = isInSessionTime(i, barMinutes, barSeconds, cfg.startMin, cfg.endMin, crossesMidnight)
-            previouslyInSession = isInSessionTime(i, prevBarMinutes, prevBarSeconds, cfg.startMin, cfg.endMin, crossesMidnight)
+            currentlyInSession = isInSessionTime(barMinutes, cfg.startMin, cfg.endMin, crossesMidnight)
+            previouslyInSession = isInSessionTime(prevBarMinutes, cfg.startMin, cfg.endMin, crossesMidnight)
             sessionStarted = currentlyInSession and not previouslyInSession
 
             if sessionStarted
-                // Skip 30s Opening if accurate 30S data is not available (historical limitation)
-                if i == IDX_30S_OPENING and na(stored30sHigh)
-                    continue
-
-                // For 30s Opening, use stored 30S candle data; otherwise use current bar
-                initBodyHigh = i == IDX_30S_OPENING and not na(stored30sOpen) ? math.max(stored30sOpen, stored30sClose) : math.max(open, close)
-                initBodyLow = i == IDX_30S_OPENING and not na(stored30sOpen) ? math.min(stored30sOpen, stored30sClose) : math.min(open, close)
-                initWickHigh = i == IDX_30S_OPENING and not na(stored30sHigh) ? stored30sHigh : high
-                initWickLow = i == IDX_30S_OPENING and not na(stored30sLow) ? stored30sLow : low
+                initBodyHigh = math.max(open, close)
+                initBodyLow = math.min(open, close)
+                initWickHigh = high
+                initWickLow = low
 
                 newSession = SessionData.new(
                      sessionIndex=i,
@@ -1324,8 +1034,8 @@ if validTimeframe
                      retrace618Line=na,
                      retrace618Labels=array.new<label>(),
                      retrace618Armed=false,
+                     retraceFaded=false,
                      ivbReentrySide=0,
-                     enableAlert=cfg.alert,
                      delayedMitigation=cfg.delayedMitigation,
                      isKeySession=cfg.isKeySession,
                      retraceLabelTextColor=cfg.retraceLabelTextColor,
@@ -1360,34 +1070,32 @@ if validTimeframe and array.size(activeSessions) > 0
         crossesMidnight = sessCfg.endMin < sessCfg.startMin
 
         // Check if current bar is within this session's time range
-        isBarInSession = isInSessionTime(idx, barMinutes, barSeconds, sessCfg.startMin, sessCfg.endMin, crossesMidnight)
+        isBarInSession = isInSessionTime(barMinutes, sessCfg.startMin, sessCfg.endMin, crossesMidnight)
 
         if isBarInSession
-            // Skip updates for 30s Opening - data is complete from request.security()
-            if idx != IDX_30S_OPENING
-                // Update session high/low values with current bar
-                currentBodyHigh = math.max(open, close)
-                currentBodyLow = math.min(open, close)
+            // Update session high/low values with current bar
+            currentBodyHigh = math.max(open, close)
+            currentBodyLow = math.min(open, close)
 
-                // Track bar index when new highs/lows are formed
-                if high > sess.wickHigh
-                    sess.highBar := bar_index
-                    sess.highTime := time
-                if low < sess.wickLow
-                    sess.lowBar := bar_index
-                    sess.lowTime := time
+            // Track bar index when new highs/lows are formed
+            if high > sess.wickHigh
+                sess.highBar := bar_index
+                sess.highTime := time
+            if low < sess.wickLow
+                sess.lowBar := bar_index
+                sess.lowTime := time
 
-                // Update body/wick levels with current bar
-                sess.bodyHigh := math.max(sess.bodyHigh, currentBodyHigh)
-                sess.bodyLow := math.min(sess.bodyLow, currentBodyLow)
-                sess.wickHigh := math.max(sess.wickHigh, high)
-                sess.wickLow := math.min(sess.wickLow, low)
+            // Update body/wick levels with current bar
+            sess.bodyHigh := math.max(sess.bodyHigh, currentBodyHigh)
+            sess.bodyLow := math.min(sess.bodyLow, currentBodyLow)
+            sess.wickHigh := math.max(sess.wickHigh, high)
+            sess.wickLow := math.min(sess.wickLow, low)
 
-                // Live deviation drawing - clear and redraw each bar
-                clearLiveDrawings(sess)
-                // Calculate projected end time based on session's end minute
-                projectedEndTime = crossesMidnight and barMinutes >= sessCfg.startMin ? currentDayStart + 24 * 60 * 60 * 1000 + sessCfg.endMin * 60 * 1000 : currentDayStart + sessCfg.endMin * 60 * 1000
-                drawLiveSessionDeviations(sess, projectedEndTime, bar_index)
+            // Live deviation drawing - clear and redraw each bar
+            clearLiveDrawings(sess)
+            // Calculate projected end time based on session's end minute
+            projectedEndTime = crossesMidnight and barMinutes >= sessCfg.startMin ? currentDayStart + 24 * 60 * 60 * 1000 + sessCfg.endMin * 60 * 1000 : currentDayStart + sessCfg.endMin * 60 * 1000
+            drawLiveSessionDeviations(sess, projectedEndTime, bar_index)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
@@ -1405,8 +1113,8 @@ if validTimeframe and array.size(activeSessions) > 0
         crossesMidnight = endMin < startMin
 
         // Detect session end transition
-        isCurrentBarInSession = isInSessionTime(idx, barMinutes, barSeconds, startMin, endMin, crossesMidnight)
-        wasPreviousBarInSession = isInSessionTime(idx, prevBarMinutes, prevBarSeconds, startMin, endMin, crossesMidnight)
+        isCurrentBarInSession = isInSessionTime(barMinutes, startMin, endMin, crossesMidnight)
+        wasPreviousBarInSession = isInSessionTime(prevBarMinutes, startMin, endMin, crossesMidnight)
         hasSessionEnded = not isCurrentBarInSession and wasPreviousBarInSession
 
         if hasSessionEnded
@@ -1441,14 +1149,12 @@ if validTimeframe and array.size(activeSessions) > 0
                 sess.midLevel := (sess.bodyHigh + sess.bodyLow) / 2
 
             // Draw core boxes
-            if not skipsBodyCore(idx)
-                sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
-
             if not skipsCore(idx)
+                sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
                 sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
 
             // Draw body deviations if mode is Body or Both
-            if (sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH) and not skipsBodyDeviations(idx)
+            if sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH
                 drawCoreWithDeviations(sess, sess.bodyHigh, sess.bodyLow, bodyHeight, true)
 
             // Draw wick deviations if mode is Wick or Both
@@ -1528,8 +1234,6 @@ if validTimeframe and array.size(sessions) > 0
                         // math.max guards the case where the first touch and the breaking close fall in the same candle (window start would precede the touch).
                         if mitigationMode == SESSION_MITIGATED and not na(sess.highPendingLine)
                             line.set_x2(sess.highPendingLine, math.max(htf30mTime + 30 * 60 * 1000 - BAR_MS, sess.provisionalHighTime))
-                        if sess.enableAlert
-                            alert(sess.sessionName + ALERT_HIGH_MITIGATED, alert.freq_once_per_bar)
                     if sess.provisionalHighMitigated and not na(sess.highPendingLine) and not sess.highMitigated and isOnSessionStartDay
                         line.set_x2(sess.highPendingLine, time)
                 else if canEvaluateMitigation and high >= sess.dominantHigh
@@ -1540,8 +1244,6 @@ if validTimeframe and array.size(sessions) > 0
                         line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                         if not na(temp)
                             sess.highMitigationLine := temp
-                    if sess.enableAlert
-                        alert(sess.sessionName + ALERT_HIGH_MITIGATED, alert.freq_once_per_bar)
 
                 else if isInOvernightWindow and high >= sess.dominantHigh
                     // Provisional breach during overnight - draw solid to breach, then dashed continuation
@@ -1561,8 +1263,6 @@ if validTimeframe and array.size(sessions) > 0
                         line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalHighMitigated, sess.highPendingLine, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                         if not na(temp)
                             sess.highMitigationLine := temp
-                    if sess.enableAlert
-                        alert(sess.sessionName + ALERT_HIGH_MITIGATED, alert.freq_once_per_bar)
 
                 // Extend pending line during overnight (before 05:00 confirmation window)
                 if sess.sessionIndex != IDX_IVB and sess.provisionalHighMitigated and not na(sess.highPendingLine) and not sess.highMitigated
@@ -1587,8 +1287,6 @@ if validTimeframe and array.size(sessions) > 0
                         // math.max guards the case where the first touch and the breaking close fall in the same candle (window start would precede the touch).
                         if mitigationMode == SESSION_MITIGATED and not na(sess.lowPendingLine)
                             line.set_x2(sess.lowPendingLine, math.max(htf30mTime + 30 * 60 * 1000 - BAR_MS, sess.provisionalLowTime))
-                        if sess.enableAlert
-                            alert(sess.sessionName + ALERT_LOW_MITIGATED, alert.freq_once_per_bar)
                     if sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated and isOnSessionStartDay
                         line.set_x2(sess.lowPendingLine, time)
                 else if canEvaluateMitigation and low <= sess.dominantLow
@@ -1599,8 +1297,6 @@ if validTimeframe and array.size(sessions) > 0
                         line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                         if not na(temp)
                             sess.lowMitigationLine := temp
-                    if sess.enableAlert
-                        alert(sess.sessionName + ALERT_LOW_MITIGATED, alert.freq_once_per_bar)
 
                 else if isInOvernightWindow and low <= sess.dominantLow
                     // Provisional breach during overnight - draw solid to breach, then dashed continuation
@@ -1620,8 +1316,6 @@ if validTimeframe and array.size(sessions) > 0
                         line temp = draw_confirmed_mitigation_line(showAllLines, sess.provisionalLowMitigated, sess.lowPendingLine, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                         if not na(temp)
                             sess.lowMitigationLine := temp
-                    if sess.enableAlert
-                        alert(sess.sessionName + ALERT_LOW_MITIGATED, alert.freq_once_per_bar)
 
                 // Extend pending line during overnight (before 05:00 confirmation window)
                 if sess.sessionIndex != IDX_IVB and sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated
@@ -1633,9 +1327,8 @@ if validTimeframe and array.size(sessions) > 0
                 sess.lowPendingLabel := resolve_pending_label(showAllLines and showAllLabels and showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.mitigationColor)
                 bool wantMitigationName = showAllLines and showAllLabels and showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex)
                 string mitigationTxt = str.lower(sess.chartLabel)
-                int mitigationSessionMs = sess.actualEndTime - sess.startTime
-                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders, mitigationSessionMs)
-                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.dominantLow, mitigationTxt, showMitigationReminders, mitigationSessionMs)
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders)
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.dominantLow, mitigationTxt, showMitigationReminders)
 
             // === CONSOLIDATED POST-MITIGATION CLEANUP (single check replaces duplicates) ===
             // Delete unmitigated line/label when HIGH is mitigated
@@ -1776,10 +1469,7 @@ if validTimeframe and array.size(sessions) > 0
                         if showAllLines
                             sess.midMitigationLine := line.new(sess.actualEndTime, sess.midLevel, time, sess.midLevel, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_50_LINE_WIDTH, xloc=xloc.bar_time)
                             if showAllLabels and sess.isKeySession
-                                sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                        if sess.enableAlert
-                            alertMsg = lowWasFirst ? sess.sessionName + ALERT_MID_MITIGATED_FROM_BELOW : sess.sessionName + ALERT_MID_MITIGATED_FROM_ABOVE
-                            alert(alertMsg, alert.freq_once_per_bar)
+                                sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
 
             // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
             if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
@@ -1799,10 +1489,16 @@ if validTimeframe and array.size(sessions) > 0
                         if showAllLines
                             sess.retrace618Line := line.new(sess.actualEndTime, sess.retraceLevel618, time, sess.retraceLevel618, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
                             if showAllLabels
-                                sess.retrace618Labels := tile_line_labels(sess.retrace618Line, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.actualEndTime - sess.startTime, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                        if sess.enableAlert
-                            alertMsg618 = lowWasFirst618 ? sess.sessionName + ALERT_618_MITIGATED_FROM_BELOW : sess.sessionName + ALERT_618_MITIGATED_FROM_ABOVE
-                            alert(alertMsg618, alert.freq_once_per_bar)
+                                sess.retrace618Labels := tile_line_labels(sess.retrace618Line, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+
+            // Both extremes reached ⇒ the range is fully traversed and the retracement is spent, so its
+            // 0.5 / 0.618 marks are no longer actionable. highMitigated / lowMitigated are already
+            // window-gated: same-day sessions (IVB) only qualify within their day; perpetual sessions
+            // (Rafael, Asia Open, Evening Range) qualify whenever the second extreme is eventually reached.
+            if fadeCompletedRetracements and not sess.retraceFaded and sess.highMitigated and sess.lowMitigated and (sess.midMitigated or sess.retrace618Mitigated)
+                fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                sess.retraceFaded := true
 
     // Combine overlapping unmitigated labels (only on last bar for performance)
     if barstate.islast and showAllLines and showAllLabels and mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
@@ -1975,24 +1671,9 @@ if validTimeframe and showColorTable and barstate.islast
     int currentRow = 1
 
     // Only show colors for sessions that are BOTH enabled AND in current Quick Filter
-    if opening_2000_2015 != OPT_HIDDEN and isInFilter(IDX_2015)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_2015, opening_2000_2015_coreColor, opening_2000_2015_deviationColor, opening_2000_2015_mitigationColor, opening_2000_2015_mitigation)
-
     if opening_2130_0129 != OPT_HIDDEN and isInFilter(IDX_0129)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_0129, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, opening_2130_0129_mitigationColor, opening_2130_0129_mitigation)
         currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_INTRADAY_0129, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor)
-
-    if opening_0200_0215 != OPT_HIDDEN and isInFilter(IDX_0215)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_0215, opening_0200_0215_coreColor, opening_0200_0215_deviationColor, opening_0200_0215_mitigationColor, opening_0200_0215_mitigation)
-
-    if opening_0900_0915 != OPT_HIDDEN and isInFilter(IDX_0915)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_0915, opening_0900_0915_coreColor, opening_0900_0915_deviationColor, opening_0900_0915_mitigationColor, opening_0900_0915_mitigation)
-
-    if opening_1200_1230 != OPT_HIDDEN and isInFilter(IDX_1230)
-        currentRow += addSessionColorRows(colorTable, currentRow, "12:00 Lunch", opening_1200_1230_coreColor, opening_1200_1230_deviationColor, opening_1200_1230_mitigationColor, opening_1200_1230_mitigation)
-
-    if opening_1400_1415 != OPT_HIDDEN and isInFilter(IDX_1415)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_INTRADAY_1415, opening_1400_1415_coreColor, opening_1400_1415_deviationColor, opening_1400_1415_mitigationColor, opening_1400_1415_mitigation)
 
     if opening_0600_0900 != OPT_HIDDEN and isInFilter(IDX_NY_EARLY)
         currentRow += addSessionColorRows(colorTable, currentRow, "NY Early", opening_0600_0900_coreColor, opening_0600_0900_deviationColor, opening_0600_0900_mitigationColor, opening_0600_0900_mitigation)
@@ -2004,9 +1685,6 @@ if validTimeframe and showColorTable and barstate.islast
     if opening_0500_0915 != OPT_HIDDEN and isInFilter(IDX_PREMARKET)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0500_0915, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, opening_0500_0915_mitigationColor, opening_0500_0915_mitigation)
 
-    if opening_0930_0945 != OPT_HIDDEN and isInFilter(IDX_NY_OPEN_15M)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_0945, opening_0930_0945_coreColor, opening_0930_0945_deviationColor, opening_0930_0945_mitigationColor, opening_0930_0945_mitigation)
-
     if opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, opening_0930_1000_mitigationColor, opening_0930_1000_mitigation)
         currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor)
@@ -2014,15 +1692,6 @@ if validTimeframe and showColorTable and barstate.islast
     if opening_1800_2100 != OPT_HIDDEN and isInFilter(IDX_ASIA_OPEN)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1800_2100, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, opening_1800_2100_mitigationColor, opening_1800_2100_mitigation)
         currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_EXTENDED_1800_2100, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor)
-
-    if opening_0930_093030 != OPT_HIDDEN and isInFilter(IDX_30S_OPENING)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_093030, opening_0930_093030_coreColor, opening_0930_093030_deviationColor, opening_0930_093030_mitigationColor, opening_0930_093030_mitigation)
-
-    if opening_0800_0850 != OPT_HIDDEN and isInFilter(IDX_0800_0850)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0800_0850, opening_0800_0850_coreColor, opening_0800_0850_deviationColor, opening_0800_0850_mitigationColor, opening_0800_0850_mitigation)
-
-    if opening_1845_2203 != OPT_HIDDEN and isInFilter(IDX_1845_2203)
-        currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1845_2203, opening_1845_2203_coreColor, opening_1845_2203_deviationColor, opening_1845_2203_mitigationColor, opening_1845_2203_mitigation)
 
     // General colors
     addSingleColorRow(colorTable, currentRow, "Labels Bg", labelsBgColor)
