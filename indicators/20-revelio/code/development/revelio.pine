@@ -67,7 +67,8 @@ LABEL_FADE_PERCENT = "Fade %"
 ANCHOR_LABEL_MODE_OFF = "Off"
 ANCHOR_LABEL_MODE_ONCE = "Once"
 ANCHOR_LABEL_MODE_REMINDERS = LABEL_REMINDERS
-ANCHOR_REMINDER_MIN_SPACING_MS = int(5 * MS_PER_DAY / 2)
+ANCHOR_REMINDER_MIN_SPACING_MS = 3 * MS_PER_DAY
+ANCHOR_REMINDER_MAX_PER_LEVEL = 5
 
 // A session whose bar-span is below this fraction of the longest session seen is treated as
 // an early close / holiday half-day and merged per the selected mode. Per-anchor thresholds:
@@ -214,12 +215,7 @@ TOOLTIP_SWEPT_LABEL_TEXT_FADE = "Extra fade applied only to swept level label te
 TOOLTIP_RTH_SWEPT_KEEP = "RTH only. Beyond the most recent RTH profile (always kept), also keep the faded continuation of older swept levels whose sweep happened within this many days. A whole profile is kept when its most recent sweep falls inside the window. 0 = only the most recent RTH profile's swept levels are kept."
 TOOLTIP_WEEKLY_SWEPT_KEEP = "Weekly only. Beyond the most recent weekly profile (always kept), also keep the faded continuation of older swept levels whose sweep happened within this many weeks. A whole profile is kept when its most recent sweep falls inside the window. 0 = only the most recent weekly profile's swept levels are kept."
 TOOLTIP_MONTHLY_SWEPT_KEEP = "Monthly only. Beyond the most recent monthly profile (always kept), also keep the faded continuation of older swept levels whose sweep happened within this many months. A whole profile is kept when its most recent sweep falls inside the window. 0 = only the most recent monthly profile's swept levels are kept."
-// Safety ceiling on identity reminders per swept line. The count is normally set by the square-root rule
-// below (grows with length, sublinearly); this only guards the label budget on extreme runs.
-SWEPT_REMINDER_MAX_PER_LINE = 8
-
-// Reminder count keys off a swept line's absolute length, not the anchor's period, so physical chart
-// distance drives density uniformly: a line earns a 2nd reminder at ~2.25× this, a 3rd at ~6.25×, etc.
+SWEPT_REMINDER_MAX_PER_LINE = 7
 SWEPT_REMINDER_BASE_MS = 3 * MS_PER_DAY
 LABEL_RTH_ANCHOR = "RTH"
 LABEL_RTH_LIVE = "★ Today's RTH"
@@ -517,8 +513,7 @@ intrabarResolution = input.string("Auto", "HD resolution (intrabar data)", optio
 levelLabelOffset = input.int(20, LABEL_LEVEL_LABEL_OFFSET, minval=0, maxval=100, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.", group=GROUP_LABELS)
 levelLabelBgColor = input.color(color.new(color.rgb(249, 248, 248), 25), LABEL_LEVEL_LABEL_BACKGROUND, group=GROUP_LABELS)
 anchorLevelLabelMode = input.string(ANCHOR_LABEL_MODE_ONCE, "Anchor Labels", options=[ANCHOR_LABEL_MODE_OFF, ANCHOR_LABEL_MODE_ONCE, ANCHOR_LABEL_MODE_REMINDERS], inline="anchor_labels", group=GROUP_LABELS)
-anchorReminderFadePercent = input.int(60, LABEL_FADE_PERCENT, minval=0, maxval=100, inline="anchor_labels", group=GROUP_LABELS)
-anchorReminderSpacingPercent = input.float(25.0, "Span %", minval=10.0, maxval=200.0, step=5.0, inline="anchor_labels", tooltip="Anchor Labels:\n• Off — no identity tags\n• Once — one intelligent tag per eligible POC / VAH / VAL extension\n• Reminders — repeat tags sparsely on long extensions\n\nThe newest completed anchor uses its recency name (for example 'LAST WEEK'S VAH'); older anchors include their date.\n\nFade % adds text transparency. Span % derives delay and repeat spacing from each anchor's own duration, with a 2.5-day minimum so short anchors do not become noisy. At 25%, RTH / Globex / Weekly use the 2.5-day floor and a normal month uses about 7.5 days.", group=GROUP_LABELS)
+anchorReminderFadePercent = input.int(60, LABEL_FADE_PERCENT, minval=0, maxval=100, inline="anchor_labels", tooltip="Identity tags on open POC / VAH / VAL extensions. Once = one per extension; Reminders = repeats on long ones. Swept levels use Swept Line Reminders instead.", group=GROUP_LABELS)
 dedupeLabels = input.bool(true, "Merge Overlapping Labels", tooltip="When levels from different anchors land at the same price, combine their tags into one label (e.g. 'PREV RTH POC | PREV GLOBEX POC') instead of stacking separate labels on top of each other. Applies to right-edge labels, active anchor reminders and swept-line reminders. Off = each level draws its own label.", group=GROUP_LABELS)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -684,7 +679,6 @@ type PendingReminder
 // POC / VAH / VAL reminders before their sparse placements are generated.
 type PendingAnchorReminder
     float price
-    int anchorStartTime
     int anchorEndTime
     int runEndTime
     string namePart
@@ -1032,6 +1026,9 @@ valueGapFillRange(string fillMode, array<float> intrabarHighs, array<float> intr
             eligibleLow := low
     [eligibleHigh, eligibleLow]
 
+reminderPlacements(int runMs, int spacingMs, int maxCount) =>
+    math.min(maxCount, math.max(1, int(math.floor(math.sqrt(float(runMs) / math.max(1, spacingMs))))))
+
 levelEndpoint(int endTime, int breachTime, string extensionMode) =>
     int rightEdge = endTime
     bool extendRight = false
@@ -1146,7 +1143,7 @@ valueGapLevelFilled(ValueGap gap, float levelPrice) =>
 
 // Only the confirmed style enables reminders, so runMs is always a bar_time span, never a bar count.
 valueGapInternalPlacements(ValueGapStyle style, int runMs) =>
-    style.showInternalReminders and runMs > 0 ? math.min(VALUE_GAP_REMINDER_MAX_PER_LEVEL, math.max(1, int(math.round(math.sqrt(float(runMs) / SWEPT_REMINDER_BASE_MS))))) : 1
+    style.showInternalReminders and runMs > 0 ? reminderPlacements(runMs, SWEPT_REMINDER_BASE_MS, VALUE_GAP_REMINDER_MAX_PER_LEVEL) : 1
 
 valueGapInternalLabelText(float levelFraction) =>
     valueGapSource + " Gap " + str.tostring(int(levelFraction * 100)) + "%"
@@ -1275,19 +1272,18 @@ renderValueGaps(array<ValueGap> valueGaps, bool enabled, array<int> floatingIndi
                 int rightTime = isFilled ? gap.fillTime : time + liveRightPadding
                 renderStyledValueGap(gap, gap.leftTime, rightTime, xloc.bar_time, style, valueGapLabelText(gap), gapIndex == boldGapIndex)
 
-// Identity tags live only on the extension beyond the completed anchor. Waiting one swept-reminder
-// span keeps the obvious session body and its immediate edge clear. A base label is always singular;
-// optional repeats grow only from usable post-delay space, preventing premature adjacent duplicates.
-renderAnchorLevelReminders(int anchorStartTime, int anchorEndTime, int runEndTime, float price, string reminderText, string levelName, color textColor, color bgColor, string sizeName) =>
-    int anchorSpanMs = math.max(1, anchorEndTime - anchorStartTime)
-    int reminderSpacingMs = math.max(ANCHOR_REMINDER_MIN_SPACING_MS, int(anchorSpanMs * anchorReminderSpacingPercent / 100.0))
-    int reminderRunStart = anchorEndTime + reminderSpacingMs
-    int eligibleRunMs = runEndTime - reminderRunStart
+// Trailing margin keeps a repeat off the right-edge label, which already names the level there.
+anchorReminderRun(int anchorEndTime, int runEndTime) =>
+    int runStart = anchorEndTime + ANCHOR_REMINDER_MIN_SPACING_MS
+    int runEnd = math.min(runEndTime, time - ANCHOR_REMINDER_MIN_SPACING_MS)
+    [runStart, runEnd - runStart]
+
+renderAnchorLevelReminders(int anchorEndTime, int runEndTime, float price, string reminderText, string levelName, color textColor, color bgColor, string sizeName) =>
+    [reminderRunStart, eligibleRunMs] = anchorReminderRun(anchorEndTime, runEndTime)
     if anchorLevelLabelMode != ANCHOR_LABEL_MODE_OFF and eligibleRunMs > 0
         int reminderCount = 1
         if anchorLevelLabelMode == ANCHOR_LABEL_MODE_REMINDERS
-            float runUnits = float(eligibleRunMs) / reminderSpacingMs
-            reminderCount := math.min(SWEPT_REMINDER_MAX_PER_LINE, math.max(1, int(math.round(math.sqrt(runUnits)))))
+            reminderCount := reminderPlacements(eligibleRunMs, ANCHOR_REMINDER_MIN_SPACING_MS, ANCHOR_REMINDER_MAX_PER_LEVEL)
         // Strong phase separation keeps nearby POC / VAH / VAL text from vertically stacking.
         float levelFrac = levelName == LABEL_VAH ? 0.5 : levelName == LABEL_VAL ? 0.85 : 0.15
         for placement = 1 to reminderCount
@@ -1302,14 +1298,14 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     int levelWeight = levelName == LABEL_POC ? 3 : levelName == LABEL_ALTERNATE_POC ? 1 : 2
     int recencyWeight = isLive ? 2 : isLast ? 1 : 0
     int labelRank = levelWeight * 10 + recencyWeight
-    if not isLive and levelName != LABEL_ALTERNATE_POC
+    // Swept levels are tagged by the swept-line reminders below, never here, or they draw the same name twice.
+    if not isLive and not sweptDenote and levelName != LABEL_ALTERNATE_POC
         int visibleEndTime = extendRight ? time : endTime
         string anchorLabelName = isLast ? style.labelLast + " " + levelName : style.labelAnchor + " " + levelName + " " + dateText
         color anchorReminderTextColor = color.new(labelTextColor, 100 - (100 - color.t(labelTextColor)) * (1 - anchorReminderFadePercent / 100.0))
-        int anchorSpanMs = math.max(1, anchorEndTime - startTime)
-        int reminderSpacingMs = math.max(ANCHOR_REMINDER_MIN_SPACING_MS, int(anchorSpanMs * anchorReminderSpacingPercent / 100.0))
-        if anchorLevelLabelMode != ANCHOR_LABEL_MODE_OFF and visibleEndTime > anchorEndTime + reminderSpacingMs
-            array.push(pendingAnchorReminders, PendingAnchorReminder.new(price, startTime, anchorEndTime, visibleEndTime, anchorLabelName, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank))
+        [_, anchorRunMs] = anchorReminderRun(anchorEndTime, visibleEndTime)
+        if anchorLevelLabelMode != ANCHOR_LABEL_MODE_OFF and anchorRunMs > 0
+            array.push(pendingAnchorReminders, PendingAnchorReminder.new(price, anchorEndTime, visibleEndTime, anchorLabelName, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank))
     if sweptDenote
         array.push(drawnLines, line.new(x1=endTime, y1=price, x2=time, y2=price, xloc=xloc.bar_time, extend=extend.right, color=sweptContinuationColor, width=style.sweptContinuationWidth, style=line.style_dashed))
     if extendRight or sweptDenote
@@ -1384,7 +1380,6 @@ flushPendingAnchorReminders(bool dedupe) =>
     int pendingCount = array.size(pendingAnchorReminders)
     if pendingCount > 0
         array<float> clusterPrice = array.new<float>()
-        array<int> clusterStartTime = array.new<int>()
         array<int> clusterAnchorEndTime = array.new<int>()
         array<int> clusterRunEndTime = array.new<int>()
         array<string> clusterName = array.new<string>()
@@ -1409,7 +1404,6 @@ flushPendingAnchorReminders(bool dedupe) =>
                 array.set(clusterName, foundIndex, existingName == "" ? pending.namePart : existingName + LABEL_NAME_SEPARATOR + pending.namePart)
                 if pending.rank > array.get(clusterRank, foundIndex)
                     array.set(clusterPrice, foundIndex, pending.price)
-                    array.set(clusterStartTime, foundIndex, pending.anchorStartTime)
                     array.set(clusterAnchorEndTime, foundIndex, pending.anchorEndTime)
                     array.set(clusterRunEndTime, foundIndex, pending.runEndTime)
                     array.set(clusterColor, foundIndex, pending.textColor)
@@ -1419,7 +1413,6 @@ flushPendingAnchorReminders(bool dedupe) =>
                     array.set(clusterRank, foundIndex, pending.rank)
             else
                 array.push(clusterPrice, pending.price)
-                array.push(clusterStartTime, pending.anchorStartTime)
                 array.push(clusterAnchorEndTime, pending.anchorEndTime)
                 array.push(clusterRunEndTime, pending.runEndTime)
                 array.push(clusterName, pending.namePart)
@@ -1429,7 +1422,7 @@ flushPendingAnchorReminders(bool dedupe) =>
                 array.push(clusterLevelName, pending.levelName)
                 array.push(clusterRank, pending.rank)
         for clusterIndex = 0 to array.size(clusterPrice) - 1
-            renderAnchorLevelReminders(array.get(clusterStartTime, clusterIndex), array.get(clusterAnchorEndTime, clusterIndex), array.get(clusterRunEndTime, clusterIndex), array.get(clusterPrice, clusterIndex), array.get(clusterName, clusterIndex), array.get(clusterLevelName, clusterIndex), array.get(clusterColor, clusterIndex), array.get(clusterBg, clusterIndex), array.get(clusterSize, clusterIndex))
+            renderAnchorLevelReminders(array.get(clusterAnchorEndTime, clusterIndex), array.get(clusterRunEndTime, clusterIndex), array.get(clusterPrice, clusterIndex), array.get(clusterName, clusterIndex), array.get(clusterLevelName, clusterIndex), array.get(clusterColor, clusterIndex), array.get(clusterBg, clusterIndex), array.get(clusterSize, clusterIndex))
         array.clear(pendingAnchorReminders)
 
 // Spread swept-line reminders along each run, merging coincident-price ones to match the right-edge label.
@@ -1479,10 +1472,10 @@ flushPendingReminders(bool dedupe) =>
                 array.push(clusterRank, pending.rank)
         for clusterIndex = 0 to array.size(clusterPrice) - 1
             int endTime = array.get(clusterEndTime, clusterIndex)
-            int sweptRunMs = time - endTime
+            // Trailing margin keeps a tag off the right-edge label, which already names the level there.
+            int sweptRunMs = (time - SWEPT_REMINDER_BASE_MS) - endTime
             if sweptRunMs > 0
-                float runUnits = sweptRunMs / SWEPT_REMINDER_BASE_MS
-                int runReminderCount = math.min(SWEPT_REMINDER_MAX_PER_LINE, math.max(1, int(math.round(math.sqrt(runUnits)))))
+                int runReminderCount = reminderPlacements(sweptRunMs, SWEPT_REMINDER_BASE_MS, SWEPT_REMINDER_MAX_PER_LINE)
                 // Each level sits at a different fraction within its segment so the level types interleave;
                 // dividing by the count (not count+1) keeps the spread across the whole run — at count 1 the
                 // four levels still fan out from ~0.2 to ~0.8 instead of bunching past the midpoint.
