@@ -124,6 +124,11 @@ type SessionData
     label lowPendingLabel
     // Deviation extension (extends deviation zones beyond session end)
     int deviationExtendMs
+    // IVB breakout extension projections (avg / avg+1σ lines and labels)
+    bool extHighProcessed
+    bool extLowProcessed
+    array<line> extLines
+    array<label> extLabels
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI STRING CONSTANTS
@@ -229,6 +234,17 @@ TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retrac
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_FADE_RETRACE = "Once BOTH of a session's extremes have been reached, its 0.5 / 0.618 retracement is complete — the range is fully traversed and those levels are no longer actionable. This fades the completed 0.5 / 0.618 line and labels by Fade % so your eye skips them.\n\nWindow-aware: same-day sessions (e.g. IVB) only qualify when the second extreme is reached the same day; perpetually-tracked sessions (Rafael, Asia Open, Evening Range) qualify whenever it eventually happens.\n\nOff = completed retracements keep their normal colors."
 TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nDensity keys off each line's own length and stays sparse (sublinear): most lines get a single tag, and only long extensions earn a second.\n\nOff = one label at each line's midpoint only."
+
+// IVB session window (NY minutes) - shared by the session config and the extension statistics
+IVB_START_MIN = 570
+IVB_END_MIN = 600
+
+// IVB breakout extensions - minimum recorded samples before projections draw
+IVB_EXT_MIN_SAMPLES = 5
+LABEL_EXT_AVG = "ivb avg"
+LABEL_EXT_STD = "ivb +1σ"
+
+TOOLTIP_IVB_EXTENSIONS = "Project how far price historically travels beyond a broken IVB edge. On the first wick breach of an IVB side, two same-day levels are drawn from the breach to 16:00:\n\n• Average extension (dashed)\n• Average + 1 standard deviation (dotted)\n\nBoth are measured as a ratio of each day's IVB range. Every broken side of a past IVB contributes one sample (10:00–16:00 max excursion); Lookback caps how many samples the statistics use. Levels appear only once at least 5 samples exist. Requires IVB Mitigation to be on."
 
 // Option values
 OPT_HIDDEN = "Hidden"
@@ -435,6 +451,9 @@ opening_0930_1000_retraceLabelTextColor = input.color(color.new(color.rgb(245, 6
 opening_0930_1000_retraceLabelBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), LABEL_RETRACE_BG, inline="0930_1000_retrace_colors", group=GROUP_0930_1000, tooltip=TOOLTIP_RETRACE_BG_COLOR)
 opening_0930_1000_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="0930_1000_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_0930_1000)
 opening_0930_1000_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0930_1000_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_0930_1000)
+opening_0930_1000_showExtensions = input.bool(true, "Breakout Extensions", inline="0930_1000_ext", group=GROUP_0930_1000, tooltip=TOOLTIP_IVB_EXTENSIONS)
+opening_0930_1000_extLookback = input.int(15, "Lookback", inline="0930_1000_ext", group=GROUP_0930_1000, minval=IVB_EXT_MIN_SAMPLES, maxval=60, tooltip=TOOLTIP_IVB_EXTENSIONS)
+opening_0930_1000_extColor = input.color(color.new(color.rgb(245, 65, 240), 30), "", inline="0930_1000_ext", group=GROUP_0930_1000, tooltip=TOOLTIP_IVB_EXTENSIONS)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Color Reference Table
@@ -854,6 +873,13 @@ deleteSession(SessionData sess) =>
         label.delete(sess.highPendingLabel)
     if not na(sess.lowPendingLabel)
         label.delete(sess.lowPendingLabel)
+    // Delete IVB breakout extension projections
+    for l in sess.extLines
+        line.delete(l)
+    array.clear(sess.extLines)
+    for lbl in sess.extLabels
+        label.delete(lbl)
+    array.clear(sess.extLabels)
     // Delete unmitigated lines and labels
     if not na(sess.highUnmitigatedLine)
         line.delete(sess.highUnmitigatedLine)
@@ -935,7 +961,7 @@ var array<SessionConfig> sessionConfigs = array.from(
     SessionConfig.new(opening_1600_0500, opening_1600_0500_offset, opening_1600_0500_showLabels, 960, 300, opening_1600_0500_coreColor, opening_1600_0500_deviationColor, SESSION_EXTENDED_1600_0500, CHART_LABEL_1600_0500, opening_1600_0500_labelPosition, opening_1600_0500_mitigation, opening_1600_0500_mitigationColor, false, opening_1600_0500_extend, opening_1600_0500_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, opening_0500_0915_extendCustom, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, opening_1800_2100_extendCustom, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, 570, 600, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
+    SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, IVB_START_MIN, IVB_END_MIN, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, opening_0930_1000_extendCustom, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1052,7 +1078,11 @@ if validTimeframe
                      lowPendingLine=na,
                      highPendingLabel=na,
                      lowPendingLabel=na,
-                     deviationExtendMs=getSessionExtendMs(i)
+                     deviationExtendMs=getSessionExtendMs(i),
+                     extHighProcessed=false,
+                     extLowProcessed=false,
+                     extLines=array.new<line>(),
+                     extLabels=array.new<label>()
                  )
 
                 array.push(activeSessions, newSession)
@@ -1191,6 +1221,80 @@ if validTimeframe and array.size(activeSessions) > 0
             array.remove(activeSessions, i)
 
 // ═══════════════════════════════════════════════════════════════════════════
+// IVB BREAKOUT EXTENSION STATISTICS
+// ═══════════════════════════════════════════════════════════════════════════
+// Rolling history of how far price travels beyond a broken IVB edge (10:00-16:00, same day),
+// as a ratio of that day's IVB range. Each broken side contributes one sample. Tracked globally
+// (not on SessionData) so the sample window survives maxSessions pruning. A day's samples are
+// pushed at 16:00 (or the next day's open on early closes), so the projections drawn on a
+// breach always come from prior days only.
+
+type IvbExtState
+    array<float> ratios  // Rolling excursion/range samples, capped at the lookback input
+    float dayHigh        // Tracked day's IVB wick high (na = no day being tracked)
+    float dayLow
+    float maxAbove       // Max excursion above dayHigh so far (0 = side never broken)
+    float maxBelow
+    int dayStart         // currentDayStart of the tracked day, for rollover detection
+
+var IvbExtState ivbExtState = IvbExtState.new(array.new<float>(), na, na, 0.0, 0.0, na)
+
+ivbExtFeatureOn = opening_0930_1000_showExtensions and opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
+
+// Push the tracked day's excursion samples into the rolling window and reset the day state.
+finalizeIvbExtDay(IvbExtState st) =>
+    if not na(st.dayHigh) and st.dayHigh > st.dayLow
+        float statRange = st.dayHigh - st.dayLow
+        if st.maxAbove > 0
+            array.push(st.ratios, st.maxAbove / statRange)
+        if st.maxBelow > 0
+            array.push(st.ratios, st.maxBelow / statRange)
+        while array.size(st.ratios) > opening_0930_1000_extLookback
+            array.shift(st.ratios)
+    st.dayHigh := na
+    st.dayLow := na
+    st.maxAbove := 0.0
+    st.maxBelow := 0.0
+
+if validTimeframe and ivbExtFeatureOn
+    // Close out the tracked day at the 16:00 crossing, or at the first bar of a new NY day
+    // (covers early closes that never print a 16:00 bar).
+    bool crossed1600 = barMinutes >= CLOSE_1600_MIN and prevBarMinutes < CLOSE_1600_MIN
+    if crossed1600 or (not na(ivbExtState.dayStart) and currentDayStart != ivbExtState.dayStart)
+        finalizeIvbExtDay(ivbExtState)
+    if barMinutes >= IVB_START_MIN and barMinutes <= IVB_END_MIN
+        ivbExtState.dayHigh := na(ivbExtState.dayHigh) ? high : math.max(ivbExtState.dayHigh, high)
+        ivbExtState.dayLow := na(ivbExtState.dayLow) ? low : math.min(ivbExtState.dayLow, low)
+        ivbExtState.dayStart := currentDayStart
+    else if barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(ivbExtState.dayHigh)
+        ivbExtState.maxAbove := math.max(ivbExtState.maxAbove, high - ivbExtState.dayHigh)
+        ivbExtState.maxBelow := math.max(ivbExtState.maxBelow, ivbExtState.dayLow - low)
+
+// Project the average / avg+1σ historical breakout extension from a broken IVB wick edge to 16:00.
+// Called once per side, on the bar of the first strict wick breach before 16:00.
+drawIvbExtensions(SessionData sess, bool brokeHigh) =>
+    if ivbExtFeatureOn and showAllLines and barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and array.size(ivbExtState.ratios) >= IVB_EXT_MIN_SAMPLES
+        // Statistics are trained on wick ranges, so projections must use the same basis even
+        // when the IVB display/mitigation mode is configured to use body levels.
+        float rangeHeight = sess.wickHigh - sess.wickLow
+        float avgRatio = array.avg(ivbExtState.ratios)
+        float stdRatio = array.stdev(ivbExtState.ratios)
+        float direction = brokeHigh ? 1.0 : -1.0
+        float edge = brokeHigh ? sess.wickHigh : sess.wickLow
+        float avgLevel = edge + direction * rangeHeight * avgRatio
+        float stdLevel = edge + direction * rangeHeight * (avgRatio + stdRatio)
+        int endOfDay = currentDayStart + CLOSE_1600_MIN * 60 * 1000
+        line avgLine = line.new(time, avgLevel, endOfDay, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
+        line stdLine = line.new(time, stdLevel, endOfDay, stdLevel, color=opening_0930_1000_extColor, style=line.style_dotted, width=1, xloc=xloc.bar_time)
+        array.push(sess.extLines, avgLine)
+        array.push(sess.extLines, stdLine)
+        if showAllLabels
+            for lbl in tile_line_labels(avgLine, avgLevel, LABEL_EXT_AVG, false, opening_0930_1000_extColor, labelsBgColor)
+                array.push(sess.extLabels, lbl)
+            for lbl in tile_line_labels(stdLine, stdLevel, LABEL_EXT_STD, false, opening_0930_1000_extColor, labelsBgColor)
+                array.push(sess.extLabels, lbl)
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PHASE 4: MITIGATION DETECTION - Check for breaches on completed sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1214,6 +1318,18 @@ if validTimeframe and array.size(sessions) > 0
             // Provisional window = genuine overnight only (formation evening + next day pre-05:00). Excludes the next day's post-RTH hours so a holiday-delayed revisit confirms (caps the dash) instead of staying pending past 05:00 — see crossesMidnight sessions (Rafael) where an empty holiday RTH window left the dash running.
             isInOvernightWindow = sess.delayedMitigation and not canEvaluateMitigation and (isOnSessionStartDay or isInNextDayOvernightWindow)
             canEvaluateRetraceMitigation = not sess.retraceCapAt1600 or (shouldTrackMitigation and barMinutes < CLOSE_1600_MIN)
+
+            // Extensions have stricter semantics than IVB mitigation: mitigation starts on a
+            // configured edge touch, while a breakout projection starts only after price exceeds
+            // the IVB wick edge. Keep this independent from highMitigated/lowMitigated so Body mode
+            // cannot consume a wick breakout before the extension is evaluated.
+            if sess.sessionIndex == IDX_IVB and canEvaluateMitigation and barMinutes < CLOSE_1600_MIN
+                if not sess.extHighProcessed and high > sess.wickHigh
+                    sess.extHighProcessed := true
+                    drawIvbExtensions(sess, true)
+                if not sess.extLowProcessed and low < sess.wickLow
+                    sess.extLowProcessed := true
+                    drawIvbExtensions(sess, false)
 
             // === HIGH MITIGATION LOGIC ===
             if not sess.highMitigated
@@ -1688,6 +1804,9 @@ if validTimeframe and showColorTable and barstate.islast
     if opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, opening_0930_1000_mitigationColor, opening_0930_1000_mitigation)
         currentRow += addRetracementColorRows(colorTable, currentRow, SESSION_EXTENDED_0930_1000, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor)
+        if opening_0930_1000_showExtensions
+            addSessionStyleColorRow(colorTable, currentRow, SESSION_EXTENDED_0930_1000, "Extension", opening_0930_1000_extColor)
+            currentRow += 1
 
     if opening_1800_2100 != OPT_HIDDEN and isInFilter(IDX_ASIA_OPEN)
         currentRow += addSessionColorRows(colorTable, currentRow, SESSION_EXTENDED_1800_2100, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, opening_1800_2100_mitigationColor, opening_1800_2100_mitigation)
