@@ -4,12 +4,12 @@
 
 **During Development**
 
-- Append "-dev" to every indicator title
+- Append "development" to every indicator title
 - This signals the indicator is in active development
 
 **During Final Commit**
 
-- Automatically remove "-dev" from the title before build or publish
+- Automatically remove "devvelopment" from the title before build or publish
 - The production version should never contain the "-dev" suffix
 
 ### Example
@@ -250,14 +250,15 @@ if show_color_table and barstate.islast
 
 ## Core Rule
 
-**NEVER execute ANY git command without EXPLICIT permission for EACH specific command.**
+**NEVER execute ANY git command without explicit permission. A direct request to commit a stated scope is permission for the routine repository-local commands required to complete that commit.**
 
 ## What This Means
 
 - Do NOT run git commands proactively
 - Do NOT assume permission from previous commands
-- Do NOT batch git commands without asking
-- ALWAYS wait for explicit approval for each git operation
+- Do NOT batch unrelated git commands without asking
+- A direct `commit` request authorizes `git status`, scoped `git diff` inspection, the necessary scoped `git add`, and the requested `git commit`
+- Commit authorization never includes `git push` or unrelated repository changes
 
 ## Examples
 
@@ -277,9 +278,9 @@ User: "yes"
 Assistant: *asks* "Should I run 'git add' now?"
 ```
 
-## Exceptions
+## Commands Requiring Separate Permission
 
-None. This rule applies to ALL git commands including but not limited to:
+Except for the routine commands authorized by a direct commit request, explicit permission is required for commands including but not limited to:
 
 - git add
 - git commit
@@ -298,11 +299,14 @@ None. This rule applies to ALL git commands including but not limited to:
 
 ## When User Says "commit"
 
-This is explicit permission ONLY for that specific commit operation. You must still:
+This authorizes the complete local workflow needed for that specific commit:
 
-1. Ask before running `git add` if files aren't staged
-2. Ask before running `git status` to check current state
-3. Only run `git commit` after receiving permission for each preceding command
+1. Run `git status` and scoped `git diff` commands to verify the requested files
+2. Run a path-scoped `git add` for the requested files when needed
+3. Run the requested `git commit` with a useful subject and body
+4. Verify the commit result with `git status`
+
+Do not include unrelated files, and do not push unless the user separately requests it.
 
 ## Commit Message Quality
 
