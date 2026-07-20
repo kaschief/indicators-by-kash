@@ -24,6 +24,7 @@ NY_TIMEZONE = "America/New_York"
 UTC_TIMEZONE = "GMT+0"
 
 MS_PER_HOUR = 60 * 60 * 1000
+MS_PER_DAY = 24 * MS_PER_HOUR
 GLOBEX_REOPEN_SHIFT_MS = 6 * MS_PER_HOUR
 SUNDAY_REOPEN_START_HOUR = 18
 SECONDS_PER_WEEK = 604800
@@ -37,8 +38,15 @@ START_TIME_UNSET = -1
 FIXED_RANGE_TIME_UNSET = 0
 
 MODE_FIXED = "🎯 Fixed Range"
+MODE_ROLLING = "⏱️ Rolling Range"
 MODE_RTH = "🗽 RTH Sessions"
 MODE_GLOBEX = "🌅 Globex Days"
+
+ROLLING_THROUGH_LIVE = "Live"
+ROLLING_THROUGH_0500 = "05:00"
+ROLLING_THROUGH_0830 = "08:30"
+ROLLING_THROUGH_0930 = "09:30"
+ROLLING_THROUGH_1600 = "16:00"
 
 DELTA_ROWS_ALL = "All Delta"
 DELTA_ROWS_BUY = "Buying"
@@ -61,9 +69,17 @@ PROFILE_EDGE_RIGHT = "Right Edge"
 PROFILE_FACE_LEFT = "Left"
 PROFILE_FACE_RIGHT = "Right"
 
-// Four parallel arrays compact early enough to stay below Pine's collection limit.
+// Sample arrays compact early enough to stay below Pine's collection limit.
 SAMPLE_COMPACT_THRESHOLD = 10000
 SAMPLE_COMPACT_ROWS = 3000
+ROLLING_SAMPLE_COMPACT_THRESHOLD = 5000
+
+PROFILE_ROWS = 400
+
+// Shared by the profile outline, its box border and the Start / center / End labels.
+BRAND_OUTLINE_COLOR = color.new(color.rgb(41, 98, 255), 30)
+BRAND_OUTLINE_HIDDEN = color.new(color.rgb(41, 98, 255), 100)
+BRAND_OUTLINE_WIDTH = 1
 
 // Reserve minimum granularity for older profiles before newer ones consume the box budget.
 DELTA_BAR_BOX_BUDGET = INDICATOR_MAX_BOXES
@@ -85,11 +101,10 @@ LABEL_SIZE_LARGE = "Large"
 LABEL_SIZE_HUGE = "Huge"
 
 DELTA_PREFIX = "Δ "
-LABEL_FIXED_START = "Fixed Start"
-LABEL_FIXED_END = "Fixed End"
 LABEL_RANGE_HIGH = "Range High"
 LABEL_RANGE_LOW = "Range Low"
 
+GROUP_QUICK_FILTERS = "⚡ Quick Filters"
 GROUP_DISPLAY = "⚙️ Profile"
 GROUP_FIXED = "🎯 Fixed Range"
 GROUP_BARS = "📊 Delta Profile"
@@ -104,45 +119,44 @@ LABEL_TABLE_RGB = "RGB"
 LABEL_TABLE_TRANSPARENCY = "Trans"
 LABEL_TABLE_WIDTH = "Width"
 
-TOOLTIP_PROFILE_MODE = "One profile source at a time, so the entire drawing budget serves it and the bars stay as granular as possible:\n• 🎯 Fixed Range — one profile between your two placed points\n• 🗽 RTH Sessions — one profile per 09:30–16:00 New York cash session\n• 🌅 Globex Days — one profile per Globex trading day (18:00 NY open; 00:00 UTC for continuous assets)\n\nVisible Profiles is the total number shown. When Developing is on, the current live profile occupies one of those slots."
+TOOLTIP_PROFILE_MODE = "One profile source at a time, so the entire drawing budget serves it and the bars stay as granular as possible:\n• 🎯 Fixed Range — one profile between your two manual points\n• ⏱️ Rolling Range — one profile ending at Live or the selected New York cutoff\n• 🗽 RTH Sessions — one profile per 09:30–16:00 New York cash session\n• 🌅 Globex Days — one profile per Globex trading day (18:00 NY open; 00:00 UTC for continuous assets)\n\nHistory means lookback days in Rolling mode and completed sessions in RTH or Globex mode. Developing adds the current live session ahead of that history."
 
-TOOLTIP_DELTA_SOURCE = "Lower timeframe pulled from inside each chart bar to build the delta profile. Smaller = more precise. 'Auto' picks a sensible sub-timeframe from the chart timeframe (1S on intraday charts up to 1 minute).\n\nPine has NO true bid/ask order-flow data, so delta is APPROXIMATED from sub-bar direction: up sub-bar = buy volume, down sub-bar = sell volume; an unchanged sub-bar compares its close with the previous sub-bar close and, if still tied, carries the persistent tape polarity. This mirrors TradingView Volume Delta's classification but is not exchange order flow.\n\nSub-bar history is limited, so the oldest portion of a very long range falls back to whole chart bars and reads coarser: prefer recent ranges and fine chart timeframes for the most accurate delta."
+TOOLTIP_ROLLING_THROUGH = "Rolling endpoint in New York time. Live runs the profile through current price action. Every other choice ends the profile at that clock time and excludes everything after it."
 
-TOOLTIP_FIXED_RANGE = "Used when Profile Mode is 🎯 Fixed Range: one delta profile between two chart points, ATAS / DeepCharts fixed-volume-profile style. The indicator loads silently with no preselected range, so saved indicator templates remain dormant until needed.\n\nTo create or replace the range, choose Reset points from the indicator's More menu and click the two chart times. You can also select the indicator and drag its time markers, or edit Range Start / Range End here. The points may be placed in either order.\n\nA four-sided outline marks Start, End, Range High and Range Low so both the time selection and its calculated price zone remain visible."
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS — QUICK FILTERS
+// ═══════════════════════════════════════════════════════════════════════════════
+quickOutliersOnly = input.bool(false, "Outliers Only", group=GROUP_QUICK_FILTERS, tooltip="Temporarily shows only buying and selling outlier rows inside every profile. Turn it off to return to the Rows selection in Delta Profile. Extended outlier zones are unaffected.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — PROFILE
 // ═══════════════════════════════════════════════════════════════════════════════
-anchorMode = input.string(MODE_FIXED, "Mode", options=[MODE_FIXED, MODE_RTH, MODE_GLOBEX], tooltip=TOOLTIP_PROFILE_MODE, group=GROUP_DISPLAY)
-profilesToShow = input.int(1, "Visible Profiles", options=[1, 2, 3, 4, 5], inline="profile_history", group=GROUP_DISPLAY)
-showDevelopingProfile = input.bool(true, "Developing", inline="profile_history", tooltip="For RTH and Globex, the current live profile occupies one visible slot. Fixed Range is unaffected.", group=GROUP_DISPLAY)
-intrabarResolution = input.string("Auto", "Intrabars", options=["Auto", "1S", "5S", "15S", "1", "3", "5", "15"], tooltip=TOOLTIP_DELTA_SOURCE, group=GROUP_DISPLAY)
-profileRows = input.int(400, "Granularity", minval=50, maxval=500, tooltip="Maximum price rows per profile. When a profile's range fits, rows snap to exact tradable ticks. Wider ranges divide into this many rows.\n\nWith one visible profile, delta may use all 500 boxes. Additional profiles share that drawing budget.", group=GROUP_DISPLAY)
+anchorMode = input.string(MODE_FIXED, "Mode", options=[MODE_FIXED, MODE_ROLLING, MODE_RTH, MODE_GLOBEX], inline="profile_mode", tooltip=TOOLTIP_PROFILE_MODE, group=GROUP_DISPLAY)
+historyCount = input.int(2, "History", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="profile_mode", group=GROUP_DISPLAY, tooltip="Rolling: lookback days. RTH or Globex: completed past sessions. Fixed Range is unaffected.", active=anchorMode != MODE_FIXED)
+rollingThrough = input.string(ROLLING_THROUGH_0930, "", options=[ROLLING_THROUGH_LIVE, ROLLING_THROUGH_0500, ROLLING_THROUGH_0830, ROLLING_THROUGH_0930, ROLLING_THROUGH_1600], inline="profile_mode", group=GROUP_DISPLAY, tooltip=TOOLTIP_ROLLING_THROUGH, active=anchorMode == MODE_ROLLING)
+showDevelopingProfile = input.bool(false, "Developing", tooltip="Adds the current live RTH or Globex profile ahead of the completed sessions selected by History.", group=GROUP_DISPLAY, active=anchorMode == MODE_RTH or anchorMode == MODE_GLOBEX)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — FIXED RANGE
 // ═══════════════════════════════════════════════════════════════════════════════
-fixedAnchorColor = input.color(color.new(color.rgb(41, 98, 255), 30), "Outline", inline="fixed_outline", group=GROUP_FIXED)
-fixedOutlineWidth = input.int(1, "", options=[1, 2, 3, 4, 5], inline="fixed_outline", group=GROUP_FIXED)
-fixedOutlineStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="fixed_outline", group=GROUP_FIXED, tooltip=TOOLTIP_FIXED_RANGE)
-fixedRangeStartInput = input.time(FIXED_RANGE_TIME_UNSET, "Range Start", group=GROUP_FIXED)
-fixedRangeEndInput = input.time(FIXED_RANGE_TIME_UNSET, "Range End", group=GROUP_FIXED)
+fixedRangeStartInput = input.time(FIXED_RANGE_TIME_UNSET, "Start", inline="fixed_range_points", group=GROUP_FIXED)
+fixedRangeEndInput = input.time(FIXED_RANGE_TIME_UNSET, "End", inline="fixed_range_points", group=GROUP_FIXED)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — DELTA PROFILE
 // ═══════════════════════════════════════════════════════════════════════════════
-deltaRowsMode = input.string(DELTA_ROWS_ALL, "Show", options=[DELTA_ROWS_ALL, DELTA_ROWS_BUY, DELTA_ROWS_SELL, DELTA_ROWS_OUTLIERS, DELTA_ROWS_BUY_OUTLIERS, DELTA_ROWS_SELL_OUTLIERS], inline="bar_display", group=GROUP_BARS, tooltip="Choose what the delta profile shows. Buying and Selling filter by direction. Outlier options show only rows identified by the Outlier setting.")
+outlierMultiplier = input.float(1.5, "Outlier Threshold", minval=0.5, maxval=20.0, step=0.5, group=GROUP_BARS, tooltip="Controls how selective outlier highlighting is. Higher values identify fewer, stronger delta rows. This affects outlier row colors, the Outlier-only Rows modes below, and which rows can receive extended outlier levels.")
+deltaRowsMode = input.string(DELTA_ROWS_ALL, "Rows", options=[DELTA_ROWS_ALL, DELTA_ROWS_BUY, DELTA_ROWS_SELL, DELTA_ROWS_OUTLIERS, DELTA_ROWS_BUY_OUTLIERS, DELTA_ROWS_SELL_OUTLIERS], inline="bar_display", group=GROUP_BARS, tooltip="Chooses which rows draw inside the profile. Buying and Selling filter by direction. Outlier options show only rows that clear the Outlier Threshold above.")
 barWidthPercent = input.int(30, "Width", minval=5, maxval=100, inline="bar_display", group=GROUP_BARS, tooltip="Maximum delta-bar width as a percentage of the profile's time span. Each row's actual length follows its net-delta magnitude.")
-deltaSmoothRows = input.int(0, "Smoothing", minval=0, maxval=10, inline="bar_detail", group=GROUP_BARS)
-deltaTicksPerRow = input.int(1, "Row Size", minval=1, maxval=20, inline="bar_detail", group=GROUP_BARS, tooltip="Smoothing blends neighboring delta rows after the profile is built. Zero keeps the original values.\n\nRow Size groups this many tradable ticks into each price row. For example, four ticks on NQ produce one-point rows. It works independently of Smoothing.")
 profileEdge = input.string(PROFILE_EDGE_LEFT, "Attach", options=[PROFILE_EDGE_LEFT, PROFILE_EDGE_RIGHT], inline="bar_orientation", group=GROUP_BARS)
 profileFacing = input.string(PROFILE_FACE_RIGHT, "Direction", options=[PROFILE_FACE_LEFT, PROFILE_FACE_RIGHT], inline="bar_orientation", group=GROUP_BARS, tooltip="Attach chooses the profile edge used as the baseline. Direction chooses where the colored delta bars grow. The volume layer remains attached to the left edge and grows right.")
 barBuyColor = input.color(color.new(color.rgb(38, 166, 154), 15), "+", inline="bar_colors", group=GROUP_BARS)
-barSellColor = input.color(color.new(color.rgb(239, 83, 80), 15), "−", inline="bar_colors", group=GROUP_BARS, tooltip="+ colors rows where buying dominated, − where selling dominated. Rows that qualify as outliers use the Outliers group's colors instead so they pop.")
+barSellColor = input.color(color.new(color.rgb(240, 98, 146), 15), "−", inline="bar_colors", group=GROUP_BARS, tooltip="+ colors rows where buying dominated, − where selling dominated. Rows that qualify as outliers use the Outliers group's colors instead so they pop.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — PROFILE APPEARANCE
 // ═══════════════════════════════════════════════════════════════════════════════
+showProfileOutline = input.bool(true, "Outline", group=GROUP_APPEARANCE, tooltip="Shows a solid one-pixel blue outline in every mode. The same blue colors the Start / center / End labels.")
 showVolumeBackdrop = input.bool(true, "Volume", inline="appearance_volume", group=GROUP_APPEARANCE)
 backdropWidthPercent = input.int(40, "Width", minval=5, maxval=100, inline="appearance_volume", group=GROUP_APPEARANCE)
 backdropColor = input.color(color.new(color.rgb(120, 123, 134), 85), "", inline="appearance_volume", group=GROUP_APPEARANCE, tooltip="Shows total volume behind the delta profile. This layer stays attached to the left edge and grows right.")
@@ -150,11 +164,7 @@ backdropValueAreaColors = input.bool(false, "Value Area", inline="appearance_val
 backdropInsideColor = input.color(color.new(color.rgb(91, 156, 246), 75), "Inside", inline="appearance_value_area", group=GROUP_APPEARANCE)
 backdropOutsideColor = input.color(color.new(color.rgb(184, 184, 184), 80), "Outside", inline="appearance_value_area", group=GROUP_APPEARANCE, tooltip="Uses separate volume colors inside and outside the value area.")
 showSessionFill = input.bool(false, "Session Fill", inline="appearance_session", group=GROUP_APPEARANCE)
-sessionBoxColor = input.color(color.new(color.rgb(187, 217, 251), 90), "", inline="appearance_session", group=GROUP_APPEARANCE, tooltip="Adds a background fill to each visible profile independently of its border.")
-showSessionBorder = input.bool(true, "Session Border", inline="appearance_border", group=GROUP_APPEARANCE)
-sessionBoxBorderColor = input.color(color.new(color.rgb(73, 128, 216), 25), "", inline="appearance_border", group=GROUP_APPEARANCE)
-sessionBoxBorderWidth = input.int(1, "", options=[1, 2, 3, 4, 5], inline="appearance_border", group=GROUP_APPEARANCE)
-sessionBoxBorderStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="appearance_border", group=GROUP_APPEARANCE, tooltip="Adds a border to each visible profile independently of its fill. Choose its color, thickness and style.")
+sessionBoxColor = input.color(color.new(color.rgb(187, 217, 251), 90), "", inline="appearance_session", group=GROUP_APPEARANCE, tooltip="Adds a background fill to Rolling, RTH and Globex profile windows. Fixed Range is unaffected.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — VALUE LEVELS
@@ -179,15 +189,14 @@ deltaPocLabelColor = input.color(color.rgb(245, 124, 0), "", inline="ctx_dpoc", 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — OUTLIER LEVELS
 // ═══════════════════════════════════════════════════════════════════════════════
-outlierMultiplier = input.float(1.5, "Outlier", minval=0.5, maxval=20.0, step=0.5, group=GROUP_OUTLIERS, tooltip="Controls how selective outlier highlighting is. Higher values identify fewer, stronger delta rows. This affects outlier colors, Outlier-only Show modes, and which rows can receive extended outlier levels.")
-outlierFlagsMode = input.string(OUTLIER_FLAGS_BOTH, "Ranked Zones", options=[OUTLIER_FLAGS_BOTH, OUTLIER_FLAGS_BUY, OUTLIER_FLAGS_SELL, OUTLIER_FLAGS_OFF], inline="flag_count", group=GROUP_OUTLIERS)
-outlierMaxFlags = input.int(2, "Zones per Side", options=[1, 2, 3, 4, 5], inline="flag_count", group=GROUP_OUTLIERS, tooltip="Choose which outlier zones extend to the right. Zones are ranked by aggregate delta independently for buying and selling within each profile.")
+outlierFlagsMode = input.string(OUTLIER_FLAGS_BOTH, "Extend Zones", options=[OUTLIER_FLAGS_BOTH, OUTLIER_FLAGS_BUY, OUTLIER_FLAGS_SELL, OUTLIER_FLAGS_OFF], inline="flag_count", group=GROUP_OUTLIERS)
+outlierMaxFlags = input.int(5, "Zones per Side", options=[1, 2, 3, 4, 5], inline="flag_count", group=GROUP_OUTLIERS, tooltip="Chooses which outlier zones extend to the right past the profile, independently of the Rows filter in Delta Profile. Zones are ranked by aggregate delta separately for buying and selling within each profile. Qualification uses the Outlier Threshold in Delta Profile.")
 showZoneFill = input.bool(true, "Fill", inline="flag_line", group=GROUP_OUTLIERS)
 outlierLineWidth = input.int(1, "Zone Lines", options=[1, 2, 3, 4, 5], inline="flag_line", group=GROUP_OUTLIERS)
 outlierLineStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="flag_line", group=GROUP_OUTLIERS, tooltip="Thickness and style of the extended outlier levels.")
 strongestOutlierLineWidth = input.int(3, "Top Zone", options=[1, 2, 3, 4, 5], inline="flag_line", group=GROUP_OUTLIERS, tooltip="Fill shows the complete contributing price span using a translucent version of the zone color. Zone Lines controls normal anchors; Top Zone controls the first-ranked anchor.")
-outlierBuyColor = input.color(color.rgb(0, 137, 123), "+", inline="flag_colors", group=GROUP_OUTLIERS)
-outlierSellColor = input.color(color.rgb(211, 47, 47), "−", inline="flag_colors", group=GROUP_OUTLIERS, tooltip="Colors for outlier buy-side (+) and sell-side (−) rows, their flag lines and their tags.")
+outlierBuyColor = input.color(color.rgb(66, 189, 168), "+", inline="flag_colors", group=GROUP_OUTLIERS)
+outlierSellColor = input.color(color.rgb(240, 98, 146), "−", inline="flag_colors", group=GROUP_OUTLIERS, tooltip="Colors for outlier buy-side (+) and sell-side (−) rows, their flag lines and their tags.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — PRICE LABELS
@@ -196,15 +205,17 @@ levelLabelOffset = input.int(150, "Offset", minval=0, maxval=500, inline="label_
 levelLabelBgColor = input.color(color.new(color.rgb(249, 248, 248), 25), "Background", inline="label_layout", group=GROUP_LABELS)
 mergeOverlaps = input.bool(true, "Merge Overlaps", inline="label_merge", group=GROUP_LABELS)
 mergeDistancePercent = input.float(OUTLIER_MERGE_DEFAULT_PERCENT, "Distance", minval=0.0, maxval=0.1, step=0.001, inline="label_merge", group=GROUP_LABELS, tooltip="One clutter control for all right-edge levels. It combines nearby same-side outlier values, then merges overlapping outlier, value-area, POC and ΔPOC lines and labels. Distance is a percentage of price with a minimum of one tick.")
-showOutlierLabels = input.bool(true, "Outliers", inline="label_outliers", group=GROUP_LABELS)
-outlierShowPrice = input.bool(false, "Prices", inline="label_outliers", group=GROUP_LABELS)
-outlierLabelSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="label_outliers", group=GROUP_LABELS, tooltip="Outliers toggles the ranked Buy Zone / Sell Zone text without hiding zone lines, fills or outlier-colored rows. Prices optionally appends the level price, e.g. 'Δ +1.1K • 4.3× • 30049.75'.")
-contextShowPrice = input.bool(false, "Context Prices", inline="label_context", group=GROUP_LABELS, tooltip="Applies to value area, POC and ΔPOC prices.")
-valueAreaLabelSize = input.string(LABEL_SIZE_SMALL, "Value Area", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="label_context", group=GROUP_LABELS)
-pocLabelSize = input.string(LABEL_SIZE_SMALL, "POC and ΔPOC", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="label_context", group=GROUP_LABELS, tooltip="Context label sizes.")
-fixedShowPrice = input.bool(true, "Range Prices", inline="label_fixed", group=GROUP_LABELS, tooltip="Fixed Range prices use the brand bullet.")
-fixedEdgeLabelSize = input.string(LABEL_SIZE_TINY, "Range Edges", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="label_fixed", group=GROUP_LABELS)
-fixedRangeLabelSize = input.string(LABEL_SIZE_TINY, "Price Bounds", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="label_fixed", group=GROUP_LABELS, tooltip="Fixed Range label sizes.")
+showOutlierLabels = input.bool(true, "Outlier Tags", group=GROUP_LABELS, tooltip="Toggles the ranked Buy Zone / Sell Zone text without hiding zone lines, fills or outlier-colored rows.")
+
+// Which labels append their price.
+outlierShowPrice = input.bool(false, "Outlier", inline="label_prices", group=GROUP_LABELS)
+contextShowPrice = input.bool(false, "Levels", inline="label_prices", group=GROUP_LABELS)
+rangeShowPrice = input.bool(false, "Range", inline="label_prices", group=GROUP_LABELS, tooltip="Appends the level price to each label family, e.g. 'Δ +1.1K • 4.3× • 30049.75'.\n\nOutlier covers the ranked zone tags. Levels covers VAH, VAL, POC and ΔPOC from the Profile Levels group. Range covers the Range High and Range Low tags.")
+
+// How large each label family draws.
+outlierLabelSize = input.string(LABEL_SIZE_SMALL, "Outlier Size", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], group=GROUP_LABELS)
+levelsLabelSize = input.string(LABEL_SIZE_SMALL, "Levels Size", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], group=GROUP_LABELS, tooltip="Sizes the VAH, VAL, POC and ΔPOC tags.")
+rangeLabelSize = input.string(LABEL_SIZE_TINY, "Range Size", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], group=GROUP_LABELS, tooltip="Sizes the Start, End, Range High and Range Low tags. RTH and Globex use it for their single session tag.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — REFERENCE
@@ -212,11 +223,11 @@ fixedRangeLabelSize = input.string(LABEL_SIZE_TINY, "Price Bounds", options=[LAB
 showColorTable = input.bool(false, "Show Table", group=GROUP_UTILITY, tooltip="Displays every configured color and its associated width.")
 
 fixedModeActive = anchorMode == MODE_FIXED
+rollingModeActive = anchorMode == MODE_ROLLING
+rangeModeActive = fixedModeActive or rollingModeActive
 rthModeActive = anchorMode == MODE_RTH
 globexModeActive = anchorMode == MODE_GLOBEX
 
-fixedRangeStart = math.min(fixedRangeStartInput, fixedRangeEndInput)
-fixedRangeEnd = math.max(fixedRangeStartInput, fixedRangeEndInput)
 fixedRangeConfigured = fixedRangeStartInput > FIXED_RANGE_TIME_UNSET and fixedRangeEndInput > FIXED_RANGE_TIME_UNSET and fixedRangeStartInput != fixedRangeEndInput
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -281,9 +292,6 @@ autoIntrabarTimeframe() =>
     chartSeconds = timeframe.in_seconds(timeframe.period)
     chartSeconds <= 60 ? "1S" : chartSeconds <= 15 * 60 ? "1" : chartSeconds <= 60 * 60 ? "5" : chartSeconds <= 4 * 60 * 60 ? "15" : "60"
 
-selectedIntrabarTimeframe() =>
-    intrabarResolution == "Auto" ? autoIntrabarTimeframe() : intrabarResolution
-
 clampRow(float rawRow, int rowCount) =>
     math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
 
@@ -303,7 +311,7 @@ formatLevelText(string name, float price, bool showPrice) =>
     showPrice ? name + " " + BRAND_BULLET + " " + str.tostring(price, format.mintick) : name
 
 activeAnchorName() =>
-    anchorMode == MODE_RTH ? "RTH" : anchorMode == MODE_GLOBEX ? "Globex" : "Fixed"
+    anchorMode == MODE_RTH ? "RTH" : anchorMode == MODE_GLOBEX ? "Globex" : anchorMode == MODE_ROLLING ? "Rolling" : "Fixed"
 
 isTrueWeekendBar(int barTime) =>
     int barDay = dayofweek(barTime, NY_TIMEZONE)
@@ -315,6 +323,39 @@ calendarDayStart(string timezone) =>
 
 shiftedCalendarDayStart(string timezone, int timeShiftMilliseconds) =>
     ta.change(dayofmonth(time + timeShiftMilliseconds, timezone)) != 0
+
+previousNyCutoff(int cutoffTime, int cutoffHour, int cutoffMinute) =>
+    int previousDateReference = cutoffTime - MS_PER_DAY
+    timestamp(NY_TIMEZONE, year(previousDateReference, NY_TIMEZONE), month(previousDateReference, NY_TIMEZONE), dayofmonth(previousDateReference, NY_TIMEZONE), cutoffHour, cutoffMinute)
+
+// Steps whole New York calendar days so the lookback holds its clock time across DST changes.
+lookbackDaysStart(int endTime, int days, bool twentyFourSeven) =>
+    int startTime = endTime
+    int countedDays = 0
+    if not na(endTime)
+        int anchorHour = hour(endTime, NY_TIMEZONE)
+        int anchorMinute = minute(endTime, NY_TIMEZONE)
+        while countedDays < days
+            startTime := previousNyCutoff(startTime, anchorHour, anchorMinute)
+            int startDay = dayofweek(startTime, NY_TIMEZONE)
+            if twentyFourSeven or (startDay != dayofweek.saturday and startDay != dayofweek.sunday)
+                countedDays += 1
+    startTime
+
+rollingThroughTime(int referenceTime, string throughMode, bool twentyFourSeven) =>
+    int endTime = referenceTime
+    if throughMode != ROLLING_THROUGH_LIVE and not na(referenceTime)
+        int cutoffHour = throughMode == ROLLING_THROUGH_0500 ? 5 : throughMode == ROLLING_THROUGH_0830 ? 8 : throughMode == ROLLING_THROUGH_0930 ? 9 : 16
+        int cutoffMinute = throughMode == ROLLING_THROUGH_0830 or throughMode == ROLLING_THROUGH_0930 ? 30 : 0
+        endTime := timestamp(NY_TIMEZONE, year(referenceTime, NY_TIMEZONE), month(referenceTime, NY_TIMEZONE), dayofmonth(referenceTime, NY_TIMEZONE), cutoffHour, cutoffMinute)
+        if endTime > referenceTime
+            endTime := previousNyCutoff(endTime, cutoffHour, cutoffMinute)
+        if not twentyFourSeven
+            int cutoffDay = dayofweek(endTime, NY_TIMEZONE)
+            while cutoffDay == dayofweek.saturday or cutoffDay == dayofweek.sunday
+                endTime := previousNyCutoff(endTime, cutoffHour, cutoffMinute)
+                cutoffDay := dayofweek(endTime, NY_TIMEZONE)
+    endTime
 
 formatMagnitude(float magnitude) =>
     magnitude >= 1e9 ? str.tostring(magnitude / 1e9, "#.#") + "B" : magnitude >= 1e6 ? str.tostring(magnitude / 1e6, "#.#") + "M" : magnitude >= 1e3 ? str.tostring(magnitude / 1e3, "#.#") + "K" : str.tostring(magnitude, "#.##")
@@ -374,14 +415,75 @@ appendSamples(array<float> destHighs, array<float> destLows, array<float> destVo
     if compactAfter
         compactIfNeeded(destHighs, destLows, destVolumes, destDeltas)
 
+// Packs the New York date and cutoff segment into one integer so compaction compares keys, not timestamps.
+rollingSegmentKey(int sampleTime) =>
+    int nyMinutes = hour(sampleTime, NY_TIMEZONE) * 60 + minute(sampleTime, NY_TIMEZONE)
+    int segment = nyMinutes < 5 * 60 ? 0 : nyMinutes < 8 * 60 + 30 ? 1 : nyMinutes < 9 * 60 + 30 ? 2 : nyMinutes < 16 * 60 ? 3 : 4
+    (year(sampleTime, NY_TIMEZONE) * 10000 + month(sampleTime, NY_TIMEZONE) * 100 + dayofmonth(sampleTime, NY_TIMEZONE)) * 10 + segment
+
+compactRollingSamples(array<int> startKeys, array<int> endKeys, array<int> startTimes, array<int> endTimes, array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
+    int sampleCount = array.size(volumes)
+    if sampleCount > ROLLING_SAMPLE_COMPACT_THRESHOLD
+        int writeIndex = 0
+        int readIndex = 0
+        while readIndex < sampleCount
+            int nextIndex = readIndex + 1
+            bool mergeNext = nextIndex < sampleCount and array.get(endKeys, readIndex) == array.get(startKeys, nextIndex)
+            array.set(startKeys, writeIndex, array.get(startKeys, readIndex))
+            array.set(endKeys, writeIndex, mergeNext ? array.get(endKeys, nextIndex) : array.get(endKeys, readIndex))
+            array.set(startTimes, writeIndex, array.get(startTimes, readIndex))
+            array.set(endTimes, writeIndex, mergeNext ? array.get(endTimes, nextIndex) : array.get(endTimes, readIndex))
+            array.set(highs, writeIndex, mergeNext ? math.max(array.get(highs, readIndex), array.get(highs, nextIndex)) : array.get(highs, readIndex))
+            array.set(lows, writeIndex, mergeNext ? math.min(array.get(lows, readIndex), array.get(lows, nextIndex)) : array.get(lows, readIndex))
+            array.set(volumes, writeIndex, array.get(volumes, readIndex) + (mergeNext ? array.get(volumes, nextIndex) : 0.0))
+            array.set(deltas, writeIndex, array.get(deltas, readIndex) + (mergeNext ? array.get(deltas, nextIndex) : 0.0))
+            writeIndex += 1
+            readIndex += mergeNext ? 2 : 1
+        while array.size(volumes) > writeIndex
+            array.pop(startKeys)
+            array.pop(endKeys)
+            array.pop(startTimes)
+            array.pop(endTimes)
+            array.pop(highs)
+            array.pop(lows)
+            array.pop(volumes)
+            array.pop(deltas)
+
+appendRollingSamples(array<int> destStartKeys, array<int> destEndKeys, array<int> destStartTimes, array<int> destEndTimes, array<float> destHighs, array<float> destLows, array<float> destVolumes, array<float> destDeltas, int sampleTime, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, bool compactAfter) =>
+    int sampleCount = array.size(sourceVolumes)
+    if sampleCount > 0
+        // Every sample from this bar shares its timestamp, so the key is derived once.
+        int sampleKey = rollingSegmentKey(sampleTime)
+        for sampleIndex = 0 to sampleCount - 1
+            array.push(destStartKeys, sampleKey)
+            array.push(destEndKeys, sampleKey)
+            array.push(destStartTimes, sampleTime)
+            array.push(destEndTimes, sampleTime)
+            array.push(destHighs, array.get(sourceHighs, sampleIndex))
+            array.push(destLows, array.get(sourceLows, sampleIndex))
+            array.push(destVolumes, array.get(sourceVolumes, sampleIndex))
+            array.push(destDeltas, array.get(sourceDeltas, sampleIndex))
+    if compactAfter
+        compactRollingSamples(destStartKeys, destEndKeys, destStartTimes, destEndTimes, destHighs, destLows, destVolumes, destDeltas)
+
+pruneRollingSamples(array<int> startKeys, array<int> endKeys, array<int> startTimes, array<int> endTimes, array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, int cutoffTime) =>
+    while array.size(volumes) > 0 and array.get(endTimes, 0) < cutoffTime
+        array.shift(startKeys)
+        array.shift(endKeys)
+        array.shift(startTimes)
+        array.shift(endTimes)
+        array.shift(highs)
+        array.shift(lows)
+        array.shift(volumes)
+        array.shift(deltas)
+
 // Prefer one-tick rows; wider ranges must use evenly sized bins.
 buildDeltaProfile(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, int requestedRows, int startTime, int endTime) =>
     int sampleCount = array.size(volumes)
     float tickSize = syminfo.mintick
-    float groupedTickSize = tickSize * deltaTicksPerRow
     float rawHigh = sampleCount > 0 ? array.max(highs) : na
     float rawLow = sampleCount > 0 ? array.min(lows) : na
-    int tickRows = sampleCount > 0 ? int(math.round((rawHigh - rawLow) / groupedTickSize)) + 1 : 0
+    int tickRows = sampleCount > 0 ? int(math.round((rawHigh - rawLow) / tickSize)) + 1 : 0
     bool tickGranular = tickRows >= 1 and tickRows <= requestedRows
     int rowCount = tickGranular ? tickRows : requestedRows
     DeltaProfile profile = DeltaProfile.new(startTime, endTime, na, na, rawLow, rawHigh, rowCount, array.new<float>(rowCount, 0.0), array.new<float>(rowCount, 0.0), 0.0, 0.0, false)
@@ -390,9 +492,9 @@ buildDeltaProfile(array<float> highs, array<float> lows, array<float> volumes, a
         float priceSpan = na
         float rowHeight = na
         if tickGranular
-            profileLow := math.round(rawLow / groupedTickSize) * groupedTickSize - groupedTickSize * 0.5
-            priceSpan := rowCount * groupedTickSize
-            rowHeight := groupedTickSize
+            profileLow := math.round(rawLow / tickSize) * tickSize - tickSize * 0.5
+            priceSpan := rowCount * tickSize
+            rowHeight := tickSize
         else
             priceSpan := math.max(rawHigh - rawLow, tickSize * rowCount)
             profileLow := rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
@@ -430,11 +532,27 @@ buildDeltaProfile(array<float> highs, array<float> lows, array<float> volumes, a
         profile.isValid := totalVolume > 0
     profile
 
+buildRollingDeltaProfile(array<int> sampleStartTimes, array<int> sampleEndTimes, array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, int requestedRows, int startTime, int endTime, bool includeEnd) =>
+    array<float> selectedHighs = array.new<float>()
+    array<float> selectedLows = array.new<float>()
+    array<float> selectedVolumes = array.new<float>()
+    array<float> selectedDeltas = array.new<float>()
+    int sampleCount = array.size(volumes)
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            bool beginsBeforeEnd = includeEnd ? array.get(sampleStartTimes, sampleIndex) <= endTime : array.get(sampleStartTimes, sampleIndex) < endTime
+            if array.get(sampleEndTimes, sampleIndex) >= startTime and beginsBeforeEnd
+                array.push(selectedHighs, array.get(highs, sampleIndex))
+                array.push(selectedLows, array.get(lows, sampleIndex))
+                array.push(selectedVolumes, array.get(volumes, sampleIndex))
+                array.push(selectedDeltas, array.get(deltas, sampleIndex))
+    buildDeltaProfile(selectedHighs, selectedLows, selectedVolumes, selectedDeltas, requestedRows, startTime, endTime)
+
 buildDevelopingDeltaProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<int> startRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
     int originalSize = array.size(barVolumes)
     if not barstate.isconfirmed
         appendSamples(barHighs, barLows, barVolumes, barDeltas, sampleHighs, sampleLows, sampleVolumes, sampleDeltas, false)
-    DeltaProfile profile = buildDeltaProfile(barHighs, barLows, barVolumes, barDeltas, profileRows, array.get(startRef, 0), time)
+    DeltaProfile profile = buildDeltaProfile(barHighs, barLows, barVolumes, barDeltas, PROFILE_ROWS, array.get(startRef, 0), time)
     while array.size(barVolumes) > originalSize
         array.pop(barHighs)
         array.pop(barLows)
@@ -456,25 +574,6 @@ downsampleProfile(DeltaProfile profile, int targetRows) =>
             coarse.maxRowVolume := math.max(coarse.maxRowVolume, rowVolume)
             coarse.maxAbsRowDelta := math.max(coarse.maxAbsRowDelta, math.abs(array.get(coarse.rowDeltas, coarseIndex)))
     coarse
-
-// Smooths deltas only — volumes and occupancy stay raw so the backdrop remains honest.
-smoothProfileDeltas(DeltaProfile profile, int radius) =>
-    if radius <= 0 or not profile.isValid or profile.rowCount <= 1
-        profile
-    else
-        array<float> smoothedDeltas = array.new<float>(profile.rowCount, 0.0)
-        float maxAbsRowDelta = 0.0
-        for rowIndex = 0 to profile.rowCount - 1
-            float windowSum = 0.0
-            int windowCount = 0
-            for windowIndex = math.max(0, rowIndex - radius) to math.min(profile.rowCount - 1, rowIndex + radius)
-                windowSum += array.get(profile.rowDeltas, windowIndex)
-                windowCount += 1
-            float smoothedDelta = windowSum / windowCount
-            array.set(smoothedDeltas, rowIndex, smoothedDelta)
-            if array.get(profile.rowVolumes, rowIndex) > 0
-                maxAbsRowDelta := math.max(maxAbsRowDelta, math.abs(smoothedDelta))
-        DeltaProfile.new(profile.startTime, profile.endTime, profile.priceLow, profile.priceHigh, profile.rangeLow, profile.rangeHigh, profile.rowCount, profile.rowVolumes, smoothedDeltas, profile.maxRowVolume, maxAbsRowDelta, profile.isValid)
 
 // Expand from POC through the heavier adjacent row to match Revelio's value area.
 profileValueLevels(DeltaProfile profile) =>
@@ -523,7 +622,7 @@ profileDeltaPocPrice(DeltaProfile profile) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 finalizePeriod(array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, int startTime, int endTime, int keepProfiles, array<DeltaProfile> profiles) =>
     if array.size(barVolumes) > 0
-        DeltaProfile profile = buildDeltaProfile(barHighs, barLows, barVolumes, barDeltas, profileRows, startTime, endTime)
+        DeltaProfile profile = buildDeltaProfile(barHighs, barLows, barVolumes, barDeltas, PROFILE_ROWS, startTime, endTime)
         if profile.isValid
             array.push(profiles, profile)
             while array.size(profiles) > keepProfiles
@@ -788,7 +887,8 @@ rowPassesDeltaFilter(float rowDelta, float strength) =>
     bool isBuy = rowDelta > 0
     bool isSell = rowDelta < 0
     bool isOutlier = isOutlierStrength(strength)
-    deltaRowsMode == DELTA_ROWS_BUY ? isBuy : deltaRowsMode == DELTA_ROWS_SELL ? isSell : deltaRowsMode == DELTA_ROWS_OUTLIERS ? (isBuy or isSell) and isOutlier : deltaRowsMode == DELTA_ROWS_BUY_OUTLIERS ? isBuy and isOutlier : deltaRowsMode == DELTA_ROWS_SELL_OUTLIERS ? isSell and isOutlier : isBuy or isSell
+    string rowsMode = quickOutliersOnly ? DELTA_ROWS_OUTLIERS : deltaRowsMode
+    rowsMode == DELTA_ROWS_BUY ? isBuy : rowsMode == DELTA_ROWS_SELL ? isSell : rowsMode == DELTA_ROWS_OUTLIERS ? (isBuy or isSell) and isOutlier : rowsMode == DELTA_ROWS_BUY_OUTLIERS ? isBuy and isOutlier : rowsMode == DELTA_ROWS_SELL_OUTLIERS ? isSell and isOutlier : isBuy or isSell
 
 countDrawableRows(DeltaProfile profile, array<float> strengths) =>
     int drawable = 0
@@ -1021,11 +1121,10 @@ flushPendingOutlierLevels(bool merge, int profileCount) =>
                             queueRightLabel(price, flagText, outlierShowPrice, levelColor, outlierLabelSize, levelRank)
         array.clear(pendingOutlierLevels)
 
-renderSessionBox(DeltaProfile profile) =>
-    color borderColor = showSessionBorder ? sessionBoxBorderColor : color.new(sessionBoxBorderColor, 100)
+renderProfileBox(DeltaProfile profile, bool drawBorder) =>
+    color borderColor = drawBorder and showProfileOutline ? BRAND_OUTLINE_COLOR : BRAND_OUTLINE_HIDDEN
     color fillColor = showSessionFill ? sessionBoxColor : color.new(sessionBoxColor, 100)
-    int borderWidth = showSessionBorder ? sessionBoxBorderWidth : 0
-    array.push(drawnBoxes, box.new(left=profile.startTime, top=profile.priceHigh, right=profile.endTime, bottom=profile.priceLow, xloc=xloc.bar_time, border_color=borderColor, border_width=borderWidth, border_style=toLineStyle(sessionBoxBorderStyle), bgcolor=fillColor))
+    array.push(drawnBoxes, box.new(left=profile.startTime, top=profile.rangeHigh, right=profile.endTime, bottom=profile.rangeLow, xloc=xloc.bar_time, border_color=borderColor, border_width=drawBorder and showProfileOutline ? 1 : 0, border_style=line.style_solid, bgcolor=fillColor))
 
 renderReferenceLevel(DeltaProfile profile, float price, string levelName, color lineColor, int lineWidth, string lineStyle, color labelColor, string labelSize, int labelRank) =>
     queueRightLine(price, profile.startTime, profile.endTime, lineColor, lineWidth, lineStyle, labelRank)
@@ -1033,25 +1132,40 @@ renderReferenceLevel(DeltaProfile profile, float price, string levelName, color 
 
 renderProfileLevels(DeltaProfile profile, float pocPrice, float valueAreaLowPrice, float valueAreaHighPrice) =>
     if showValueAreaLevels
-        renderReferenceLevel(profile, valueAreaHighPrice, "VAH", valueAreaLevelColor, valueAreaLevelWidth, valueAreaLevelStyle, valueAreaLabelColor, valueAreaLabelSize, 200)
-        renderReferenceLevel(profile, valueAreaLowPrice, "VAL", valueAreaLevelColor, valueAreaLevelWidth, valueAreaLevelStyle, valueAreaLabelColor, valueAreaLabelSize, 200)
+        renderReferenceLevel(profile, valueAreaHighPrice, "VAH", valueAreaLevelColor, valueAreaLevelWidth, valueAreaLevelStyle, valueAreaLabelColor, levelsLabelSize, 200)
+        renderReferenceLevel(profile, valueAreaLowPrice, "VAL", valueAreaLevelColor, valueAreaLevelWidth, valueAreaLevelStyle, valueAreaLabelColor, levelsLabelSize, 200)
     if showPocLevel
-        renderReferenceLevel(profile, pocPrice, "POC", pocLevelColor, pocLevelWidth, pocLevelStyle, pocLabelColor, pocLabelSize, 300)
+        renderReferenceLevel(profile, pocPrice, "POC", pocLevelColor, pocLevelWidth, pocLevelStyle, pocLabelColor, levelsLabelSize, 300)
     if showDeltaPocLevel
         float deltaPocPrice = profileDeltaPocPrice(profile)
         if not na(deltaPocPrice)
-            renderReferenceLevel(profile, deltaPocPrice, "ΔPOC", deltaPocLevelColor, deltaPocLevelWidth, deltaPocLevelStyle, deltaPocLabelColor, pocLabelSize, 400)
+            renderReferenceLevel(profile, deltaPocPrice, "ΔPOC", deltaPocLevelColor, deltaPocLevelWidth, deltaPocLevelStyle, deltaPocLabelColor, levelsLabelSize, 400)
 
-renderFixedAnchors(DeltaProfile profile) =>
-    int middleTime = profile.startTime + int(math.round((profile.endTime - profile.startTime) * 0.5))
-    array.push(drawnLines, line.new(profile.startTime, profile.rangeLow, profile.startTime, profile.rangeHigh, xloc=xloc.bar_time, color=fixedAnchorColor, style=toLineStyle(fixedOutlineStyle), width=fixedOutlineWidth))
-    array.push(drawnLines, line.new(profile.endTime, profile.rangeLow, profile.endTime, profile.rangeHigh, xloc=xloc.bar_time, color=fixedAnchorColor, style=toLineStyle(fixedOutlineStyle), width=fixedOutlineWidth))
-    array.push(drawnLines, line.new(profile.startTime, profile.rangeHigh, profile.endTime, profile.rangeHigh, xloc=xloc.bar_time, color=fixedAnchorColor, style=toLineStyle(fixedOutlineStyle), width=fixedOutlineWidth))
-    array.push(drawnLines, line.new(profile.startTime, profile.rangeLow, profile.endTime, profile.rangeLow, xloc=xloc.bar_time, color=fixedAnchorColor, style=toLineStyle(fixedOutlineStyle), width=fixedOutlineWidth))
-    array.push(drawnLabels, label.new(profile.startTime, profile.rangeHigh, LABEL_FIXED_START, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=fixedAnchorColor, size=toLabelSize(fixedEdgeLabelSize), color=levelLabelBgColor))
-    array.push(drawnLabels, label.new(profile.endTime, profile.rangeHigh, LABEL_FIXED_END, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=fixedAnchorColor, size=toLabelSize(fixedEdgeLabelSize), color=levelLabelBgColor))
-    array.push(drawnLabels, label.new(middleTime, profile.rangeHigh, formatLevelText(LABEL_RANGE_HIGH, profile.rangeHigh, fixedShowPrice), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=fixedAnchorColor, size=toLabelSize(fixedRangeLabelSize), color=levelLabelBgColor))
-    array.push(drawnLabels, label.new(middleTime, profile.rangeLow, formatLevelText(LABEL_RANGE_LOW, profile.rangeLow, fixedShowPrice), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=fixedAnchorColor, size=toLabelSize(fixedRangeLabelSize), color=levelLabelBgColor))
+renderRangeOutline(DeltaProfile profile) =>
+    if showProfileOutline
+        array.push(drawnLines, line.new(profile.startTime, profile.rangeLow, profile.startTime, profile.rangeHigh, xloc=xloc.bar_time, color=BRAND_OUTLINE_COLOR, style=line.style_solid, width=BRAND_OUTLINE_WIDTH))
+        array.push(drawnLines, line.new(profile.endTime, profile.rangeLow, profile.endTime, profile.rangeHigh, xloc=xloc.bar_time, color=BRAND_OUTLINE_COLOR, style=line.style_solid, width=BRAND_OUTLINE_WIDTH))
+        array.push(drawnLines, line.new(profile.startTime, profile.rangeHigh, profile.endTime, profile.rangeHigh, xloc=xloc.bar_time, color=BRAND_OUTLINE_COLOR, style=line.style_solid, width=BRAND_OUTLINE_WIDTH))
+        array.push(drawnLines, line.new(profile.startTime, profile.rangeLow, profile.endTime, profile.rangeLow, xloc=xloc.bar_time, color=BRAND_OUTLINE_COLOR, style=line.style_solid, width=BRAND_OUTLINE_WIDTH))
+
+// Centers on the bar midpoint, not the time midpoint, so weekends and session gaps inside the range do not skew it.
+rangeCenterTime(DeltaProfile profile, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
+    int centerTime = profile.startTime + int(math.round((profile.endTime - profile.startTime) * 0.5))
+    if startScaleIndex >= 0 and endScaleIndex >= 0
+        centerTime := array.get(chartTimes, int(math.round((startScaleIndex + endScaleIndex) * 0.5)))
+    centerTime
+
+// Start and End tags mark the two manual or rolling edges; session profiles carry a single center tag.
+renderRangeLabels(DeltaProfile profile, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
+    int middleTime = rangeCenterTime(profile, chartTimes, startScaleIndex, endScaleIndex)
+    string anchorName = activeAnchorName()
+    if rangeModeActive
+        array.push(drawnLabels, label.new(profile.startTime, profile.rangeHigh, anchorName + " Start", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=BRAND_OUTLINE_COLOR, size=toLabelSize(rangeLabelSize), color=levelLabelBgColor))
+        array.push(drawnLabels, label.new(profile.endTime, profile.rangeHigh, anchorName + " End", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=BRAND_OUTLINE_COLOR, size=toLabelSize(rangeLabelSize), color=levelLabelBgColor))
+        array.push(drawnLabels, label.new(middleTime, profile.rangeHigh, formatLevelText(LABEL_RANGE_HIGH, profile.rangeHigh, rangeShowPrice), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=BRAND_OUTLINE_COLOR, size=toLabelSize(rangeLabelSize), color=levelLabelBgColor))
+        array.push(drawnLabels, label.new(middleTime, profile.rangeLow, formatLevelText(LABEL_RANGE_LOW, profile.rangeLow, rangeShowPrice), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=BRAND_OUTLINE_COLOR, size=toLabelSize(rangeLabelSize), color=levelLabelBgColor))
+    else
+        array.push(drawnLabels, label.new(middleTime, profile.rangeHigh, anchorName, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=BRAND_OUTLINE_COLOR, size=toLabelSize(rangeLabelSize), color=levelLabelBgColor))
 
 // Newest-first ordering protects the most actionable profile when budgets tighten.
 enqueueProfile(array<DeltaProfile> queue, DeltaProfile profile) =>
@@ -1078,10 +1192,14 @@ writeColorRow(table referenceTable, int row, ColorRow entry) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════════════════════════════════════════════
-var array<float> fixedBarHighs = array.new<float>()
-var array<float> fixedBarLows = array.new<float>()
-var array<float> fixedBarVolumes = array.new<float>()
-var array<float> fixedBarDeltas = array.new<float>()
+var array<float> rangeBarHighs = array.new<float>()
+var array<float> rangeBarLows = array.new<float>()
+var array<float> rangeBarVolumes = array.new<float>()
+var array<float> rangeBarDeltas = array.new<float>()
+var array<int> rangeSampleStartKeys = array.new<int>()
+var array<int> rangeSampleEndKeys = array.new<int>()
+var array<int> rangeSampleStartTimes = array.new<int>()
+var array<int> rangeSampleEndTimes = array.new<int>()
 
 var array<float> rthBarHighs = array.new<float>()
 var array<float> rthBarLows = array.new<float>()
@@ -1107,7 +1225,7 @@ var float previousTapeClose = na
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA & BOUNDARIES
 // ═══════════════════════════════════════════════════════════════════════════════
-intrabarTimeframe = selectedIntrabarTimeframe()
+intrabarTimeframe = autoIntrabarTimeframe()
 [intrabarOpens, intrabarHighs, intrabarLows, intrabarCloses, intrabarVolumes] = request.security_lower_tf(syminfo.tickerid, intrabarTimeframe, [open, high, low, close, volume], ignore_invalid_timeframe=true)
 
 // Sunday before the futures reopen distinguishes 24/7 trading from CME-style hours.
@@ -1134,6 +1252,14 @@ rthSessionEnd = not rthInSession and rthInSession[1]
 utcDayStart = calendarDayStart(UTC_TIMEZONE)
 futuresGlobexStart = shiftedCalendarDayStart(NY_TIMEZONE, GLOBEX_REOPEN_SHIFT_MS)
 globexDayStart = isTwentyFourSevenAsset ? utcDayStart : futuresGlobexStart
+
+fixedRangeStart = math.min(fixedRangeStartInput, fixedRangeEndInput)
+fixedRangeEnd = math.max(fixedRangeStartInput, fixedRangeEndInput)
+rollingRangeEnd = rollingThroughTime(last_bar_time, rollingThrough, isTwentyFourSevenAsset)
+rollingRangeStart = lookbackDaysStart(rollingRangeEnd, historyCount, isTwentyFourSevenAsset)
+activeRangeStart = rollingModeActive ? rollingRangeStart : fixedRangeStart
+activeRangeEnd = rollingModeActive ? rollingRangeEnd : fixedRangeEnd
+activeRangeConfigured = rollingModeActive ? not na(last_bar_time) : fixedRangeConfigured
 
 array<float> barSampleHighs = array.new<float>()
 array<float> barSampleLows = array.new<float>()
@@ -1168,12 +1294,18 @@ if array.size(barSampleVolumes) == 0 and not na(volume) and volume > 0
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROCESS
 // ═══════════════════════════════════════════════════════════════════════════════
-processAnchor(rthModeActive, profilesToShow, rthInSession, rthSessionStart, rthSessionEnd, rthBarHighs, rthBarLows, rthBarVolumes, rthBarDeltas, rthProfiles, rthStartRef, rthLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
-processAnchor(globexModeActive, profilesToShow, true, globexDayStart, false, globexBarHighs, globexBarLows, globexBarVolumes, globexBarDeltas, globexProfiles, globexStartRef, globexLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+processAnchor(rthModeActive, historyCount, rthInSession, rthSessionStart, rthSessionEnd, rthBarHighs, rthBarLows, rthBarVolumes, rthBarDeltas, rthProfiles, rthStartRef, rthLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+processAnchor(globexModeActive, historyCount, true, globexDayStart, false, globexBarHighs, globexBarLows, globexBarVolumes, globexBarDeltas, globexProfiles, globexStartRef, globexLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
 
-bool fixedBarInRange = fixedModeActive and fixedRangeConfigured and time >= fixedRangeStart and time <= fixedRangeEnd
-if fixedBarInRange and barstate.isconfirmed
-    appendSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+bool fixedRangeBarInRange = fixedModeActive and activeRangeConfigured and time >= activeRangeStart and time <= activeRangeEnd
+bool rollingBarRetained = rollingModeActive and activeRangeConfigured and time >= activeRangeStart
+if rollingModeActive
+    pruneRollingSamples(rangeSampleStartKeys, rangeSampleEndKeys, rangeSampleStartTimes, rangeSampleEndTimes, rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, activeRangeStart)
+if barstate.isconfirmed
+    if rollingBarRetained
+        appendRollingSamples(rangeSampleStartKeys, rangeSampleEndKeys, rangeSampleStartTimes, rangeSampleEndTimes, rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, time, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+    else if fixedRangeBarInRange
+        appendSamples(rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RENDER
@@ -1182,17 +1314,25 @@ if barstate.islast
     clearDrawings()
 
     // Temporarily include the open bar without persisting it twice.
-    DeltaProfile fixedProfile = na
-    if fixedModeActive and fixedRangeConfigured
-        int originalSize = array.size(fixedBarVolumes)
-        if fixedBarInRange and not barstate.isconfirmed
-            appendSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
-        fixedProfile := buildDeltaProfile(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, profileRows, fixedRangeStart, math.min(fixedRangeEnd, time))
-        while array.size(fixedBarVolumes) > originalSize
-            array.pop(fixedBarHighs)
-            array.pop(fixedBarLows)
-            array.pop(fixedBarVolumes)
-            array.pop(fixedBarDeltas)
+    DeltaProfile rangeProfile = na
+    if rangeModeActive and activeRangeConfigured
+        int originalSize = array.size(rangeBarVolumes)
+        if not barstate.isconfirmed
+            if rollingBarRetained
+                appendRollingSamples(rangeSampleStartKeys, rangeSampleEndKeys, rangeSampleStartTimes, rangeSampleEndTimes, rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, time, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+            else if fixedRangeBarInRange
+                appendSamples(rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+        rangeProfile := rollingModeActive ? buildRollingDeltaProfile(rangeSampleStartTimes, rangeSampleEndTimes, rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, PROFILE_ROWS, activeRangeStart, activeRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE) : buildDeltaProfile(rangeBarHighs, rangeBarLows, rangeBarVolumes, rangeBarDeltas, PROFILE_ROWS, activeRangeStart, math.min(activeRangeEnd, time))
+        while array.size(rangeBarVolumes) > originalSize
+            if rollingModeActive
+                array.pop(rangeSampleStartKeys)
+                array.pop(rangeSampleEndKeys)
+                array.pop(rangeSampleStartTimes)
+                array.pop(rangeSampleEndTimes)
+            array.pop(rangeBarHighs)
+            array.pop(rangeBarLows)
+            array.pop(rangeBarVolumes)
+            array.pop(rangeBarDeltas)
 
     DeltaProfile rthLiveProfile = na
     if rthModeActive and showDevelopingProfile and rthInSession and array.size(rthBarVolumes) > 0
@@ -1203,51 +1343,54 @@ if barstate.islast
 
     bool rthLiveShown = not na(rthLiveProfile) and rthLiveProfile.isValid
     bool globexLiveShown = not na(globexLiveProfile) and globexLiveProfile.isValid
+    int sessionProfilesToRender = historyCount + (rthLiveShown or globexLiveShown ? 1 : 0)
 
     array<DeltaProfile> renderQueue = array.new<DeltaProfile>()
-    if fixedModeActive and not na(fixedProfile) and fixedProfile.isValid
-        array.push(renderQueue, fixedProfile)
-        renderFixedAnchors(fixedProfile)
+    if rangeModeActive and not na(rangeProfile) and rangeProfile.isValid
+        array.push(renderQueue, rangeProfile)
+        renderRangeOutline(rangeProfile)
     if rthLiveShown
         enqueueProfile(renderQueue, rthLiveProfile)
     if globexLiveShown
         enqueueProfile(renderQueue, globexLiveProfile)
     if rthModeActive and array.size(rthProfiles) > 0
         int profileIndex = array.size(rthProfiles) - 1
-        while profileIndex >= 0 and array.size(renderQueue) < profilesToShow
+        while profileIndex >= 0 and array.size(renderQueue) < sessionProfilesToRender
             enqueueProfile(renderQueue, array.get(rthProfiles, profileIndex))
             profileIndex -= 1
     if globexModeActive and array.size(globexProfiles) > 0
         int profileIndex = array.size(globexProfiles) - 1
-        while profileIndex >= 0 and array.size(renderQueue) < profilesToShow
+        while profileIndex >= 0 and array.size(renderQueue) < sessionProfilesToRender
             enqueueProfile(renderQueue, array.get(globexProfiles, profileIndex))
             profileIndex -= 1
 
     // Reserve context boxes so Pine never evicts delta rows implicitly.
-    bool showSessionFrame = showSessionFill or showSessionBorder
-    int sessionBoxesReserved = showSessionFrame ? array.size(renderQueue) : 0
-    int boxesRemaining = math.max(0, DELTA_BAR_BOX_BUDGET - sessionBoxesReserved)
+    bool sessionModeActive = rthModeActive or globexModeActive
+    bool showProfileBox = (sessionModeActive and (showSessionFill or showProfileOutline)) or (rollingModeActive and showSessionFill)
+    int profileBoxesReserved = showProfileBox ? array.size(renderQueue) : 0
+    int boxesRemaining = math.max(0, DELTA_BAR_BOX_BUDGET - profileBoxesReserved)
     int polylinesRemaining = INDICATOR_MAX_POLYLINES
     int queueCount = array.size(renderQueue)
     if chartTimesBuiltAtBar != bar_index
         cachedChartTimes := recentChartTimes()
         chartTimesBuiltAtBar := bar_index
     array<int> chartTimes = cachedChartTimes
-    // One smoothing + strength pass per profile up front keeps the grant loop O(n).
+    // One strength pass per profile up front keeps the grant loop O(n).
     array<int> queueDrawableCounts = array.new<int>()
     if queueCount > 0
         for queueIndex = 0 to queueCount - 1
-            DeltaProfile smoothedProfile = smoothProfileDeltas(array.get(renderQueue, queueIndex), deltaSmoothRows)
-            array.set(renderQueue, queueIndex, smoothedProfile)
-            array.push(queueDrawableCounts, countDrawableRows(smoothedProfile, computeRowStrengths(smoothedProfile)))
+            DeltaProfile profile = array.get(renderQueue, queueIndex)
+            array.push(queueDrawableCounts, countDrawableRows(profile, computeRowStrengths(profile)))
         for queueIndex = 0 to queueCount - 1
             DeltaProfile profile = array.get(renderQueue, queueIndex)
             [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = profileValueLevels(profile)
             int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
             int endScaleIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
 
-            if showSessionFrame
-                renderSessionBox(profile)
+            renderRangeLabels(profile, chartTimes, startScaleIndex, endScaleIndex)
+
+            if showProfileBox
+                renderProfileBox(profile, sessionModeActive)
 
             if showVolumeBackdrop and polylinesRemaining > 0
                 polylinesRemaining -= renderVolumeBackdrop(profile, valueAreaLowRow, valueAreaHighRow, polylinesRemaining, chartTimes, startScaleIndex, endScaleIndex)
@@ -1282,14 +1425,13 @@ if barstate.islast
 
     if showColorTable
         array<ColorRow> colorRows = array.new<ColorRow>()
-        addColorRow(colorRows, "Fixed Outline + Labels", fixedAnchorColor, str.tostring(fixedOutlineWidth))
+        addColorRow(colorRows, "Outline + Labels", BRAND_OUTLINE_COLOR, str.tostring(BRAND_OUTLINE_WIDTH))
         addColorRow(colorRows, "Delta Buy Rows", barBuyColor, str.tostring(barWidthPercent) + "%")
         addColorRow(colorRows, "Delta Sell Rows", barSellColor, str.tostring(barWidthPercent) + "%")
         addColorRow(colorRows, "Volume Layer", backdropColor, str.tostring(backdropWidthPercent) + "%")
         addColorRow(colorRows, "Volume Value Area In", backdropInsideColor, str.tostring(backdropWidthPercent) + "%")
         addColorRow(colorRows, "Volume Value Area Out", backdropOutsideColor, str.tostring(backdropWidthPercent) + "%")
         addColorRow(colorRows, "Session Fill", sessionBoxColor, "Fill")
-        addColorRow(colorRows, "Session Border", sessionBoxBorderColor, str.tostring(sessionBoxBorderWidth))
         addColorRow(colorRows, "Value Area Lines", valueAreaLevelColor, str.tostring(valueAreaLevelWidth))
         addColorRow(colorRows, "Value Area Labels", valueAreaLabelColor, "")
         addColorRow(colorRows, "POC Line", pocLevelColor, str.tostring(pocLevelWidth))
