@@ -246,6 +246,28 @@ if show_color_table and barstate.islast
 5. **Row counter** - Use a `row` variable and increment it (no magic numbers like 1, 2, 3)
 6. **Transparency** - Use `int(color.t(clr))` to round transparency values
 
+# Change Handoff Rules
+
+## Always Include a Product-Owner Explanation
+
+After making code changes, do not provide only a technical changelog. The final handoff must also explain the change in plain language so a product owner can understand the resulting behavior and make an informed test plan.
+
+Every implementation handoff must include all of the following:
+
+1. **What changed technically** - The important files, calculations, state, or drawing behavior that changed.
+2. **What this means in practice** - A non-technical explanation of what users should now see or experience differently.
+3. **Where to test** - Specific chart types, timeframes, modes, settings, instruments, and scenarios affected by the work.
+4. **What to watch for** - Likely regressions, side effects, limitations, boundary cases, and intentionally unchanged behavior.
+5. **Validation status** - What was verified locally and what still requires TradingView compile, replay, or visual confirmation.
+
+Do not assume that naming an implementation detail tells the user where its effects will appear. Translate details such as coordinate systems, session classification, data sources, persistence, and mitigation logic into observable chart behavior.
+
+### Example
+
+Technical note: "Range charts use stored bar indices for pool endpoints."
+
+Product-owner explanation: "On Range charts, a high or low should now stop on the exact candle that first trades through it instead of appearing to continue through later candles. Test recent Daily, Weekly, Monthly, and session levels on 180R and 360R. Standard time charts and Bar Replay still use timestamps and should look unchanged. Older Range-chart lines may begin at the earliest drawable bar because TradingView limits index-based drawings to roughly 10,000 bars of history."
+
 # Git Command Rules
 
 ## Core Rule
