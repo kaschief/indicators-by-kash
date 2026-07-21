@@ -1,0 +1,305 @@
+//@version=6
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INDICATOR SETUP
+// ═════════════════════════════════════════════════════════════════════════════
+INDICATOR_TITLE = "spectra •"
+INDICATOR_MAX_BOXES = 500
+INDICATOR_MAX_BARS_BACK = 5000
+
+indicator(INDICATOR_TITLE, overlay=false, format=format.volume, max_boxes_count=INDICATOR_MAX_BOXES, max_bars_back=INDICATOR_MAX_BARS_BACK)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ════════════════════════════════════════════════════════════════════════════
+MAX_VISIBLE_LOOKBACK = 4999
+AUTO_WINDOW_MIN_BARS = 50
+AUTO_WINDOW_MAX_BARS = 500
+AUTO_WINDOW_SPEED_SAMPLE = 50
+
+GROUP_DISPLAY = "⚙️ Display"
+GROUP_VOLUME = "📊 Volume"
+GROUP_APPEARANCE = "🖼️ Appearance"
+GROUP_UTILITY = "🎨 Reference"
+
+VOLUME_COLOR_DELTA = "Delta Pressure"
+VOLUME_COLOR_SIGNIFICANCE = "Volume Significance"
+VOLUME_COLOR_PRICE_DIRECTION = "Price Direction"
+VOLUME_COLOR_FIXED = "Single Color"
+
+TEXT_SIZE_TINY = "Tiny"
+TEXT_SIZE_SMALL = "Small"
+TEXT_SIZE_NORMAL = "Normal"
+
+TABLE_HEADER_COLOR = color.new(color.rgb(128, 128, 128), 50)
+TABLE_BACKGROUND_COLOR = color.rgb(255, 255, 255)
+TABLE_BORDER_COLOR = color.rgb(128, 128, 128)
+TABLE_TEXT_COLOR = color.rgb(0, 0, 0)
+TABLE_HEADER_TEXT_COLOR = color.rgb(255, 255, 255)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ════════════════════════════════════════════════════════════════════════════
+showVolume = input.bool(true, "Vol", inline="layers", group=GROUP_DISPLAY)
+showVolumeValues = input.bool(true, "Values", inline="layers", group=GROUP_DISPLAY, active=showVolume)
+showDeltaVolume = input.bool(true, "ΔV", inline="layers", group=GROUP_DISPLAY)
+showDeltaPercent = input.bool(true, "Δ%", inline="layers", group=GROUP_DISPLAY, tooltip="Each switch is independent. Vol draws the histogram. Values adds its labeled volume-value row at the base. ΔV shows buy volume minus sell volume. Δ% shows that difference as a percentage of total volume. Disabled rows collapse without gaps. Printed volume values always use compact notation.")
+
+volumeColorMode = input.string(VOLUME_COLOR_DELTA, "Color", options=[VOLUME_COLOR_DELTA, VOLUME_COLOR_SIGNIFICANCE, VOLUME_COLOR_PRICE_DIRECTION, VOLUME_COLOR_FIXED], group=GROUP_VOLUME, tooltip="Delta Pressure: direction and saturation both come from statistically normalized Δ%. Volume Significance: green or purple shows which footprint side led, while saturation shows how large total volume is relative to its rolling average and deviation. On Range charts, both modes instead use price direction for green or purple and native volume significance for the full soft-to-strong gradient. Price Direction: green when the close rose from the previous close, purple when it fell. Single Color: uses the Fixed color. The ΔV and Δ% rows always retain their own metric-specific statistical coloring when supported.")
+showExtremeDelta = input.bool(true, "Extreme", inline="extreme_delta", group=GROUP_VOLUME)
+extremeDeltaPercentThreshold = input.float(15.0, "Δ%", minval=1.0, maxval=100.0, step=1.0, inline="extreme_delta", group=GROUP_VOLUME, active=showExtremeDelta)
+extremeDeltaBorderWidth = input.int(3, "Width", options=[1, 2, 3, 4], inline="extreme_delta", group=GROUP_VOLUME, active=showExtremeDelta)
+extremeDeltaBorderColor = input.color(color.rgb(255, 152, 0), "Border", inline="extreme_delta", group=GROUP_VOLUME, active=showExtremeDelta, tooltip="Extreme applies full directional saturation and the configured border whenever absolute Δ% reaches the adjacent fixed threshold. Width and Border control the outline. No rarity, rolling baseline, or volume qualification is applied. Range charts suppress this treatment with all other Delta data.")
+
+textSizeInput = input.string(TEXT_SIZE_TINY, "Text", options=[TEXT_SIZE_TINY, TEXT_SIZE_SMALL, TEXT_SIZE_NORMAL], inline="text_style", group=GROUP_APPEARANCE)
+textColor = input.color(color.rgb(33, 33, 33), "Color", inline="text_style", group=GROUP_APPEARANCE, tooltip="Text selects the size of printed values and row legends. Color controls their text color. Row height and rendered history adapt automatically to the visible volume scale, enabled rows, and Pine's 500-box limit.")
+buySoftColor = input.color(color.rgb(178, 235, 242), "+", inline="buy_colors", group=GROUP_APPEARANCE)
+buyStrongColor = input.color(color.rgb(0, 151, 167), "", inline="buy_colors", group=GROUP_APPEARANCE, tooltip="Positive gradient. Pale means the active metric is shallow relative to its own recent scale; saturated green means it reached the configured statistical Depth.")
+sellSoftColor = input.color(color.rgb(248, 187, 208), "−", inline="sell_colors", group=GROUP_APPEARANCE)
+sellStrongColor = input.color(color.rgb(236, 64, 122), "", inline="sell_colors", group=GROUP_APPEARANCE, tooltip="Negative gradient. Pale means the active metric is shallow relative to its own recent scale; saturated purple means it reached the configured statistical Depth.")
+neutralColor = input.color(color.rgb(224, 224, 224), "0", inline="neutral_colors", group=GROUP_APPEARANCE)
+gridColor = input.color(color.new(color.rgb(99, 99, 99), 65), "Grid", inline="neutral_colors", group=GROUP_APPEARANCE, tooltip="Neutral controls zero-delta cells. Grid controls ordinary cell borders and the zero line.")
+fixedVolumeColor = input.color(color.rgb(128, 128, 128), "Fixed", group=GROUP_APPEARANCE, tooltip="Fixed is used by the Single Color volume mode.")
+autoIntensityWindow = input.bool(true, "Auto", inline="intensity", group=GROUP_APPEARANCE)
+manualIntensityWindow = input.int(100, "Window", minval=10, maxval=500, inline="intensity", group=GROUP_APPEARANCE, active=not autoIntensityWindow)
+intensityDeviations = input.float(2.0, "Depth σ", minval=0.5, maxval=5.0, step=0.25, inline="intensity", group=GROUP_APPEARANCE, tooltip="Auto converts an asset-specific activity horizon into the current chart's bars: 6.5 hours for futures and stocks, 6 hours for crypto, and 8 hours for forex and other markets. Range and tick charts estimate their recent bar-production speed while excluding long gaps. The result is clamped to 50–500 bars and appears as Active Window in TradingView's Data Window. Disable Auto to use Window directly. Depth is the number of standard deviations required for full saturation. Volume, ΔV, and Δ% each use their own scale. Lower Depth makes more values vivid; higher Depth reserves vivid color for rarer extremes. These settings change color only, never the printed values.")
+
+showColorTable = input.bool(false, "Show Table", group=GROUP_UTILITY, tooltip="Displays every configured color with its RGB values and transparency.")
+
+// ════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+resolveMetricColor(float directionValue, float intensity, color positiveSoft, color positiveStrong, color negativeSoft, color negativeStrong, color neutral) =>
+    if na(directionValue) or directionValue == 0.0
+        neutral
+    else
+        float normalizedIntensity = math.min(math.max(intensity, 0.0), 1.0)
+        directionValue > 0.0 ? color.from_gradient(normalizedIntensity, 0.0, 1.0, positiveSoft, positiveStrong) : color.from_gradient(normalizedIntensity, 0.0, 1.0, negativeSoft, negativeStrong)
+
+resolveVolumeColor(string mode, color deltaPressureColor, color volumeSignificanceColor, float currentClose, float previousClose, color risingColor, color fallingColor, color fixedColor) =>
+    switch mode
+        VOLUME_COLOR_SIGNIFICANCE => volumeSignificanceColor
+        VOLUME_COLOR_PRICE_DIRECTION => na(previousClose) or currentClose >= previousClose ? risingColor : fallingColor
+        VOLUME_COLOR_FIXED => fixedColor
+        => deltaPressureColor
+
+resolveTextSize(string textSize) =>
+    switch textSize
+        TEXT_SIZE_SMALL => size.small
+        TEXT_SIZE_NORMAL => size.normal
+        => size.tiny
+
+resolveActivityHorizonSeconds(string assetType) =>
+    switch assetType
+        "futures" => 23400.0
+        "stock" => 23400.0
+        "crypto" => 21600.0
+        "forex" => 28800.0
+        => 28800.0
+
+clampAutoWindow(float candidateBars) =>
+    int(math.round(math.min(math.max(candidateBars, AUTO_WINDOW_MIN_BARS), AUTO_WINDOW_MAX_BARS)))
+
+formatCompactVolume(float value) =>
+    if na(value)
+        ""
+    else
+        float absoluteValue = math.abs(value)
+        string signText = value < 0.0 ? "-" : ""
+        string valueText = absoluteValue >= 1000000000.0 ? str.tostring(absoluteValue / 1000000000.0, "#.#") + "B" : absoluteValue >= 1000000.0 ? str.tostring(absoluteValue / 1000000.0, "#.#") + "M" : absoluteValue >= 1000.0 ? str.tostring(absoluteValue / 1000.0, "#.#") + "K" : str.tostring(int(math.round(absoluteValue)))
+        signText + valueText
+
+formatDeltaPercent(float value) =>
+    na(value) ? "" : str.tostring(int(math.round(value)))
+
+clearBoxes(array<box> boxes) =>
+    while array.size(boxes) > 0
+        box.delete(array.pop(boxes))
+
+clearLabels(array<label> labels) =>
+    while array.size(labels) > 0
+        label.delete(array.pop(labels))
+
+createValueCell(int leftTime, int rightTime, float cellTop, float cellBottom, string cellText, color backgroundColor, color borderColor, int borderWidth, color cellTextColor, string cellTextSize) =>
+    box.new(left=leftTime, top=cellTop, right=rightTime, bottom=cellBottom, xloc=xloc.bar_time, border_color=borderColor, border_width=borderWidth, bgcolor=backgroundColor, text=cellText, text_color=cellTextColor, text_size=cellTextSize, text_halign=text.align_center, text_valign=text.align_center)
+
+createStatCell(int leftTime, int rightTime, float rowHeight, int rowIndex, string cellText, color backgroundColor, color borderColor, int borderWidth, color cellTextColor, string cellTextSize) =>
+    createValueCell(leftTime, rightTime, -rowHeight * rowIndex, -rowHeight * (rowIndex + 1), cellText, backgroundColor, borderColor, borderWidth, cellTextColor, cellTextSize)
+
+createRowLegendLabel(int legendAnchorTime, float rowCenter, string legendText, string legendTooltip, string legendTextSize) =>
+    label.new(x=legendAnchorTime, y=rowCenter, text=legendText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=chart.bg_color, textcolor=chart.fg_color, size=legendTextSize, textalign=text.align_left, tooltip=legendTooltip)
+
+addColorRow(table colorTable, int row, string name, color clr) =>
+    table.cell(colorTable, 0, row, name, text_size=size.small, text_color=TABLE_TEXT_COLOR)
+    table.cell(colorTable, 1, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=TABLE_TEXT_COLOR)
+    table.cell(colorTable, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=TABLE_TEXT_COLOR)
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FOOTPRINT DATA
+// ═════════════════════════════════════════════════════════════════════════════════
+footprint barFootprint = request.footprint(100)
+bool hasFootprint = not na(barFootprint)
+bool deltaAvailable = hasFootprint and not chart.is_range
+float totalVolume = deltaAvailable ? footprint.total_volume(barFootprint) : volume
+float deltaVolume = deltaAvailable ? footprint.delta(barFootprint) : na
+float deltaPercent = deltaAvailable and totalVolume > 0.0 ? deltaVolume / totalVolume * 100.0 : na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADAPTIVE INTENSITY WINDOW
+// ══════════════════════════════════════════════════════════════════════════════
+float activityHorizonSeconds = resolveActivityHorizonSeconds(syminfo.type)
+float chartBarSeconds = timeframe.in_seconds()
+float elapsedBarSeconds = math.max((time - time[1]) / 1000.0, 1.0)
+float validObservedBarSeconds = elapsedBarSeconds <= activityHorizonSeconds / 4.0 ? elapsedBarSeconds : na
+float averageObservedBarSeconds = ta.sma(validObservedBarSeconds, AUTO_WINDOW_SPEED_SAMPLE)
+bool useObservedBarSpeed = chart.is_range or timeframe.isticks or na(chartBarSeconds)
+float observedBarSeconds = nz(averageObservedBarSeconds, activityHorizonSeconds / 150.0)
+float automaticWindowCandidate = useObservedBarSpeed ? activityHorizonSeconds / observedBarSeconds : activityHorizonSeconds / chartBarSeconds
+int automaticIntensityWindow = clampAutoWindow(automaticWindowCandidate)
+int intensityWindow = autoIntensityWindow ? automaticIntensityWindow : manualIntensityWindow
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATISTICAL INTENSITY
+// ══════════════════════════════════════════════════════════════════════════════
+float volumeMean = ta.sma(nz(totalVolume), intensityWindow)
+float volumeStdev = ta.stdev(nz(totalVolume), intensityWindow)
+float volumeFullScale = volumeMean + intensityDeviations * volumeStdev
+float volumeIntensity = volumeFullScale > 0.0 ? nz(totalVolume) / volumeFullScale : 0.0
+
+float deltaVolumeStdev = ta.stdev(nz(deltaVolume), intensityWindow)
+float deltaVolumeIntensity = deltaVolumeStdev > 0.0 ? math.abs(nz(deltaVolume)) / (intensityDeviations * deltaVolumeStdev) : 0.0
+
+float deltaPercentStdev = ta.stdev(nz(deltaPercent), intensityWindow)
+float deltaPercentIntensity = deltaPercentStdev > 0.0 ? math.abs(nz(deltaPercent)) / (intensityDeviations * deltaPercentStdev) : 0.0
+
+color volumeSignificanceColor = resolveMetricColor(deltaVolume, volumeIntensity, buySoftColor, buyStrongColor, sellSoftColor, sellStrongColor, neutralColor)
+color deltaVolumeCellColor = resolveMetricColor(deltaVolume, deltaVolumeIntensity, buySoftColor, buyStrongColor, sellSoftColor, sellStrongColor, neutralColor)
+bool exceptionalDeltaPercent = showExtremeDelta and deltaAvailable and math.abs(deltaPercent) >= extremeDeltaPercentThreshold
+color normalizedDeltaPercentCellColor = resolveMetricColor(deltaPercent, deltaPercentIntensity, buySoftColor, buyStrongColor, sellSoftColor, sellStrongColor, neutralColor)
+color deltaPercentCellColor = exceptionalDeltaPercent ? deltaPercent > 0.0 ? buyStrongColor : sellStrongColor : normalizedDeltaPercentCellColor
+color rangeVolumeGradientColor = resolveMetricColor(close - nz(close[1], close), volumeIntensity, buySoftColor, buyStrongColor, sellSoftColor, sellStrongColor, neutralColor)
+bool useRangeVolumeGradient = chart.is_range and (volumeColorMode == VOLUME_COLOR_DELTA or volumeColorMode == VOLUME_COLOR_SIGNIFICANCE)
+color volumeBarColor = useRangeVolumeGradient ? rangeVolumeGradientColor : resolveVolumeColor(volumeColorMode, deltaPercentCellColor, volumeSignificanceColor, close, close[1], buyStrongColor, sellStrongColor, fixedVolumeColor)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOLUME
+// ════════════════════════════════════════════════════════════════════════════════
+plot(showVolume ? totalVolume : na, "Volume", color=volumeBarColor, style=plot.style_columns, histbase=0.0, format=format.volume)
+plot(intensityWindow, "Active Window", color=na, display=display.data_window)
+hline(0.0, "Zero", color=gridColor, linestyle=hline.style_solid)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// VISIBLE-RANGE STAT CELLS
+// ═══════════════════════════════════════════════════════════════════════════════
+var array<box> valueCells = array.new<box>()
+var array<label> rowLegendLabels = array.new<label>()
+
+if barstate.islast
+    clearBoxes(valueCells)
+    clearLabels(rowLegendLabels)
+
+    int searchLimit = math.min(MAX_VISIBLE_LOOKBACK, last_bar_index)
+    float visibleMaxVolume = 0.0
+    bool showVolumeText = showVolume and showVolumeValues
+    bool renderDeltaVolume = showDeltaVolume and not chart.is_range
+    bool renderDeltaPercent = showDeltaPercent and not chart.is_range
+    int enabledStatRows = (renderDeltaVolume ? 1 : 0) + (renderDeltaPercent ? 1 : 0)
+    int enabledCellRows = enabledStatRows + (showVolumeText ? 1 : 0)
+    int renderBarLimit = enabledCellRows > 0 ? int(math.floor(INDICATOR_MAX_BOXES / enabledCellRows)) : 0
+    string renderedTextSize = resolveTextSize(textSizeInput)
+
+    if searchLimit >= 0
+        for historyOffset = 0 to searchLimit
+            int barTime = time[historyOffset]
+            if barTime < chart.left_visible_bar_time
+                break
+            if barTime <= chart.right_visible_bar_time
+                float historicalVolume = totalVolume[historyOffset]
+                visibleMaxVolume := math.max(visibleMaxVolume, nz(historicalVolume))
+
+    float rowHeight = math.max(visibleMaxVolume * 0.2, 1.0)
+    int renderedBars = 0
+    int legendAnchorTime = chart.right_visible_bar_time
+
+    if searchLimit >= 0 and enabledCellRows > 0
+        for historyOffset = 0 to searchLimit
+            int barTime = time[historyOffset]
+            if barTime < chart.left_visible_bar_time or renderedBars >= renderBarLimit
+                break
+            if barTime <= chart.right_visible_bar_time
+                int fallbackDuration = historyOffset < searchLimit ? math.max(barTime - time[historyOffset + 1], 1) : 1
+                int barDuration = na(time_close[historyOffset]) ? fallbackDuration : math.max(time_close[historyOffset] - barTime, 1)
+                int halfBarDuration = math.max(int(math.round(barDuration * 0.5)), 1)
+                int cellLeftTime = barTime - halfBarDuration
+                int cellRightTime = barTime + halfBarDuration
+
+                if barTime == chart.right_visible_bar_time
+                    legendAnchorTime := cellRightTime
+
+                if showVolumeText
+                    box volumeValueCell = createValueCell(cellLeftTime, cellRightTime, rowHeight, 0.0, formatCompactVolume(totalVolume[historyOffset]), volumeBarColor[historyOffset], gridColor, 1, textColor, renderedTextSize)
+                    array.push(valueCells, volumeValueCell)
+
+                if deltaAvailable[historyOffset]
+                    int statRowIndex = 0
+                    if renderDeltaVolume
+                        box deltaVolumeCell = createStatCell(cellLeftTime, cellRightTime, rowHeight, statRowIndex, formatCompactVolume(deltaVolume[historyOffset]), deltaVolumeCellColor[historyOffset], gridColor, 1, textColor, renderedTextSize)
+                        array.push(valueCells, deltaVolumeCell)
+                        statRowIndex += 1
+                    if renderDeltaPercent
+                        bool historicalExceptionalDeltaPercent = exceptionalDeltaPercent[historyOffset]
+                        color deltaPercentBorderColor = historicalExceptionalDeltaPercent ? extremeDeltaBorderColor : gridColor
+                        int deltaPercentBorderWidth = historicalExceptionalDeltaPercent ? extremeDeltaBorderWidth : 1
+                        box deltaPercentCell = createStatCell(cellLeftTime, cellRightTime, rowHeight, statRowIndex, formatDeltaPercent(deltaPercent[historyOffset]), deltaPercentCellColor[historyOffset], deltaPercentBorderColor, deltaPercentBorderWidth, textColor, renderedTextSize)
+                        array.push(valueCells, deltaPercentCell)
+
+                renderedBars += 1
+
+    if enabledCellRows > 0 and renderedBars > 0 and not na(chart.right_visible_bar_time)
+        int legendStatRowIndex = 0
+        if showVolumeText
+            label volumeLegend = createRowLegendLabel(legendAnchorTime, rowHeight * 0.5, "Vol", "Total volume for each chart bar.", renderedTextSize)
+            array.push(rowLegendLabels, volumeLegend)
+        if renderDeltaVolume
+            label deltaVolumeLegend = createRowLegendLabel(legendAnchorTime, -rowHeight * (legendStatRowIndex + 0.5), "ΔV", "Footprint buy-classified volume minus sell-classified volume.", renderedTextSize)
+            array.push(rowLegendLabels, deltaVolumeLegend)
+            legendStatRowIndex += 1
+        if renderDeltaPercent
+            label deltaPercentLegend = createRowLegendLabel(legendAnchorTime, -rowHeight * (legendStatRowIndex + 0.5), "Δ%", "Delta volume divided by total volume. A custom border marks the fixed absolute threshold.", renderedTextSize)
+            array.push(rowLegendLabels, deltaPercentLegend)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+var table colorTable = na
+
+if barstate.islast
+    if showColorTable
+        if na(colorTable)
+            colorTable := table.new(position.top_right, 3, 10, bgcolor=TABLE_BACKGROUND_COLOR, border_width=1, border_color=TABLE_BORDER_COLOR, frame_width=1, frame_color=TABLE_BORDER_COLOR)
+
+        table.cell(colorTable, 0, 0, "Setting", bgcolor=TABLE_HEADER_COLOR, text_color=TABLE_HEADER_TEXT_COLOR, text_size=size.small)
+        table.cell(colorTable, 1, 0, "RGB", bgcolor=TABLE_HEADER_COLOR, text_color=TABLE_HEADER_TEXT_COLOR, text_size=size.small)
+        table.cell(colorTable, 2, 0, "Trans", bgcolor=TABLE_HEADER_COLOR, text_color=TABLE_HEADER_TEXT_COLOR, text_size=size.small)
+
+        int row = 1
+        addColorRow(colorTable, row, "Buy Soft", buySoftColor)
+        row += 1
+        addColorRow(colorTable, row, "Buy Strong", buyStrongColor)
+        row += 1
+        addColorRow(colorTable, row, "Sell Soft", sellSoftColor)
+        row += 1
+        addColorRow(colorTable, row, "Sell Strong", sellStrongColor)
+        row += 1
+        addColorRow(colorTable, row, "Neutral", neutralColor)
+        row += 1
+        addColorRow(colorTable, row, "Text", textColor)
+        row += 1
+        addColorRow(colorTable, row, "Grid", gridColor)
+        row += 1
+        addColorRow(colorTable, row, "Fixed Volume", fixedVolumeColor)
+        row += 1
+        addColorRow(colorTable, row, "Extreme Delta Border", extremeDeltaBorderColor)
+    else if not na(colorTable)
+        table.delete(colorTable)
+        colorTable := na
