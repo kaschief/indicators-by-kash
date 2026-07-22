@@ -145,6 +145,20 @@ is_displacement_candle(htf2_o2, htf2_c2, htf2_o3, htf2_c3, htf2_o4, htf2_c4) // 
 - Context about behavior (e.g., "Reverse the array for bearish stacking")
 - Warnings or constraints (e.g., "Must be called before X")
 
+## Keep Comments and Tooltips Concise
+
+**CORE PRINCIPLE: Do not turn source comments or TradingView tooltips into documentation essays.**
+
+- Keep comments only when they explain a non-obvious constraint, invariant, or algorithmic choice.
+- Remove comments that merely restate the next line of code.
+- Prefer one short technical sentence over multi-line commentary.
+- Preserve section dividers because they are navigation aids.
+- Keep single-purpose tooltips brief.
+- When a tooltip covers multiple controls or behaviors, use short headings, blank lines, and bullets.
+- Do not repeat information already clear from the control label or group name.
+- Split unrelated concepts into separate paragraphs instead of one continuous block.
+- Optimize for quick scanning in TradingView's narrow tooltip panel.
+
 ## Never Convert Color Formats Without Permission
 
 **NEVER convert color constants between formats without explicit permission.**
