@@ -23,6 +23,8 @@ MS_PER_DAY = 24 * MS_PER_HOUR
 MS_PER_WEEK = 7 * MS_PER_DAY
 MS_PER_MONTH = 30 * MS_PER_DAY
 MS_PER_QUARTER = 3 * MS_PER_MONTH
+MINUTES_PER_HOUR = 60
+MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
 // Session specification (RTH has a daily gap; the 24h sessions are anchored by NY calendar below)
 RTH_SESSION = "0930-1600:23456"      // Regular cash session, Mon-Fri (session-based assets)
@@ -97,6 +99,21 @@ HISTOGRAM_WIDTH_PERCENT = 25.0
 // Compact long-period samples below Pine's array cap using a grid finer than PROFILE_ROWS.
 SAMPLE_COMPACT_THRESHOLD = 60000
 SAMPLE_COMPACT_ROWS = 6000
+// Two calendar quarters plus buffer cover the previous completed quarter from any current-quarter date.
+QUARTERLY_MAX_TWO_QUARTERS_DAYS = 184
+QUARTERLY_HISTORY_BUFFER_DAYS = 16
+QUARTERLY_LOOKBACK_DAYS = QUARTERLY_MAX_TWO_QUARTERS_DAYS + QUARTERLY_HISTORY_BUFFER_DAYS
+QUARTERLY_CALCULATION_MINUTES = 15
+QUARTERLY_INTRABAR_MINUTES = 5
+QUARTERLY_CALCULATION_TIMEFRAME = str.tostring(QUARTERLY_CALCULATION_MINUTES)
+QUARTERLY_INTRABAR_TIMEFRAME = str.tostring(QUARTERLY_INTRABAR_MINUTES)
+QUARTERLY_CALCULATION_BARS = int(QUARTERLY_LOOKBACK_DAYS * MINUTES_PER_DAY / QUARTERLY_CALCULATION_MINUTES)
+QUARTERLY_INTRABAR_BARS = int(QUARTERLY_CALCULATION_BARS * QUARTERLY_CALCULATION_MINUTES / QUARTERLY_INTRABAR_MINUTES)
+INACTIVE_REQUEST_BARS = 1
+QUARTERLY_SNAPSHOT_MINUTE = MINUTES_PER_HOUR - QUARTERLY_CALCULATION_MINUTES
+// Sparse Monday snapshots transfer histogram rows without returning a Profile object on every bar.
+QUARTERLY_UTC_WEEKLY_SNAPSHOT_HOUR = 0
+QUARTERLY_MARKET_WEEKLY_SNAPSHOT_HOUR = 9
 
 DEFAULT_RTH_PROFILES = 10
 DEFAULT_GLOBEX_PROFILES = 10
@@ -107,6 +124,18 @@ WEEKLY_MATURITY_HISTORY = 5
 MONTHLY_MATURITY_HISTORY = 2
 QUARTERLY_MATURITY_HISTORY = 2
 MATURITY_STABILITY_FRACTION = 0.20
+MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT = 45
+WEEKLY_UTC_MATURITY_SESSIONS = 4
+WEEKLY_MARKET_MATURITY_SESSIONS = 3
+WEEKLY_EARLY_MATURITY_SESSIONS = 2
+MONTHLY_UTC_MATURITY_SESSIONS = 15
+MONTHLY_MARKET_MATURITY_SESSIONS = 10
+MONTHLY_UTC_EARLY_MATURITY_SESSIONS = 7
+MONTHLY_MARKET_EARLY_MATURITY_SESSIONS = 5
+QUARTERLY_UTC_MATURITY_SESSIONS = 45
+QUARTERLY_MARKET_MATURITY_SESSIONS = 30
+QUARTERLY_UTC_EARLY_MATURITY_SESSIONS = 22
+QUARTERLY_MARKET_EARLY_MATURITY_SESSIONS = 15
 MAX_STORED_VALUE_GAPS = 100
 VALUE_GAP_LINE_BUDGET = 140
 VALUE_GAP_LABEL_BUDGET = 140
@@ -400,7 +429,7 @@ rthDevelopingCutoffMinute = input.int(30, ":", minval=0, maxval=59, inline="rth_
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — value-area gaps
 // ═══════════════════════════════════════════════════════════════════════════════
-valueGapsEnabled = input.bool(false, LABEL_ENABLE_VALUE_GAPS, inline="vag_top", group=GROUP_VALUE_GAPS)
+valueGapsEnabled = input.bool(true, LABEL_ENABLE_VALUE_GAPS, inline="vag_top", group=GROUP_VALUE_GAPS)
 valueGapsToShow = input.int(20, "", minval=1, maxval=50, inline="vag_top", group=GROUP_VALUE_GAPS)
 valueGapSource = input.string(VALUE_GAP_SOURCE_RTH, "Source", options=[VALUE_GAP_SOURCE_RTH, VALUE_GAP_SOURCE_GLOBEX], inline="vag_top", group=GROUP_VALUE_GAPS)
 confirmedValueGapMinPercent = input.float(5.0, "Min %", minval=0.0, maxval=100.0, step=0.5, inline="vag_top", group=GROUP_VALUE_GAPS, tooltip="Confirmed Gaps\nCompare consecutive completed Source value areas.\n\n• Bullish — new VAL above prior VAH.\n• Bearish — new VAH below prior VAL.\n• Number — history limit.\n• Min % — gap height versus prior profile range.")
@@ -598,7 +627,7 @@ intrabarResolution = input.string("Auto", "HD resolution (intrabar data)", optio
 // ═══════════════════════════════════════════════════════════════════════════════
 levelLabelOffset = input.int(20, LABEL_LEVEL_LABEL_OFFSET, minval=0, maxval=100, tooltip="Shift the price tags this many bars to the right of the last bar, into the empty margin where the extended lines point.", group=GROUP_LABELS)
 levelLabelBgColor = input.color(color.new(color.rgb(249, 248, 248), 25), LABEL_LEVEL_LABEL_BACKGROUND, group=GROUP_LABELS)
-anchorLevelLabelMode = input.string(ANCHOR_LABEL_MODE_ONCE, "Anchor Labels", options=[ANCHOR_LABEL_MODE_OFF, ANCHOR_LABEL_MODE_ONCE, ANCHOR_LABEL_MODE_REMINDERS], inline="anchor_labels", group=GROUP_LABELS)
+anchorLevelLabelMode = input.string(ANCHOR_LABEL_MODE_REMINDERS, "Anchor Labels", options=[ANCHOR_LABEL_MODE_OFF, ANCHOR_LABEL_MODE_ONCE, ANCHOR_LABEL_MODE_REMINDERS], inline="anchor_labels", group=GROUP_LABELS)
 anchorReminderFadePercent = input.int(60, LABEL_FADE_PERCENT, minval=0, maxval=100, inline="anchor_labels", tooltip="Anchor Labels\n• Off — no extension tags.\n• Once — one tag per open extension.\n• Reminders — sparse repeats on long extensions.\n\nFade % controls tag transparency. Swept levels use Swept Line Reminders.", group=GROUP_LABELS)
 dedupeLabels = input.bool(true, "Merge Overlapping Labels", inline="label_merge", group=GROUP_LABELS)
 labelMergePreset = input.string(LABEL_MERGE_BALANCED, "", options=[LABEL_MERGE_STRICT, LABEL_MERGE_BALANCED, LABEL_MERGE_WIDE, LABEL_MERGE_CUSTOM], inline="label_merge", group=GROUP_LABELS)
@@ -670,6 +699,8 @@ type LevelHitEvent
     string identity
     color lineColor
     string circleSize
+    int effectiveLineWidth
+    int rank
 
 type AnchorState
     array<float> barHighs
@@ -686,6 +717,15 @@ type MergeState
     int pendingStartTime
     int normalSpan
     int foldCount
+
+type AnchorProcessPolicy
+    int keepProfiles
+    int mergeDepth
+    bool combineShorts
+    float shortSpanFraction
+    bool continuousBoundary
+    bool prepareHistogram
+    bool requireObservedBoundary
 
 type MaturityState
     float valueAreaHigh
@@ -832,8 +872,38 @@ newAnchorState() =>
 newMergeState() =>
     MergeState.new(array.new<float>(), array.new<float>(), array.new<float>(), START_TIME_UNSET, 0, 0)
 
+mergeCombine(string mode) =>
+    mode == MERGE_COMBINE
+
+mergeDepth(string mode) =>
+    mode == MERGE_OFF ? 0 : mode == MERGE_EARLIEST ? 1 : 2
+
+newAnchorProcessPolicy(int keepProfiles, int mergeDepth, bool combineShorts, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram, bool requireObservedBoundary) =>
+    AnchorProcessPolicy.new(keepProfiles, mergeDepth, combineShorts, shortSpanFraction, continuousBoundary, prepareHistogram, requireObservedBoundary)
+
+newMergedAnchorProcessPolicy(int keepProfiles, string mergeMode, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram) =>
+    newAnchorProcessPolicy(keepProfiles, mergeDepth(mergeMode), mergeCombine(mergeMode), shortSpanFraction, continuousBoundary, prepareHistogram, false)
+
+newCalendarAnchorProcessPolicy(int keepProfiles, bool prepareHistogram, bool requireObservedBoundary) =>
+    newAnchorProcessPolicy(keepProfiles, 0, false, 1.0, true, prepareHistogram, requireObservedBoundary)
+
 newMaturityState() =>
     MaturityState.new(na, na, na, false, 0, array.new<float>())
+
+newProfile(int startTime, int endTime, int rowCount) =>
+    Profile.new(startTime, endTime, na, na, rowCount, array.new<float>(rowCount, 0.0), 0.0, 0, 0, 0, na, na, na, na, na, na, false, na, na, na, na, na, na, false, false, false, false, false, false, false, false, false)
+
+newRemoteProfile(int startTime, int endTime, float priceLow, float priceHigh, float pocPrice, float valueAreaHighPrice, float valueAreaLowPrice, bool hasAlternatePoc, float alternatePocPrice) =>
+    Profile profile = newProfile(startTime, endTime, PROFILE_ROWS)
+    profile.priceLow := priceLow
+    profile.priceHigh := priceHigh
+    profile.pocPrice := pocPrice
+    profile.valueAreaHighPrice := valueAreaHighPrice
+    profile.valueAreaLowPrice := valueAreaLowPrice
+    profile.hasAlternatePoc := hasAlternatePoc
+    profile.alternatePocPrice := alternatePocPrice
+    profile.isValid := true
+    profile
 
 clampRow(float rawRow, int rowCount) =>
     math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
@@ -890,6 +960,9 @@ calendarDateText(int eventTime, bool useUtcTimezone) =>
     int eventDay = useUtcTimezone ? dayofmonth(eventTime, UTC_TIMEZONE) : dayofmonth(eventTime, NY_TIMEZONE)
     int eventYear = useUtcTimezone ? year(eventTime, UTC_TIMEZONE) : year(eventTime, NY_TIMEZONE)
     monthName(eventMonth) + " " + str.tostring(eventDay) + ", " + str.tostring(eventYear)
+
+sameCalendarDate(int firstTime, int secondTime, string timezone) =>
+    year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
 
 toLineStyle(string styleName) =>
     styleName == STYLE_DASHED ? line.style_dashed : styleName == STYLE_DOTTED ? line.style_dotted : line.style_solid
@@ -1021,7 +1094,7 @@ prepareProfileHistogram(Profile profile) =>
     true
 
 buildProfile(array<float> highs, array<float> lows, array<float> volumes, int rowCount, float valueAreaPercent, int startTime, int endTime, bool prepareHistogram) =>
-    Profile profile = Profile.new(startTime, endTime, na, na, rowCount, array.new<float>(rowCount, 0.0), 0.0, 0, 0, 0, na, na, na, na, na, na, false, na, na, na, na, na, na, false, false, false, false, false, false, false, false, false)
+    Profile profile = newProfile(startTime, endTime, rowCount)
     int barCount = array.size(volumes)
     if barCount > 0
         float rawHigh = array.max(highs)
@@ -1606,7 +1679,7 @@ var bool isTwentyFourSevenAsset = false
 var bool assetClassificationReady = false
 
 sameNyDate(int firstTime, int secondTime) =>
-    year(firstTime, NY_TIMEZONE) == year(secondTime, NY_TIMEZONE) and month(firstTime, NY_TIMEZONE) == month(secondTime, NY_TIMEZONE) and dayofmonth(firstTime, NY_TIMEZONE) == dayofmonth(secondTime, NY_TIMEZONE)
+    sameCalendarDate(firstTime, secondTime, NY_TIMEZONE)
 
 calendarDateSerial(int eventTime, string timezone, int shiftMilliseconds) =>
     int shiftedTime = eventTime + shiftMilliseconds
@@ -1652,15 +1725,54 @@ levelIdentity(int startTime, SessionStyle style, bool isLive, bool isLast, strin
     string nameText = isLive ? style.labelLive + " " + levelName : isLast ? style.labelLast + " " + levelName : style.labelAnchor + " " + levelName + " " + dateText
     nameText + (sweptDenote ? " " + SWEPT_CHECKMARK : "")
 
+levelLabelRank(string levelName, SessionStyle style, bool isLive, bool isLast) =>
+    int levelWeight = levelName == LABEL_POC ? 3 : levelName == LABEL_ALTERNATE_POC ? 1 : 2
+    int anchorWeight = style.periodLabelMode == PERIOD_LABEL_QUARTER ? 1 : 0
+    int recencyWeight = isLive ? 2 : isLast ? 1 : 0
+    levelWeight * 100 + anchorWeight * 10 + recencyWeight
+
+effectiveLevelLineWidth(int lineWidth, SessionStyle style, bool sweptDenote) =>
+    sweptDenote ? style.sweptContinuationWidth : lineWidth
+
+identityPrecedes(int candidateWidth, int candidateRank, int candidateOrder, int currentWidth, int currentRank, int currentOrder) =>
+    candidateWidth > currentWidth or (candidateWidth == currentWidth and (candidateRank > currentRank or (candidateRank == currentRank and candidateOrder < currentOrder)))
+
+orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    string body = ""
+    int clusterIdentityCount = 0
+    if array.size(identityName) > 0
+        for identityIndex = 0 to array.size(identityName) - 1
+            if array.get(identityCluster, identityIndex) == clusterIndex
+                clusterIdentityCount += 1
+    array<bool> identityUsed = array.new<bool>(array.size(identityName), false)
+    if clusterIdentityCount > 0
+        for identityPosition = 1 to clusterIdentityCount
+            int bestIdentityIndex = -1
+            int bestWidth = -1
+            int bestRank = -1
+            int bestOrder = fallbackOrder
+            for identityIndex = 0 to array.size(identityName) - 1
+                if array.get(identityCluster, identityIndex) == clusterIndex and not array.get(identityUsed, identityIndex)
+                    int candidateWidth = array.get(identityWidth, identityIndex)
+                    int candidateRank = array.get(identityRank, identityIndex)
+                    int candidateOrder = array.get(identityOrder, identityIndex)
+                    if identityPrecedes(candidateWidth, candidateRank, candidateOrder, bestWidth, bestRank, bestOrder)
+                        bestIdentityIndex := identityIndex
+                        bestWidth := candidateWidth
+                        bestRank := candidateRank
+                        bestOrder := candidateOrder
+            if bestIdentityIndex >= 0
+                string nextName = array.get(identityName, bestIdentityIndex)
+                body := body == "" ? nextName : body + separator + nextName
+                array.set(identityUsed, bestIdentityIndex, true)
+    body
+
 // sweptDenote adds a faded dashed continuation after the solid swept segment.
 drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidth, string styleName, bool extendRight, color labelColor, string levelName, SessionStyle style, bool sweptDenote, color sweptContinuationColor, bool hitTraceActive, bool isLive, bool isLast, int anchorEndTime) =>
     trackLine(line.new(x1=startTime, y1=price, x2=endTime, y2=price, xloc=xloc.bar_time, extend=extendRight ? extend.right : extend.none, color=lineColor, width=lineWidth, style=toLineStyle(styleName)))
     color labelTextColor = sweptDenote ? color.new(labelColor, 100 - (100 - color.t(labelColor)) * (1 - sweptLabelTextFadePercent / 100.0)) : labelColor
     string dateText = periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
-    int levelWeight = levelName == LABEL_POC ? 3 : levelName == LABEL_ALTERNATE_POC ? 1 : 2
-    int anchorWeight = style.periodLabelMode == PERIOD_LABEL_QUARTER ? 1 : 0
-    int recencyWeight = isLive ? 2 : isLast ? 1 : 0
-    int labelRank = levelWeight * 100 + anchorWeight * 10 + recencyWeight
+    int labelRank = levelLabelRank(levelName, style, isLive, isLast)
     // Swept levels are tagged by the swept-line reminders below, never here, or they draw the same name twice.
     if not isLive and not sweptDenote and levelName != LABEL_ALTERNATE_POC
         int visibleEndTime = extendRight ? time : endTime
@@ -1675,7 +1787,7 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     if extendRight or sweptDenote or hitTraceActive
         string priceText = str.tostring(price, format.mintick)
         string detailsText = levelIdentity(startTime, style, isLive, isLast, levelName, sweptDenote)
-        int effectiveLineWidth = sweptDenote ? style.sweptContinuationWidth : lineWidth
+        int effectiveLineWidth = effectiveLevelLineWidth(lineWidth, style, sweptDenote)
         // Buffer the right-edge label instead of drawing it; flushPendingLabels merges coincident prices.
         array.push(pendingLabels, PendingLabel.new(price, bar_index + style.levelLabelOffset, detailsText, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth))
         // Last and live profiles are self-evident, so only older completed profiles carry a date.
@@ -1740,35 +1852,8 @@ flushPendingLabels(bool dedupe) =>
                 array.push(identityWidth, pending.effectiveLineWidth)
                 array.push(identityRank, pending.rank)
                 array.push(identityOrder, pendingIndex)
-        array<bool> identityUsed = array.new<bool>(array.size(identityName), false)
         for clusterIndex = 0 to array.size(clusterPrice) - 1
-            string body = ""
-            int clusterIdentityCount = 0
-            if array.size(identityName) > 0
-                for identityIndex = 0 to array.size(identityName) - 1
-                    if array.get(identityCluster, identityIndex) == clusterIndex
-                        clusterIdentityCount += 1
-            if clusterIdentityCount > 0
-                for identityPosition = 1 to clusterIdentityCount
-                    int bestIdentityIndex = -1
-                    int bestWidth = -1
-                    int bestRank = -1
-                    int bestOrder = pendingCount
-                    for identityIndex = 0 to array.size(identityName) - 1
-                        if array.get(identityCluster, identityIndex) == clusterIndex and not array.get(identityUsed, identityIndex)
-                            int candidateWidth = array.get(identityWidth, identityIndex)
-                            int candidateRank = array.get(identityRank, identityIndex)
-                            int candidateOrder = array.get(identityOrder, identityIndex)
-                            bool betterIdentity = candidateWidth > bestWidth or (candidateWidth == bestWidth and (candidateRank > bestRank or (candidateRank == bestRank and candidateOrder < bestOrder)))
-                            if betterIdentity
-                                bestIdentityIndex := identityIndex
-                                bestWidth := candidateWidth
-                                bestRank := candidateRank
-                                bestOrder := candidateOrder
-                    if bestIdentityIndex >= 0
-                        string nextName = array.get(identityName, bestIdentityIndex)
-                        body := body == "" ? nextName : body + LABEL_NAME_SEPARATOR + nextName
-                        array.set(identityUsed, bestIdentityIndex, true)
+            string body = orderedClusterIdentities(clusterIndex, LABEL_NAME_SEPARATOR, pendingCount, identityCluster, identityName, identityWidth, identityRank, identityOrder)
             string labelText = array.get(clusterWantPrice, clusterIndex) ? (body == "" ? array.get(clusterPriceText, clusterIndex) : body + " " + BRAND_BULLET + " " + array.get(clusterPriceText, clusterIndex)) : body
             string finalText = array.get(clusterHitTrace, clusterIndex) ? "● " + labelText : labelText
             trackLabel(label.new(array.get(clusterX, clusterIndex), array.get(clusterPrice, clusterIndex), finalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex)), color=array.get(clusterBg, clusterIndex)))
@@ -1911,9 +1996,13 @@ renderLevelHitCircles(array<LevelHitEvent> events, bool tracePresentationActive)
     if tracePresentationActive and eventCount > 0
         array<int> groupTimes = array.new<int>()
         array<float> groupPrices = array.new<float>()
-        array<string> groupIdentities = array.new<string>()
         array<color> groupColors = array.new<color>()
         array<string> groupSizes = array.new<string>()
+        array<int> identityGroup = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
         for eventIndex = 0 to eventCount - 1
             LevelHitEvent hitEvent = array.get(events, eventIndex)
             if levelHitTraceActive(hitEvent.hitTime, tracePresentationActive)
@@ -1927,20 +2016,26 @@ renderLevelHitCircles(array<LevelHitEvent> events, bool tracePresentationActive)
                             groupIndex := candidateIndex
                             break
                 if groupIndex >= 0
-                    array.set(groupIdentities, groupIndex, array.get(groupIdentities, groupIndex) + "\n" + hitEvent.identity)
                     array.set(groupSizes, groupIndex, largerLabelSize(array.get(groupSizes, groupIndex), hitEvent.circleSize))
                 else
                     array.push(groupTimes, hitEvent.hitTime)
                     array.push(groupPrices, hitEvent.price)
-                    array.push(groupIdentities, hitEvent.identity)
                     array.push(groupColors, hitEvent.lineColor)
                     array.push(groupSizes, hitEvent.circleSize)
-        for groupIndex = 0 to array.size(groupTimes) - 1
-            int hitTime = array.get(groupTimes, groupIndex)
-            float hitPrice = array.get(groupPrices, groupIndex)
-            color hitColor = array.get(groupColors, groupIndex)
-            string tooltipText = array.get(groupIdentities, groupIndex) + "\nHit " + levelHitTimeText(hitTime)
-            trackLabel(label.new(hitTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(hitColor, 0), size=toLabelSize(array.get(groupSizes, groupIndex)), tooltip=tooltipText))
+                    groupIndex := array.size(groupTimes) - 1
+                array.push(identityGroup, groupIndex)
+                array.push(identityName, hitEvent.identity)
+                array.push(identityWidth, hitEvent.effectiveLineWidth)
+                array.push(identityRank, hitEvent.rank)
+                array.push(identityOrder, eventIndex)
+        if array.size(groupTimes) > 0
+            for groupIndex = 0 to array.size(groupTimes) - 1
+                int hitTime = array.get(groupTimes, groupIndex)
+                float hitPrice = array.get(groupPrices, groupIndex)
+                color hitColor = array.get(groupColors, groupIndex)
+                string identities = orderedClusterIdentities(groupIndex, "\n", eventCount, identityGroup, identityName, identityWidth, identityRank, identityOrder)
+                string tooltipText = identities + "\nHit " + levelHitTimeText(hitTime)
+                trackLabel(label.new(hitTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(hitColor, 0), size=toLabelSize(array.get(groupSizes, groupIndex)), tooltip=tooltipText))
     true
 
 // Scale visible opacity so fading respects the base transparency.
@@ -2136,24 +2231,87 @@ finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endT
         array.clear(state.barLows)
         array.clear(state.barVolumes)
 
-processAnchor(AnchorState state, MergeState mergeState, bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, int mergeDepth, bool combineShorts, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram) =>
+processAnchor(AnchorState state, MergeState mergeState, AnchorProcessPolicy policy, bool enabled, bool inWindow, bool periodStart, bool periodEnd, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, bool barConfirmed) =>
     if enabled
-        bool shouldStart = periodStart or (state.startTime == START_TIME_UNSET and inWindow)
+        bool shouldStart = periodStart or (not policy.requireObservedBoundary and state.startTime == START_TIME_UNSET and inWindow)
 
         if periodEnd and array.size(state.barVolumes) > 0
 // End early-close profiles at the last traded bar.
-            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, keepProfiles, mergeDepth, combineShorts, shortSpanFraction, prepareHistogram)
+            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
 
         if shouldStart
             if array.size(state.barVolumes) > 0
 // Continuous anchors end at the new period boundary; RTH falls back to time[1].
-                int boundaryEnd = continuousBoundary ? time : time[1]
-                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, keepProfiles, mergeDepth, combineShorts, shortSpanFraction, prepareHistogram)
+                int boundaryEnd = policy.continuousBoundary ? time : time[1]
+                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
             state.startTime := time
 
-        if inWindow and barstate.isconfirmed
+        if inWindow and barConfirmed
             appendPreparedBarVolume(state.barHighs, state.barLows, state.barVolumes, preparedHighs, preparedLows, preparedVolumes, true)
             state.lastBarTime := time
+
+syncProfileHistogram(Profile target, Profile source) =>
+    target.priceLow := source.priceLow
+    target.priceHigh := source.priceHigh
+    target.rowCount := source.rowCount
+    target.rowVolumes := array.copy(source.rowVolumes)
+    target.maxHistogramVolume := source.maxHistogramVolume
+    target.pocRow := source.pocRow
+    target.valueAreaLowRow := source.valueAreaLowRow
+    target.valueAreaHighRow := source.valueAreaHighRow
+    true
+
+profileIndexByStart(array<Profile> profiles, int startTime) =>
+    int profileIndex = -1
+    if startTime != START_TIME_UNSET
+        if array.size(profiles) > 0
+            for candidateIndex = array.size(profiles) - 1 to 0
+                if array.get(profiles, candidateIndex).startTime == startTime
+                    profileIndex := candidateIndex
+                    break
+    profileIndex
+
+storeProfile(AnchorState state, Profile profile, int keepProfiles) =>
+    array.push(state.profiles, profile)
+    while array.size(state.profiles) > keepProfiles
+        array.shift(state.profiles)
+    array.size(state.profiles) - 1
+
+emptyRemoteProfileResult() =>
+    float unavailablePrice = na
+    Profile histogramSnapshot = na
+    Profile developingSnapshot = na
+    [START_TIME_UNSET, START_TIME_UNSET, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, histogramSnapshot, developingSnapshot, 0]
+
+fixedQuarterlyContext(bool enabled, bool developingEnabled, bool useUtcCalendar, bool prepareHistogram) =>
+    if not enabled
+        emptyRemoteProfileResult()
+    else
+        [fixedHighs, fixedLows, fixedVolumes] = request.security_lower_tf(syminfo.tickerid, QUARTERLY_INTRABAR_TIMEFRAME, [high, low, volume], ignore_invalid_timeframe=true, calc_bars_count=QUARTERLY_INTRABAR_BARS)
+        bool utcQuarterBoundary = calendarQuarterStart(UTC_TIMEZONE)
+        bool marketQuarterBoundary = calendarQuarterStart(NY_TIMEZONE)
+        bool quarterBoundary = selectAssetCalendarStart(useUtcCalendar, utcQuarterBoundary, marketQuarterBoundary)
+        bool utcDayBoundary = calendarDayStart(UTC_TIMEZONE)
+        bool marketRthInSession = not na(time(timeframe.period, RTH_SESSION, NY_TIMEZONE))
+        bool marketSessionComplete = not marketRthInSession and marketRthInSession[1]
+        bool maturitySessionComplete = useUtcCalendar ? utcDayBoundary : marketSessionComplete
+        var AnchorState state = newAnchorState()
+        var MergeState mergeState = newMergeState()
+        var MaturityState maturityState = newMaturityState()
+        var AnchorProcessPolicy policy = newCalendarAnchorProcessPolicy(quarterlyProfilesToShow, prepareHistogram, true)
+        if developingEnabled
+            advanceMaturityState(maturityState, state, quarterBoundary, maturitySessionComplete, QUARTERLY_MATURITY_HISTORY)
+        [preparedHighs, preparedLows, preparedVolumes] = prepareBarVolumeSamples(fixedHighs, fixedLows, fixedVolumes, high, low, volume, true)
+        processAnchor(state, mergeState, policy, true, true, quarterBoundary, false, preparedHighs, preparedLows, preparedVolumes, true)
+        Profile latestProfile = array.size(state.profiles) > 0 ? array.last(state.profiles) : na
+        bool latestAvailable = not na(latestProfile) and latestProfile.isValid
+        bool sameCompletionDay = latestAvailable and (useUtcCalendar ? sameCalendarDate(time, latestProfile.endTime, UTC_TIMEZONE) : sameCalendarDate(time, latestProfile.endTime, NY_TIMEZONE))
+        bool histogramPublishWindow = sameCompletionDay and minute(time) == QUARTERLY_SNAPSHOT_MINUTE
+        bool weeklyHistogramSnapshot = useUtcCalendar ? dayofweek(time, UTC_TIMEZONE) == dayofweek.monday and hour(time, UTC_TIMEZONE) == QUARTERLY_UTC_WEEKLY_SNAPSHOT_HOUR and minute(time, UTC_TIMEZONE) == QUARTERLY_SNAPSHOT_MINUTE : dayofweek(time, NY_TIMEZONE) == dayofweek.monday and hour(time, NY_TIMEZONE) == QUARTERLY_MARKET_WEEKLY_SNAPSHOT_HOUR and minute(time, NY_TIMEZONE) == QUARTERLY_SNAPSHOT_MINUTE
+        Profile histogramSnapshot = prepareHistogram and latestAvailable and (histogramPublishWindow or weeklyHistogramSnapshot or barstate.islast) ? latestProfile : na
+        Profile developingSnapshot = developingEnabled and state.startTime != START_TIME_UNSET and array.size(state.barVolumes) > 0 and barstate.islast ? buildProfile(state.barHighs, state.barLows, state.barVolumes, PROFILE_ROWS, valueAreaPercent, state.startTime, time, prepareHistogram) : na
+        bool showDeveloping = developingEnabled and maturityShowsDeveloping(maturityState, state, quarterlyCurrentMode, useUtcCalendar ? QUARTERLY_UTC_MATURITY_SESSIONS : QUARTERLY_MARKET_MATURITY_SESSIONS, useUtcCalendar ? QUARTERLY_UTC_EARLY_MATURITY_SESSIONS : QUARTERLY_MARKET_EARLY_MATURITY_SESSIONS, MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT)
+        [latestAvailable ? latestProfile.startTime : START_TIME_UNSET, latestAvailable ? latestProfile.endTime : START_TIME_UNSET, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0]
 
 updateMitigation(array<Profile> profiles, bool active, bool sameSessionOnly, bool inWindowNow, float breachHigh, float breachLow) =>
     if active and array.size(profiles) > 0 and not (sameSessionOnly and not inWindowNow)
@@ -2185,11 +2343,11 @@ levelAlreadyMarkedToday(array<LevelHitEvent> events, string key) =>
                 break
     marked
 
-processLevelHit(float levelPrice, int previousHitTime, string key, string identity, color lineColor, string circleSize, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
+processLevelHit(float levelPrice, int previousHitTime, string key, string identity, color lineColor, string circleSize, int effectiveLineWidth, int rank, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
     bool hitNow = not na(hitHigh) and not na(hitLow) and hitLow <= levelPrice and hitHigh >= levelPrice
     bool firstHitToday = hitNow and not levelAlreadyMarkedToday(events, key)
     if firstHitToday
-        array.push(events, LevelHitEvent.new(time, levelPrice, key, identity, lineColor, circleSize))
+        array.push(events, LevelHitEvent.new(time, levelPrice, key, identity, lineColor, circleSize, effectiveLineWidth, rank))
         while array.size(events) > MAX_LEVEL_HIT_EVENTS
             array.shift(events)
     firstHitToday ? time : previousHitTime
@@ -2213,14 +2371,15 @@ updateLevelHitTrace(array<Profile> profiles, bool active, SessionStyle style, ar
                 bool valVisibleAtLiveEdge = style.showValueArea and (na(profile.valueAreaLowBreachTime) or valSweptDenote)
                 bool alternateVisibleAtLiveEdge = style.showAlternatePoc and profile.hasAlternatePoc and (na(profile.alternatePocBreachTime) or alternateSweptDenote)
                 color valueAreaLineColor = isMostRecentCompleted ? style.valueAreaLastColor : style.valueAreaColor
+                int valueAreaLineWidth = isMostRecentCompleted ? style.valueAreaLastWidth : style.valueAreaWidth
                 if pocVisibleAtLiveEdge
-                    profile.pocHitTime := processLevelHit(profile.pocPrice, profile.pocHitTime, levelHitKey(profile.startTime, style, LABEL_POC), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_POC, pocSweptDenote), style.pocColor, circleSize, events, hitHigh, hitLow)
+                    profile.pocHitTime := processLevelHit(profile.pocPrice, profile.pocHitTime, levelHitKey(profile.startTime, style, LABEL_POC), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_POC, pocSweptDenote), style.pocColor, circleSize, effectiveLevelLineWidth(style.pocWidth, style, pocSweptDenote), levelLabelRank(LABEL_POC, style, false, isMostRecentCompleted), events, hitHigh, hitLow)
                 if vahVisibleAtLiveEdge
-                    profile.valueAreaHighHitTime := processLevelHit(profile.valueAreaHighPrice, profile.valueAreaHighHitTime, levelHitKey(profile.startTime, style, LABEL_VAH), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_VAH, vahSweptDenote), valueAreaLineColor, circleSize, events, hitHigh, hitLow)
+                    profile.valueAreaHighHitTime := processLevelHit(profile.valueAreaHighPrice, profile.valueAreaHighHitTime, levelHitKey(profile.startTime, style, LABEL_VAH), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_VAH, vahSweptDenote), valueAreaLineColor, circleSize, effectiveLevelLineWidth(valueAreaLineWidth, style, vahSweptDenote), levelLabelRank(LABEL_VAH, style, false, isMostRecentCompleted), events, hitHigh, hitLow)
                 if valVisibleAtLiveEdge
-                    profile.valueAreaLowHitTime := processLevelHit(profile.valueAreaLowPrice, profile.valueAreaLowHitTime, levelHitKey(profile.startTime, style, LABEL_VAL), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_VAL, valSweptDenote), valueAreaLineColor, circleSize, events, hitHigh, hitLow)
+                    profile.valueAreaLowHitTime := processLevelHit(profile.valueAreaLowPrice, profile.valueAreaLowHitTime, levelHitKey(profile.startTime, style, LABEL_VAL), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_VAL, valSweptDenote), valueAreaLineColor, circleSize, effectiveLevelLineWidth(valueAreaLineWidth, style, valSweptDenote), levelLabelRank(LABEL_VAL, style, false, isMostRecentCompleted), events, hitHigh, hitLow)
                 if alternateVisibleAtLiveEdge
-                    profile.alternatePocHitTime := processLevelHit(profile.alternatePocPrice, profile.alternatePocHitTime, levelHitKey(profile.startTime, style, LABEL_ALTERNATE_POC), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_ALTERNATE_POC, alternateSweptDenote), style.alternatePocColor, circleSize, events, hitHigh, hitLow)
+                    profile.alternatePocHitTime := processLevelHit(profile.alternatePocPrice, profile.alternatePocHitTime, levelHitKey(profile.startTime, style, LABEL_ALTERNATE_POC), levelIdentity(profile.startTime, style, false, isMostRecentCompleted, LABEL_ALTERNATE_POC, alternateSweptDenote), style.alternatePocColor, circleSize, effectiveLevelLineWidth(style.alternatePocWidth, style, alternateSweptDenote), levelLabelRank(LABEL_ALTERNATE_POC, style, false, isMostRecentCompleted), events, hitHigh, hitLow)
     true
 
 // Advance a two-sided sweep when close clears each side by the configured margin.
@@ -2366,7 +2525,6 @@ var MergeState rthMergeState = newMergeState()
 var MergeState globexMergeState = newMergeState()
 var MergeState weeklyMergeState = newMergeState()
 var MergeState monthlyMergeState = newMergeState()
-var MergeState quarterlyMergeState = newMergeState()
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -2491,23 +2649,31 @@ weeklyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcWeekStart
 utcMonthStart = calendarMonthStart(UTC_TIMEZONE)
 nyMonthStart = calendarMonthStart(NY_TIMEZONE)
 monthlyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcMonthStart, nyMonthStart)
-utcQuarterStart = calendarQuarterStart(UTC_TIMEZONE)
-nyQuarterStart = calendarQuarterStart(NY_TIMEZONE)
-quarterlyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcQuarterStart, nyQuarterStart)
+
+quarterlyRequestedBars = quarterlyStateActive ? QUARTERLY_CALCULATION_BARS : INACTIVE_REQUEST_BARS
+// Keep frequent remote values scalar; Profile objects cross contexts only for sparse histogram snapshots.
+[quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotHasAlternatePoc, quarterlySnapshotAlternatePocPrice, quarterlyHistogramSnapshot, quarterlyDevelopingSnapshot, requestedQuarterlyShowDeveloping] = request.security(syminfo.tickerid, QUARTERLY_CALCULATION_TIMEFRAME, fixedQuarterlyContext(quarterlyStateActive, quarterlyFilterEnabled, useUtcCalendarAnchors, quarterlyFilterEnabled and quarterlyShowHistogram), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, calc_bars_count=quarterlyRequestedBars)
+int quarterlyProfileIndex = profileIndexByStart(quarterlyState.profiles, quarterlySnapshotStartTime)
+if quarterlySnapshotStartTime != START_TIME_UNSET
+    if quarterlyProfileIndex < 0
+        Profile quarterlyProfile = newRemoteProfile(quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotHasAlternatePoc, quarterlySnapshotAlternatePocPrice)
+        quarterlyProfileIndex := storeProfile(quarterlyState, quarterlyProfile, quarterlyProfilesToShow)
+    if not na(quarterlyHistogramSnapshot)
+        syncProfileHistogram(array.get(quarterlyState.profiles, quarterlyProfileIndex), quarterlyHistogramSnapshot)
 
 // Count completed sessions before exposing a mature profile.
 maturitySessionComplete = useUtcCalendarAnchors ? utcDayStart : rthSessionEnd
 var MaturityState weeklyMaturityState = newMaturityState()
 var MaturityState monthlyMaturityState = newMaturityState()
-var MaturityState quarterlyMaturityState = newMaturityState()
 advanceMaturityState(weeklyMaturityState, weeklyState, weeklyPeriodStart, maturitySessionComplete, WEEKLY_MATURITY_HISTORY)
 advanceMaturityState(monthlyMaturityState, monthlyState, monthlyPeriodStart, maturitySessionComplete, MONTHLY_MATURITY_HISTORY)
-advanceMaturityState(quarterlyMaturityState, quarterlyState, quarterlyPeriodStart, maturitySessionComplete, QUARTERLY_MATURITY_HISTORY)
 
 // Auto maturity uses anchor-specific history floors and a 45% completed-volume threshold.
-weeklyShowDeveloping = maturityShowsDeveloping(weeklyMaturityState, weeklyState, weeklyCurrentMode, useUtcCalendarAnchors ? 4 : 3, 2, 45)
-monthlyShowDeveloping = maturityShowsDeveloping(monthlyMaturityState, monthlyState, monthlyCurrentMode, useUtcCalendarAnchors ? 15 : 10, useUtcCalendarAnchors ? 7 : 5, 45)
-quarterlyShowDeveloping = maturityShowsDeveloping(quarterlyMaturityState, quarterlyState, quarterlyCurrentMode, useUtcCalendarAnchors ? 45 : 30, useUtcCalendarAnchors ? 22 : 15, 45)
+weeklyShowDeveloping = maturityShowsDeveloping(weeklyMaturityState, weeklyState, weeklyCurrentMode, useUtcCalendarAnchors ? WEEKLY_UTC_MATURITY_SESSIONS : WEEKLY_MARKET_MATURITY_SESSIONS, WEEKLY_EARLY_MATURITY_SESSIONS, MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT)
+monthlyShowDeveloping = maturityShowsDeveloping(monthlyMaturityState, monthlyState, monthlyCurrentMode, useUtcCalendarAnchors ? MONTHLY_UTC_MATURITY_SESSIONS : MONTHLY_MARKET_MATURITY_SESSIONS, useUtcCalendarAnchors ? MONTHLY_UTC_EARLY_MATURITY_SESSIONS : MONTHLY_MARKET_EARLY_MATURITY_SESSIONS, MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT)
+var bool quarterlyShowDeveloping = false
+if not na(requestedQuarterlyShowDeveloping)
+    quarterlyShowDeveloping := requestedQuarterlyShowDeveloping == 1
 
 // Show Only keeps one recurring NY-time window visible.
 intradayVisualTimeframeAllowed = timeframe.in_seconds(timeframe.period) <= INTRADAY_VISUAL_MAX_TIMEFRAME_SECONDS
@@ -2517,19 +2683,13 @@ inVisibleFrom0830 = not na(time(timeframe.period, SESSION_WINDOW_FROM_0830, NY_T
 inVisibleRth = not na(time(timeframe.period, SESSION_WINDOW_RTH, NY_TIMEZONE))
 inVisibleWindow = visibleWindow == SHOW_FROM_0500 ? inVisibleFrom0500 : visibleWindow == SHOW_FROM_0830 ? inVisibleFrom0830 : visibleWindow == SHOW_RTH ? inVisibleRth : inVisibleOvernight
 // Most Recent Only keeps the selected window on the current NY date.
-inMostRecentDay = dayofmonth(time, NY_TIMEZONE) == dayofmonth(timenow, NY_TIMEZONE) and month(time, NY_TIMEZONE) == month(timenow, NY_TIMEZONE) and year(time, NY_TIMEZONE) == year(timenow, NY_TIMEZONE)
+inMostRecentDay = sameCalendarDate(time, timenow, NY_TIMEZONE)
 hideThisBar = showOnlyEnabled and intradayVisualTimeframeAllowed and not (inVisibleWindow and (not showOnlyMostRecent or inMostRecentDay))
 plotcandle(hideThisBar ? open : na, high, low, close, color=hiddenCandleColor, wickcolor=hiddenCandleColor, bordercolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROCESS
 // ═══════════════════════════════════════════════════════════════════════════════
-// Map each short-session merge mode to its fold depth and direction.
-mergeCombine(string mode) =>
-    mode == MERGE_COMBINE
-mergeDepth(string mode) =>
-    mode == MERGE_OFF ? 0 : mode == MERGE_EARLIEST ? 1 : 2
-
 levelHitDetectionEnabled = levelHitTraceEnabled and intradayVisualTimeframeAllowed
 levelHitWindowStartMinute = levelHitDetectionStartMinute()
 levelHitFallbackWindow = levelHitDetectionWindow == SHOW_FROM_0500 ? inVisibleFrom0500 : levelHitDetectionWindow == SHOW_FROM_0830 ? inVisibleFrom0830 : rthInSession
@@ -2563,14 +2723,19 @@ if valueGapsActive
     if not na(valueGapBreachHigh) and not na(valueGapBreachLow)
         updateValueGapPriceFills(valueGapRecords, valueGapBreachHigh, valueGapBreachLow)
 
-bool profileSamplesNeeded = barstate.isconfirmed and ((rthDataEnabled and rthInSession) or globexDataEnabled or weeklyStateActive or monthlyStateActive or quarterlyStateActive)
+bool profileSamplesNeeded = barstate.isconfirmed and ((rthDataEnabled and rthInSession) or globexDataEnabled or weeklyStateActive or monthlyStateActive)
 [preparedBarHighs, preparedBarLows, preparedBarVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume, profileSamplesNeeded)
 
-processAnchor(rthState, rthMergeState, rthDataEnabled, rthProfilesToShow, rthInSession, rthSessionStart, rthSessionEnd, preparedBarHighs, preparedBarLows, preparedBarVolumes, mergeDepth(rthMergeMode), mergeCombine(rthMergeMode), RTH_MERGE_SPAN_FRACTION, false, rthFilterEnabled and rthShowHistogram)
-processAnchor(globexState, globexMergeState, globexDataEnabled, globexProfilesToShow, true, globexDayStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, mergeDepth(globexMergeMode), mergeCombine(globexMergeMode), GLOBEX_MERGE_SPAN_FRACTION, true, globexFilterEnabled and globexShowHistogram)
-processAnchor(weeklyState, weeklyMergeState, weeklyStateActive, weeklyProfilesToShow, true, weeklyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, 0, false, 1.0, true, weeklyFilterEnabled and weeklyShowHistogram)
-processAnchor(monthlyState, monthlyMergeState, monthlyStateActive, monthlyProfilesToShow, true, monthlyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, 0, false, 1.0, true, monthlyFilterEnabled and monthlyShowHistogram)
-processAnchor(quarterlyState, quarterlyMergeState, quarterlyStateActive, quarterlyProfilesToShow, true, quarterlyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, 0, false, 1.0, true, quarterlyFilterEnabled and quarterlyShowHistogram)
+// Policies are allocated once; per-bar calls pass only state, events and prepared samples.
+var AnchorProcessPolicy rthProcessPolicy = newMergedAnchorProcessPolicy(rthProfilesToShow, rthMergeMode, RTH_MERGE_SPAN_FRACTION, false, rthFilterEnabled and rthShowHistogram)
+var AnchorProcessPolicy globexProcessPolicy = newMergedAnchorProcessPolicy(globexProfilesToShow, globexMergeMode, GLOBEX_MERGE_SPAN_FRACTION, true, globexFilterEnabled and globexShowHistogram)
+var AnchorProcessPolicy weeklyProcessPolicy = newCalendarAnchorProcessPolicy(weeklyProfilesToShow, weeklyFilterEnabled and weeklyShowHistogram, false)
+var AnchorProcessPolicy monthlyProcessPolicy = newCalendarAnchorProcessPolicy(monthlyProfilesToShow, monthlyFilterEnabled and monthlyShowHistogram, false)
+
+processAnchor(rthState, rthMergeState, rthProcessPolicy, rthDataEnabled, rthInSession, rthSessionStart, rthSessionEnd, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(globexState, globexMergeState, globexProcessPolicy, globexDataEnabled, true, globexDayStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(weeklyState, weeklyMergeState, weeklyProcessPolicy, weeklyStateActive, true, weeklyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(monthlyState, monthlyMergeState, monthlyProcessPolicy, monthlyStateActive, true, monthlyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
 
 if valueGapsActive
     syncValueGapProfile(valueGapSourceIsRth ? rthState.profiles : globexState.profiles, valueGapSourceProfiles, valueGapRecords)
@@ -2631,8 +2796,8 @@ if barstate.islast
         weeklyLiveProfile := buildDevelopingAnchorProfile(weeklyState, intrabarHighs, intrabarLows, intrabarVolumes, weeklyShowHistogram)
     if monthlyFilterEnabled and monthlyShowDeveloping and array.size(monthlyState.barVolumes) > 0
         monthlyLiveProfile := buildDevelopingAnchorProfile(monthlyState, intrabarHighs, intrabarLows, intrabarVolumes, monthlyShowHistogram)
-    if quarterlyFilterEnabled and quarterlyShowDeveloping and array.size(quarterlyState.barVolumes) > 0
-        quarterlyLiveProfile := buildDevelopingAnchorProfile(quarterlyState, intrabarHighs, intrabarLows, intrabarVolumes, quarterlyShowHistogram)
+    if quarterlyFilterEnabled and quarterlyShowDeveloping and not na(quarterlyDevelopingSnapshot)
+        quarterlyLiveProfile := quarterlyDevelopingSnapshot
     array<int> floatingValueGapIndices = selectValueGapFloats(valueGapRecords, valueGapFloatingActive, valueGapNearestFloats)
     int historicalGapLimit = valueGapDisplayMode == VALUE_GAP_DISPLAY_RECENT_FLOATING ? 1 : valueGapsToShow
     renderValueGaps(valueGapRecords, valueGapHistoricalActive, floatingValueGapIndices, historicalGapLimit, useUtcValueGapLabels)
@@ -2645,7 +2810,7 @@ if barstate.islast
     bool weeklyHistogramActive = weeklyFilterEnabled and weeklyShowHistogram
     bool monthlyHistogramActive = monthlyFilterEnabled and monthlyShowHistogram
     bool quarterlyHistogramActive = quarterlyFilterEnabled and quarterlyShowHistogram
-    int liveHistogramReserve = (rthHistogramActive and rthShowDeveloping and array.size(rthState.barVolumes) > 0 ? 3 : 0) + (globexHistogramActive and globexShowDeveloping and array.size(globexState.barVolumes) > 0 ? 3 : 0) + (weeklyHistogramActive and weeklyShowDeveloping and array.size(weeklyState.barVolumes) > 0 ? 3 : 0) + (monthlyHistogramActive and monthlyShowDeveloping and array.size(monthlyState.barVolumes) > 0 ? 3 : 0) + (quarterlyHistogramActive and quarterlyShowDeveloping and array.size(quarterlyState.barVolumes) > 0 ? 3 : 0)
+    int liveHistogramReserve = (rthHistogramActive and rthShowDeveloping and array.size(rthState.barVolumes) > 0 ? 3 : 0) + (globexHistogramActive and globexShowDeveloping and array.size(globexState.barVolumes) > 0 ? 3 : 0) + (weeklyHistogramActive and weeklyShowDeveloping and array.size(weeklyState.barVolumes) > 0 ? 3 : 0) + (monthlyHistogramActive and monthlyShowDeveloping and array.size(monthlyState.barVolumes) > 0 ? 3 : 0) + (quarterlyHistogramActive and quarterlyShowDeveloping and not na(quarterlyLiveProfile) ? 3 : 0)
     array<HistogramAnchor> histogramAnchors = array.new<HistogramAnchor>()
     array.push(histogramAnchors, HistogramAnchor.new(rthState.profiles, rthHistogramActive))
     array.push(histogramAnchors, HistogramAnchor.new(globexState.profiles, globexHistogramActive))
