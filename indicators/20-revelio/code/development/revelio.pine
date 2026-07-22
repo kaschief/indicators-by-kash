@@ -778,7 +778,7 @@ type SessionStyle
     bool showSweptReminderDate
     int valueAreaLastWidth
 
-// Buffered for price clustering; rank selects the merged label's visual identity and anchor price.
+// Buffered for price clustering; effectiveLineWidth orders identities while rank selects label styling.
 type PendingLabel
     float price
     int xPos
@@ -790,6 +790,7 @@ type PendingLabel
     color bgColor
     string sizeName
     int rank
+    int effectiveLineWidth
 
 // Buffered so coincident swept reminders match merged right-edge identities.
 type PendingReminder
@@ -1674,19 +1675,19 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     if extendRight or sweptDenote or hitTraceActive
         string priceText = str.tostring(price, format.mintick)
         string detailsText = levelIdentity(startTime, style, isLive, isLast, levelName, sweptDenote)
+        int effectiveLineWidth = sweptDenote ? style.sweptContinuationWidth : lineWidth
         // Buffer the right-edge label instead of drawing it; flushPendingLabels merges coincident prices.
-        array.push(pendingLabels, PendingLabel.new(price, bar_index + style.levelLabelOffset, detailsText, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank))
+        array.push(pendingLabels, PendingLabel.new(price, bar_index + style.levelLabelOffset, detailsText, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth))
         // Last and live profiles are self-evident, so only older completed profiles carry a date.
         if style.showSweptReminders and sweptDenote
             string reminderName = isLive ? style.labelLive + " " + levelName : isLast ? style.labelLast + " " + levelName : style.labelAnchor + " " + levelName + (style.showSweptReminderDate ? " " + dateText : "")
             array.push(pendingReminders, PendingReminder.new(price, endTime, reminderName, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank))
 
-// Merge nearby right-edge labels; the highest-rank member supplies the cluster's visual style.
+// Merge nearby right-edge labels; widest contributors lead while the highest rank supplies styling.
 flushPendingLabels(bool dedupe) =>
     int pendingCount = array.size(pendingLabels)
     if pendingCount > 0
         array<float> clusterPrice = array.new<float>()
-        array<string> clusterName = array.new<string>()
         array<bool> clusterWantPrice = array.new<bool>()
         array<bool> clusterHitTrace = array.new<bool>()
         array<string> clusterPriceText = array.new<string>()
@@ -1695,6 +1696,11 @@ flushPendingLabels(bool dedupe) =>
         array<string> clusterSize = array.new<string>()
         array<int> clusterRank = array.new<int>()
         array<int> clusterX = array.new<int>()
+        array<int> identityCluster = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
         for pendingIndex = 0 to pendingCount - 1
             PendingLabel pending = array.get(pendingLabels, pendingIndex)
             float tolerance = math.max(syminfo.mintick, math.abs(pending.price) * labelMergeDistancePercent / 100.0)
@@ -1707,9 +1713,6 @@ flushPendingLabels(bool dedupe) =>
                         minDistance := distance
                         foundIndex := clusterIndex
             if foundIndex >= 0
-                if pending.namePart != ""
-                    string existingName = array.get(clusterName, foundIndex)
-                    array.set(clusterName, foundIndex, existingName == "" ? pending.namePart : existingName + LABEL_NAME_SEPARATOR + pending.namePart)
                 array.set(clusterWantPrice, foundIndex, array.get(clusterWantPrice, foundIndex) or pending.wantPrice)
                 array.set(clusterHitTrace, foundIndex, array.get(clusterHitTrace, foundIndex) or pending.hitTrace)
                 array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName))
@@ -1722,7 +1725,6 @@ flushPendingLabels(bool dedupe) =>
                     array.set(clusterX, foundIndex, pending.xPos)
             else
                 array.push(clusterPrice, pending.price)
-                array.push(clusterName, pending.namePart)
                 array.push(clusterWantPrice, pending.wantPrice)
                 array.push(clusterHitTrace, pending.hitTrace)
                 array.push(clusterPriceText, pending.pricePart)
@@ -1731,8 +1733,42 @@ flushPendingLabels(bool dedupe) =>
                 array.push(clusterSize, pending.sizeName)
                 array.push(clusterRank, pending.rank)
                 array.push(clusterX, pending.xPos)
+                foundIndex := array.size(clusterPrice) - 1
+            if pending.namePart != ""
+                array.push(identityCluster, foundIndex)
+                array.push(identityName, pending.namePart)
+                array.push(identityWidth, pending.effectiveLineWidth)
+                array.push(identityRank, pending.rank)
+                array.push(identityOrder, pendingIndex)
+        array<bool> identityUsed = array.new<bool>(array.size(identityName), false)
         for clusterIndex = 0 to array.size(clusterPrice) - 1
-            string body = array.get(clusterName, clusterIndex)
+            string body = ""
+            int clusterIdentityCount = 0
+            if array.size(identityName) > 0
+                for identityIndex = 0 to array.size(identityName) - 1
+                    if array.get(identityCluster, identityIndex) == clusterIndex
+                        clusterIdentityCount += 1
+            if clusterIdentityCount > 0
+                for identityPosition = 1 to clusterIdentityCount
+                    int bestIdentityIndex = -1
+                    int bestWidth = -1
+                    int bestRank = -1
+                    int bestOrder = pendingCount
+                    for identityIndex = 0 to array.size(identityName) - 1
+                        if array.get(identityCluster, identityIndex) == clusterIndex and not array.get(identityUsed, identityIndex)
+                            int candidateWidth = array.get(identityWidth, identityIndex)
+                            int candidateRank = array.get(identityRank, identityIndex)
+                            int candidateOrder = array.get(identityOrder, identityIndex)
+                            bool betterIdentity = candidateWidth > bestWidth or (candidateWidth == bestWidth and (candidateRank > bestRank or (candidateRank == bestRank and candidateOrder < bestOrder)))
+                            if betterIdentity
+                                bestIdentityIndex := identityIndex
+                                bestWidth := candidateWidth
+                                bestRank := candidateRank
+                                bestOrder := candidateOrder
+                    if bestIdentityIndex >= 0
+                        string nextName = array.get(identityName, bestIdentityIndex)
+                        body := body == "" ? nextName : body + LABEL_NAME_SEPARATOR + nextName
+                        array.set(identityUsed, bestIdentityIndex, true)
             string labelText = array.get(clusterWantPrice, clusterIndex) ? (body == "" ? array.get(clusterPriceText, clusterIndex) : body + " " + BRAND_BULLET + " " + array.get(clusterPriceText, clusterIndex)) : body
             string finalText = array.get(clusterHitTrace, clusterIndex) ? "● " + labelText : labelText
             trackLabel(label.new(array.get(clusterX, clusterIndex), array.get(clusterPrice, clusterIndex), finalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex)), color=array.get(clusterBg, clusterIndex)))
