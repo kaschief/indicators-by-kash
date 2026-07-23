@@ -112,7 +112,6 @@ QUARTERLY_CALCULATION_TIMEFRAME = str.tostring(QUARTERLY_CALCULATION_MINUTES)
 QUARTERLY_INTRABAR_TIMEFRAME = str.tostring(QUARTERLY_INTRABAR_MINUTES)
 QUARTERLY_CALCULATION_BARS = int(QUARTERLY_LOOKBACK_DAYS * MINUTES_PER_DAY / QUARTERLY_CALCULATION_MINUTES)
 QUARTERLY_INTRABAR_BARS = int(QUARTERLY_CALCULATION_BARS * QUARTERLY_CALCULATION_MINUTES / QUARTERLY_INTRABAR_MINUTES)
-INACTIVE_REQUEST_BARS = 1
 QUARTERLY_SNAPSHOT_MINUTE = MINUTES_PER_HOUR - QUARTERLY_CALCULATION_MINUTES
 // Sparse Monday snapshots transfer histogram rows without returning a Profile object on every bar.
 QUARTERLY_UTC_WEEKLY_SNAPSHOT_HOUR = 0
@@ -2692,13 +2691,8 @@ weeklyFilterEnabled = weeklyQuickFilterActive or (isAll and weeklyEnabled)
 monthlyFilterEnabled = monthlyQuickFilterActive or (isAll and monthlyEnabled)
 quarterlyFilterEnabled = quarterlyQuickFilterActive or (isAll and quarterlyEnabled)
 
-// All Anchors tracks hidden anchors for hits without rendering them.
+// Hit Trace chooses eligible sources without owning anchor calculation.
 levelHitHiddenAnchorsActive = levelHitTraceEnabled and levelHitIncludeHiddenAnchors and levelHitTimeframeAllowed
-rthStateActive = rthFilterEnabled or levelHitHiddenAnchorsActive
-globexStateActive = globexFilterEnabled or levelHitHiddenAnchorsActive
-weeklyStateActive = weeklyFilterEnabled or levelHitHiddenAnchorsActive
-monthlyStateActive = monthlyFilterEnabled or levelHitHiddenAnchorsActive
-quarterlyStateActive = quarterlyFilterEnabled or levelHitHiddenAnchorsActive
 
 // The gaps preset changes presentation only; it does not rewrite anchor controls.
 rthEffectiveExtensionMode = rthGapsPreset ? LEVEL_BREACH_ANY : rthExtensionMode
@@ -2712,11 +2706,6 @@ globexStyle.extensionMode := globexEffectiveExtensionMode
 globexStyle.showPoc := not globexGapsPreset and globexShowPoc
 globexStyle.showAlternatePoc := not globexGapsPreset and globexShowAlternatePoc
 globexStyle.showValueArea := globexGapsPreset or globexShowValueArea
-
-// Gap detection needs the source anchor's raw samples even when a Quick Filter hides its profiles.
-rthDataEnabled = rthStateActive or (valueGapsActive and valueGapSourceIsRth)
-globexDataEnabled = globexStateActive or (valueGapsActive and not valueGapSourceIsRth)
-
 
 rthShowDeveloping     = isAll ? true : includeDevelopingRth
 globexShowDeveloping  = isAll ? true : includeDevelopingGlobex
@@ -2766,9 +2755,8 @@ utcMonthStart = calendarMonthStart(UTC_TIMEZONE)
 nyMonthStart = calendarMonthStart(NY_TIMEZONE)
 monthlyPeriodStart = selectAssetCalendarStart(useUtcCalendarAnchors, utcMonthStart, nyMonthStart)
 
-quarterlyRequestedBars = quarterlyStateActive ? QUARTERLY_CALCULATION_BARS : INACTIVE_REQUEST_BARS
 // Keep frequent remote values scalar; Profile objects cross contexts only for sparse histogram snapshots.
-[quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotHasAlternatePoc, quarterlySnapshotAlternatePocPrice, quarterlyHistogramSnapshot, quarterlyDevelopingSnapshot, requestedQuarterlyShowDeveloping] = request.security(syminfo.tickerid, QUARTERLY_CALCULATION_TIMEFRAME, fixedQuarterlyContext(quarterlyStateActive, quarterlyFilterEnabled, useUtcCalendarAnchors, quarterlyFilterEnabled and quarterlyShowHistogram), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, calc_bars_count=quarterlyRequestedBars)
+[quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotHasAlternatePoc, quarterlySnapshotAlternatePocPrice, quarterlyHistogramSnapshot, quarterlyDevelopingSnapshot, requestedQuarterlyShowDeveloping] = request.security(syminfo.tickerid, QUARTERLY_CALCULATION_TIMEFRAME, fixedQuarterlyContext(true, quarterlyFilterEnabled, useUtcCalendarAnchors, quarterlyFilterEnabled and quarterlyShowHistogram), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, calc_bars_count=QUARTERLY_CALCULATION_BARS)
 int quarterlyProfileIndex = profileIndexByStart(quarterlyState.profiles, quarterlySnapshotStartTime)
 if quarterlySnapshotStartTime != START_TIME_UNSET
     if quarterlyProfileIndex < 0
@@ -2838,8 +2826,7 @@ if valueGapsActive
     if not na(valueGapBreachHigh) and not na(valueGapBreachLow)
         updateValueGapPriceFills(valueGapRecords, valueGapBreachHigh, valueGapBreachLow)
 
-bool profileSamplesNeeded = barstate.isconfirmed and ((rthDataEnabled and rthInSession) or globexDataEnabled or weeklyStateActive or monthlyStateActive)
-[preparedBarHighs, preparedBarLows, preparedBarVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume, profileSamplesNeeded)
+[preparedBarHighs, preparedBarLows, preparedBarVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume, barstate.isconfirmed)
 
 // Policies are allocated once; per-bar calls pass only state, events and prepared samples.
 var AnchorProcessPolicy rthProcessPolicy = newMergedAnchorProcessPolicy(rthProfilesToShow, rthMergeMode, RTH_MERGE_SPAN_FRACTION, false, rthFilterEnabled and rthShowHistogram)
@@ -2847,32 +2834,32 @@ var AnchorProcessPolicy globexProcessPolicy = newMergedAnchorProcessPolicy(globe
 var AnchorProcessPolicy weeklyProcessPolicy = newCalendarAnchorProcessPolicy(weeklyProfilesToShow, weeklyFilterEnabled and weeklyShowHistogram, false)
 var AnchorProcessPolicy monthlyProcessPolicy = newCalendarAnchorProcessPolicy(monthlyProfilesToShow, monthlyFilterEnabled and monthlyShowHistogram, false)
 
-processAnchor(rthState, rthMergeState, rthProcessPolicy, rthDataEnabled, rthInSession, rthSessionStart, rthSessionEnd, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
-processAnchor(globexState, globexMergeState, globexProcessPolicy, globexDataEnabled, true, globexDayStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
-processAnchor(weeklyState, weeklyMergeState, weeklyProcessPolicy, weeklyStateActive, true, weeklyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
-processAnchor(monthlyState, monthlyMergeState, monthlyProcessPolicy, monthlyStateActive, true, monthlyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(rthState, rthMergeState, rthProcessPolicy, true, rthInSession, rthSessionStart, rthSessionEnd, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(globexState, globexMergeState, globexProcessPolicy, true, true, globexDayStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(weeklyState, weeklyMergeState, weeklyProcessPolicy, true, true, weeklyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
+processAnchor(monthlyState, monthlyMergeState, monthlyProcessPolicy, true, true, monthlyPeriodStart, false, preparedBarHighs, preparedBarLows, preparedBarVolumes, barstate.isconfirmed)
 
 if valueGapsActive
     syncValueGapProfile(valueGapSourceIsRth ? rthState.profiles : globexState.profiles, valueGapSourceProfiles, valueGapRecords)
 
-rthMitigationActive = rthStateActive and (rthEffectiveExtensionMode == LEVEL_BREACH_ANY or rthEffectiveExtensionMode == LEVEL_BREACH_SAME)
-globexMitigationActive = globexStateActive and globexEffectiveExtensionMode == LEVEL_BREACH_ANY
-weeklyMitigationActive = weeklyStateActive and weeklyExtensionMode == LEVEL_BREACH_ANY
-monthlyMitigationActive = monthlyStateActive and monthlyExtensionMode == LEVEL_BREACH_ANY
-quarterlyMitigationActive = quarterlyStateActive and quarterlyExtensionMode == LEVEL_BREACH_ANY
+rthMitigationActive = rthEffectiveExtensionMode == LEVEL_BREACH_ANY or rthEffectiveExtensionMode == LEVEL_BREACH_SAME
+globexMitigationActive = globexEffectiveExtensionMode == LEVEL_BREACH_ANY
+weeklyMitigationActive = weeklyExtensionMode == LEVEL_BREACH_ANY
+monthlyMitigationActive = monthlyExtensionMode == LEVEL_BREACH_ANY
+quarterlyMitigationActive = quarterlyExtensionMode == LEVEL_BREACH_ANY
 rthDevelopingProfileActive = rthFilterEnabled and rthInSession and rthDevelopingEnabled and isBeforeNyCutoff(rthDevelopingCutoffHour, rthDevelopingCutoffMinute)
-rthSweepActive = rthStateActive and rthEffectiveExtensionMode == LEVEL_BREACH_SWEEP
-globexSweepActive = globexStateActive and globexEffectiveExtensionMode == LEVEL_BREACH_SWEEP
-weeklySweepActive = weeklyStateActive and weeklyExtensionMode == LEVEL_BREACH_SWEEP
-monthlySweepActive = monthlyStateActive and monthlyExtensionMode == LEVEL_BREACH_SWEEP
-quarterlySweepActive = quarterlyStateActive and quarterlyExtensionMode == LEVEL_BREACH_SWEEP
+rthSweepActive = rthEffectiveExtensionMode == LEVEL_BREACH_SWEEP
+globexSweepActive = globexEffectiveExtensionMode == LEVEL_BREACH_SWEEP
+weeklySweepActive = weeklyExtensionMode == LEVEL_BREACH_SWEEP
+monthlySweepActive = monthlyExtensionMode == LEVEL_BREACH_SWEEP
+quarterlySweepActive = quarterlyExtensionMode == LEVEL_BREACH_SWEEP
 levelHitDetectionActive = levelHitDetectionEnabled and not na(levelHitHigh) and not na(levelHitLow)
 levelHitTracePresentationActive = levelHitDetectionEnabled and (levelHitKeep != LEVEL_HIT_KEEP_DETECTION_WINDOW or levelHitDetectionActive)
-rthHitTraceSourceActive = levelHitDetectionEnabled and rthStateActive and rthEffectiveExtensionMode != LEVEL_PERIOD
-globexHitTraceSourceActive = levelHitDetectionEnabled and globexStateActive and globexEffectiveExtensionMode != LEVEL_PERIOD
-weeklyHitTraceSourceActive = levelHitDetectionEnabled and weeklyStateActive and weeklyExtensionMode != LEVEL_PERIOD
-monthlyHitTraceSourceActive = levelHitDetectionEnabled and monthlyStateActive and monthlyExtensionMode != LEVEL_PERIOD
-quarterlyHitTraceSourceActive = levelHitDetectionEnabled and quarterlyStateActive and quarterlyExtensionMode != LEVEL_PERIOD
+rthHitTraceSourceActive = levelHitDetectionEnabled and (rthFilterEnabled or levelHitHiddenAnchorsActive) and rthEffectiveExtensionMode != LEVEL_PERIOD
+globexHitTraceSourceActive = levelHitDetectionEnabled and (globexFilterEnabled or levelHitHiddenAnchorsActive) and globexEffectiveExtensionMode != LEVEL_PERIOD
+weeklyHitTraceSourceActive = levelHitDetectionEnabled and (weeklyFilterEnabled or levelHitHiddenAnchorsActive) and weeklyExtensionMode != LEVEL_PERIOD
+monthlyHitTraceSourceActive = levelHitDetectionEnabled and (monthlyFilterEnabled or levelHitHiddenAnchorsActive) and monthlyExtensionMode != LEVEL_PERIOD
+quarterlyHitTraceSourceActive = levelHitDetectionEnabled and (quarterlyFilterEnabled or levelHitHiddenAnchorsActive) and quarterlyExtensionMode != LEVEL_PERIOD
 
 if barstate.isconfirmed
     float sweepMarginFraction = sweepConfirmMarginPercent / 100.0
