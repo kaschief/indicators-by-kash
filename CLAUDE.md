@@ -2,15 +2,19 @@
 
 ## Development Naming Rule
 
+The suffix is ` development`, appended after the brand bullet. Never `-dev`.
+
 **During Development**
 
-- Append "-dev" to every indicator title
-- This signals the indicator is in active development
+- Append " development" to the indicator title the moment you begin changing it
+- Applies to any indicator you touch that does not already carry the suffix
+- Adding it is part of the change, not a separate step
 
-**During Final Commit**
+**Removing the Suffix**
 
-- Automatically remove "-dev" from the title before build or publish
-- The production version should never contain the "-dev" suffix
+- Remove it ONLY after the user explicitly approves the work
+- Never strip it preemptively "before commit" or "before build"
+- The production version never contains the suffix
 
 ### Example
 
@@ -18,7 +22,7 @@
 // During development
 indicator("deviations • development", overlay=true, ...)
 
-// Before final commit/publish
+// After the user approves
 indicator("deviations •", overlay=true, ...)
 ```
 
