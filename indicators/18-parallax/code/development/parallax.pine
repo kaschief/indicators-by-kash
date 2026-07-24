@@ -55,6 +55,11 @@ const int SECS_WEEK      = 604800
 const int SECS_MONTH_AVG = 2629800
 const int SECS_4_WEEKS   = 2419200
 const int MS_PER_SEC     = 1000
+const int TIME_HISTORY_BUFFER_SIZE = 5000
+const int BAR_INDEX_DRAWING_LOOKBACK = TIME_HISTORY_BUFFER_SIZE - 1
+const int BAR_INDEX_DRAWING_LOOKAHEAD = 500
+
+max_bars_back(time, TIME_HISTORY_BUFFER_SIZE)
 
 const string LBL_TINY   = "Tiny"
 const string LBL_SMALL  = "Small"
@@ -165,7 +170,7 @@ lookbackN  = input.int(100, "Lookback", group=GROUP_GENERAL, minval=10, maxval=5
      tooltip="Maximum HTF candles for the expansion stats. Effective N is min(this, available HTF bars).")
 
 // Consolidated row tooltip — Pine only renders the tooltip on the last inline input.
-const string SLOT_ROW_TOOLTIP = "Slot row controls (left → right):\n\n• Enable — toggle this slot on/off\n• Manual — use the TF picker beside it (otherwise auto-pairs to N tiers above chart)\n• TF — manual timeframe (only applied when Manual is on)\n• Color — slot identity color\n• History — total visible zones (1 = current only, N = current + N−1 past)\n• Fib — draw fib levels for this slot (count comes from the global Fib History in the Fibonacci group)"
+const string SLOT_ROW_TOOLTIP = "Slot row controls (left → right):\n\n• Enable — toggle this slot on/off\n• Manual — use the TF picker beside it (otherwise auto-pairs to N tiers above chart)\n• TF — manual timeframe; Range charts use this picker because they have no time interval\n• Color — slot identity color\n• History — total visible zones (1 = current only, N = current + N−1 past)\n• Fib — draw fib levels for this slot (count comes from the global Fib History in the Fibonacci group)"
 
 const string SLOT_LABEL_MANUAL    = "Manual"
 const string SLOT_LABEL_FIB       = "Fib"
@@ -358,50 +363,52 @@ string CHART_TF = timeframe.period
 [s3AutoValid, s3AutoTF, s3AutoLabel] = get_tf_pairing(CHART_TF, 3)
 [s4AutoValid, s4AutoTF, s4AutoLabel] = get_tf_pairing(CHART_TF, 4)
 
-string s1TF    = slot1Manual ? slot1TFIn : (s1AutoValid ? s1AutoTF : "1D")
-bool   s1Valid = slot1Show and (slot1Manual or s1AutoValid) and timeframe.in_seconds(s1TF) > timeframe.in_seconds()
+string s1TF    = (slot1Manual or chart.is_range) ? slot1TFIn : (s1AutoValid ? s1AutoTF : "1D")
+bool   s1Valid = slot1Show and (slot1Manual or chart.is_range or s1AutoValid) and (chart.is_range or timeframe.in_seconds(s1TF) > timeframe.in_seconds())
 string s1Safe  = s1Valid ? s1TF : "1D"
 string s1Label = get_tf_display_label(s1TF)
 string s1ZoneLabel = zoneLabelMode == TAG_SOURCE ? s1Label + " ¹" : s1Label
 
-string s2TF    = slot2Manual ? slot2TFIn : (s2AutoValid ? s2AutoTF : "1D")
-bool   s2Valid = slot2Show and (slot2Manual or s2AutoValid) and timeframe.in_seconds(s2TF) > timeframe.in_seconds()
+string s2TF    = (slot2Manual or chart.is_range) ? slot2TFIn : (s2AutoValid ? s2AutoTF : "1D")
+bool   s2Valid = slot2Show and (slot2Manual or chart.is_range or s2AutoValid) and (chart.is_range or timeframe.in_seconds(s2TF) > timeframe.in_seconds())
 string s2Safe  = s2Valid ? s2TF : "1D"
 string s2Label = get_tf_display_label(s2TF)
 string s2ZoneLabel = zoneLabelMode == TAG_SOURCE ? s2Label + " ²" : s2Label
 
-string s3TF    = slot3Manual ? slot3TFIn : (s3AutoValid ? s3AutoTF : "1D")
-bool   s3Valid = slot3Show and (slot3Manual or s3AutoValid) and timeframe.in_seconds(s3TF) > timeframe.in_seconds()
+string s3TF    = (slot3Manual or chart.is_range) ? slot3TFIn : (s3AutoValid ? s3AutoTF : "1D")
+bool   s3Valid = slot3Show and (slot3Manual or chart.is_range or s3AutoValid) and (chart.is_range or timeframe.in_seconds(s3TF) > timeframe.in_seconds())
 string s3Safe  = s3Valid ? s3TF : "1D"
 string s3Label = get_tf_display_label(s3TF)
 string s3ZoneLabel = zoneLabelMode == TAG_SOURCE ? s3Label + " ³" : s3Label
 
-string s4TF    = slot4Manual ? slot4TFIn : (s4AutoValid ? s4AutoTF : "1D")
-bool   s4Valid = slot4Show and (slot4Manual or s4AutoValid) and timeframe.in_seconds(s4TF) > timeframe.in_seconds()
+string s4TF    = (slot4Manual or chart.is_range) ? slot4TFIn : (s4AutoValid ? s4AutoTF : "1D")
+bool   s4Valid = slot4Show and (slot4Manual or chart.is_range or s4AutoValid) and (chart.is_range or timeframe.in_seconds(s4TF) > timeframe.in_seconds())
 string s4Safe  = s4Valid ? s4TF : "1D"
 string s4Label = get_tf_display_label(s4TF)
 string s4ZoneLabel = zoneLabelMode == TAG_SOURCE ? s4Label + " ⁴" : s4Label
 
 // HTF DATA — running high/low are tracked chart-side; request.security with lookahead_on
 // for high/low on an in-progress HTF bar is unreliable in Pine v6 with tuple returns.
-fetch_htf_open(string tf) =>
-    request.security(syminfo.tickerid, tf, open, lookahead=barmerge.lookahead_on)
+string htfTickerId = chart.is_range ? ticker.standard(syminfo.tickerid) : syminfo.tickerid
 
-fetch_htf_stats(string tf) =>
-    request.security(syminfo.tickerid, tf,
+fetch_htf_open(string tickerId, string tf) =>
+    request.security(tickerId, tf, open, lookahead=barmerge.lookahead_on)
+
+fetch_htf_stats(string tickerId, string tf) =>
+    request.security(tickerId, tf,
          [ta.median(high - open, lookbackN), ta.sma(high - open, lookbackN), ta.stdev(high - open, lookbackN),
           ta.median(open - low,  lookbackN), ta.sma(open - low,  lookbackN), ta.stdev(open - low,  lookbackN)],
          lookahead=barmerge.lookahead_off)
 
-s1O = fetch_htf_open(s1Safe)
-s2O = fetch_htf_open(s2Safe)
-s3O = fetch_htf_open(s3Safe)
-s4O = fetch_htf_open(s4Safe)
+s1O = fetch_htf_open(htfTickerId, s1Safe)
+s2O = fetch_htf_open(htfTickerId, s2Safe)
+s3O = fetch_htf_open(htfTickerId, s3Safe)
+s4O = fetch_htf_open(htfTickerId, s4Safe)
 
-[s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL] = fetch_htf_stats(s1Safe)
-[s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL] = fetch_htf_stats(s2Safe)
-[s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL] = fetch_htf_stats(s3Safe)
-[s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL] = fetch_htf_stats(s4Safe)
+[s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL] = fetch_htf_stats(htfTickerId, s1Safe)
+[s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL] = fetch_htf_stats(htfTickerId, s2Safe)
+[s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL] = fetch_htf_stats(htfTickerId, s3Safe)
+[s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL] = fetch_htf_stats(htfTickerId, s4Safe)
 
 var float s1RunHigh = na
 var float s1RunLow  = na
@@ -452,11 +459,13 @@ int  nativeShifted = time + NATIVE_SHIFT_MS
 int  nativeTradeId = year(nativeShifted, NATIVE_TZ) * 10000 + month(nativeShifted, NATIVE_TZ) * 100 + dayofmonth(nativeShifted, NATIVE_TZ)
 bool nativeNewDay  = ta.change(nativeTradeId) != 0
 var int   nativeDayStart = na
+var int   nativeDayStartIndex = na
 var float nativeOpen     = na
 var float nativeRunHigh  = na
 var float nativeRunLow   = na
 if nativeNewDay or na(nativeDayStart)
     nativeDayStart := time
+    nativeDayStartIndex := bar_index
     nativeOpen     := open
     nativeRunHigh  := high
     nativeRunLow   := low
@@ -468,11 +477,13 @@ else
 // holiday-shifted "W" bar (e.g. a Friday Juneteenth would otherwise break the week early).
 bool nativeNewWeek = nativeNewDay and dayofweek(time, NATIVE_TZ) == dayofweek.sunday
 var int   nativeWeekStartT  = na
+var int   nativeWeekStartIndex = na
 var float nativeWeekOpen    = na
 var float nativeWeekRunHigh = na
 var float nativeWeekRunLow  = na
 if nativeNewWeek or na(nativeWeekStartT)
     nativeWeekStartT  := time
+    nativeWeekStartIndex := bar_index
     nativeWeekOpen    := open
     nativeWeekRunHigh := high
     nativeWeekRunLow  := low
@@ -515,12 +526,26 @@ var SlotState slot4 = new_slot()
 zone_fill_color(color slotColor) =>
     showZoneFill ? color.new(slotColor, zoneFillTransparency) : color.new(color.white, 100)
 
-make_zone_box(int leftT, float top, int rightT, float bottom, color fillClr, color slotColor, string txt, string slotLabelSize) =>
-    box.new(leftT, top, rightT, bottom,
-         bgcolor=fillClr, border_color=na, xloc=xloc.bar_time,
+drawing_x(int timeX, int indexX) =>
+    chart.is_range ? math.min(math.max(na(indexX) ? bar_index : indexX, bar_index - BAR_INDEX_DRAWING_LOOKBACK), bar_index + BAR_INDEX_DRAWING_LOOKAHEAD) : timeX
+
+drawing_xloc() =>
+    chart.is_range ? xloc.bar_index : xloc.bar_time
+
+make_zone_box(int leftT, int leftIndex, float top, int rightT, int rightIndex, float bottom, color fillClr, color slotColor, string txt, string slotLabelSize) =>
+    box.new(drawing_x(leftT, leftIndex), top, drawing_x(rightT, rightIndex), bottom,
+         bgcolor=fillClr, border_color=na, xloc=drawing_xloc(),
          text=txt, text_color=color.new(slotColor, LABEL_TEXT_TRANSPARENCY),
          text_size=get_label_size(slotLabelSize),
          text_halign=text.align_center, text_valign=text.align_center)
+
+make_horizontal_line(int leftT, int leftIndex, int rightT, int rightIndex, float price, color lineColor, string lineStyle, int lineWidth) =>
+    line.new(drawing_x(leftT, leftIndex), price, drawing_x(rightT, rightIndex), price,
+         color=lineColor, style=lineStyle, width=lineWidth, xloc=drawing_xloc())
+
+make_fib_label(int anchorT, int anchorIndex, float price, string txt, string labelStyle, color textColor, string labelSize) =>
+    label.new(drawing_x(anchorT, anchorIndex), price, txt, xloc=drawing_xloc(), style=labelStyle,
+         color=color.new(color.white, 100), textcolor=textColor, size=labelSize)
 
 // Returns [innerHigh, outerHigh, innerLow, outerLow, distPlus, distMinus]
 compute_levels(float htfO, float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL, float k) =>
@@ -530,8 +555,8 @@ compute_levels(float htfO, float medHO, float meanHO, float stdHO, float medOL, 
      htfO - meanOL - k * stdOL]
 
 // Pushes one line per visible fib level into `target`. Anchors define 0% / 100% of the fib range.
-push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost,
-               array<label> labelTarget, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs) =>
+push_fib_lines(array<line> target, int leftT, int leftIndex, int rightT, int rightIndex, float anchorHigh, float anchorLow, int transparencyBoost,
+               array<label> labelTarget, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs, int labelOffsetBars) =>
     if not na(anchorHigh) and not na(anchorLow)
         float fibRange = anchorHigh - anchorLow
 
@@ -550,7 +575,7 @@ push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, floa
                 color baseClr = array.get(colors, i)
                 // Clamp at 95 so higher-tier slots never become fully invisible.
                 color clr     = color.new(baseClr, math.min(int(color.t(baseClr)) + transparencyBoost, 95))
-                array.push(target, line.new(leftT, price, rightT, price, color=clr, style=line.style_dotted, width=array.get(widths, i), xloc=xloc.bar_time))
+                array.push(target, make_horizontal_line(leftT, leftIndex, rightT, rightIndex, price, clr, line.style_dotted, array.get(widths, i)))
 
                 if drawLabels and (not keyOnly or array.get(isKeyLevel, i))
                     // Tint label text to match its line, but pull transparency down so faint levels stay legible.
@@ -559,35 +584,35 @@ push_fib_lines(array<line> target, int leftT, int rightT, float anchorHigh, floa
                     // Offset pushes each tag outward from its anchor edge (right tags later, left tags earlier)
                     // so slots whose zones end on the same bar don't stack their tags on one x-coordinate.
                     if labelPos == POS_RIGHT or labelPos == POS_BOTH
-                        array.push(labelTarget, label.new(rightT + labelOffsetMs, price, lblText, xloc=xloc.bar_time, style=label.style_label_left,  color=color.new(color.white, 100), textcolor=txtClr, size=labelSize))
+                        array.push(labelTarget, make_fib_label(rightT + labelOffsetMs, rightIndex + labelOffsetBars, price, lblText, label.style_label_left, txtClr, labelSize))
                     if labelPos == POS_LEFT or labelPos == POS_BOTH
-                        array.push(labelTarget, label.new(leftT - labelOffsetMs,  price, lblText, xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.white, 100), textcolor=txtClr, size=labelSize))
+                        array.push(labelTarget, make_fib_label(leftT - labelOffsetMs, leftIndex - labelOffsetBars, price, lblText, label.style_label_right, txtClr, labelSize))
 
-draw_slot_fib(SlotState s, int leftT, int rightT, float anchorHigh, float anchorLow, int transparencyBoost, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs) =>
-    push_fib_lines(s.fibLines, leftT, rightT, anchorHigh, anchorLow, transparencyBoost, s.fibLabels, tfLabel, drawLabels, labelSize, labelPos, labelOffsetMs)
+draw_slot_fib(SlotState s, int leftT, int leftIndex, int rightT, int rightIndex, float anchorHigh, float anchorLow, int transparencyBoost, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs, int labelOffsetBars) =>
+    push_fib_lines(s.fibLines, leftT, leftIndex, rightT, rightIndex, anchorHigh, anchorLow, transparencyBoost, s.fibLabels, tfLabel, drawLabels, labelSize, labelPos, labelOffsetMs, labelOffsetBars)
 
-// Resolves a slot's rollover signal + zone anchors + effective open/run-high/low, applying the
-// daily holiday override. Returns [transitionNow, zoneStart, curLeft, curRight, open, runHigh, runLow].
+// Resolves a slot's rollover, dual-coordinate anchors, and effective open/run-high/low.
 resolve_slot_timing(string safe, float normOpen, float normRunHigh, float normRunLow,
-                    bool nNewDay, int nDayStart, float nOpen, float nRunHigh, float nRunLow,
-                    bool nNewWeek, int nWeekStart, float nwOpen, float nwRunHigh, float nwRunLow) =>
+                    bool nNewDay, int nDayStart, int nDayStartIndex, float nOpen, float nRunHigh, float nRunLow,
+                    bool nNewWeek, int nWeekStart, int nWeekStartIndex, float nwOpen, float nwRunHigh, float nwRunLow) =>
     bool isDaily   = timeframe.in_seconds(safe) == SECS_DAY
     bool isWeekly  = timeframe.in_seconds(safe) == SECS_WEEK
     int  normStart = time(safe)
     int  normRight = normStart + timeframe.in_seconds(safe) * MS_PER_SEC
     bool normTrans = ta.change(time(safe)) != 0
+    int  normStartIndex = nz(ta.valuewhen(normTrans, bar_index, 0), 0)
     if isDaily and holidayMode == HOLIDAY_NATIVE
-        [nNewDay, nDayStart, nDayStart, nDayStart + SECS_DAY * MS_PER_SEC, nOpen, nRunHigh, nRunLow]
+        [nNewDay, nDayStart, nDayStartIndex, nDayStart + SECS_DAY * MS_PER_SEC, nOpen, nRunHigh, nRunLow]
     else if isWeekly and holidayMode == HOLIDAY_NATIVE
-        [nNewWeek, nWeekStart, nWeekStart, nWeekStart + SECS_WEEK * MS_PER_SEC, nwOpen, nwRunHigh, nwRunLow]
+        [nNewWeek, nWeekStart, nWeekStartIndex, nWeekStart + SECS_WEEK * MS_PER_SEC, nwOpen, nwRunHigh, nwRunLow]
     else if isDaily and holidayMode == HOLIDAY_EXTEND
-        [normTrans, normStart, normStart, (normRight > time ? normRight : time), normOpen, normRunHigh, normRunLow]
+        [normTrans, normStart, normStartIndex, (normRight > time ? normRight : time), normOpen, normRunHigh, normRunLow]
     else
-        [normTrans, normStart, normStart, normRight, normOpen, normRunHigh, normRunLow]
+        [normTrans, normStart, normStartIndex, normRight, normOpen, normRunHigh, normRunLow]
 
 // On HTF transition, [1] reads give us the just-closed bar's open + the stats as of its
 // start (i.e. excluding it) — exactly what was used to project that bar in real time.
-update_slot(SlotState s, bool valid, bool transitionNow, int zoneStart, float htfO, float runHigh, float runLow, color slotColor, string htfLabel,
+update_slot(SlotState s, bool valid, bool transitionNow, int zoneStartT, int zoneStartIndex, float htfO, float runHigh, float runLow, color slotColor, string htfLabel,
              float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
              int historyN, string slotLabelSize,
              bool fibEnabled, int fibFade) =>
@@ -615,20 +640,22 @@ update_slot(SlotState s, bool valid, bool transitionNow, int zoneStart, float ht
 
         if not na(prevO) and not na(prevMedHO) and not na(prevMedOL)
             [h_innH, h_outH, h_innL, h_outL, h_distP, h_distM] = compute_levels(prevO, prevMedHO, prevMeanHO, prevStdHO, prevMedOL, prevMeanOL, prevStdOL, distSigmaK)
-            bar_l = zoneStart[1]
-            bar_r = zoneStart
+            bar_l_t = zoneStartT[1]
+            bar_r_t = zoneStartT
+            bar_l_index = zoneStartIndex[1]
+            bar_r_index = zoneStartIndex
 
             if effectiveCap > 0
                 if showZoneFill
                     color fillClr = zone_fill_color(slotColor)
-                    array.push(s.histBoxes, make_zone_box(bar_l, h_outH, bar_r, h_innH, fillClr, slotColor, "", slotLabelSize))
-                    array.push(s.histBoxes, make_zone_box(bar_l, h_innL, bar_r, h_outL, fillClr, slotColor, "", slotLabelSize))
+                    array.push(s.histBoxes, make_zone_box(bar_l_t, bar_l_index, h_outH, bar_r_t, bar_r_index, h_innH, fillClr, slotColor, "", slotLabelSize))
+                    array.push(s.histBoxes, make_zone_box(bar_l_t, bar_l_index, h_innL, bar_r_t, bar_r_index, h_outL, fillClr, slotColor, "", slotLabelSize))
                     while array.size(s.histBoxes) > effectiveCap
                         box.delete(array.shift(s.histBoxes))
 
                 if showDist and not na(prevStdHO) and not na(prevStdOL)
-                    array.push(s.histDistLines, line.new(bar_l, h_distP, bar_r, h_distP, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time))
-                    array.push(s.histDistLines, line.new(bar_l, h_distM, bar_r, h_distM, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time))
+                    array.push(s.histDistLines, make_horizontal_line(bar_l_t, bar_l_index, bar_r_t, bar_r_index, h_distP, slotColor, get_line_style(distStyle), 1))
+                    array.push(s.histDistLines, make_horizontal_line(bar_l_t, bar_l_index, bar_r_t, bar_r_index, h_distM, slotColor, get_line_style(distStyle), 1))
                     while array.size(s.histDistLines) > effectiveCap
                         line.delete(array.shift(s.histDistLines))
 
@@ -637,13 +664,13 @@ update_slot(SlotState s, bool valid, bool transitionNow, int zoneStart, float ht
                 float prevRunLow    = runLow[1]
                 float histAnchorHigh = fibTrailing ? math.max(h_outH, prevRunHigh) : h_outH
                 float histAnchorLow  = fibTrailing ? math.min(h_outL, prevRunLow)  : h_outL
-                push_fib_lines(s.histFibLines, bar_l, bar_r, histAnchorHigh, histAnchorLow, fibFade, s.fibLabels, htfLabel, false, slotLabelSize, POS_RIGHT, 0)
+                push_fib_lines(s.histFibLines, bar_l_t, bar_l_index, bar_r_t, bar_r_index, histAnchorHigh, histAnchorLow, fibFade, s.fibLabels, htfLabel, false, slotLabelSize, POS_RIGHT, 0, 0)
                 while array.size(s.histFibLines) > fibHistCap
                     line.delete(array.shift(s.histFibLines))
 
-draw_slot_current(SlotState s, bool valid, string htfSafe, int curLeft, int curRight, float htfO, float htfH, float htfL, color slotColor, string htfLabel,
+draw_slot_current(SlotState s, bool valid, string htfSafe, int curLeftT, int curLeftIndex, int curRightT, int curRightIndex, float htfO, float htfH, float htfL, color slotColor, string htfLabel,
                    float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
-                   string slotLabelSize, bool fibEnabled, int fibTransparencyBoost, bool labelSlotEnabled, string fibLabelSize, string fibLabelPos, int fibLabelOffsetMs) =>
+                   string slotLabelSize, bool fibEnabled, int fibTransparencyBoost, bool labelSlotEnabled, string fibLabelSize, string fibLabelPos, int fibLabelOffsetMs, int fibLabelOffsetBars) =>
     // Null after delete so toggling a feature off mid-session leaves no dangling handle.
     if not na(s.fillUp)
         box.delete(s.fillUp)
@@ -683,48 +710,45 @@ draw_slot_current(SlotState s, bool valid, string htfSafe, int curLeft, int curR
     if valid and not na(medHO) and not na(medOL)
         [innerHigh, outerHigh, innerLow, outerLow, distPlus, distMinus] = compute_levels(htfO, medHO, meanHO, stdHO, medOL, meanOL, stdOL, distSigmaK)
 
-        leftT  = curLeft
-        rightT = curRight
-
         bool   tagCurrent = zoneLabelMode != TAG_OFF
         string boxText    = tagCurrent ? htfLabel : ""
         color  fillClr    = zone_fill_color(slotColor)
         if showZoneFill or tagCurrent
-            s.fillUp := make_zone_box(leftT, outerHigh, rightT, innerHigh, fillClr, slotColor, boxText, slotLabelSize)
-            s.fillLo := make_zone_box(leftT, innerLow,  rightT, outerLow,  fillClr, slotColor, boxText, slotLabelSize)
+            s.fillUp := make_zone_box(curLeftT, curLeftIndex, outerHigh, curRightT, curRightIndex, innerHigh, fillClr, slotColor, boxText, slotLabelSize)
+            s.fillLo := make_zone_box(curLeftT, curLeftIndex, innerLow, curRightT, curRightIndex, outerLow, fillClr, slotColor, boxText, slotLabelSize)
 
-        s.innH := line.new(leftT, innerHigh, rightT, innerHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-        s.innL := line.new(leftT, innerLow,  rightT, innerLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-        s.outH := line.new(leftT, outerHigh, rightT, outerHigh, color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
-        s.outL := line.new(leftT, outerLow,  rightT, outerLow,  color=slotColor, style=line.style_solid, width=1, xloc=xloc.bar_time)
+        s.innH := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, innerHigh, slotColor, line.style_solid, 1)
+        s.innL := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, innerLow, slotColor, line.style_solid, 1)
+        s.outH := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, outerHigh, slotColor, line.style_solid, 1)
+        s.outL := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, outerLow, slotColor, line.style_solid, 1)
 
         if showMidline
             float midUpY = (innerHigh + outerHigh) / 2
             float midDnY = (innerLow  + outerLow)  / 2
-            s.midUp := line.new(leftT, midUpY, rightT, midUpY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
-            s.midDn := line.new(leftT, midDnY, rightT, midDnY, color=midlineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
+            s.midUp := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, midUpY, midlineColor, line.style_dashed, 1)
+            s.midDn := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, midDnY, midlineColor, line.style_dashed, 1)
 
         if showDist
-            s.distP := line.new(leftT, distPlus,  rightT, distPlus,  color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time)
-            s.distM := line.new(leftT, distMinus, rightT, distMinus, color=slotColor, style=get_line_style(distStyle), width=1, xloc=xloc.bar_time)
+            s.distP := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, distPlus, slotColor, get_line_style(distStyle), 1)
+            s.distM := make_horizontal_line(curLeftT, curLeftIndex, curRightT, curRightIndex, distMinus, slotColor, get_line_style(distStyle), 1)
 
         if fibEnabled
             float fibAnchorHigh = fibTrailing ? math.max(outerHigh, htfH) : outerHigh
             float fibAnchorLow  = fibTrailing ? math.min(outerLow,  htfL) : outerLow
-            draw_slot_fib(s, leftT, rightT, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, get_tf_display_label(htfSafe), labelSlotEnabled, fibLabelSize, fibLabelPos, fibLabelOffsetMs)
+            draw_slot_fib(s, curLeftT, curLeftIndex, curRightT, curRightIndex, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, get_tf_display_label(htfSafe), labelSlotEnabled, fibLabelSize, fibLabelPos, fibLabelOffsetMs, fibLabelOffsetBars)
 
 
 // DISPATCH — every bar maintains state per slot
 
-[s1Trans, s1Start, s1CurL, s1CurR, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s2Trans, s2Start, s2CurL, s2CurR, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s3Trans, s3Start, s3CurL, s3CurR, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s4Trans, s4Start, s4CurL, s4CurR, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, nativeNewDay, nativeDayStart, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s1Trans, s1StartT, s1StartIndex, s1CurRightT, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s2Trans, s2StartT, s2StartIndex, s2CurRightT, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s3Trans, s3StartT, s3StartIndex, s3CurRightT, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s4Trans, s4StartT, s4StartIndex, s4CurRightT, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
 
-update_slot(slot1, s1Valid, s1Trans, s1Start, s1OEff, s1RHi, s1RLo, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, slot1History, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE)
-update_slot(slot2, s2Valid, s2Trans, s2Start, s2OEff, s2RHi, s2RLo, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, slot2History, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE)
-update_slot(slot3, s3Valid, s3Trans, s3Start, s3OEff, s3RHi, s3RLo, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, slot3History, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE)
-update_slot(slot4, s4Valid, s4Trans, s4Start, s4OEff, s4RHi, s4RLo, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, slot4History, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE)
+update_slot(slot1, s1Valid, s1Trans, s1StartT, s1StartIndex, s1OEff, s1RHi, s1RLo, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, slot1History, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE)
+update_slot(slot2, s2Valid, s2Trans, s2StartT, s2StartIndex, s2OEff, s2RHi, s2RLo, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, slot2History, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE)
+update_slot(slot3, s3Valid, s3Trans, s3StartT, s3StartIndex, s3OEff, s3RHi, s3RLo, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, slot3History, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE)
+update_slot(slot4, s4Valid, s4Trans, s4StartT, s4StartIndex, s4OEff, s4RHi, s4RLo, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, slot4History, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE)
 
 bool fibLabelsOn = fibLabelLevels != FL_OFF
 bool fibLabel1On = fibLabelsOn and fibLabelSlot1
@@ -732,14 +756,15 @@ bool fibLabel2On = fibLabelsOn and fibLabelSlot2
 bool fibLabel3On = fibLabelsOn and fibLabelSlot3
 bool fibLabel4On = fibLabelsOn and fibLabelSlot4
 
-// Offset inputs are in chart bars; convert to the bar_time delta the labels are placed against.
-int chartBarMs = timeframe.in_seconds(timeframe.period) * MS_PER_SEC
+// Standard charts convert bar offsets to time; Range charts use the offsets directly.
+int chartBarMs = chart.is_range ? 0 : int(timeframe.in_seconds(timeframe.period) * MS_PER_SEC)
+int currentRightIndex = chart.is_range ? bar_index + 1 : bar_index
 
 if barstate.islast
-    draw_slot_current(slot1, s1Valid, s1Safe, s1CurL, s1CurR, s1OEff, s1RHi, s1RLo, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE, fibLabel1On, get_label_size(fibLabelSize1), fibLabelPos1, fibLabelOff1 * chartBarMs)
-    draw_slot_current(slot2, s2Valid, s2Safe, s2CurL, s2CurR, s2OEff, s2RHi, s2RLo, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE, fibLabel2On, get_label_size(fibLabelSize2), fibLabelPos2, fibLabelOff2 * chartBarMs)
-    draw_slot_current(slot3, s3Valid, s3Safe, s3CurL, s3CurR, s3OEff, s3RHi, s3RLo, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLabel3On, get_label_size(fibLabelSize3), fibLabelPos3, fibLabelOff3 * chartBarMs)
-    draw_slot_current(slot4, s4Valid, s4Safe, s4CurL, s4CurR, s4OEff, s4RHi, s4RLo, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLabel4On, get_label_size(fibLabelSize4), fibLabelPos4, fibLabelOff4 * chartBarMs)
+    draw_slot_current(slot1, s1Valid, s1Safe, s1StartT, s1StartIndex, s1CurRightT, currentRightIndex, s1OEff, s1RHi, s1RLo, slot1Color, s1ZoneLabel, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE, fibLabel1On, get_label_size(fibLabelSize1), fibLabelPos1, fibLabelOff1 * chartBarMs, fibLabelOff1)
+    draw_slot_current(slot2, s2Valid, s2Safe, s2StartT, s2StartIndex, s2CurRightT, currentRightIndex, s2OEff, s2RHi, s2RLo, slot2Color, s2ZoneLabel, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE, fibLabel2On, get_label_size(fibLabelSize2), fibLabelPos2, fibLabelOff2 * chartBarMs, fibLabelOff2)
+    draw_slot_current(slot3, s3Valid, s3Safe, s3StartT, s3StartIndex, s3CurRightT, currentRightIndex, s3OEff, s3RHi, s3RLo, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLabel3On, get_label_size(fibLabelSize3), fibLabelPos3, fibLabelOff3 * chartBarMs, fibLabelOff3)
+    draw_slot_current(slot4, s4Valid, s4Safe, s4StartT, s4StartIndex, s4CurRightT, currentRightIndex, s4OEff, s4RHi, s4RLo, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLabel4On, get_label_size(fibLabelSize4), fibLabelPos4, fibLabelOff4 * chartBarMs, fibLabelOff4)
 
 // COLOR REFERENCE TABLE
 
