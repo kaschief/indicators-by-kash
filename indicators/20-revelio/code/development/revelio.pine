@@ -284,7 +284,7 @@ LABEL_TABLE_SETTING = "Setting"
 LABEL_TABLE_RGB = "RGB"
 LABEL_TABLE_TRANSPARENCY = "Trans"
 LABEL_TABLE_WIDTH = "Width"
-TOOLTIP_LEVEL_HIT_TRACE = "Marks the first hit inside the selected detection window for completed POC, aPOC, VAH and VAL levels. Hover for identity and time.\n\n• All Anchors — include hidden anchors without drawing them.\n• Fixed — selected circle size.\n• Scale by Anchor — RTH/Globex Normal; Weekly Large; Monthly/Quarterly Huge.\n• Nearby hits on the same candle share one circle, even when label merging is off.\n• A circle leaves when its source profile leaves Show Last.\n• Under drawing pressure, newest circles are retained first.\n\nUp to 1 hour."
+TOOLTIP_LEVEL_HIT_TRACE = "Marks the first hit inside the selected detection window for completed POC, aPOC, VAH and VAL levels. Live hits appear on the realtime update that trades through the level. Hover for identity and time.\n\n• All Anchors — include hidden anchors without drawing them.\n• Fixed — selected circle size.\n• Scale by Anchor — RTH/Globex Normal; Weekly Large; Monthly/Quarterly Huge.\n• Nearby hits on the same candle share one circle, even when label merging is off.\n• A circle leaves when its source profile leaves Show Last.\n• Under drawing pressure, newest circles are retained first.\n\nUp to 1 hour."
 TOOLTIP_LEVEL_HIT_WINDOW = "Detect\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\n\nKeep\nRetains the most recent detection days. Session-based assets skip weekends; 24/7 assets count them. The next day begins when its selected detection window starts."
 
 LABEL_LAST_VALUE_AREA_COLOR = "Last VAH/L"
@@ -705,6 +705,7 @@ type Profile
 
 type LevelHitEvent
     int hitTime
+    int barTime
     float price
     string sourceProfileKey
     string key
@@ -2094,7 +2095,8 @@ levelHitTimeText(int hitTime) =>
 renderLevelHitCircles(array<LevelHitEvent> events, bool tracePresentationActive) =>
     int eventCount = array.size(events)
     if tracePresentationActive and eventCount > 0
-        array<int> groupTimes = array.new<int>()
+        array<int> groupBarTimes = array.new<int>()
+        array<int> groupHitTimes = array.new<int>()
         array<float> groupPrices = array.new<float>()
         array<color> groupColors = array.new<color>()
         array<string> groupSizes = array.new<string>()
@@ -2108,9 +2110,9 @@ renderLevelHitCircles(array<LevelHitEvent> events, bool tracePresentationActive)
             if levelHitTraceActive(hitEvent.hitTime, tracePresentationActive)
                 int groupIndex = -1
                 float tolerance = labelMergeTolerance(hitEvent.price)
-                if array.size(groupTimes) > 0
-                    for candidateIndex = 0 to array.size(groupTimes) - 1
-                        bool sameCandle = array.get(groupTimes, candidateIndex) == hitEvent.hitTime
+                if array.size(groupBarTimes) > 0
+                    for candidateIndex = 0 to array.size(groupBarTimes) - 1
+                        bool sameCandle = array.get(groupBarTimes, candidateIndex) == hitEvent.barTime
                         bool samePrice = math.abs(array.get(groupPrices, candidateIndex) - hitEvent.price) <= tolerance
                         if sameCandle and samePrice
                             groupIndex := candidateIndex
@@ -2118,24 +2120,26 @@ renderLevelHitCircles(array<LevelHitEvent> events, bool tracePresentationActive)
                 if groupIndex >= 0
                     array.set(groupSizes, groupIndex, largerLabelSize(array.get(groupSizes, groupIndex), hitEvent.circleSize))
                 else
-                    array.push(groupTimes, hitEvent.hitTime)
+                    array.push(groupBarTimes, hitEvent.barTime)
+                    array.push(groupHitTimes, hitEvent.hitTime)
                     array.push(groupPrices, hitEvent.price)
                     array.push(groupColors, hitEvent.lineColor)
                     array.push(groupSizes, hitEvent.circleSize)
-                    groupIndex := array.size(groupTimes) - 1
+                    groupIndex := array.size(groupBarTimes) - 1
                 array.push(identityGroup, groupIndex)
                 array.push(identityName, hitEvent.identity)
                 array.push(identityWidth, hitEvent.effectiveLineWidth)
                 array.push(identityRank, hitEvent.rank)
                 array.push(identityOrder, eventIndex)
-        if array.size(groupTimes) > 0
-            for groupIndex = array.size(groupTimes) - 1 to 0
-                int hitTime = array.get(groupTimes, groupIndex)
+        if array.size(groupBarTimes) > 0
+            for groupIndex = array.size(groupBarTimes) - 1 to 0
+                int barTime = array.get(groupBarTimes, groupIndex)
+                int hitTime = array.get(groupHitTimes, groupIndex)
                 float hitPrice = array.get(groupPrices, groupIndex)
                 color hitColor = array.get(groupColors, groupIndex)
                 string identities = orderedClusterIdentities(groupIndex, "\n", eventCount, identityGroup, identityName, identityWidth, identityRank, identityOrder)
                 string tooltipText = identities + "\nHit " + levelHitTimeText(hitTime)
-                trackLabel(label.new(hitTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(hitColor, 0), size=toLabelSize(array.get(groupSizes, groupIndex)), tooltip=tooltipText))
+                trackLabel(label.new(barTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(hitColor, 0), size=toLabelSize(array.get(groupSizes, groupIndex)), tooltip=tooltipText))
     true
 
 // Scale visible opacity so fading respects the base transparency.
@@ -2462,26 +2466,28 @@ registerLevelHitSourceProfiles(map<string, bool> retainedSourceProfiles, array<P
             map.put(retainedSourceProfiles, levelHitSourceProfileKey(profile.startTime, style), true)
     true
 
-levelAlreadyMarkedToday(array<LevelHitEvent> events, string key) =>
-    bool marked = false
+levelMarkedTimeToday(array<LevelHitEvent> events, string key) =>
+    int markedTime = na
     if array.size(events) > 0
         for eventIndex = array.size(events) - 1 to 0
             LevelHitEvent hitEvent = array.get(events, eventIndex)
             if not sameNyDate(hitEvent.hitTime, time)
                 break
             if hitEvent.key == key
-                marked := true
+                markedTime := hitEvent.hitTime
                 break
-    marked
+    markedTime
 
 processLevelHit(float levelPrice, int previousHitTime, string sourceProfileKey, string key, string identity, color lineColor, string circleSize, int effectiveLineWidth, int rank, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
     bool hitNow = not na(hitHigh) and not na(hitLow) and hitLow <= levelPrice and hitHigh >= levelPrice
-    bool firstHitToday = hitNow and not levelAlreadyMarkedToday(events, key)
+    int markedTime = levelMarkedTimeToday(events, key)
+    bool firstHitToday = hitNow and na(markedTime)
     if firstHitToday
-        array.push(events, LevelHitEvent.new(time, levelPrice, sourceProfileKey, key, identity, lineColor, circleSize, effectiveLineWidth, rank))
+        markedTime := barstate.isrealtime ? timenow : time
+        array.push(events, LevelHitEvent.new(markedTime, time, levelPrice, sourceProfileKey, key, identity, lineColor, circleSize, effectiveLineWidth, rank))
         while array.size(events) > MAX_LEVEL_HIT_EVENTS
             array.shift(events)
-    firstHitToday ? time : previousHitTime
+    not na(markedTime) ? markedTime : previousHitTime
 
 // Hit presentation is independent of mitigation and sweep completion.
 updateLevelHitTrace(array<Profile> profiles, bool active, SessionStyle style, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
@@ -2645,7 +2651,7 @@ var table colorTable = na
 
 var array<Profile> valueGapSourceProfiles = array.new<Profile>()
 var array<ValueGap> valueGapRecords = array.new<ValueGap>()
-var array<LevelHitEvent> levelHitEvents = array.new<LevelHitEvent>()
+varip array<LevelHitEvent> levelHitEvents = array.new<LevelHitEvent>()
 var map<string, bool> retainedLevelHitSourceProfiles = map.new<string, bool>()
 var AnchorState rthState = newAnchorState()
 var AnchorState globexState = newAnchorState()
@@ -2812,6 +2818,13 @@ if levelHitDetectionEnabled and not levelHitUsesRthWindow and priceWindowMayCont
     [calculatedHitHigh, calculatedHitLow] = priceWindowRange(levelHitWindowStartMinute, intrabarHighs, intrabarLows, intrabarTimes, isTwentyFourSevenAsset, levelHitFallbackWindow)
     levelHitHigh := calculatedHitHigh
     levelHitLow := calculatedHitLow
+bool liveTickEligibleForHitTrace = barstate.isrealtime and nyPriceWindowTimestampEligible(timenow, levelHitWindowStartMinute, isTwentyFourSevenAsset)
+if levelHitDetectionEnabled and liveTickEligibleForHitTrace and not na(close)
+    bool fullLiveBarEligibleForHitTrace = nyPriceWindowTimestampEligible(time, levelHitWindowStartMinute, isTwentyFourSevenAsset)
+    float liveHitHigh = fullLiveBarEligibleForHitTrace ? high : close
+    float liveHitLow = fullLiveBarEligibleForHitTrace ? low : close
+    levelHitHigh := na(levelHitHigh) ? liveHitHigh : math.max(levelHitHigh, liveHitHigh)
+    levelHitLow := na(levelHitLow) ? liveHitLow : math.min(levelHitLow, liveHitLow)
 
 if valueGapsActive
     bool valueGapFallbackWindow = valueGapFillWindow == WINDOW_LABEL_FROM_0500 ? inVisibleFrom0500 : valueGapFillWindow == WINDOW_LABEL_FROM_0830 ? inVisibleFrom0830 : rthInSession
@@ -2861,23 +2874,24 @@ weeklyHitTraceSourceActive = levelHitDetectionEnabled and (weeklyFilterEnabled o
 monthlyHitTraceSourceActive = levelHitDetectionEnabled and (monthlyFilterEnabled or levelHitHiddenAnchorsActive) and monthlyExtensionMode != LEVEL_PERIOD
 quarterlyHitTraceSourceActive = levelHitDetectionEnabled and (quarterlyFilterEnabled or levelHitHiddenAnchorsActive) and quarterlyExtensionMode != LEVEL_PERIOD
 
+map.clear(retainedLevelHitSourceProfiles)
+registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, rthState.profiles, rthHitTraceSourceActive, rthStyle)
+registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, globexState.profiles, globexHitTraceSourceActive, globexStyle)
+registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, weeklyState.profiles, weeklyHitTraceSourceActive, weeklyStyle)
+registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, monthlyState.profiles, monthlyHitTraceSourceActive, monthlyStyle)
+registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, quarterlyState.profiles, quarterlyHitTraceSourceActive, quarterlyStyle)
+updateLevelHitTrace(rthState.profiles, levelHitDetectionActive and rthHitTraceSourceActive, rthStyle, levelHitEvents, levelHitHigh, levelHitLow)
+updateLevelHitTrace(globexState.profiles, levelHitDetectionActive and globexHitTraceSourceActive, globexStyle, levelHitEvents, levelHitHigh, levelHitLow)
+updateLevelHitTrace(weeklyState.profiles, levelHitDetectionActive and weeklyHitTraceSourceActive, weeklyStyle, levelHitEvents, levelHitHigh, levelHitLow)
+updateLevelHitTrace(monthlyState.profiles, levelHitDetectionActive and monthlyHitTraceSourceActive, monthlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
+updateLevelHitTrace(quarterlyState.profiles, levelHitDetectionActive and quarterlyHitTraceSourceActive, quarterlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
+pruneLevelHitEvents(levelHitEvents, levelHitTracePresentationActive, retainedLevelHitSourceProfiles)
+
 if barstate.isconfirmed
     float sweepMarginFraction = sweepConfirmMarginPercent / 100.0
     bool mitigationRangeNeeded = rthMitigationActive or globexMitigationActive or weeklyMitigationActive or monthlyMitigationActive or quarterlyMitigationActive
     float mitigationBreachHigh = mitigationRangeNeeded ? (array.size(intrabarHighs) > 0 ? array.max(intrabarHighs) : high) : na
     float mitigationBreachLow = mitigationRangeNeeded ? (array.size(intrabarLows) > 0 ? array.min(intrabarLows) : low) : na
-    map.clear(retainedLevelHitSourceProfiles)
-    registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, rthState.profiles, rthHitTraceSourceActive, rthStyle)
-    registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, globexState.profiles, globexHitTraceSourceActive, globexStyle)
-    registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, weeklyState.profiles, weeklyHitTraceSourceActive, weeklyStyle)
-    registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, monthlyState.profiles, monthlyHitTraceSourceActive, monthlyStyle)
-    registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, quarterlyState.profiles, quarterlyHitTraceSourceActive, quarterlyStyle)
-    updateLevelHitTrace(rthState.profiles, levelHitDetectionActive and rthHitTraceSourceActive, rthStyle, levelHitEvents, levelHitHigh, levelHitLow)
-    updateLevelHitTrace(globexState.profiles, levelHitDetectionActive and globexHitTraceSourceActive, globexStyle, levelHitEvents, levelHitHigh, levelHitLow)
-    updateLevelHitTrace(weeklyState.profiles, levelHitDetectionActive and weeklyHitTraceSourceActive, weeklyStyle, levelHitEvents, levelHitHigh, levelHitLow)
-    updateLevelHitTrace(monthlyState.profiles, levelHitDetectionActive and monthlyHitTraceSourceActive, monthlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
-    updateLevelHitTrace(quarterlyState.profiles, levelHitDetectionActive and quarterlyHitTraceSourceActive, quarterlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
-    pruneLevelHitEvents(levelHitEvents, levelHitTracePresentationActive, retainedLevelHitSourceProfiles)
     updateAnchorLevels(rthState, rthMitigationActive, rthEffectiveExtensionMode == LEVEL_BREACH_SAME, rthInSession, rthSweepActive, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction)
     updateAnchorLevels(globexState, globexMitigationActive, false, true, globexSweepActive, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction)
     updateAnchorLevels(weeklyState, weeklyMitigationActive, false, true, weeklySweepActive, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction)
