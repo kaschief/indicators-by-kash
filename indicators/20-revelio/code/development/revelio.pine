@@ -128,12 +128,10 @@ DEFAULT_GLOBEX_PROFILES = 10
 DEFAULT_WEEKLY_PROFILES = 5
 DEFAULT_MONTHLY_PROFILES = 2
 DEFAULT_QUARTERLY_PROFILES = 2
-DEFAULT_FOCUS_COUNT = 10
+DEFAULT_FOCUS_COUNT = 5
 // Retention is destructive and runs before the anchor is known, so Focus always searches this deep.
 FOCUS_SEARCH_DEPTH = 250
 DAILY_PROFILE_ANCHOR_COUNT = 2
-FOCUS_ANCHOR_TRANSPARENCY = 55
-FOCUS_ANCHOR_WIDTH = 1
 RTH_SWEPT_CONTINUATION_WIDTH = 1
 GLOBEX_SWEPT_CONTINUATION_WIDTH = 1
 WEEKLY_SWEPT_CONTINUATION_WIDTH = 2
@@ -249,6 +247,8 @@ LABEL_VALUE_AREA_HIGH_LOW = "VAH/L"
 LABEL_VAH = "VAH"
 LABEL_VAL = "VAL"
 LABEL_POC = "POC"
+LABEL_FOCUS_ANCHOR = "MANUAL FOCUS ANCHOR"
+LABEL_FOCUS_ANCHOR_UNSET = "MANUAL FOCUS ANCHOR UNSET"
 LABEL_ALTERNATE_POC = "aPOC"
 LABEL_ENABLE_VALUE_GAPS = "Enable Value Gaps"
 LABEL_HISTOGRAM = "Histogram"
@@ -259,6 +259,7 @@ LABEL_SHORT_SESSION_MERGE = "Merge Short Session"
 LABEL_LEVEL_LABELS = "Price Labels"
 LABEL_LEVEL_LABEL_OFFSET = "Price Label Offset"
 LABEL_LEVEL_LABEL_BACKGROUND = "Price Label Background"
+LABEL_MANUAL_FOCUS_ANCHOR = "Manual Focus Anchor"
 LABEL_DEVELOPING_PROFILE = "Style Developing Profile"
 LABEL_SWEPT = "Swept"
 LABEL_SWEEP_CONFIRM_MARGIN = "Sweep Confirmation Percent Margin"
@@ -347,7 +348,8 @@ TOOLTIP_MONTHLY_PROFILES = "Recent Monthly profiles to keep and draw in every Qu
 TOOLTIP_QUARTERLY_PROFILES = "Recent Quarterly profiles to keep and draw in every Quick Filter mode."
 TOOLTIP_DAILY_PROFILE_BOOST = "Temporarily replaces the active daily Show Last counts with the selected depth.\n\n• Intraday — RTH + Globex.\n• RTH Only — RTH.\n• Globex Only — Globex.\n• Off — restore the normal counts.\n\nRTH and Globex remain editable while boosted; changes apply when Boost is Off. Inactive while Intraday Focus is on."
 TOOLTIP_FOCUS = "Nearest whole RTH/Globex profiles to the anchor. Count is per anchor."
-TOOLTIP_FOCUS_ANCHOR = "Manual uses the Price level, drawn dotted."
+TOOLTIP_FOCUS_ANCHOR = "Manual uses the Price level, drawn solid and tagged in the right margin."
+TOOLTIP_FOCUS_SWEPT = "Focused profiles carry their swept levels to the right edge, ignoring the Sweep keep windows."
 TOOLTIP_DEVELOPING_RTH = "Show today's developing RTH profile outside Manual mode."
 TOOLTIP_DEVELOPING_GLOBEX = "Show the developing Globex profile outside Manual mode."
 TOOLTIP_DEVELOPING_WEEKLY = "Weekly current profile:\n• Auto — show when mature.\n• On — always show.\n• Off — hide."
@@ -415,6 +417,10 @@ focusAnchorMode = input.string(FOCUS_ANCHOR_PRICE, "Anchor", options=[FOCUS_ANCH
 focusManualAnchorSelected = focusSelected and focusAnchorMode == FOCUS_ANCHOR_MANUAL
 // No tooltip: TradingView renders an interactive input's tooltip as a banner across the chart.
 focusManualPrice = input.price(0.0, "Price", inline="focus_anchor", group=GROUP_QUICK_FILTER_FOCUS, active=focusManualAnchorSelected)
+focusManualPricePlaced = not na(focusManualPrice) and focusManualPrice > 0
+focusAnchorColor = input.color(color.new(color.rgb(242, 54, 69), 0), LABEL_MANUAL_FOCUS_ANCHOR, inline="focus_anchor_style", group=GROUP_QUICK_FILTER_FOCUS, active=focusManualAnchorSelected)
+focusAnchorWidth = input.int(2, "", options=[1, 2, 3, 4, 5], inline="focus_anchor_style", group=GROUP_QUICK_FILTER_FOCUS, active=focusManualAnchorSelected)
+focusSurfaceSweptLevels = input.bool(true, "Swept Levels", inline="focus_swept", group=GROUP_QUICK_FILTER_FOCUS, active=focusSelected, tooltip=TOOLTIP_FOCUS_SWEPT)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Quick Filter: Settings
@@ -694,7 +700,7 @@ labelMergeDistancePercent = labelMergePreset == LABEL_MERGE_STRICT ? LABEL_MERGE
 // INPUTS — Right Edge
 // ═══════════════════════════════════════════════════════════════════════════════
 levelLabelOffset = input.int(20, LABEL_LEVEL_LABEL_OFFSET, minval=0, maxval=100, tooltip="Shift price labels this many bars into the right margin.", group=GROUP_RIGHT_EDGE)
-floatingValueGapOffset = input.int(24, "Floating Gaps · Offset", minval=1, maxval=100, inline="right_edge_floating", group=GROUP_RIGHT_EDGE, active=valueGapFloatingControlsActive)
+floatingValueGapOffset = input.int(100, "Floating Gaps · Offset", minval=1, maxval=100, inline="right_edge_floating", group=GROUP_RIGHT_EDGE, active=valueGapFloatingControlsActive)
 floatingValueGapWidth = input.int(10, "Width", minval=2, maxval=50, inline="right_edge_floating", group=GROUP_RIGHT_EDGE, active=valueGapFloatingControlsActive, tooltip="Offset sets where floating confirmed gaps begin. Width sets their horizontal bar width.")
 upcomingValueGapOffset = input.int(10, "Upcoming Gap · Offset", minval=1, maxval=100, inline="right_edge_upcoming", group=GROUP_RIGHT_EDGE, active=upcomingValueGapControlsActive)
 upcomingValueGapWidth = input.int(10, "Width", minval=2, maxval=50, inline="right_edge_upcoming", group=GROUP_RIGHT_EDGE, active=upcomingValueGapControlsActive, tooltip="Offset sets where the Upcoming gap begins. Width sets its horizontal bar width.")
@@ -929,6 +935,7 @@ type RenderBudgetAnchor
     bool histogramEnabled
     array<bool> focusSelections
     bool restrictToFocus
+    bool surfaceSweptLevels
 
 // One completed profile competing for a Focus slot.
 type FocusCandidate
@@ -2230,10 +2237,10 @@ profileLastBreach(Profile profile) =>
     latest := profile.hasAlternatePoc ? maxBreachTime(latest, profile.alternatePocBreachTime) : latest
     latest
 
-profileSweptContinuationVisible(Profile profile, bool isMostRecentCompleted, string extensionMode, int sweptKeepMs) =>
+profileSweptContinuationVisible(Profile profile, bool isMostRecentCompleted, string extensionMode, int sweptKeepMs, bool focusSurfaced) =>
     int lastBreach = profileLastBreach(profile)
     bool withinKeepWindow = sweptKeepMs > 0 and not na(lastBreach) and time - lastBreach <= sweptKeepMs
-    extensionMode == LEVEL_BREACH_SWEEP and (isMostRecentCompleted or withinKeepWindow)
+    extensionMode == LEVEL_BREACH_SWEEP and (isMostRecentCompleted or focusSurfaced or withinKeepWindow)
 
 // The value area splits the silhouette into at most three runs (below/inside/above VA), one polyline each.
 histogramRunCount(Profile profile) =>
@@ -2261,11 +2268,14 @@ profileFocusDistance(Profile profile, SessionStyle style, float focusPrice, stri
     nearest
 
 // An unplaced manual anchor falls back to price.
-focusAnchorPrice(string anchorMode, float manualPrice, float currentPrice) =>
-    anchorMode == FOCUS_ANCHOR_MANUAL and not na(manualPrice) and manualPrice > 0 ? manualPrice : currentPrice
+focusAnchorPrice(string anchorMode, float manualPrice, bool manualPlaced, float currentPrice) =>
+    anchorMode == FOCUS_ANCHOR_MANUAL and manualPlaced ? manualPrice : currentPrice
 
 renderBudgetProfileAllowed(RenderBudgetAnchor anchor, int profileIndex) =>
     not anchor.restrictToFocus or array.get(anchor.focusSelections, profileIndex)
+
+anchorSurfacesSweptLevels(RenderBudgetAnchor anchor, int profileIndex) =>
+    anchor.restrictToFocus and anchor.surfaceSweptLevels and array.get(anchor.focusSelections, profileIndex)
 
 // Ties resolve to the newer profile.
 focusCandidateOutranks(FocusCandidate candidate, FocusCandidate other) =>
@@ -2318,18 +2328,20 @@ selectFocusedProfiles(array<RenderBudgetAnchor> anchors, int dailyAnchorCount, f
                         array.set(anchor.focusSelections, array.get(ranked, rankedIndex).profileIndex, true)
     true
 
-// A manual anchor draws its own reference line.
-renderFocusAnchor(bool anchorVisible, float anchorPrice) =>
+// A manual anchor draws its own reference line, tagged in the right margin so it can be found and dragged.
+renderFocusAnchor(bool anchorVisible, float anchorPrice, bool anchorPlaced, color anchorColor, int anchorWidth) =>
     if anchorVisible and not na(anchorPrice) and anchorPrice > 0
-        trackLine(line.new(time[1], anchorPrice, time, anchorPrice, xloc=xloc.bar_time, extend=extend.both, color=color.new(chart.fg_color, FOCUS_ANCHOR_TRANSPARENCY), width=FOCUS_ANCHOR_WIDTH, style=line.style_dotted))
+        trackLine(line.new(time[1], anchorPrice, time, anchorPrice, xloc=xloc.bar_time, extend=extend.both, color=anchorColor, width=anchorWidth, style=line.style_solid))
+        string anchorText = (anchorPlaced ? LABEL_FOCUS_ANCHOR : LABEL_FOCUS_ANCHOR_UNSET) + " " + str.tostring(anchorPrice, format.mintick)
+        trackLabel(label.new(bar_index + levelLabelOffset, anchorPrice, anchorText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=anchorColor, size=size.small, color=levelLabelBgColor))
     true
 
 // Must mirror every level-line emission path in renderProfile and drawLevel.
-profileLineCount(Profile profile, SessionStyle style, bool isMostRecentCompleted) =>
+profileLineCount(Profile profile, SessionStyle style, bool isMostRecentCompleted, bool focusSurfaced) =>
     int lineCount = 0
     if not na(profile)
         if profile.isValid
-            bool profileDenote = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs)
+            bool profileDenote = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs, focusSurfaced)
             if style.showPoc
                 lineCount += 1 + (profileDenote and not na(profile.pocBreachTime) ? 1 : 0)
             if style.showAlternatePoc and profile.hasAlternatePoc
@@ -2341,7 +2353,7 @@ profileLineCount(Profile profile, SessionStyle style, bool isMostRecentCompleted
     lineCount
 
 liveProfileLineCount(Profile profile, bool enabled, SessionStyle style) =>
-    enabled and not na(profile) ? profileLineCount(profile, style, false) : 0
+    enabled and not na(profile) ? profileLineCount(profile, style, false, false) : 0
 
 newestCandidateEndTime(array<Profile> profiles, int candidateIndex) =>
     candidateIndex >= 0 ? nz(array.get(profiles, candidateIndex).endTime, -1) : -1
@@ -2414,7 +2426,7 @@ allocateProfileBudget(array<RenderBudgetAnchor> anchors, int budget, bool histog
             Profile chosen = array.get(newestAnchor.profiles, newestProfileIndex)
             bool isMostRecentCompleted = newestProfileIndex == array.size(newestAnchor.profiles) - 1
             bool profileAllowed = renderBudgetProfileAllowed(newestAnchor, newestProfileIndex)
-            int cost = not profileAllowed ? 0 : histogramBudget ? histogramRunCount(chosen) : profileLineCount(chosen, newestAnchor.style, isMostRecentCompleted)
+            int cost = not profileAllowed ? 0 : histogramBudget ? histogramRunCount(chosen) : profileLineCount(chosen, newestAnchor.style, isMostRecentCompleted, anchorSurfacesSweptLevels(newestAnchor, newestProfileIndex))
             if cost > remaining
                 exhausted := true
             else
@@ -2437,7 +2449,7 @@ registerRenderedLevelHitKey(map<string, bool> renderedLevelHitKeys, Profile prof
         map.put(renderedLevelHitKeys, levelHitKey(sourceProfileKey, levelName), true)
     true
 
-renderProfile(Profile profile, SessionStyle style, bool developingProfileActive, bool isMostRecentCompleted, bool isLive, bool histogramAllowed, bool levelsAllowed, bool hitTraceWindowActive, map<string, bool> renderedLevelHitKeys) =>
+renderProfile(Profile profile, SessionStyle style, bool developingProfileActive, bool isMostRecentCompleted, bool focusSurfaced, bool isLive, bool histogramAllowed, bool levelsAllowed, bool hitTraceWindowActive, map<string, bool> renderedLevelHitKeys) =>
     if profile.isValid
         float priceRange = profile.priceHigh - profile.priceLow
         bool useDevelopingColors = developingProfileActive and style.developingEnabled
@@ -2475,8 +2487,8 @@ renderProfile(Profile profile, SessionStyle style, bool developingProfileActive,
         if style.showSessionBox
             trackBox(box.new(left=profile.startTime, top=profile.priceHigh, right=profile.endTime, bottom=profile.priceLow, xloc=xloc.bar_time, border_width=0, bgcolor=style.sessionBoxColor))
 
-        // Retain the newest swept profile and older profiles still inside their keep window.
-        bool profileDenote = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs)
+        // Retain the newest swept profile, focus-surfaced profiles, and older profiles still inside their keep window.
+        bool profileDenote = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs, focusSurfaced)
         if levelsAllowed and style.showPoc
             [pocRight, pocExtend] = levelEndpoint(profile.endTime, profile.pocBreachTime, style.extensionMode)
             color pocBaseColor = useDevelopingColors ? style.developingColor : style.pocColor
@@ -2703,7 +2715,8 @@ updateLevelHitTrace(array<Profile> profiles, bool active, SessionStyle style, ar
             if time > profile.endTime
                 string sourceProfileKey = levelHitSourceProfileKey(profile.startTime, style)
                 bool isMostRecentCompleted = profileIndex == profileCount - 1
-                bool sweptContinuationVisible = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs)
+                // Focus selection exists only on the last bar, so hit tracing keeps to the keep windows.
+                bool sweptContinuationVisible = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs, false)
                 bool pocSweptDenote = sweptContinuationVisible and not na(profile.pocBreachTime)
                 bool vahSweptDenote = sweptContinuationVisible and not na(profile.valueAreaHighBreachTime)
                 bool valSweptDenote = sweptContinuationVisible and not na(profile.valueAreaLowBreachTime)
@@ -2780,9 +2793,9 @@ renderAnchor(RenderBudgetAnchor anchor, Profile liveProfile, bool developingProf
                     bool histogramAllowed = profileIndex >= histogramFromIndex
                     // Focused profiles draw whole or not at all.
                     bool focusWholeProfile = not anchor.restrictToFocus or not anchor.histogramEnabled or histogramAllowed
-                    renderProfile(array.get(anchor.profiles, profileIndex), anchor.style, false, profileIndex == profileCount - 1, false, histogramAllowed, profileIndex >= lineFromIndex and focusWholeProfile, hitTraceWindowActive, renderedLevelHitKeys)
+                    renderProfile(array.get(anchor.profiles, profileIndex), anchor.style, false, profileIndex == profileCount - 1, anchorSurfacesSweptLevels(anchor, profileIndex), false, histogramAllowed, profileIndex >= lineFromIndex and focusWholeProfile, hitTraceWindowActive, renderedLevelHitKeys)
         if showDeveloping and not na(liveProfile)
-            renderProfile(liveProfile, anchor.style, developingProfileActive, false, true, true, true, false, renderedLevelHitKeys)
+            renderProfile(liveProfile, anchor.style, developingProfileActive, false, false, true, true, true, false, renderedLevelHitKeys)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
@@ -3154,15 +3167,16 @@ if barstate.islast
     bool monthlyHistogramActive = monthlyFilterEnabled and monthlyShowHistogram
     bool quarterlyHistogramActive = quarterlyFilterEnabled and quarterlyShowHistogram
     bool focusActive = focusSelected and (rthFilterEnabled or globexFilterEnabled)
-    float focusAnchor = focusAnchorPrice(focusAnchorMode, focusManualPrice, close)
-    renderFocusAnchor(focusActive and focusAnchorMode == FOCUS_ANCHOR_MANUAL, focusAnchor)
+    float focusAnchor = focusAnchorPrice(focusAnchorMode, focusManualPrice, focusManualPricePlaced, close)
+    bool focusManualAnchorVisible = focusActive and focusAnchorMode == FOCUS_ANCHOR_MANUAL
+    renderFocusAnchor(focusManualAnchorVisible, focusAnchor, focusManualPricePlaced, focusAnchorColor, focusAnchorWidth)
     int liveHistogramReserve = (rthHistogramActive and rthShowDeveloping and array.size(rthState.barVolumes) > 0 ? 3 : 0) + (globexHistogramActive and globexShowDeveloping and array.size(globexState.barVolumes) > 0 ? 3 : 0) + (weeklyHistogramActive and weeklyShowDeveloping and array.size(weeklyState.barVolumes) > 0 ? 3 : 0) + (monthlyHistogramActive and monthlyShowDeveloping and array.size(monthlyState.barVolumes) > 0 ? 3 : 0) + (quarterlyHistogramActive and quarterlyShowDeveloping and not na(quarterlyLiveProfile) ? 3 : 0)
     array<RenderBudgetAnchor> renderBudgetAnchors = array.new<RenderBudgetAnchor>()
-    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(rthState.profiles, rthStyle, rthFilterEnabled, rthHistogramActive, array.new<bool>(), focusActive and rthFilterEnabled))
-    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(globexState.profiles, globexStyle, globexFilterEnabled, globexHistogramActive, array.new<bool>(), focusActive and globexFilterEnabled))
-    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(weeklyState.profiles, weeklyStyle, weeklyFilterEnabled, weeklyHistogramActive, array.new<bool>(), false))
-    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(monthlyState.profiles, monthlyStyle, monthlyFilterEnabled, monthlyHistogramActive, array.new<bool>(), false))
-    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(quarterlyState.profiles, quarterlyStyle, quarterlyFilterEnabled, quarterlyHistogramActive, array.new<bool>(), false))
+    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(rthState.profiles, rthStyle, rthFilterEnabled, rthHistogramActive, array.new<bool>(), focusActive and rthFilterEnabled, focusSurfaceSweptLevels))
+    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(globexState.profiles, globexStyle, globexFilterEnabled, globexHistogramActive, array.new<bool>(), focusActive and globexFilterEnabled, focusSurfaceSweptLevels))
+    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(weeklyState.profiles, weeklyStyle, weeklyFilterEnabled, weeklyHistogramActive, array.new<bool>(), false, false))
+    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(monthlyState.profiles, monthlyStyle, monthlyFilterEnabled, monthlyHistogramActive, array.new<bool>(), false, false))
+    array.push(renderBudgetAnchors, RenderBudgetAnchor.new(quarterlyState.profiles, quarterlyStyle, quarterlyFilterEnabled, quarterlyHistogramActive, array.new<bool>(), false, false))
     if focusActive
         selectFocusedProfiles(renderBudgetAnchors, DAILY_PROFILE_ANCHOR_COUNT, focusAnchor, focusDirection, focusProfileCount)
         trimFocusToBudget(renderBudgetAnchors, DAILY_PROFILE_ANCHOR_COUNT, focusAnchor, focusDirection, INDICATOR_MAX_POLYLINES - liveHistogramReserve)
@@ -3192,11 +3206,13 @@ if barstate.islast
     flushPendingReminders(dedupeLabels)
 
     if showColorTable
-        bool hasLevelLabelBackground = sessionLevelLabelsActive(rthFilterEnabled, rthStyle) or sessionLevelLabelsActive(globexFilterEnabled, globexStyle) or sessionLevelLabelsActive(weeklyFilterEnabled, weeklyStyle) or sessionLevelLabelsActive(monthlyFilterEnabled, monthlyStyle) or sessionLevelLabelsActive(quarterlyFilterEnabled, quarterlyStyle)
+        bool hasLevelLabelBackground = focusManualAnchorVisible or sessionLevelLabelsActive(rthFilterEnabled, rthStyle) or sessionLevelLabelsActive(globexFilterEnabled, globexStyle) or sessionLevelLabelsActive(weeklyFilterEnabled, weeklyStyle) or sessionLevelLabelsActive(monthlyFilterEnabled, monthlyStyle) or sessionLevelLabelsActive(quarterlyFilterEnabled, quarterlyStyle)
 
         array<ColorRow> colorRows = array.new<ColorRow>()
         if hasLevelLabelBackground
             addColorRow(colorRows, LABEL_LEVEL_LABEL_BACKGROUND, levelLabelBgColor, "")
+        if focusManualAnchorVisible
+            addColorRow(colorRows, LABEL_MANUAL_FOCUS_ANCHOR, focusAnchorColor, str.tostring(focusAnchorWidth))
         bool upcomingGapColorsActive = valueGapsActive and upcomingValueGapEnabled
         collectValueGapColorRows(colorRows, valueGapSource + " Value Gaps", valueGapsActive, confirmedValueGapStyle(), true)
         if upcomingGapColorsActive
