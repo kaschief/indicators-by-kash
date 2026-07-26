@@ -7,7 +7,7 @@ INDICATOR_MAX_LINES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_POLYLINES = 100
-INDICATOR_TITLE = 'revelio • development'
+INDICATOR_TITLE = 'revelio •'
 
 indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS, max_boxes_count=INDICATOR_MAX_BOXES, max_polylines_count=INDICATOR_MAX_POLYLINES, max_bars_back=5000)
 
@@ -111,6 +111,9 @@ HISTOGRAM_WIDTH_PERCENT = 25.0
 // Compact long-period samples below Pine's array cap using a grid finer than PROFILE_ROWS.
 SAMPLE_COMPACT_THRESHOLD = 60000
 SAMPLE_COMPACT_ROWS = 6000
+// Where HD data is unavailable (deep history, Bar Replay) the chart-bar fallback is folded into
+// aligned five-minute buckets so sub-5m charts build the same profiles as a 5m chart.
+FALLBACK_PARITY_BUCKET_MS = 5 * 60 * 1000
 // Two calendar quarters plus buffer cover the previous completed quarter from any current-quarter date.
 QUARTERLY_MAX_TWO_QUARTERS_DAYS = 184
 QUARTERLY_HISTORY_BUFFER_DAYS = 16
@@ -170,7 +173,8 @@ VALUE_GAP_REMINDER_MAX_PER_LEVEL = 4
 MAX_LEVEL_HIT_EVENTS = INDICATOR_MAX_LABELS
 MAX_LEVEL_HIT_TRADING_DAY_SCAN = 10
 MAX_LEVEL_HIT_WEEKDAY_RETENTION_DAYS = 5
-MAX_FOCUS_HIT_RANGES = 6000
+// Ranges are per lower-timeframe sub-bar, so the cap must cover the full scan window in minutes.
+MAX_FOCUS_HIT_RANGES = (MAX_LEVEL_HIT_TRADING_DAY_SCAN + 1) * MINUTES_PER_DAY
 FOCUS_HIT_RANGE_RETENTION_MS = (MAX_LEVEL_HIT_TRADING_DAY_SCAN + 1) * MS_PER_DAY
 
 // Shared with the gap family in Gaps so the related features read as one visual system.
@@ -690,7 +694,6 @@ valueGapSourceIsRth = valueGapSource == VALUE_GAP_SOURCE_RTH
 // INPUTS — Display
 // ═══════════════════════════════════════════════════════════════════════════════
 valueAreaPercent = input.float(70.0, "Value area %", minval=1.0, maxval=100.0, step=0.5, tooltip="The Value Area is the band, centered on the POC, holding this percentage of total volume. Value Area High / Low are its edges. 70% is the market-profile standard.", group=GROUP_DISPLAY)
-intrabarResolution = input.string("Auto", "HD resolution (intrabar data)", options=["Auto", "1S", "5S", "15S", "1", "3", "5", "15"], tooltip="Lower timeframe pulled from inside each chart bar to build the profile and detect breaches. Smaller = more precise. 'Auto' picks a sensible sub-timeframe from the chart timeframe.", group=GROUP_DISPLAY)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Labels
@@ -811,6 +814,7 @@ type MergeState
 type AnchorProcessPolicy
     int keepProfiles
     int mergeDepth
+    bool mergeAllShorts
     bool combineShorts
     float shortSpanFraction
     bool continuousBoundary
@@ -968,16 +972,33 @@ type FocusHitLevel
     string sourceProfileKey
     string key
 
+// Declared before the calculation functions so the developing-profile builder can read the
+// pending bucket that confirmed fallback bars accumulate into.
+chartBarMs = timeframe.in_seconds(timeframe.period) * 1000
+// Range and other non-time bars are not five-minute-alignable, so parity bucketing is time-charts only.
+fallbackBucketAggregationActive = chart.is_standard and chartBarMs < FALLBACK_PARITY_BUCKET_MS and FALLBACK_PARITY_BUCKET_MS % chartBarMs == 0
+var float fallbackBucketHigh = na
+var float fallbackBucketLow = na
+var float fallbackBucketVolume = na
+var int fallbackBucketId = -1
+
+// Touch contact set for the current bar: price ranges that actually traded, one per eligible
+// lower-timeframe sub-bar (or the chart bar as fallback). Realtime entries are the newly covered
+// territory since the previous tick, so detection stays instant without the chart-bar envelope.
+var array<float> levelHitContactHighs = array.new<float>()
+var array<float> levelHitContactLows = array.new<float>()
+var array<int> levelHitContactTimes = array.new<int>()
+varip float liveCoveredHigh = na
+varip float liveCoveredLow = na
+varip int liveCoveredBarTime = na
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTIONS — calculation (parameterized, reused for every anchor)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 autoIntrabarTimeframe() =>
     chartSeconds = timeframe.in_seconds(timeframe.period)
-    chartSeconds <= 60 ? "1S" : chartSeconds <= 15 * 60 ? "1" : chartSeconds <= 60 * 60 ? "5" : chartSeconds <= 4 * 60 * 60 ? "15" : "60"
-
-selectedIntrabarTimeframe() =>
-    intrabarResolution == "Auto" ? autoIntrabarTimeframe() : intrabarResolution
+    chartSeconds < 60 ? "1S" : chartSeconds <= 15 * 60 ? "1" : chartSeconds <= 60 * 60 ? "5" : chartSeconds <= 4 * 60 * 60 ? "15" : "60"
 
 newAnchorState() =>
     AnchorState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), START_TIME_UNSET, START_TIME_UNSET)
@@ -988,17 +1009,20 @@ newMergeState() =>
 mergeCombine(string mode) =>
     mode == MERGE_COMBINE
 
-mergeDepth(string mode) =>
-    mode == MERGE_OFF ? 0 : mode == MERGE_EARLIEST ? 1 : 2
+mergeAll(string mode) =>
+    mode == MERGE_ALL
 
-newAnchorProcessPolicy(int keepProfiles, int mergeDepth, bool combineShorts, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram, bool requireObservedBoundary) =>
-    AnchorProcessPolicy.new(keepProfiles, mergeDepth, combineShorts, shortSpanFraction, continuousBoundary, prepareHistogram, requireObservedBoundary)
+mergeDepth(string mode) =>
+    mode == MERGE_EARLIEST ? 1 : mode == MERGE_COMBINE ? 2 : 0
+
+newAnchorProcessPolicy(int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram, bool requireObservedBoundary) =>
+    AnchorProcessPolicy.new(keepProfiles, mergeDepth, mergeAllShorts, combineShorts, shortSpanFraction, continuousBoundary, prepareHistogram, requireObservedBoundary)
 
 newMergedAnchorProcessPolicy(int keepProfiles, string mergeMode, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram) =>
-    newAnchorProcessPolicy(keepProfiles, mergeDepth(mergeMode), mergeCombine(mergeMode), shortSpanFraction, continuousBoundary, prepareHistogram, false)
+    newAnchorProcessPolicy(keepProfiles, mergeDepth(mergeMode), mergeAll(mergeMode), mergeCombine(mergeMode), shortSpanFraction, continuousBoundary, prepareHistogram, false)
 
 newCalendarAnchorProcessPolicy(int keepProfiles, bool prepareHistogram, bool requireObservedBoundary) =>
-    newAnchorProcessPolicy(keepProfiles, 0, false, 1.0, true, prepareHistogram, requireObservedBoundary)
+    newAnchorProcessPolicy(keepProfiles, 0, false, false, 1.0, true, prepareHistogram, requireObservedBoundary)
 
 newMaturityState() =>
     MaturityState.new(na, na, na, false, 0, array.new<float>())
@@ -1286,6 +1310,10 @@ buildProfile(array<float> highs, array<float> lows, array<float> volumes, int ro
 
 buildDevelopingProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, bool prepareHistogram) =>
     int originalSize = array.size(barVolumes)
+    if not na(fallbackBucketVolume)
+        array.push(barHighs, fallbackBucketHigh)
+        array.push(barLows, fallbackBucketLow)
+        array.push(barVolumes, fallbackBucketVolume)
     if not barstate.isconfirmed
         appendBarVolume(barHighs, barLows, barVolumes, intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume, false)
     Profile profile = buildProfile(barHighs, barLows, barVolumes, PROFILE_ROWS, valueAreaPercent, startTime, time, prepareHistogram)
@@ -2476,7 +2504,8 @@ profileLevelHitPresentation(Profile profile, int profileIndex, int profileCount,
     bool isMostRecentCompleted = profileIndex == profileCount - 1
     bool sweptContinuationVisible = profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs, surfaceSweptLevels)
     bool sweptDenote = sweptContinuationVisible and not na(profileLevelBreachTime(profile, levelName))
-    color lineColor = levelName == LABEL_POC ? style.pocColor : levelName == LABEL_ALTERNATE_POC ? style.alternatePocColor : isMostRecentCompleted ? style.valueAreaLastColor : style.valueAreaColor
+// Marker dots stay high-visibility on aged profiles, so value-area dots always use the strong color.
+    color lineColor = levelName == LABEL_POC ? style.pocColor : levelName == LABEL_ALTERNATE_POC ? style.alternatePocColor : style.valueAreaLastColor
     int lineWidth = levelName == LABEL_POC ? style.pocWidth : levelName == LABEL_ALTERNATE_POC ? style.alternatePocWidth : isMostRecentCompleted ? style.valueAreaLastWidth : style.valueAreaWidth
     LevelHitPresentation.new(levelIdentity(profile.startTime, style, false, isMostRecentCompleted, levelName, sweptDenote), lineColor, levelHitCircleSizeForAnchor(style.labelAnchor), effectiveLevelLineWidth(lineWidth, style, sweptDenote), levelLabelRank(levelName, style, false, isMostRecentCompleted))
 
@@ -2585,12 +2614,13 @@ renderProfile(Profile profile, SessionStyle style, bool developingProfileActive,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Finalize a period and apply the selected short-session merge policy.
-finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endTime, int lastBarTime, int keepProfiles, int mergeDepth, bool combineShorts, float shortSpanFraction, bool prepareHistogram) =>
+finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endTime, int lastBarTime, int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool prepareHistogram) =>
     if array.size(state.barVolumes) > 0
         int periodSpan = lastBarTime - startTime
         int normalSpan = mergeState.normalSpan
-        bool isShortPeriod = mergeDepth > 0 and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
-        bool canMerge = isShortPeriod and mergeState.foldCount < mergeDepth and array.size(mergeState.pendingVolumes) > 0 and array.size(state.profiles) > 0
+        bool mergeEnabled = mergeAllShorts or mergeDepth > 0
+        bool isShortPeriod = mergeEnabled and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
+        bool canMerge = isShortPeriod and (mergeAllShorts or mergeState.foldCount < mergeDepth) and array.size(mergeState.pendingVolumes) > 0 and array.size(state.profiles) > 0
         if canMerge
             array.concat(mergeState.pendingHighs, state.barHighs)
             array.concat(mergeState.pendingLows, state.barLows)
@@ -2612,7 +2642,7 @@ finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endT
                 // Calibrate normal full-session span from non-merged periods (drives short detection).
                 if periodSpan > normalSpan
                     mergeState.normalSpan := periodSpan
-                if mergeDepth > 0
+                if mergeEnabled
 // Select the short-session fold base from the chosen merge mode.
                     bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
                     if becomesBase
@@ -2639,13 +2669,13 @@ processAnchor(AnchorState state, MergeState mergeState, AnchorProcessPolicy poli
 
         if periodEnd and array.size(state.barVolumes) > 0
 // End early-close profiles at the last traded bar.
-            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
+            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
 
         if shouldStart
             if array.size(state.barVolumes) > 0
 // Continuous anchors end at the new period boundary; RTH falls back to time[1].
                 int boundaryEnd = policy.continuousBoundary ? time : time[1]
-                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
+                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram)
             state.startTime := time
 
         if inWindow and barConfirmed
@@ -2737,15 +2767,21 @@ registerLevelHitSourceProfiles(map<string, bool> retainedSourceProfiles, array<P
             map.put(retainedSourceProfiles, levelHitSourceProfileKey(profile.startTime, style), true)
     true
 
-recordLevelHitRange(array<LevelHitRange> ranges, bool active, int barTime, float highPrice, float lowPrice, int referenceTime) =>
-    if active
-        int rangeCount = array.size(ranges)
-        if rangeCount > 0 and array.get(ranges, rangeCount - 1).barTime == barTime
-            LevelHitRange latestRange = array.get(ranges, rangeCount - 1)
-            latestRange.highPrice := math.max(latestRange.highPrice, highPrice)
-            latestRange.lowPrice := math.min(latestRange.lowPrice, lowPrice)
-        else
-            array.push(ranges, LevelHitRange.new(barTime, highPrice, lowPrice))
+// Historical bars retain one entry per contact sub-range; realtime ticks fold their newly covered
+// segments into a single per-bar entry so the archive stays bounded while the bar forms.
+recordLevelHitRanges(array<LevelHitRange> ranges, bool active, int barTime, int referenceTime) =>
+    int contactCount = array.size(levelHitContactTimes)
+    if active and contactCount > 0
+        for contactIndex = 0 to contactCount - 1
+            float contactHigh = array.get(levelHitContactHighs, contactIndex)
+            float contactLow = array.get(levelHitContactLows, contactIndex)
+            int rangeCount = array.size(ranges)
+            if barstate.isrealtime and rangeCount > 0 and array.get(ranges, rangeCount - 1).barTime == barTime
+                LevelHitRange latestRange = array.get(ranges, rangeCount - 1)
+                latestRange.highPrice := math.max(latestRange.highPrice, contactHigh)
+                latestRange.lowPrice := math.min(latestRange.lowPrice, contactLow)
+            else
+                array.push(ranges, LevelHitRange.new(barstate.isrealtime ? barTime : array.get(levelHitContactTimes, contactIndex), contactHigh, contactLow))
     int oldestAllowedTime = referenceTime - FOCUS_HIT_RANGE_RETENTION_MS
     while array.size(ranges) > 0 and (array.get(ranges, 0).barTime < oldestAllowedTime or array.size(ranges) > MAX_FOCUS_HIT_RANGES)
         array.shift(ranges)
@@ -2776,19 +2812,32 @@ insertLevelHitEvent(array<LevelHitEvent> events, LevelHitEvent hitEvent) =>
         array.shift(events)
     true
 
-processLevelHitAtTime(float levelPrice, int previousHitTime, string sourceProfileKey, string key, bool focusOnly, array<LevelHitEvent> events, float hitHigh, float hitLow, int hitTime, int hitBarTime) =>
+processLevelHitAtTime(float levelPrice, int previousHitTime, string sourceProfileKey, string key, bool focusOnly, array<LevelHitEvent> events, float hitHigh, float hitLow, int hitTime, int hitBarTime, bool searchEventArchive) =>
     bool hitNow = not na(hitHigh) and not na(hitLow) and hitLow <= levelPrice and hitHigh >= levelPrice
-    int markedTime = levelMarkedTimeOnDate(events, key, hitTime)
+    int markedTime = searchEventArchive ? levelMarkedTimeOnDate(events, key, hitTime) : not na(previousHitTime) and sameNyDate(previousHitTime, hitTime) ? previousHitTime : na
     bool firstHitToday = hitNow and na(markedTime)
     if firstHitToday
         markedTime := hitTime
         insertLevelHitEvent(events, LevelHitEvent.new(markedTime, hitBarTime, levelPrice, sourceProfileKey, key, focusOnly))
     not na(markedTime) ? markedTime : previousHitTime
 
-processLevelHit(float levelPrice, int previousHitTime, string sourceProfileKey, string key, bool focusOnly, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
-    processLevelHitAtTime(levelPrice, previousHitTime, sourceProfileKey, key, focusOnly, events, hitHigh, hitLow, barstate.isrealtime ? timenow : time, time)
+firstLevelHitContactTime(float levelPrice) =>
+    int contactTime = na
+    int contactCount = array.size(levelHitContactTimes)
+    if contactCount > 0
+        for contactIndex = 0 to contactCount - 1
+            if array.get(levelHitContactLows, contactIndex) <= levelPrice and array.get(levelHitContactHighs, contactIndex) >= levelPrice
+                contactTime := array.get(levelHitContactTimes, contactIndex)
+                break
+    contactTime
 
-updateProfileLevelHitTrace(Profile profile, int profileIndex, int profileCount, SessionStyle style, array<LevelHitEvent> events, float hitHigh, float hitLow, bool surfaceSweptLevels, bool focusOnly) =>
+// A degenerate [level, level] range replays the contact through the shared dedupe-and-insert core.
+processLevelHit(float levelPrice, int previousHitTime, string sourceProfileKey, string key, bool focusOnly, array<LevelHitEvent> events) =>
+    int contactTime = firstLevelHitContactTime(levelPrice)
+    float contactPrice = not na(contactTime) ? levelPrice : na
+    processLevelHitAtTime(levelPrice, previousHitTime, sourceProfileKey, key, focusOnly, events, contactPrice, contactPrice, not na(contactTime) ? contactTime : barstate.isrealtime ? timenow : time, time, barstate.isrealtime)
+
+updateProfileLevelHitTrace(Profile profile, int profileIndex, int profileCount, SessionStyle style, array<LevelHitEvent> events, bool surfaceSweptLevels, bool focusOnly) =>
     if time > profile.endTime
         string sourceProfileKey = levelHitSourceProfileKey(profile.startTime, style)
         bool isMostRecentCompleted = profileIndex == profileCount - 1
@@ -2806,34 +2855,34 @@ updateProfileLevelHitTrace(Profile profile, int profileIndex, int profileCount, 
         bool valVisibleAtLiveEdge = style.showValueArea and (valExtendsRight or valSweptDenote)
         bool alternateVisibleAtLiveEdge = style.showAlternatePoc and profile.hasAlternatePoc and (alternateExtendsRight or alternateSweptDenote)
         if pocVisibleAtLiveEdge
-            profile.pocHitTime := processLevelHit(profile.pocPrice, profile.pocHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_POC), focusOnly, events, hitHigh, hitLow)
+            profile.pocHitTime := processLevelHit(profile.pocPrice, profile.pocHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_POC), focusOnly, events)
         if vahVisibleAtLiveEdge
-            profile.valueAreaHighHitTime := processLevelHit(profile.valueAreaHighPrice, profile.valueAreaHighHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_VAH), focusOnly, events, hitHigh, hitLow)
+            profile.valueAreaHighHitTime := processLevelHit(profile.valueAreaHighPrice, profile.valueAreaHighHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_VAH), focusOnly, events)
         if valVisibleAtLiveEdge
-            profile.valueAreaLowHitTime := processLevelHit(profile.valueAreaLowPrice, profile.valueAreaLowHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_VAL), focusOnly, events, hitHigh, hitLow)
+            profile.valueAreaLowHitTime := processLevelHit(profile.valueAreaLowPrice, profile.valueAreaLowHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_VAL), focusOnly, events)
         if alternateVisibleAtLiveEdge
-            profile.alternatePocHitTime := processLevelHit(profile.alternatePocPrice, profile.alternatePocHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_ALTERNATE_POC), focusOnly, events, hitHigh, hitLow)
+            profile.alternatePocHitTime := processLevelHit(profile.alternatePocPrice, profile.alternatePocHitTime, sourceProfileKey, levelHitKey(sourceProfileKey, LABEL_ALTERNATE_POC), focusOnly, events)
     true
 
 hitTraceProfileFromIndex(array<Profile> profiles, bool focusDeepRetention, int normalProfileCount) =>
     focusDeepRetention ? math.max(0, array.size(profiles) - normalProfileCount) : 0
 
 // Hit presentation is independent of mitigation and sweep completion.
-updateLevelHitTrace(array<Profile> profiles, int fromIndex, bool active, SessionStyle style, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
+updateLevelHitTrace(array<Profile> profiles, int fromIndex, bool active, SessionStyle style, array<LevelHitEvent> events) =>
     if active and (style.showPoc or style.showValueArea or style.showAlternatePoc) and array.size(profiles) > 0
         int profileCount = array.size(profiles)
         for profileIndex = math.max(0, fromIndex) to profileCount - 1
-            updateProfileLevelHitTrace(array.get(profiles, profileIndex), profileIndex, profileCount, style, events, hitHigh, hitLow, false, false)
+            updateProfileLevelHitTrace(array.get(profiles, profileIndex), profileIndex, profileCount, style, events, false, false)
     true
 
 // Focus-selected profiles add their visible levels without recruiting the retained search archive.
-updateFocusedLevelHitTrace(RenderBudgetAnchor anchor, bool active, array<LevelHitEvent> events, float hitHigh, float hitLow) =>
+updateFocusedLevelHitTrace(RenderBudgetAnchor anchor, bool active, array<LevelHitEvent> events) =>
     if active and anchor.restrictToFocus and (anchor.style.showPoc or anchor.style.showValueArea or anchor.style.showAlternatePoc)
         int profileCount = array.size(anchor.profiles)
         if profileCount > 0
             for profileIndex = 0 to profileCount - 1
                 if renderBudgetProfileAllowed(anchor, profileIndex)
-                    updateProfileLevelHitTrace(array.get(anchor.profiles, profileIndex), profileIndex, profileCount, anchor.style, events, hitHigh, hitLow, anchor.surfaceSweptLevels, true)
+                    updateProfileLevelHitTrace(array.get(anchor.profiles, profileIndex), profileIndex, profileCount, anchor.style, events, anchor.surfaceSweptLevels, true)
     true
 
 insertFocusHitLevel(array<FocusHitLevel> levels, FocusHitLevel candidate) =>
@@ -2874,6 +2923,13 @@ collectFocusedHitLevels(RenderBudgetAnchor anchor, bool active, array<FocusHitLe
                         bool alternateContinuationVisible = sweptContinuationVisible and not na(profile.alternatePocBreachTime)
                         addFocusHitLevel(levels, profile, profile.alternatePocPrice, profile.alternatePocBreachTime, alternateContinuationVisible, LABEL_ALTERNATE_POC, sourceProfileKey)
     true
+
+focusedHitLevelsKey(array<FocusHitLevel> levels) =>
+    string key = ""
+    if array.size(levels) > 0
+        for levelIndex = 0 to array.size(levels) - 1
+            key += "|" + array.get(levels, levelIndex).key
+    key
 
 firstFocusHitLevelAtOrAbove(array<FocusHitLevel> levels, float price) =>
     int leftIndex = 0
@@ -2924,7 +2980,7 @@ backfillFocusedLevelHitTrace(array<FocusHitLevel> levels, array<LevelHitRange> r
                         break
                     string markedDateKey = levelHitDateKey(level.key, hitRange.barTime)
                     if focusHitLevelActiveAtTime(level, hitRange.barTime) and not map.contains(markedDateKeys, markedDateKey)
-                        int markedTime = processLevelHitAtTime(level.price, focusHitLevelPreviousTime(level), level.sourceProfileKey, level.key, true, events, hitRange.highPrice, hitRange.lowPrice, hitRange.barTime, hitRange.barTime)
+                        int markedTime = processLevelHitAtTime(level.price, focusHitLevelPreviousTime(level), level.sourceProfileKey, level.key, true, events, hitRange.highPrice, hitRange.lowPrice, hitRange.barTime, hitRange.barTime, true)
                         setFocusHitLevelTime(level, markedTime)
                         map.put(markedDateKeys, markedDateKey, true)
                     levelIndex += 1
@@ -3073,6 +3129,7 @@ var array<Profile> valueGapSourceProfiles = array.new<Profile>()
 var array<ValueGap> valueGapRecords = array.new<ValueGap>()
 varip array<LevelHitEvent> levelHitEvents = array.new<LevelHitEvent>()
 varip array<LevelHitRange> levelHitRanges = array.new<LevelHitRange>()
+varip string focusedHitBackfillKey = ""
 var map<string, bool> retainedLevelHitSourceProfiles = map.new<string, bool>()
 var map<string, bool> renderedLevelHitKeys = map.new<string, bool>()
 var map<string, LevelHitPresentation> levelHitPresentations = map.new<string, LevelHitPresentation>()
@@ -3108,7 +3165,7 @@ var quarterlyStyle = SessionStyle.new(quarterlyExtensionMode, quarterlyDimTouche
 // QUICK FILTER
 // ═══════════════════════════════════════════════════════════════════════════════
 // Quick Filter membership is shared by input activation and runtime rendering.
-levelHitTimeframeAllowed = timeframe.in_seconds(timeframe.period) <= LEVEL_HIT_MAX_TIMEFRAME_SECONDS
+levelHitTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= LEVEL_HIT_MAX_TIMEFRAME_SECONDS
 
 valueGapsActive = valueGapsEnabled or isGapsFilter
 rthGapsPreset = valueGapsActive and isGapsFilter and valueGapSourceIsRth
@@ -3146,7 +3203,7 @@ globexShowDeveloping  = isAll ? true : includeDevelopingGlobex
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA & BOUNDARIES
 // ═══════════════════════════════════════════════════════════════════════════════
-intrabarTimeframe = selectedIntrabarTimeframe()
+intrabarTimeframe = autoIntrabarTimeframe()
 [intrabarHighs, intrabarLows, intrabarVolumes, intrabarTimes] = request.security_lower_tf(syminfo.tickerid, intrabarTimeframe, [high, low, volume, time], ignore_invalid_timeframe=true)
 
 // Weekend bars distinguish 24/7 assets from session-based instruments.
@@ -3229,8 +3286,7 @@ plotcandle(hideThisBar ? open : na, high, low, close, color=hiddenCandleColor, w
 levelHitDetectionEnabled = levelHitTraceEnabled and levelHitTimeframeAllowed
 levelHitWindowStartMinute = levelHitDetectionStartMinute()
 levelHitFallbackWindow = levelHitDetectionWindow == WINDOW_LABEL_FROM_0500 ? inVisibleFrom0500 : levelHitDetectionWindow == WINDOW_LABEL_FROM_0830 ? inVisibleFrom0830 : rthInSession
-levelHitUsesRthWindow = levelHitDetectionWindow == WINDOW_LABEL_RTH
-rthEligibleRangeRequested = (levelHitDetectionEnabled and levelHitUsesRthWindow) or (valueGapsActive and valueGapFillWindow == WINDOW_LABEL_RTH)
+rthEligibleRangeRequested = valueGapsActive and valueGapFillWindow == WINDOW_LABEL_RTH
 rthEligibleRangeNeeded = rthEligibleRangeRequested and priceWindowMayContainEligiblePrice(RTH_START_MINUTE, intrabarTimes, isTwentyFourSevenAsset, rthInSession)
 float rthEligibleHigh = na
 float rthEligibleLow = na
@@ -3239,19 +3295,55 @@ if rthEligibleRangeNeeded
     rthEligibleHigh := calculatedRthHigh
     rthEligibleLow := calculatedRthLow
 
-float levelHitHigh = levelHitUsesRthWindow ? rthEligibleHigh : na
-float levelHitLow = levelHitUsesRthWindow ? rthEligibleLow : na
-if levelHitDetectionEnabled and not levelHitUsesRthWindow and priceWindowMayContainEligiblePrice(levelHitWindowStartMinute, intrabarTimes, isTwentyFourSevenAsset, levelHitFallbackWindow)
-    [calculatedHitHigh, calculatedHitLow] = priceWindowRange(levelHitWindowStartMinute, intrabarHighs, intrabarLows, intrabarTimes, isTwentyFourSevenAsset, levelHitFallbackWindow)
-    levelHitHigh := calculatedHitHigh
-    levelHitLow := calculatedHitLow
-bool liveTickEligibleForHitTrace = barstate.isrealtime and nyPriceWindowTimestampEligible(timenow, levelHitWindowStartMinute, isTwentyFourSevenAsset)
-if levelHitDetectionEnabled and liveTickEligibleForHitTrace and not na(close)
-    bool fullLiveBarEligibleForHitTrace = nyPriceWindowTimestampEligible(time, levelHitWindowStartMinute, isTwentyFourSevenAsset)
-    float liveHitHigh = fullLiveBarEligibleForHitTrace ? high : close
-    float liveHitLow = fullLiveBarEligibleForHitTrace ? low : close
-    levelHitHigh := na(levelHitHigh) ? liveHitHigh : math.max(levelHitHigh, liveHitHigh)
-    levelHitLow := na(levelHitLow) ? liveHitLow : math.min(levelHitLow, liveHitLow)
+array.clear(levelHitContactHighs)
+array.clear(levelHitContactLows)
+array.clear(levelHitContactTimes)
+bool levelHitWindowActiveNow = false
+if levelHitDetectionEnabled
+    if barstate.isrealtime
+        if nyPriceWindowTimestampEligible(timenow, levelHitWindowStartMinute, isTwentyFourSevenAsset) and not na(close)
+            levelHitWindowActiveNow := true
+            if nyPriceWindowTimestampEligible(time, levelHitWindowStartMinute, isTwentyFourSevenAsset)
+                if time != liveCoveredBarTime
+                    array.push(levelHitContactHighs, high)
+                    array.push(levelHitContactLows, low)
+                    array.push(levelHitContactTimes, timenow)
+                    liveCoveredHigh := high
+                    liveCoveredLow := low
+                    liveCoveredBarTime := time
+                else
+                    if high > liveCoveredHigh
+                        array.push(levelHitContactHighs, high)
+                        array.push(levelHitContactLows, liveCoveredHigh)
+                        array.push(levelHitContactTimes, timenow)
+                        liveCoveredHigh := high
+                    if low < liveCoveredLow
+                        array.push(levelHitContactHighs, liveCoveredLow)
+                        array.push(levelHitContactLows, low)
+                        array.push(levelHitContactTimes, timenow)
+                        liveCoveredLow := low
+            else
+// The bar opened before the window, so only the in-window tick price itself counts.
+                array.push(levelHitContactHighs, close)
+                array.push(levelHitContactLows, close)
+                array.push(levelHitContactTimes, timenow)
+    else if priceWindowMayContainEligiblePrice(levelHitWindowStartMinute, intrabarTimes, isTwentyFourSevenAsset, levelHitFallbackWindow)
+        int hitIntrabarCount = array.size(intrabarTimes)
+        if hitIntrabarCount > 0
+            for intrabarIndex = 0 to hitIntrabarCount - 1
+                int subTime = array.get(intrabarTimes, intrabarIndex)
+                if nyPriceWindowTimestampEligible(subTime, levelHitWindowStartMinute, isTwentyFourSevenAsset)
+                    float subHigh = array.get(intrabarHighs, intrabarIndex)
+                    float subLow = array.get(intrabarLows, intrabarIndex)
+                    if not na(subHigh) and not na(subLow)
+                        array.push(levelHitContactHighs, subHigh)
+                        array.push(levelHitContactLows, subLow)
+                        array.push(levelHitContactTimes, subTime)
+        else if not na(high) and not na(low)
+            array.push(levelHitContactHighs, high)
+            array.push(levelHitContactLows, low)
+            array.push(levelHitContactTimes, time)
+        levelHitWindowActiveNow := array.size(levelHitContactTimes) > 0
 
 if valueGapsActive
     bool valueGapFallbackWindow = valueGapFillWindow == WINDOW_LABEL_FROM_0500 ? inVisibleFrom0500 : valueGapFillWindow == WINDOW_LABEL_FROM_0830 ? inVisibleFrom0830 : rthInSession
@@ -3266,7 +3358,46 @@ if valueGapsActive
     if not na(valueGapBreachHigh) and not na(valueGapBreachLow)
         updateValueGapPriceFills(valueGapRecords, valueGapBreachHigh, valueGapBreachLow)
 
-[preparedBarHighs, preparedBarLows, preparedBarVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, high, low, volume, barstate.isconfirmed)
+float fallbackSampleHigh = high
+float fallbackSampleLow = low
+float fallbackSampleVolume = volume
+float fallbackFlushHigh = na
+float fallbackFlushLow = na
+float fallbackFlushVolume = na
+if fallbackBucketAggregationActive and barstate.isconfirmed
+    bool fallbackBarNeeded = array.size(intrabarVolumes) == 0
+    int barBucketId = time / FALLBACK_PARITY_BUCKET_MS
+// A pending bucket is stale once HD data resumes or the bar belongs to a newer bucket.
+    if not na(fallbackBucketVolume) and (not fallbackBarNeeded or barBucketId != fallbackBucketId)
+        fallbackFlushHigh := fallbackBucketHigh
+        fallbackFlushLow := fallbackBucketLow
+        fallbackFlushVolume := fallbackBucketVolume
+        fallbackBucketHigh := na
+        fallbackBucketLow := na
+        fallbackBucketVolume := na
+        fallbackBucketId := -1
+    if fallbackBarNeeded
+        if not na(volume) and volume > 0 and not na(high) and not na(low)
+            fallbackBucketHigh := na(fallbackBucketHigh) ? high : math.max(fallbackBucketHigh, high)
+            fallbackBucketLow := na(fallbackBucketLow) ? low : math.min(fallbackBucketLow, low)
+            fallbackBucketVolume := na(fallbackBucketVolume) ? volume : fallbackBucketVolume + volume
+            fallbackBucketId := barBucketId
+        if time_close % FALLBACK_PARITY_BUCKET_MS == 0 and not na(fallbackBucketVolume)
+            fallbackSampleHigh := fallbackBucketHigh
+            fallbackSampleLow := fallbackBucketLow
+            fallbackSampleVolume := fallbackBucketVolume
+            fallbackBucketHigh := na
+            fallbackBucketLow := na
+            fallbackBucketVolume := na
+            fallbackBucketId := -1
+        else
+            fallbackSampleVolume := na
+
+[preparedBarHighs, preparedBarLows, preparedBarVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, fallbackSampleHigh, fallbackSampleLow, fallbackSampleVolume, barstate.isconfirmed)
+if not na(fallbackFlushVolume)
+    array.insert(preparedBarHighs, 0, fallbackFlushHigh)
+    array.insert(preparedBarLows, 0, fallbackFlushLow)
+    array.insert(preparedBarVolumes, 0, fallbackFlushVolume)
 
 // Policies are allocated once; per-bar calls pass only state, events and prepared samples.
 var AnchorProcessPolicy rthProcessPolicy = newMergedAnchorProcessPolicy(rthProfilesToRetain, rthMergeMode, RTH_MERGE_SPAN_FRACTION, false, rthFilterEnabled and rthShowHistogram)
@@ -3293,7 +3424,7 @@ globexSweepActive = globexEffectiveExtensionMode == LEVEL_BREACH_SWEEP
 weeklySweepActive = weeklyExtensionMode == LEVEL_BREACH_SWEEP
 monthlySweepActive = monthlyExtensionMode == LEVEL_BREACH_SWEEP
 quarterlySweepActive = quarterlyExtensionMode == LEVEL_BREACH_SWEEP
-levelHitDetectionActive = levelHitDetectionEnabled and not na(levelHitHigh) and not na(levelHitLow)
+levelHitDetectionActive = levelHitDetectionEnabled and levelHitWindowActiveNow
 levelHitTracePresentationActive = levelHitDetectionEnabled and (levelHitKeep != LEVEL_HIT_KEEP_DETECTION_WINDOW or levelHitDetectionActive)
 rthHitTraceSourceActive = levelHitDetectionEnabled and (rthFilterEnabled or levelHitHiddenAnchorsActive) and rthEffectiveExtensionMode != LEVEL_PERIOD
 globexHitTraceSourceActive = levelHitDetectionEnabled and (globexFilterEnabled or levelHitHiddenAnchorsActive) and globexEffectiveExtensionMode != LEVEL_PERIOD
@@ -3302,7 +3433,7 @@ monthlyHitTraceSourceActive = levelHitDetectionEnabled and (monthlyFilterEnabled
 quarterlyHitTraceSourceActive = levelHitDetectionEnabled and (quarterlyFilterEnabled or levelHitHiddenAnchorsActive) and quarterlyExtensionMode != LEVEL_PERIOD
 rthFocusedHitTraceActive = focusHitTraceActive and rthHitTraceSourceActive
 globexFocusedHitTraceActive = focusHitTraceActive and globexHitTraceSourceActive
-recordLevelHitRange(levelHitRanges, levelHitDetectionActive and (rthFocusedHitTraceActive or globexFocusedHitTraceActive), time, levelHitHigh, levelHitLow, time)
+recordLevelHitRanges(levelHitRanges, levelHitDetectionActive and (rthFocusedHitTraceActive or globexFocusedHitTraceActive), time, time)
 
 int rthHitTraceFromIndex = hitTraceProfileFromIndex(rthState.profiles, focusSelected and rthFilterEnabled, rthEffectiveProfilesToShow)
 int globexHitTraceFromIndex = hitTraceProfileFromIndex(globexState.profiles, focusSelected and globexFilterEnabled, globexEffectiveProfilesToShow)
@@ -3312,11 +3443,11 @@ registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, globexState.profi
 registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, weeklyState.profiles, 0, weeklyHitTraceSourceActive, weeklyStyle)
 registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, monthlyState.profiles, 0, monthlyHitTraceSourceActive, monthlyStyle)
 registerLevelHitSourceProfiles(retainedLevelHitSourceProfiles, quarterlyState.profiles, 0, quarterlyHitTraceSourceActive, quarterlyStyle)
-updateLevelHitTrace(rthState.profiles, rthHitTraceFromIndex, levelHitDetectionActive and rthHitTraceSourceActive, rthStyle, levelHitEvents, levelHitHigh, levelHitLow)
-updateLevelHitTrace(globexState.profiles, globexHitTraceFromIndex, levelHitDetectionActive and globexHitTraceSourceActive, globexStyle, levelHitEvents, levelHitHigh, levelHitLow)
-updateLevelHitTrace(weeklyState.profiles, 0, levelHitDetectionActive and weeklyHitTraceSourceActive, weeklyStyle, levelHitEvents, levelHitHigh, levelHitLow)
-updateLevelHitTrace(monthlyState.profiles, 0, levelHitDetectionActive and monthlyHitTraceSourceActive, monthlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
-updateLevelHitTrace(quarterlyState.profiles, 0, levelHitDetectionActive and quarterlyHitTraceSourceActive, quarterlyStyle, levelHitEvents, levelHitHigh, levelHitLow)
+updateLevelHitTrace(rthState.profiles, rthHitTraceFromIndex, levelHitDetectionActive and rthHitTraceSourceActive, rthStyle, levelHitEvents)
+updateLevelHitTrace(globexState.profiles, globexHitTraceFromIndex, levelHitDetectionActive and globexHitTraceSourceActive, globexStyle, levelHitEvents)
+updateLevelHitTrace(weeklyState.profiles, 0, levelHitDetectionActive and weeklyHitTraceSourceActive, weeklyStyle, levelHitEvents)
+updateLevelHitTrace(monthlyState.profiles, 0, levelHitDetectionActive and monthlyHitTraceSourceActive, monthlyStyle, levelHitEvents)
+updateLevelHitTrace(quarterlyState.profiles, 0, levelHitDetectionActive and quarterlyHitTraceSourceActive, quarterlyStyle, levelHitEvents)
 
 if barstate.isconfirmed
     float sweepMarginFraction = sweepConfirmMarginPercent / 100.0
@@ -3396,9 +3527,16 @@ if barstate.islast
         array<FocusHitLevel> focusedHitLevels = array.new<FocusHitLevel>()
         collectFocusedHitLevels(array.get(renderBudgetAnchors, 0), rthFocusedHitTraceActive, focusedHitLevels)
         collectFocusedHitLevels(array.get(renderBudgetAnchors, 1), globexFocusedHitTraceActive, focusedHitLevels)
-        backfillFocusedLevelHitTrace(focusedHitLevels, levelHitRanges, levelHitEvents, levelHitTracePresentationActive)
-        updateFocusedLevelHitTrace(array.get(renderBudgetAnchors, 0), levelHitDetectionActive and rthFocusedHitTraceActive, levelHitEvents, levelHitHigh, levelHitLow)
-        updateFocusedLevelHitTrace(array.get(renderBudgetAnchors, 1), levelHitDetectionActive and globexFocusedHitTraceActive, levelHitEvents, levelHitHigh, levelHitLow)
+        string currentFocusedHitBackfillKey = focusedHitLevelsKey(focusedHitLevels)
+        if levelHitTracePresentationActive and currentFocusedHitBackfillKey != focusedHitBackfillKey
+            backfillFocusedLevelHitTrace(focusedHitLevels, levelHitRanges, levelHitEvents, true)
+            focusedHitBackfillKey := currentFocusedHitBackfillKey
+        else if not levelHitTracePresentationActive
+            focusedHitBackfillKey := ""
+        updateFocusedLevelHitTrace(array.get(renderBudgetAnchors, 0), levelHitDetectionActive and rthFocusedHitTraceActive, levelHitEvents)
+        updateFocusedLevelHitTrace(array.get(renderBudgetAnchors, 1), levelHitDetectionActive and globexFocusedHitTraceActive, levelHitEvents)
+    else
+        focusedHitBackfillKey := ""
     pruneLevelHitEvents(levelHitEvents, levelHitTracePresentationActive, retainedLevelHitSourceProfiles)
     array<int> histogramFromIndices = allocateProfileBudget(renderBudgetAnchors, INDICATOR_MAX_POLYLINES - liveHistogramReserve, true)
     int liveLineReserve = liveProfileLineCount(rthLiveProfile, rthFilterEnabled and rthShowDeveloping, rthStyle) + liveProfileLineCount(globexLiveProfile, globexFilterEnabled and globexShowDeveloping, globexStyle) + liveProfileLineCount(weeklyLiveProfile, weeklyFilterEnabled and weeklyShowDeveloping, weeklyStyle) + liveProfileLineCount(monthlyLiveProfile, monthlyFilterEnabled and monthlyShowDeveloping, monthlyStyle) + liveProfileLineCount(quarterlyLiveProfile, quarterlyFilterEnabled and quarterlyShowDeveloping, quarterlyStyle)

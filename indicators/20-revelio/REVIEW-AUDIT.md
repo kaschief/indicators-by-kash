@@ -16,7 +16,7 @@ Purpose: Track verified findings, product decisions, remediation order, and inde
 
 The current development version has three categories of work:
 
-1. Correctness inconsistencies in touch handling, short-session merging, quarterly snapshots, and drawing-budget allocation.
+1. Correctness inconsistencies in touch handling, short-session merging, and drawing-budget allocation.
 2. Timeframe-dependent profile and Touch Marker behavior that can produce different Monthly levels or markers on 1-minute and 5-minute charts.
 3. Performance and maintainability pressure from repeated Focus backfills, full drawing recreation, large state types, and repeated four-level logic.
 
@@ -26,27 +26,32 @@ The stale Touch Marker identity reported on 2026-07-26 has been refactored. Mark
 
 | ID | Priority | Status | Area | Summary | Fable Verdict |
 | --- | --- | --- | --- | --- | --- |
-| REV-001 | P1 | Open | Touch semantics | Exact-price contact counts as a Touch Marker but not as mitigation. | Confirmed, with a contract nuance |
-| REV-002 | P1 | Open | Focus budget | Histogram trimming can remove every requested Focus profile because it compares total cost but can only remove Focus selections. | Confirmed |
-| REV-003 | P1 | Open | Focus budget | The final newest-first allocator can discard older profiles that Focus selected for proximity. | Confirmed, plus an additional starvation mode |
-| REV-004 | P1 | Open | Performance | Focus history can rescan up to 6,000 stored ranges on every last-bar update. | Confirmed |
+| REV-001 | — | Explained / no defect | Touch semantics | Exact contact marks a touch; mitigation requires price to trade through the level. | Distinct contracts confirmed |
+| REV-002 | P1 | Deferred / implementation rejected | Focus budget | Histogram trimming can remove every requested Focus profile because it compares total cost but can only remove Focus selections. | Confirmed |
+| REV-003 | P1 | Deferred / implementation rejected | Focus budget | The final newest-first allocator can discard older profiles that Focus selected for proximity. | Confirmed, plus an additional starvation mode |
+| REV-004 | P1 | Resolved / TV pending | Performance | Focus history can rescan up to 6,000 stored ranges on every last-bar update. | Confirmed |
 | REV-005 | P2 | Open | Performance | All tracked drawings are deleted and recreated on every last-bar update. | Confirmed |
-| REV-006 | P1 | Open | Session merge | `All Into Previous Full Session` is limited to two consecutive short sessions. | Confirmed |
-| REV-007 | P1 | Open | Quarterly | The completion-day histogram publish condition is true every hour at the configured minute. | Confirmed |
+| REV-006 | P1 | Resolved / TV pending | Session merge | `All Into Previous Full Session` is limited to two consecutive short sessions. | Confirmed |
+| REV-007 | — | Explained / no defect | Quarterly | Completion-day repetition preserves sparse histogram snapshots across higher chart timeframes. | Runtime evidence rejected the proposed fix |
 | REV-008 | P1 | Resolved / TV pending | Touch Markers | A marker retained the identity `PREV` after its profile was no longer previous. | Refactor confirmed statically; needs runtime evidence |
 | REV-009 | — | Explained / no defect | Touch Marker UX | A later-finalized level can join the current right-edge cluster without becoming part of an older marker event. | Explanation confirmed statically; Replay evidence pending |
-| REV-010 | P1 | Open | Cross-timeframe consistency | Weekly and Monthly profiles use different source resolutions on 1-minute and 5-minute charts. | Confirmed mechanism; marker delta needs runtime evidence |
-| REV-011 | P1 | Open | Cross-timeframe consistency | Touch detection collapses each chart candle's eligible sub-bars into one high/low envelope. | Confirmed; backfill path shares the defect |
+| REV-010 | P1 | Resolved / TV pending | Cross-timeframe consistency | Profiles diverged across chart timeframes: HD resolution differed, and the chart-bar fallback fed timeframe-sized samples. | Both mechanisms confirmed; auto-TF fix plus five-minute fallback buckets applied |
+| REV-011 | P1 | Resolved / TV pending | Cross-timeframe consistency | Touch detection collapsed each chart candle's eligible sub-bars into one high/low envelope. | Fixed via per-sub-bar contact sets, tick-territory realtime detection, range-chart support |
 | REV-012 | P2 | Product decision | Profile semantics | POC and value area use raw rows while the visible histogram is smoothed afterwards. | Confirmed, with an implementation constraint |
 | REV-013 | P2 | Product decision | Sweep semantics | Swept confirmation uses closes from the current chart timeframe. | Confirmed |
 | REV-014 | P3 | Product decision | Focus anchor | Manual Focus treats zero and negative prices as unplaced. | Confirmed |
 | REV-015 | P2 | Maintainability | Touch state | Profile hit timestamps and the event archive both retain touch state. | Confirmed |
 | REV-016 | P2 | Maintainability | Architecture | `Profile`, `SessionStyle`, and four-level POC/VAH/VAL/aPOC paths are large and repetitive. | Confirmed |
 | REV-017 | P1 | Maintainability | Validation | There is no automated Pine compile or deterministic behavioral test harness. | Confirmed |
+| REV-018 | P1 | Resolved / TV passed | Performance | Regular Touch Markers search the retained event archive for every eligible level on every historical bar. | Runtime speed improvement confirmed |
 
 ## Detailed Findings
 
 ### REV-001 — Exact contact has two meanings
+
+**Status**
+
+Explained / no defect. Touch Markers and mitigation intentionally represent different events.
 
 **Evidence**
 
@@ -59,7 +64,11 @@ A candle that lands exactly on a level can receive a Touch Marker while the same
 
 **Expected direction**
 
-Adopt one shared contact predicate and use it for all features whose contract is “price touched this level.” Sweep confirmation remains separate because it intentionally requires two-sided closes and a margin.
+Preserve the current contracts:
+
+- Touch Marker — exact contact counts.
+- Mitigation — price must trade through the level.
+- Swept — confirmed closes must clear both sides with the configured margin.
 
 **Independent validation**
 
@@ -67,9 +76,13 @@ Test a candle whose high or low equals POC, VAH, or VAL exactly. Record whether 
 
 ### REV-002 — Focus trimming can remove all Focus profiles
 
+**Status**
+
+Deferred. The proposed allocator was rejected and the original behavior was restored.
+
 **Evidence**
 
-`trimFocusToBudget()` compares `totalHistogramCost(anchors)` with the global histogram budget. That total includes Weekly, Monthly, Quarterly, and ordinary daily costs, but the loop can only deselect Focus profiles from the daily anchors.
+The audited `trimFocusToBudget()` implementation compared `totalHistogramCost(anchors)` with the global histogram budget. That total included Weekly, Monthly, Quarterly, and ordinary daily costs, but the loop could only deselect Focus profiles from the daily anchors.
 
 **Impact**
 
@@ -79,11 +92,19 @@ If non-Focus histogram cost already consumes the budget, the loop can remove eve
 
 Calculate the capacity available to Focus explicitly and assign product priority before trimming. Requested Focus profiles should not silently lose to unrelated historical histograms.
 
+**Implementation result**
+
+The proposal caused runtime timeouts and missing profiles. It was removed completely. Revisit only if the original behavior becomes a visible product problem.
+
 **Independent validation**
 
 Enable dense Weekly, Monthly, and Quarterly histograms, then request five or more Focus profiles. Confirm whether all requested Focus profiles disappear despite being valid selections.
 
 ### REV-003 — Newest-first allocation can override Focus proximity
+
+**Status**
+
+Deferred. The proposed allocator was rejected and the original behavior was restored.
 
 **Evidence**
 
@@ -103,11 +124,19 @@ Use an explicit priority order:
 
 Lines and histograms should be budgeted independently.
 
+**Implementation result**
+
+The proposal caused repeated 500 ms runtime errors. A bounded-search follow-up then reduced the chart to one visible profile. The proposal and its timeout guards were removed completely.
+
 **Independent validation**
 
 Place a manual Focus anchor near an old RTH or Globex profile while several newer Weekly, Monthly, Quarterly, and daily profiles are enabled. Apply drawing pressure and verify which profile disappears first.
 
 ### REV-004 — Focus history is repeatedly rescanned
+
+**Status**
+
+Resolved locally; TradingView loading and realtime validation pending.
 
 **Evidence**
 
@@ -119,9 +148,19 @@ Place a manual Focus anchor near an old RTH or Globex profile while several newe
 
 The same historical ranges can be reconsidered repeatedly while the current candle forms. Cost grows with retained ranges and selected Focus levels.
 
+**Runtime observation — 2026-07-26**
+
+The user reported noticeably slower indicator loading with the current Touch Marker and Focus changes. REV-004 is now the first performance investigation after REV-006. Compare `Off`, `On`, and `On + Focus` before attributing the slowdown to this path.
+
+After the REV-004 change, the overall version still felt slow with Intraday Focus disabled. Focus backfill is therefore not the primary source of that loading delay. The next comparison must disable Touch Markers themselves to separate the regular marker engine from general drawing recreation.
+
 **Expected direction**
 
 Backfill when the Focus selection changes, then advance incrementally for new or updated ranges. Preserve instant live markers.
+
+**Current implementation**
+
+The selected Focus level keys are cached in `focusedHitBackfillKey`. Historical ranges are rescanned only when that selected level set changes or the presentation window reopens. New touches still use the existing live update path on every eligible realtime update.
 
 **Independent validation**
 
@@ -141,7 +180,33 @@ Realtime updates rebuild the full visible scene, increasing object churn and mak
 
 First optimize repeated calculations such as Focus backfill. Then measure whether stable drawing IDs and targeted updates are warranted for the highest-cost drawing groups.
 
+### REV-018 — Regular Touch Marker archive searches slow loading
+
+**Status**
+
+Resolved. TradingView loading improvement confirmed by the user.
+
+**Runtime evidence**
+
+Loading returns to the older version's speed when Touch Markers are `Off`, even with Intraday Focus already disabled. The remaining slowdown is therefore inside the regular Touch Marker path rather than Focus backfill or general drawing recreation.
+
+**Code evidence**
+
+`processLevelHitAtTime()` called `levelMarkedTimeOnDate()` for every eligible level on every historical chart bar. That function scans backward through the retained marker archive. Cost grows with chart history, retained profiles, visible levels, and recorded marker events.
+
+**Current implementation**
+
+Historical processing now uses each profile level's existing latest-hit timestamp for same-day deduplication. Archive searches remain enabled for realtime updates, where Pine rollback requires the `varip` event archive, and for out-of-order Focus backfill.
+
+**Independent validation**
+
+Compare loading with Touch Markers `Off` and `On`. Then verify historical marker count and placement, realtime instant markers, same-day deduplication, and Focus backfill.
+
 ### REV-006 — “All” short-session merge is capped at two
+
+**Status**
+
+Resolved locally; TradingView validation pending.
 
 **Evidence**
 
@@ -155,15 +220,25 @@ First optimize repeated calculations such as Focus backfill. Then measure whethe
 
 `All Into Previous Full Session` does not mean all consecutive short sessions when the run contains more than two.
 
+A plausible resilience case is two holiday-adjusted traded sessions followed by an unexpected shortened session, such as a presidential national day of mourning. Fully closed days do not count because they create no session profile.
+
 **Expected direction**
 
 Make the displayed option and actual fold policy agree. `All` should continue through the complete consecutive short-session run.
+
+**Current implementation**
+
+The anchor process policy now carries an explicit `mergeAllShorts` rule. `All Into Previous Full Session` bypasses the finite fold counter, while `Off`, `Earliest`, and `Combine Shorts` keep their existing depth behavior.
 
 **Independent validation**
 
 Replay a holiday sequence or synthetic sequence containing three consecutive qualifying short sessions and inspect the resulting profile boundaries.
 
 ### REV-007 — Quarterly snapshot condition repeats hourly
+
+**Status**
+
+Explained / no defect. The proposed one-time snapshot was reverted after TradingView testing.
 
 **Evidence**
 
@@ -175,7 +250,13 @@ The completion-day snapshot qualifies every hour at that minute. This creates un
 
 **Expected direction**
 
-Use one explicit completion transition or one exact scheduled timestamp.
+Preserve the repeated completion-day snapshots. Document their higher-timeframe aggregation purpose.
+
+**Runtime validation — 2026-07-26**
+
+Replacing the repeated snapshots with one scheduled snapshot removed older Quarterly histogram shapes on a 4-hour BTCUSD chart. The baseline retained them. `fixedQuarterlyContext()` returns a sparse `Profile` object through a 15-minute `request.security(..., gaps=barmerge.gaps_on)` call; repeating at the configured minute allows the object to survive aggregation into higher chart-timeframe bars.
+
+The original publication condition was restored. No Quarterly behavior change remains.
 
 ### REV-008 — Stale `PREV` marker identity
 
@@ -227,7 +308,7 @@ The apparent ambiguity comes from the dot now occupying the same price column as
 
 Use Bar Replay around the RTH finalization. Confirm that the 09:30 marker initially belongs only to Globex VAL, then confirm that the right-edge cluster gains RTH POC after finalization without rewriting the marker's source membership.
 
-### REV-010 — Monthly and Weekly profiles are chart-timeframe dependent
+### REV-010 — Profile levels are chart-timeframe dependent
 
 **Screenshots**
 
@@ -238,6 +319,14 @@ Use Bar Replay around the RTH finalization. Confirm that the 09:30 marker initia
 
 A large green Monthly Touch Marker is present on the 5-minute chart and absent on the 1-minute chart.
 
+The ES1! December 31 RTH comparison provides direct level-price evidence:
+
+- 5-minute RTH VAH: approximately 6,937.50.
+- 1-minute RTH VAH: approximately 6,947.50.
+- The RTH VAL also differs, while the RTH POC appears aligned.
+
+Screenshot: `Screenshot 2026-07-26 at 20.20.06.png`.
+
 **Evidence**
 
 With Intrabar Resolution set to Auto:
@@ -245,35 +334,67 @@ With Intrabar Resolution set to Auto:
 - A 5-minute chart requests 1-minute samples.
 - A 1-minute chart requests 1-second samples.
 
-The same samples build RTH, Globex, Weekly, and Monthly profiles. Different sample resolutions can change volume distribution, POC, VAH, VAL, aPOC, and therefore which price the Monthly marker is testing.
+The same samples build RTH, Globex, Weekly, and Monthly profiles. Different sample resolutions can change volume distribution, POC, VAH, VAL, aPOC, and therefore which price a marker is testing.
 
 **Impact**
 
-The Monthly profile and its marker are not guaranteed to agree across chart timeframes.
+Profile levels and their markers are not guaranteed to agree across chart timeframes. This is now visibly confirmed for the December 31 RTH value area.
+
+**Product decision**
+
+Completed RTH, Globex, Weekly, and Monthly profiles must agree across nearby intraday chart timeframes. Test the existing `1` HD-resolution option on matching 1-minute and 5-minute charts first. If the levels align, use a common 1-minute profile source automatically on 1–15 minute charts.
+
+**Second mechanism — chart-bar fallback divergence (2026-07-26)**
+
+After `autoIntrabarTimeframe()` was changed so 1-minute through 15-minute charts all request `1` HD data, the mismatch persisted (`Screenshot 2026-07-26 at 20.35.59.png`, ES1! Bar Replay near 2026-01-02: December 31 RTH VAH ≈ 6,938 on 5-minute vs ≈ 6,947 on 1-minute).
+
+Root cause: profile construction has a second, chart-timeframe-dependent input. When `request.security_lower_tf` returns empty arrays — Bar Replay, and history beyond the intrabar availability window — `prepareBarVolumeSamples()` falls back to the chart bar's high/low/volume. A 1-minute chart then feeds one-minute samples while a 5-minute chart feeds five-minute envelopes. Same underlying trade data, different sample granularity, different POC/VAH/VAL. The auto-resolution change only equalized the zone where HD data exists; the replay screenshot sits entirely in the fallback zone.
+
+**Fix applied — Resolved / TV pending**
+
+Sub-5-minute chart bars in the fallback path are now folded into epoch-aligned five-minute buckets (`FALLBACK_PARITY_BUCKET_MS`) before entering profile state, so a 1-minute chart's fallback emits exactly the samples a 5-minute chart's bars produce:
+
+- A pending bucket (`fallbackBucket*` state) accumulates confirmed fallback bars; the sample is emitted on the bar whose close lands on the five-minute boundary.
+- A stale pending bucket — HD data resuming mid-bucket, or a missing boundary bar — is flushed ahead of that bar's own samples.
+- `buildDevelopingProfile()` includes the pending bucket, so live profiles do not lose the current partial bucket.
+- Aggregation activates only when the chart timeframe divides five minutes evenly (1S–1m and 5m itself trivially); 2/3/4-minute charts keep per-bar fallback because five-minute buckets cannot be reproduced from their bars.
+- All profile period boundaries (09:30, 16:00, 18:00, day/week/month starts) are five-minute-aligned, so buckets never straddle a session boundary.
+
+Known residual limits: 15-minute charts still fall back to 15-minute bars in the fallback zone (parity target is the 1m/5m pair); exchanges whose sessions open off the five-minute grid would have shifted buckets; Touch Marker contact timing can still differ per REV-011.
 
 **Independent validation**
 
-On the same symbol and date, expose prices in the Monthly level labels and compare exact POC, VAH, VAL, and aPOC values on 1-minute and 5-minute charts with identical settings.
+Repeat the ES1! Bar Replay comparison from `Screenshot 2026-07-26 at 20.35.59.png` on matching 1-minute and 5-minute charts and confirm the December 31 RTH VAH/VAL agree. Then compare live-chart levels inside the HD window to confirm no regression where intrabar data exists.
 
 ### REV-011 — Touch detection uses one envelope per chart candle
 
-**Evidence**
+**Status**
 
-`priceWindowRange()` reduces all eligible lower-timeframe samples inside the chart candle to one maximum high and one minimum low. `processLevelHitAtTime()` then treats every level between those extremes as touched.
+Resolved locally (2026-07-26); TradingView validation pending.
+
+**Original evidence**
+
+`priceWindowRange()` reduced all eligible lower-timeframe samples inside the chart candle to one maximum high and one minimum low. `processLevelHitAtTime()` then treated every level between those extremes as touched.
 
 **Impact**
 
-On a 5-minute chart, a gap between component 1-minute bars can place a level inside the combined five-minute envelope even if no component bar traded that price. On a 1-minute chart, the same gap can sit between candles, producing no marker.
+On a 5-minute chart, a gap between component 1-minute bars could place a level inside the combined five-minute envelope even if no component bar traded that price. On a 1-minute chart, the same gap sat between candles, producing no marker. This was the remaining source of markers such as a Monthly level hit shown on 5-minute but absent on 1-minute, independent of the REV-010 level-price divergence.
 
-This is separate from REV-010: even if the Monthly level price is identical, the contact result can still differ.
+**Fix applied — contact-set detection**
 
-**Expected direction**
+The single per-bar envelope was replaced with a per-bar contact set (`levelHitContactHighs/Lows/Times`): the price ranges that actually traded, each with its own timestamp.
 
-Evaluate contact against individual lower-timeframe ranges rather than a single collapsed envelope, while retaining the first qualifying timestamp for instant and historical markers.
+- Historical bars with HD data: one contact range per eligible lower-timeframe sub-bar. A level between sub-bars is a hit on no chart timeframe, and the recorded hit time is the sub-bar's own time — sub-minute accuracy on the marker tooltip, identical across 1-minute and 5-minute charts.
+- Realtime: each tick contributes only the newly covered territory since the previous tick (`liveCovered*` varip state). Detection stays tick-instant, and first-touch-of-day is driven by the shared tape rather than the chart's forming-bar envelope, so a level jumped by a gap inside a forming 5-minute bar is no longer marked. A bar that opened before the detection window still counts only the in-window tick price, as before.
+- Fallback (no HD data) and non-time charts: the chart bar is the single contact range. Range bars are contiguous by construction, so this is accurate there.
+- Focus history now records the contact set (`recordLevelHitRanges`), so backfilled Focus markers agree with live detection. `MAX_FOCUS_HIT_RANGES` is derived from the scan window in minutes to keep full backfill coverage at sub-bar granularity. Realtime forming-bar entries remain a per-bar envelope so the archive stays bounded while the bar forms.
+- Range charts: `levelHitTimeframeAllowed` now passes `chart.is_range` explicitly, and the REV-010 fallback bucketing is gated to `chart.is_standard` so range bars are never folded into time buckets.
+
+Residual limits: in the fallback zone contact granularity equals the chart bar, so 1-minute remains more precise than 5-minute there (accuracy prioritized over parity); realtime forming-bar entries in the Focus archive are envelopes until the bar completes.
 
 **Independent validation**
 
-Inspect the component bars around the green marker. Determine whether one sub-bar actually contains the Monthly price or whether the price was only crossed by a gap between sub-bars.
+Reproduce the Monthly marker case on matching 1-minute and 5-minute charts: within HD coverage the marker must appear on both or neither, with the same `Hit HH:MM NY`. Watch a live session and confirm markers appear on the touching tick. Confirm markers appear on a range chart with identical settings.
 
 ### REV-012 — Raw analytical levels with a smoothed visible histogram
 
@@ -373,45 +494,22 @@ Maintain:
 - A repeatable TradingView compile and Replay matrix.
 - Screenshot baselines for dense Focus, shared levels, Value Gaps, and session finalization.
 
-## Recommended Remediation Order
+## Current Remediation Sequence
 
-### Gate 1 — Validate the current marker identity refactor
+REV numbers are permanent finding IDs, not step numbers. Remaining work now proceeds numerically:
 
-Compile the development source in TradingView and test:
+1. **REV-002 and REV-003 — Deferred.** The attempted allocator change was rejected and fully reverted.
+2. **REV-005 — Deferred.** Skip unless loading becomes slow again after the completed marker optimizations.
+3. **REV-010 — Next after confirming the rollback.** Decide and implement stable Weekly and Monthly source resolution.
+4. **REV-011.** Evaluate touches per actual lower-timeframe range.
+5. **REV-012.** Decide raw-versus-smoothed histogram semantics.
+6. **REV-013.** Decide chart-based versus fixed-resolution Swept confirmation.
+7. **REV-014.** Decide support for zero and negative Manual Focus prices.
+8. **REV-015.** Reduce Touch Marker state synchronization risk.
+9. **REV-016.** Consolidate repeated four-level paths incrementally.
+10. **REV-017.** Add repeatable structural validation.
 
-- RTH and Globex session rollover.
-- Weekly, Monthly, and Quarterly rollover.
-- Bar Replay before and after finalization.
-- Include Hidden.
-- Focus live and backfilled markers.
-- Same-candle merged markers.
-
-### Batch 1 — Small correctness fixes
-
-Address REV-001, REV-006, and REV-007 together. They are isolated rules with clear expected behavior.
-
-### Batch 2 — Timeframe consistency
-
-Address REV-010 and REV-011 as one design review:
-
-- Choose a stable source resolution for Weekly and Monthly profiles if cross-timeframe identity is required.
-- Evaluate contacts per lower-timeframe range rather than per chart-candle envelope.
-
-### Batch 3 — Focus allocator
-
-Address REV-002 and REV-003 together. Establish drawing priority before changing either trimming or final allocation.
-
-### Batch 4 — Performance
-
-Address REV-004 first, measure, then decide how much of REV-005 is necessary.
-
-### Batch 5 — Product semantics
-
-Resolve REV-012, REV-013, and REV-014 with explicit product decisions before implementation.
-
-### Batch 6 — Maintainability and validation
-
-Address REV-015 through REV-017 incrementally after the behavioral contracts are stable.
+Completed, closed, deferred, or awaiting only TradingView confirmation: REV-001, REV-002, REV-003, REV-004, REV-006, REV-007, REV-008, REV-009, and REV-018.
 
 ## Fable Independent Review Protocol
 
@@ -433,19 +531,19 @@ Static review of `code/development/revelio.pine` (3,462 lines). No indicator cha
 
 ### Verdicts and citations
 
-**REV-001 — Confirmed, with a contract nuance.** `updateMitigation()` (lines 2724–2730) requires strictly `breachLow < level and breachHigh > level`; `processLevelHitAtTime()` (line 2780) uses inclusive `hitLow <= level and hitHigh >= level`. A bar whose extreme lands exactly on the level marks a touch but never mitigates. Nuance on the proposed fix: the strict two-sided predicate reads as "traded through the level," which is a legitimately different contract from "wick contacted the level." Before unifying on one shared predicate, decide whether mitigation is intended to mean penetration. If it is, the correct remediation is documenting the two contracts, not merging them.
+**REV-001 — Distinct contracts confirmed; no defect.** `updateMitigation()` requires price to trade through the level, while `processLevelHitAtTime()` treats exact contact as a touch. Touch Marker, mitigation, and Swept represent different lifecycle events, so their predicates should not be unified.
 
 **REV-002 — Confirmed.** `trimFocusToBudget()` (lines 2405–2427) loops while `totalHistogramCost(anchors) > budget` (line 2409), where `totalHistogramCost()` (line 2396) sums every anchor including Weekly/Monthly/Quarterly. The loop can only flip `focusSelections` on `restrictToFocus` anchors (line 2426) and exits via `farthestAnchorIndex < 0` (line 2423) once none remain — so it terminates, but it can deselect every Focus profile without resolving the overflow. The comment at lines 2403–2404 confirms the trimming intent; the budget comparison scope is what is wrong. Agree with the proposed direction: compute the capacity actually available to Focus and trim against that.
 
 **REV-003 — Confirmed, plus an additional starvation mode.** `allocateProfileBudget()` (lines 2429–2464) walks strictly newest-first with no Focus priority class. Additional detail beyond the finding: when the newest candidate's cost exceeds the remaining budget, the loop sets `exhausted := true` immediately (lines 2456–2457) instead of skipping to cheaper candidates — one expensive newest profile therefore blocks every older profile across all anchors, including Focus selections. Mitigating detail: disallowed profiles cost 0 (line 2455), so non-selected profiles in Focus anchors do not consume budget. The proposed priority order (live → Focus-by-distance → recency) is correct; the fix should also decide skip-vs-stop behavior on an unaffordable candidate.
 
-**REV-004 — Confirmed.** `MAX_FOCUS_HIT_RANGES = 6000` (line 173). `backfillFocusedLevelHitTrace()` (lines 2909–2931) iterates all retained ranges and additionally rebuilds `markedDateKeys` from the full event array on every call (lines 2912–2916). It is called at line 3399 inside the `barstate.islast` block that begins at line 3335, so every realtime tick pays the full rescan. Agree with the incremental direction; the `markedDateKeys` rebuild should be made incremental in the same pass.
+**REV-004 — Baseline defect confirmed; resolved locally.** `focusedHitBackfillKey` now records the selected Focus level set. The retained range scan and `markedDateKeys` rebuild run only when that set changes or the presentation window reopens. The existing live trace path handles subsequent eligible updates without rescanning history. TradingView performance and marker validation remain pending.
 
 **REV-005 — Confirmed.** `clearDrawings()` (line 1563) is called at line 3336, the first statement of the `barstate.islast` render block. Agree with the ordering: fix REV-004 first, measure, then decide how much stable-ID rendering is worth its complexity. Full-recreate is a simple invariant; partial updates in Pine are a known source of orphaned-drawing bugs.
 
-**REV-006 — Confirmed.** `mergeDepth()` (lines 991–992) returns `2` for both `MERGE_ALL` and `MERGE_COMBINE`, and `finalizePeriod()` gates folding on `mergeState.foldCount < mergeDepth` (line 2593). A run of three qualifying short sessions leaves the third unmerged despite the `All` label, and the Globex tooltip (line 449) promises "fold consecutive shorts." Agree: `MERGE_ALL` should return an effectively unbounded depth (or the fold gate should not cap by count for that mode).
+**REV-006 — Baseline defect confirmed; resolved locally.** `AnchorProcessPolicy` now carries `mergeAllShorts` independently from the finite `mergeDepth`. `finalizePeriod()` bypasses the fold counter only for `MERGE_ALL`; `Off`, `Earliest`, and `Combine Shorts` retain their previous limits. TradingView regression testing remains pending.
 
-**REV-007 — Confirmed.** Line 2711: `histogramPublishWindow = sameCompletionDay and minute(time) == QUARTERLY_SNAPSHOT_MINUTE` — no hour constraint and no transition detection. The adjacent `weeklyHistogramSnapshot` (line 2712) already constrains day + hour + minute and is the pattern to copy. Note `histogramSnapshot` (line 2713) also ORs `barstate.islast`, so the last-bar path is unaffected; the waste is on historical completion-day bars.
+**REV-007 — Static mechanism confirmed; remediation rejected by runtime evidence.** Line 2712 intentionally repeats the completion-day snapshot at the configured minute. A one-time scheduled replacement removed historical Quarterly histogram shapes on a 4-hour BTCUSD chart because the sparse 15-minute `Profile` object did not survive higher-timeframe `request.security` aggregation. The repeated condition is required compatibility behavior, not removable waste.
 
 **REV-008 — Refactor confirmed statically; needs runtime evidence.** `LevelHitEvent` (line 775) retains only touch facts; `LevelHitPresentation` (line 783) is rebuilt during rendering via `registerProfileLevelHitPresentations()` (lines 2483–2491) into the `levelHitPresentations` map (line 3078), and `renderLevelHitCircles()` resolves presentation by key at render time (lines 2192–2210). The architecture makes stale identity structurally impossible for retained profiles. Gate 1 TradingView validation remains required.
 
@@ -471,7 +569,7 @@ Static review of `code/development/revelio.pine` (3,462 lines). No indicator cha
 
 The batch order is sound. Two adjustments recommended:
 
-1. In Batch 1, REV-001 needs the touch-vs-mitigation contract decision (see verdict) before code changes — otherwise it risks silently redefining mitigation.
+1. REV-001 is closed with the existing distinction preserved: exact contact creates a Touch Marker, while mitigation requires trading through the level.
 2. Batch 2 and Batch 5 overlap on resolution policy: REV-010's fixed-resolution choice and REV-013's sweep-confirmation resolution should be decided in the same design review, with the Quarterly fixed-timeframe path (line 2692) as the precedent.
 3. Any REV-011 fix must update `LevelHitRange` retention as well as live detection, or live and backfilled Focus markers will diverge.
 
