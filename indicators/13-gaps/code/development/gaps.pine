@@ -29,11 +29,9 @@ const float CE_LEVEL = 0.50
 const float Q1_LEVEL = 0.25
 const float Q3_LEVEL = 0.75
 const int RIGHT_EDGE_CUSHION = 3
-const int DRAFT_OFFSET_RTH = 10
 const int DRAFT_WIDTH = 10
-const int FLOAT_OFFSET_RTH = 10
-const int FLOAT_OFFSET_NDOG = 26
-const int FLOAT_OFFSET_NWOG = 38
+const int FLOAT_OFFSET_NDOG_DELTA = 16
+const int FLOAT_OFFSET_NWOG_DELTA = 28
 const int FLOAT_WIDTH = 10
 const int MAX_STORED_GAPS = 80
 const int MAX_BAR_TIMES = 50000
@@ -91,6 +89,7 @@ enum QuickFilter
 
 quickFilter = input.enum(QuickFilter.all, "Quick Filter", group=GROUP_GENERAL, tooltip="Override the individual RTH / NWOG / NDOG toggles to quickly show a preset set, forcing the chosen types on even if their toggle is off.\n\n• RTH + NWOG + NDOG: respect the individual toggles\n• Any other preset: force that set on and the rest off")
 displayMode = input.enum(DisplayMode.historicalFloating, LABEL_DISPLAY_MODE, group=GROUP_GENERAL, tooltip="Historical shows normal gap boxes only. Historical + Floating also floats the most recent unfilled gap per type. Floating Only hides non-floating historical boxes while lifecycle tracking continues.")
+floatingOffset = input.int(200, "Floating Offset", minval=1, maxval=1000, group=GROUP_GENERAL, tooltip="Moves floating gaps and the Upcoming RTH gap into the right margin. NWOG and NDOG retain their spacing relative to RTH.")
 useFloating = displayMode != DisplayMode.historical
 floatingOnly = displayMode == DisplayMode.floatingOnly
 
@@ -306,9 +305,12 @@ floatPaletteColor(int slot) =>
 
 getFloatOffset(GapType gapType) =>
     switch gapType
-        GapType.nwog => FLOAT_OFFSET_NWOG
-        GapType.ndog => FLOAT_OFFSET_NDOG
-        => FLOAT_OFFSET_RTH
+        GapType.nwog => floatingOffset + FLOAT_OFFSET_NWOG_DELTA
+        GapType.ndog => floatingOffset + FLOAT_OFFSET_NDOG_DELTA
+        => floatingOffset
+
+futureOffsetTime(int barOffset) =>
+    time + barOffset * barMs
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BOX GEOMETRY
@@ -368,12 +370,12 @@ ensureGapDrawings(GapRecord gap) =>
 createRthDraft(float closePrice) =>
     draftTop = math.max(closePrice, close)
     draftBottom = math.min(closePrice, close)
-    leftBar = bar_index + DRAFT_OFFSET_RTH
-    rightBar = leftBar + DRAFT_WIDTH
-    bodyBox = box.new(leftBar, draftTop, rightBar, draftBottom, xloc=xloc.bar_index, bgcolor=rthPreviewColor, border_color=na)
-    topBorder = line.new(leftBar, draftTop, rightBar, draftTop, xloc=xloc.bar_index, color=UPCOMING_RTH_COLOR, style=line.style_solid)
-    bottomBorder = line.new(leftBar, draftBottom, rightBar, draftBottom, xloc=xloc.bar_index, color=UPCOMING_RTH_COLOR, style=line.style_solid)
-    draftLabel = label.new(math.round((leftBar + rightBar) / 2), draftBottom, "", xloc=xloc.bar_index, yloc=yloc.price, color=LABEL_BG_TRANSPARENT, textcolor=rthBorderColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
+    leftTime = futureOffsetTime(floatingOffset)
+    rightTime = futureOffsetTime(floatingOffset + DRAFT_WIDTH)
+    bodyBox = box.new(leftTime, draftTop, rightTime, draftBottom, xloc=xloc.bar_time, bgcolor=rthPreviewColor, border_color=na)
+    topBorder = line.new(leftTime, draftTop, rightTime, draftTop, xloc=xloc.bar_time, color=UPCOMING_RTH_COLOR, style=line.style_solid)
+    bottomBorder = line.new(leftTime, draftBottom, rightTime, draftBottom, xloc=xloc.bar_time, color=UPCOMING_RTH_COLOR, style=line.style_solid)
+    draftLabel = label.new(int(math.avg(leftTime, rightTime)), draftBottom, "", xloc=xloc.bar_time, yloc=yloc.price, color=LABEL_BG_TRANSPARENT, textcolor=rthBorderColor, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
     DraftGap.new(
          top=draftTop,
@@ -385,8 +387,9 @@ createRthDraft(float closePrice) =>
          dateLabel=draftLabel)
 
 createFloatingGap(GapRecord gap) =>
-    leftBar = bar_index + getFloatOffset(gap.gapType)
-    rightBar = leftBar + FLOAT_WIDTH
+    floatOffset = getFloatOffset(gap.gapType)
+    leftTime = futureOffsetTime(floatOffset)
+    rightTime = futureOffsetTime(floatOffset + FLOAT_WIDTH)
     gapRange = gap.top - gap.bottom
     midPrice = gap.bottom + gapRange * CE_LEVEL
     q1Price = gap.bottom + gapRange * Q1_LEVEL
@@ -394,15 +397,15 @@ createFloatingGap(GapRecord gap) =>
     unfilledClr = getUnfilledColor(gap.gapType)
     borderClr = getBorderColor(gap.gapType)
 
-    topBox = box.new(leftBar, gap.top, rightBar, gap.bottom, xloc=xloc.bar_index, bgcolor=unfilledClr, border_color=na)
-    filledBox = box.new(leftBar, gap.bottom, rightBar, gap.bottom, xloc=xloc.bar_index, bgcolor=na, border_color=na)
-    bottomBox = box.new(leftBar, gap.bottom, rightBar, gap.bottom, xloc=xloc.bar_index, bgcolor=na, border_color=na)
-    ceLine = line.new(leftBar, midPrice, rightBar, midPrice, xloc=xloc.bar_index, color=internalLinesColor, style=line.style_dotted)
-    q1Line = line.new(leftBar, q1Price, rightBar, q1Price, xloc=xloc.bar_index, color=internalLinesColor, style=line.style_dotted)
-    q3Line = line.new(leftBar, q3Price, rightBar, q3Price, xloc=xloc.bar_index, color=internalLinesColor, style=line.style_dotted)
-    topBorder = line.new(leftBar, gap.top, rightBar, gap.top, xloc=xloc.bar_index, color=borderClr, style=line.style_solid)
-    bottomBorder = line.new(leftBar, gap.bottom, rightBar, gap.bottom, xloc=xloc.bar_index, color=borderClr, style=line.style_solid)
-    floatingLabel = label.new(math.round((leftBar + rightBar) / 2), gap.bottom, "", xloc=xloc.bar_index, yloc=yloc.price, color=LABEL_BG_TRANSPARENT, textcolor=borderClr, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
+    topBox = box.new(leftTime, gap.top, rightTime, gap.bottom, xloc=xloc.bar_time, bgcolor=unfilledClr, border_color=na)
+    filledBox = box.new(leftTime, gap.bottom, rightTime, gap.bottom, xloc=xloc.bar_time, bgcolor=na, border_color=na)
+    bottomBox = box.new(leftTime, gap.bottom, rightTime, gap.bottom, xloc=xloc.bar_time, bgcolor=na, border_color=na)
+    ceLine = line.new(leftTime, midPrice, rightTime, midPrice, xloc=xloc.bar_time, color=internalLinesColor, style=line.style_dotted)
+    q1Line = line.new(leftTime, q1Price, rightTime, q1Price, xloc=xloc.bar_time, color=internalLinesColor, style=line.style_dotted)
+    q3Line = line.new(leftTime, q3Price, rightTime, q3Price, xloc=xloc.bar_time, color=internalLinesColor, style=line.style_dotted)
+    topBorder = line.new(leftTime, gap.top, rightTime, gap.top, xloc=xloc.bar_time, color=borderClr, style=line.style_solid)
+    bottomBorder = line.new(leftTime, gap.bottom, rightTime, gap.bottom, xloc=xloc.bar_time, color=borderClr, style=line.style_solid)
+    floatingLabel = label.new(int(math.avg(leftTime, rightTime)), gap.bottom, "", xloc=xloc.bar_time, yloc=yloc.price, color=LABEL_BG_TRANSPARENT, textcolor=borderClr, style=label.style_label_up, size=size.tiny, textalign=text.align_center)
 
     FloatingGap.new(
          topUnfilledBox=topBox,
@@ -461,29 +464,29 @@ hideDraftDrawings(DraftGap draft) =>
 updateRthDraft(DraftGap draft, float closePrice) =>
     draft.top := math.max(closePrice, close)
     draft.bottom := math.min(closePrice, close)
-    leftBar = bar_index + DRAFT_OFFSET_RTH
-    rightBar = leftBar + DRAFT_WIDTH
-    centerBar = math.round((leftBar + rightBar) / 2)
+    leftTime = futureOffsetTime(floatingOffset)
+    rightTime = futureOffsetTime(floatingOffset + DRAFT_WIDTH)
+    centerTime = int(math.avg(leftTime, rightTime))
 
-    box.set_left(draft.bodyBox, leftBar)
-    box.set_right(draft.bodyBox, rightBar)
+    box.set_left(draft.bodyBox, leftTime)
+    box.set_right(draft.bodyBox, rightTime)
     box.set_top(draft.bodyBox, draft.top)
     box.set_bottom(draft.bodyBox, draft.bottom)
     box.set_bgcolor(draft.bodyBox, rthPreviewColor)
 
-    line.set_x1(draft.topBorderLine, leftBar)
-    line.set_x2(draft.topBorderLine, rightBar)
+    line.set_x1(draft.topBorderLine, leftTime)
+    line.set_x2(draft.topBorderLine, rightTime)
     line.set_y1(draft.topBorderLine, draft.top)
     line.set_y2(draft.topBorderLine, draft.top)
     line.set_color(draft.topBorderLine, UPCOMING_RTH_COLOR)
 
-    line.set_x1(draft.bottomBorderLine, leftBar)
-    line.set_x2(draft.bottomBorderLine, rightBar)
+    line.set_x1(draft.bottomBorderLine, leftTime)
+    line.set_x2(draft.bottomBorderLine, rightTime)
     line.set_y1(draft.bottomBorderLine, draft.bottom)
     line.set_y2(draft.bottomBorderLine, draft.bottom)
     line.set_color(draft.bottomBorderLine, UPCOMING_RTH_COLOR)
 
-    label.set_x(draft.dateLabel, centerBar)
+    label.set_x(draft.dateLabel, centerTime)
     label.set_y(draft.dateLabel, draft.bottom)
     label.set_text(draft.dateLabel, showLabels ? getDraftLabel(draft) : "")
     label.set_textcolor(draft.dateLabel, rthBorderColor)
@@ -500,9 +503,10 @@ hideFloatingDrawings(FloatingGap floating) =>
     label.set_text(floating.dateLabel, "")
 
 updateFloating(FloatingGap floating, GapRecord gap, color borderOverride = na) =>
-    leftBar = bar_index + getFloatOffset(gap.gapType)
-    rightBar = leftBar + FLOAT_WIDTH
-    centerBar = math.round((leftBar + rightBar) / 2)
+    floatOffset = getFloatOffset(gap.gapType)
+    leftTime = futureOffsetTime(floatOffset)
+    rightTime = futureOffsetTime(floatOffset + FLOAT_WIDTH)
+    centerTime = int(math.avg(leftTime, rightTime))
     gapRange = gap.top - gap.bottom
     midPrice = gap.bottom + gapRange * CE_LEVEL
     q1Price = gap.bottom + gapRange * Q1_LEVEL
@@ -512,52 +516,52 @@ updateFloating(FloatingGap floating, GapRecord gap, color borderOverride = na) =
     filledClr = getFilledColor(gap.gapType)
     borderClr = na(borderOverride) ? getBorderColor(gap.gapType) : borderOverride
 
-    box.set_left(floating.topUnfilledBox, leftBar)
-    box.set_right(floating.topUnfilledBox, rightBar)
+    box.set_left(floating.topUnfilledBox, leftTime)
+    box.set_right(floating.topUnfilledBox, rightTime)
     box.set_top(floating.topUnfilledBox, tTop)
     box.set_bottom(floating.topUnfilledBox, tBot)
     box.set_bgcolor(floating.topUnfilledBox, tTop != tBot ? unfilledClr : na)
 
-    box.set_left(floating.filledBox, leftBar)
-    box.set_right(floating.filledBox, rightBar)
+    box.set_left(floating.filledBox, leftTime)
+    box.set_right(floating.filledBox, rightTime)
     box.set_top(floating.filledBox, fTop)
     box.set_bottom(floating.filledBox, fBot)
     box.set_bgcolor(floating.filledBox, fTop != fBot ? filledClr : na)
 
-    box.set_left(floating.bottomUnfilledBox, leftBar)
-    box.set_right(floating.bottomUnfilledBox, rightBar)
+    box.set_left(floating.bottomUnfilledBox, leftTime)
+    box.set_right(floating.bottomUnfilledBox, rightTime)
     box.set_top(floating.bottomUnfilledBox, bTop)
     box.set_bottom(floating.bottomUnfilledBox, bBot)
     box.set_bgcolor(floating.bottomUnfilledBox, bTop != bBot ? unfilledClr : na)
 
-    line.set_x1(floating.ceLine, leftBar)
-    line.set_x2(floating.ceLine, rightBar)
+    line.set_x1(floating.ceLine, leftTime)
+    line.set_x2(floating.ceLine, rightTime)
     line.set_y1(floating.ceLine, midPrice)
     line.set_y2(floating.ceLine, midPrice)
     line.set_color(floating.ceLine, showInternalLines ? internalLinesColor : na)
-    line.set_x1(floating.q1Line, leftBar)
-    line.set_x2(floating.q1Line, rightBar)
+    line.set_x1(floating.q1Line, leftTime)
+    line.set_x2(floating.q1Line, rightTime)
     line.set_y1(floating.q1Line, q1Price)
     line.set_y2(floating.q1Line, q1Price)
     line.set_color(floating.q1Line, showInternalLines ? internalLinesColor : na)
-    line.set_x1(floating.q3Line, leftBar)
-    line.set_x2(floating.q3Line, rightBar)
+    line.set_x1(floating.q3Line, leftTime)
+    line.set_x2(floating.q3Line, rightTime)
     line.set_y1(floating.q3Line, q3Price)
     line.set_y2(floating.q3Line, q3Price)
     line.set_color(floating.q3Line, showInternalLines ? internalLinesColor : na)
 
-    line.set_x1(floating.topBorderLine, leftBar)
-    line.set_x2(floating.topBorderLine, rightBar)
+    line.set_x1(floating.topBorderLine, leftTime)
+    line.set_x2(floating.topBorderLine, rightTime)
     line.set_y1(floating.topBorderLine, gap.top)
     line.set_y2(floating.topBorderLine, gap.top)
     line.set_color(floating.topBorderLine, borderClr)
-    line.set_x1(floating.bottomBorderLine, leftBar)
-    line.set_x2(floating.bottomBorderLine, rightBar)
+    line.set_x1(floating.bottomBorderLine, leftTime)
+    line.set_x2(floating.bottomBorderLine, rightTime)
     line.set_y1(floating.bottomBorderLine, gap.bottom)
     line.set_y2(floating.bottomBorderLine, gap.bottom)
     line.set_color(floating.bottomBorderLine, borderClr)
 
-    label.set_x(floating.dateLabel, centerBar)
+    label.set_x(floating.dateLabel, centerTime)
     label.set_y(floating.dateLabel, gap.bottom)
     label.set_text(floating.dateLabel, showLabels ? getGapLabel(gap) : "")
     label.set_textcolor(floating.dateLabel, getBorderColor(gap.gapType))
