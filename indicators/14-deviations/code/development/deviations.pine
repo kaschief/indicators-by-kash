@@ -2,11 +2,11 @@
 indicator("deviations •", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TIMEFRAME RESTRICTION
+// CHART CONTEXT
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Only allow 30S and 1-5 minute timeframes
-validTimeframe = timeframe.period == "30S" or timeframe.period == "1" or timeframe.period == "2" or timeframe.period == "3" or timeframe.period == "4" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "30"
+validTimeChart = timeframe.period == "30S" or (timeframe.isminutes and (timeframe.multiplier <= 5 or timeframe.multiplier == 15 or timeframe.multiplier == 30))
+validChartContext = chart.is_range or validTimeChart
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPE DEFINITIONS
@@ -318,6 +318,7 @@ showOnlyMostRecent = input.bool(false, LABEL_MOST_RECENT_ONLY, inline="show_only
 // ═══════════════════════════════════════════════════════════════════════════
 
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
+showUnmitigatedRafaelAsiaOpenLevels = input.bool(false, "Show Unmitigated Rafael + Asia Open Levels", group=GROUP_MITIGATION, tooltip="Keep unmitigated Rafael and Asia Open highs and lows visible while using Mitigated mode.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Labels
@@ -703,6 +704,11 @@ shouldShowMitigationName(SessionData sess, bool isHigh) =>
 timeWithOffset(int baseTime, int barOffset) =>
     baseTime + barOffset * BAR_MS
 
+// Range candles have no fixed duration, so their confirmation endpoint is the current candle.
+ivbConfirmationEndTime(int confirmedBarTime, int provisionalTime, int currentBarTime, bool isRange, int chartBarMs) =>
+    int endpoint = isRange ? currentBarTime : confirmedBarTime + 30 * 60 * 1000 - chartBarMs
+    math.max(endpoint, provisionalTime)
+
 // Parse deviation string into ordered array of DeviationZone entries
 // Example: "1, 2:2.5, 4:4.5" → [{1,1,false}, {2,2.5,true}, {4,4.5,true}]
 parseDeviationZones(string deviationStr) =>
@@ -980,8 +986,8 @@ var array<SessionConfig> sessionConfigs = array.from(
 // PHASE 1: SESSION DETECTION - Detect new sessions starting
 // ═══════════════════════════════════════════════════════════════════════════
 
-barMinutes = validTimeframe ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
-prevBarMinutes = validTimeframe ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
+barMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
+prevBarMinutes = validChartContext ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
 currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -997,7 +1003,7 @@ currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY
 PREMARKET_START_MIN = array.get(sessionConfigs, IDX_PREMARKET).startMin  // 300 = 05:00
 CLOSE_1600_MIN = 960  // 16:00 = 16 * 60
 
-if validTimeframe
+if validChartContext
     for i = 0 to array.size(sessionConfigs) - 1
         SessionConfig cfg = array.get(sessionConfigs, i)
 
@@ -1107,7 +1113,7 @@ if validTimeframe
 // PHASE 2: SESSION TRACKING - Update all active sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
-if validTimeframe and array.size(activeSessions) > 0
+if validChartContext and array.size(activeSessions) > 0
     for sess in activeSessions
         idx = sess.sessionIndex
         SessionConfig sessCfg = array.get(sessionConfigs, idx)
@@ -1147,7 +1153,7 @@ if validTimeframe and array.size(activeSessions) > 0
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
 // ═══════════════════════════════════════════════════════════════════════════
 
-if validTimeframe and array.size(activeSessions) > 0
+if validChartContext and array.size(activeSessions) > 0
     for i = array.size(activeSessions) - 1 to 0
         sess = array.get(activeSessions, i)
         idx = sess.sessionIndex
@@ -1272,7 +1278,7 @@ finalizeIvbExtDay(IvbExtState st) =>
     st.maxAbove := 0.0
     st.maxBelow := 0.0
 
-if validTimeframe and ivbExtFeatureOn
+if validChartContext and ivbExtFeatureOn
     // Close out the tracked day at the 16:00 crossing, or at the first bar of a new NY day
     // (covers early closes that never print a 16:00 bar).
     bool crossed1600 = barMinutes >= CLOSE_1600_MIN and prevBarMinutes < CLOSE_1600_MIN
@@ -1317,7 +1323,7 @@ drawIvbExtensions(SessionData sess, bool brokeHigh) =>
 // IVB-based retracement requires IVB enabled and in the active filter.
 ivbFeatureAvailable = opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
 
-if validTimeframe and array.size(sessions) > 0
+if validChartContext and array.size(sessions) > 0
     for sess in sessions
         if sess.showMitigation and not na(sess.dominantHigh)
             // Same-day mitigation: only track mitigations on the same calendar day (Asia Open is exempt)
@@ -1334,6 +1340,8 @@ if validTimeframe and array.size(sessions) > 0
             // Provisional window = genuine overnight only (formation evening + next day pre-05:00). Excludes the next day's post-RTH hours so a holiday-delayed revisit confirms (caps the dash) instead of staying pending past 05:00 — see crossesMidnight sessions (Rafael) where an empty holiday RTH window left the dash running.
             isInOvernightWindow = sess.delayedMitigation and not canEvaluateMitigation and (isOnSessionStartDay or isInNextDayOvernightWindow)
             canEvaluateRetraceMitigation = not sess.retraceCapAt1600 or (shouldTrackMitigation and barMinutes < CLOSE_1600_MIN)
+            bool showOpenKeyOverlay = mitigationMode == SESSION_MITIGATED and showUnmitigatedRafaelAsiaOpenLevels and alwaysTrackMitigation(sess.sessionIndex)
+            bool showPersistentLevels = mitigationMode == SESSION_UNMITIGATED or showOpenKeyOverlay
 
             // Extensions have stricter semantics than IVB mitigation: mitigation starts on a
             // configured edge touch, while a breakout projection starts only after price exceeds
@@ -1363,11 +1371,8 @@ if validTimeframe and array.size(sessions) > 0
                     if sess.provisionalHighMitigated and not na(htf30mClose) and htf30mClose > sess.dominantHigh and isSameCalendarDay(sess.startTime, htf30mTime)
                         sess.highMitigated := true
                         sess.highMitigationBar := bar_index
-                        // End at the open of the LAST chart-timeframe candle inside the breaching 30m window (timeframe-aware via BAR_MS):
-                        // on 30m that's the breaking bar's left edge; on a 3m chart it's the last 3m bar (~:57) where the 30m close lands — so the line reaches the breaking candle on every TF.
-                        // math.max guards the case where the first touch and the breaking close fall in the same candle (window start would precede the touch).
                         if mitigationMode == SESSION_MITIGATED and not na(sess.highPendingLine)
-                            line.set_x2(sess.highPendingLine, math.max(htf30mTime + 30 * 60 * 1000 - BAR_MS, sess.provisionalHighTime))
+                            line.set_x2(sess.highPendingLine, ivbConfirmationEndTime(htf30mTime, sess.provisionalHighTime, time, chart.is_range, BAR_MS))
                     if sess.provisionalHighMitigated and not na(sess.highPendingLine) and not sess.highMitigated and isOnSessionStartDay
                         line.set_x2(sess.highPendingLine, time)
                 else if canEvaluateMitigation and high >= sess.dominantHigh
@@ -1416,11 +1421,8 @@ if validTimeframe and array.size(sessions) > 0
                     if sess.provisionalLowMitigated and not na(htf30mClose) and htf30mClose < sess.dominantLow and isSameCalendarDay(sess.startTime, htf30mTime)
                         sess.lowMitigated := true
                         sess.lowMitigationBar := bar_index
-                        // End at the open of the LAST chart-timeframe candle inside the breaching 30m window (timeframe-aware via BAR_MS):
-                        // on 30m that's the breaking bar's left edge; on a 3m chart it's the last 3m bar (~:57) where the 30m close lands — so the line reaches the breaking candle on every TF.
-                        // math.max guards the case where the first touch and the breaking close fall in the same candle (window start would precede the touch).
                         if mitigationMode == SESSION_MITIGATED and not na(sess.lowPendingLine)
-                            line.set_x2(sess.lowPendingLine, math.max(htf30mTime + 30 * 60 * 1000 - BAR_MS, sess.provisionalLowTime))
+                            line.set_x2(sess.lowPendingLine, ivbConfirmationEndTime(htf30mTime, sess.provisionalLowTime, time, chart.is_range, BAR_MS))
                     if sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated and isOnSessionStartDay
                         line.set_x2(sess.lowPendingLine, time)
                 else if canEvaluateMitigation and low <= sess.dominantLow
@@ -1465,19 +1467,25 @@ if validTimeframe and array.size(sessions) > 0
                 resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.dominantLow, mitigationTxt, showMitigationReminders)
 
             // === CONSOLIDATED POST-MITIGATION CLEANUP (single check replaces duplicates) ===
-            // Delete unmitigated line/label when HIGH is mitigated
-            if sess.highMitigated and not na(sess.highUnmitigatedLine)
+            // Hand provisional overlay lines to the standard Mitigated presentation.
+            bool highOverlayHandedOff = showOpenKeyOverlay and sess.provisionalHighMitigated
+            bool lowOverlayHandedOff = showOpenKeyOverlay and sess.provisionalLowMitigated
+
+            // Delete unmitigated line/label when HIGH is mitigated or handed off.
+            if (sess.highMitigated or highOverlayHandedOff) and not na(sess.highUnmitigatedLine)
                 line.delete(sess.highUnmitigatedLine)
                 sess.highUnmitigatedLine := na
-                label.delete(sess.highUnmitigatedLabel)
-                sess.highUnmitigatedLabel := na
+                if not na(sess.highUnmitigatedLabel)
+                    label.delete(sess.highUnmitigatedLabel)
+                    sess.highUnmitigatedLabel := na
 
-            // Delete unmitigated line/label when LOW is mitigated
-            if sess.lowMitigated and not na(sess.lowUnmitigatedLine)
+            // Delete unmitigated line/label when LOW is mitigated or handed off.
+            if (sess.lowMitigated or lowOverlayHandedOff) and not na(sess.lowUnmitigatedLine)
                 line.delete(sess.lowUnmitigatedLine)
                 sess.lowUnmitigatedLine := na
-                label.delete(sess.lowUnmitigatedLabel)
-                sess.lowUnmitigatedLabel := na
+                if not na(sess.lowUnmitigatedLabel)
+                    label.delete(sess.lowUnmitigatedLabel)
+                    sess.lowUnmitigatedLabel := na
 
             // Anchor 0.618 off the first extreme taken; IVB mode may re-anchor below.
             if sess.isKeySession and na(sess.retraceLevel618)
@@ -1486,18 +1494,18 @@ if validTimeframe and array.size(sessions) > 0
                 else if sess.lowMitigated and not sess.highMitigated
                     sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
 
-            // Unmitigated mode: cleanup stale lines and draw for tracked sessions
-            if mitigationMode == SESSION_UNMITIGATED and showAllLines
-                // Clean up HIGH pending line if: mitigated, not provisional, or outside tracking window
-                bool shouldShowHighPending = not sess.highMitigated and sess.provisionalHighMitigated and shouldTrackMitigation
-                if not shouldShowHighPending and not na(sess.highPendingLine)
-                    line.delete(sess.highPendingLine)
-                    sess.highPendingLine := na
-                // Clean up LOW pending line if: mitigated, not provisional, or outside tracking window
-                bool shouldShowLowPending = not sess.lowMitigated and sess.provisionalLowMitigated and shouldTrackMitigation
-                if not shouldShowLowPending and not na(sess.lowPendingLine)
-                    line.delete(sess.lowPendingLine)
-                    sess.lowPendingLine := na
+            // Draw untouched levels in Unmitigated mode or as the Rafael + Asia overlay.
+            if showPersistentLevels and showAllLines
+                if mitigationMode == SESSION_UNMITIGATED
+                    // Unmitigated mode owns its pending-line lifecycle.
+                    bool shouldShowHighPending = not sess.highMitigated and sess.provisionalHighMitigated and shouldTrackMitigation
+                    if not shouldShowHighPending and not na(sess.highPendingLine)
+                        line.delete(sess.highPendingLine)
+                        sess.highPendingLine := na
+                    bool shouldShowLowPending = not sess.lowMitigated and sess.provisionalLowMitigated and shouldTrackMitigation
+                    if not shouldShowLowPending and not na(sess.lowPendingLine)
+                        line.delete(sess.lowPendingLine)
+                        sess.lowPendingLine := na
                 // Clean up unmitigated lines/labels if outside tracking window
                 if not shouldTrackMitigation
                     if not na(sess.highUnmitigatedLine)
@@ -1515,7 +1523,7 @@ if validTimeframe and array.size(sessions) > 0
                 else
                     // Draw for sessions within tracking window (same-day or always-track)
                     // High unmitigated line and label
-                    if not sess.highMitigated
+                    if not sess.highMitigated and (mitigationMode == SESSION_UNMITIGATED or not sess.provisionalHighMitigated)
                         if sess.provisionalHighMitigated
                             // Provisionally mitigated: solid to breach, dashed continuation
                             if na(sess.highPendingLine)
@@ -1542,7 +1550,7 @@ if validTimeframe and array.size(sessions) > 0
                                 if not na(sess.highUnmitigatedLabel)
                                     label.set_x(sess.highUnmitigatedLabel, time)
                     // Low unmitigated line and label
-                    if not sess.lowMitigated
+                    if not sess.lowMitigated and (mitigationMode == SESSION_UNMITIGATED or not sess.provisionalLowMitigated)
                         if sess.provisionalLowMitigated
                             // Provisionally mitigated: solid to breach, dashed continuation
                             if na(sess.lowPendingLine)
@@ -1700,7 +1708,7 @@ if validTimeframe and array.size(sessions) > 0
 //    - If within window AND previously touched: keep darkened
 //    - If outside window: restore original color, clear touch record
 
-if validTimeframe and enableDeviationGlow and array.size(sessions) > 0
+if validChartContext and enableDeviationGlow and array.size(sessions) > 0
     glowWindowMs = int(glowWindowHours * 60 * 60 * 1000)
 
     // Track which session types we've processed (reset each bar)
@@ -1807,7 +1815,7 @@ addRetracementColorRows(table tbl, int startRow, string sessionName, color textC
     addSessionStyleColorRow(tbl, startRow + 1, sessionName, "Retracement Bg", bgClr)
     2
 
-if validTimeframe and showColorTable and barstate.islast
+if validChartContext and showColorTable and barstate.islast
     var table colorTable = table.new(position.top_right, 4, COLOR_TABLE_MAX_ROWS, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
 
     // Header row
@@ -1859,7 +1867,7 @@ if validTimeframe and showColorTable and barstate.islast
 // ═══════════════════════════════════════════════════════════════════════════
 // The dropdown picks one recurring NY-time window to keep visible; a bar is greyed when it falls OUTSIDE
 // that window. Windows are evaluated from const session strings (time() needs consts) and selected by mode.
-showOnlyTimeframeAllowed = timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
+showOnlyTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
 // Pick the chosen window first, then do ONE session lookup per bar instead of evaluating all six.
 activeShowOnlySession = visibleWindow == SHOW_FROM_0500 ? SESSION_WINDOW_FROM_0500 : visibleWindow == SHOW_FROM_0830 ? SESSION_WINDOW_FROM_0830 : visibleWindow == SHOW_RTH ? SESSION_WINDOW_RTH : SESSION_WINDOW_OVERNIGHT
 inVisibleWindow = not na(time(timeframe.period, activeShowOnlySession, NY_TIMEZONE))
