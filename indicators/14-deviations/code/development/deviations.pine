@@ -113,11 +113,13 @@ type SessionData
     string retracementMode
     // Midnight-crossing session (e.g., 21:30-01:29) - extends same-day logic to next calendar day
     bool crossesMidnight
-    // Provisional mitigation tracking (overnight breach pending 05:00 confirmation)
+    // Provisional boundary tracking (IVB close confirmation and overnight handoff)
     bool provisionalHighMitigated
     bool provisionalLowMitigated
     int provisionalHighTime
     int provisionalLowTime
+    int provisionalHighBar
+    int provisionalLowBar
     line highPendingLine
     line lowPendingLine
     label highPendingLabel
@@ -129,6 +131,8 @@ type SessionData
     bool extLowProcessed
     int extHighTime
     int extLowTime
+    bool extHighConfirmed
+    bool extLowConfirmed
     array<line> extLines
     array<label> extLabels
 
@@ -245,7 +249,7 @@ IVB_EXT_MIN_SAMPLES = 5
 LABEL_EXT_AVG = "ivb avg"
 LABEL_EXT_STD = "ivb +1σ"
 
-TOOLTIP_IVB_EXTENSIONS = "Projects IVB Average and +1σ breakout levels to 16:00. Lookback sets the sample count. Requires at least 5 samples and IVB Mitigation."
+TOOLTIP_IVB_EXTENSIONS = "Projects IVB Average and +1σ breakout levels to 16:00 after a confirmed 30-minute close outside the IVB wick range. Lookback sets the sample count. Requires at least 5 samples and IVB Mitigation."
 
 // Option values
 OPT_HIDDEN = "Hidden"
@@ -307,7 +311,7 @@ DEV_J_IVB = "0.25:0.5, 1:1.5"                                    // IVB (09:30-1
 // ═══════════════════════════════════════════════════════════════════════════
 
 quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_RAFAEL_1800_EARLY_OVERNIGHT, FILTER_RAFAEL_1800_EARLY_PREMARKET_OVERNIGHT, FILTER_1800, FILTER_1800_EARLY, FILTER_IVB, FILTER_NY_EARLY_IVB, FILTER_NY_EARLY_IVB_PREMARKET], group=GROUP_GENERAL, tooltip="Quick filter presets for session visibility.")
-maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=50)
+maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_GENERAL, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=100)
 showOnlyEnabled = input.bool(true, LABEL_SHOW_ONLY, inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
 visibleWindow = input.string(SHOW_FROM_0500, "", options=[SHOW_OVERNIGHT, SHOW_FROM_0500, SHOW_FROM_0830, SHOW_RTH], inline="show_only", group=GROUP_GENERAL, tooltip=TOOLTIP_SHOW_ONLY)
@@ -344,7 +348,7 @@ glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", g
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Deviation glow window.")
 enableIvbExtensionGlow = input.bool(false, "IVB Extension Glow", inline="ivb_ext_glow", group=GROUP_DISPLAY)
 glowIvbExtensionWidth = input.int(4, "Width", inline="ivb_ext_glow", group=GROUP_DISPLAY, options=[1, 2, 3, 4, 5], active=enableIvbExtensionGlow)
-ivbExtensionGlowWindowHours = input.float(20.0, "Duration", inline="ivb_ext_glow", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, active=enableIvbExtensionGlow, tooltip="IVB extension glow window.")
+ivbExtensionGlowWindowHours = input.float(20.0, "Duration", inline="ivb_ext_glow", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, active=enableIvbExtensionGlow, tooltip="Latest-IVB projections can register hits until the next IVB begins. After its first hit, each line stays widened for this duration or until the next IVB, whichever comes first.")
 quickCheckMode = input.bool(true, "Quick Check", group=GROUP_DISPLAY, tooltip="Hide deviations for Rafael and 1800 - show core only")
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1020,10 +1024,10 @@ currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY
 // 30M DATA - Confirmed close for IVB mitigation
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Confirmed (closed) 30m close + its bar-open time, for IVB mitigation. close[1] + lookahead_on
+// Confirmed standard-OHLC 30m close + its bar-open time, for IVB mitigation. close[1] + lookahead_on
 // is the no-repaint idiom: returns only fully-closed 30m values. Single tuple request keeps it to one security call.
 // Note: on a 30m chart this confirms one bar later than on lower TFs (the close is only known after the bar closes).
-[htf30mClose, htf30mTime] = request.security(syminfo.tickerid, "30", [close[1], time[1]], lookahead=barmerge.lookahead_on)
+[htf30mClose, htf30mTime] = request.security(ticker.standard(syminfo.tickerid), "30", [close[1], time[1]], lookahead=barmerge.lookahead_on)
 
 // Time windows used by mitigation logic
 PREMARKET_START_MIN = array.get(sessionConfigs, IDX_PREMARKET).startMin  // 300 = 05:00
@@ -1120,6 +1124,8 @@ if validChartContext
                      provisionalLowMitigated=false,
                      provisionalHighTime=na,
                      provisionalLowTime=na,
+                     provisionalHighBar=na,
+                     provisionalLowBar=na,
                      highPendingLine=na,
                      lowPendingLine=na,
                      highPendingLabel=na,
@@ -1129,6 +1135,8 @@ if validChartContext
                      extLowProcessed=false,
                      extHighTime=na,
                      extLowTime=na,
+                     extHighConfirmed=false,
+                     extLowConfirmed=false,
                      extLines=array.new<line>(),
                      extLabels=array.new<label>()
                  )
@@ -1318,10 +1326,10 @@ if validChartContext and ivbExtFeatureOn
         ivbExtState.maxAbove := math.max(ivbExtState.maxAbove, high - ivbExtState.dayHigh)
         ivbExtState.maxBelow := math.max(ivbExtState.maxBelow, ivbExtState.dayLow - low)
 
-// Project the average / avg+1σ historical breakout extension from a broken IVB wick edge to 16:00.
-// Called once per side, on the bar of the first strict wick breach before 16:00.
+// Reveal the average / avg+1σ projection after confirmation, anchored at the original IVB break.
 drawIvbExtensions(SessionData sess, bool brokeHigh) =>
-    if ivbExtFeatureOn and showAllLines and barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and array.size(ivbExtState.ratios) >= IVB_EXT_MIN_SAMPLES
+    int projectionStartTime = brokeHigh ? sess.extHighTime : sess.extLowTime
+    if ivbExtFeatureOn and showAllLines and barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(projectionStartTime) and array.size(ivbExtState.ratios) >= IVB_EXT_MIN_SAMPLES
         // Statistics are trained on wick ranges, so projections must use the same basis even
         // when the IVB display/mitigation mode is configured to use body levels.
         float rangeHeight = sess.wickHigh - sess.wickLow
@@ -1332,8 +1340,8 @@ drawIvbExtensions(SessionData sess, bool brokeHigh) =>
         float avgLevel = edge + direction * rangeHeight * avgRatio
         float stdLevel = edge + direction * rangeHeight * (avgRatio + stdRatio)
         int endOfDay = currentDayStart + CLOSE_1600_MIN * 60 * 1000
-        line avgLine = line.new(time, avgLevel, endOfDay, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
-        line stdLine = line.new(time, stdLevel, endOfDay, stdLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
+        line avgLine = line.new(projectionStartTime, avgLevel, endOfDay, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
+        line stdLine = line.new(projectionStartTime, stdLevel, endOfDay, stdLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
         array.push(sess.extLines, avgLine)
         array.push(sess.extLines, stdLine)
         if showAllLabels
@@ -1369,18 +1377,20 @@ if validChartContext and array.size(sessions) > 0
             bool showOpenKeyOverlay = mitigationMode == SESSION_MITIGATED and showUnmitigatedRafaelAsiaOpenLevels and alwaysTrackMitigation(sess.sessionIndex)
             bool showPersistentLevels = mitigationMode == SESSION_UNMITIGATED or showOpenKeyOverlay
 
-            // Extensions have stricter semantics than IVB mitigation: mitigation starts on a
-            // configured edge touch, while a breakout projection starts only after price exceeds
-            // the IVB wick edge. Keep this independent from highMitigated/lowMitigated so Body mode
-            // cannot consume a wick breakout before the extension is evaluated.
+            // Record the first strict wick break per side for NY Early's IVB-based direction.
+            // Projection drawing waits for the separate 30-minute close confirmation below.
             if sess.sessionIndex == IDX_IVB and canEvaluateMitigation and barMinutes < CLOSE_1600_MIN
                 if not sess.extHighProcessed and high > sess.wickHigh
                     sess.extHighProcessed := true
                     sess.extHighTime := time
-                    drawIvbExtensions(sess, true)
                 if not sess.extLowProcessed and low < sess.wickLow
                     sess.extLowProcessed := true
                     sess.extLowTime := time
+                if not sess.extHighConfirmed and not na(htf30mClose) and htf30mClose > sess.wickHigh and isSameCalendarDay(sess.startTime, htf30mTime)
+                    sess.extHighConfirmed := true
+                    drawIvbExtensions(sess, true)
+                if not sess.extLowConfirmed and not na(htf30mClose) and htf30mClose < sess.wickLow and isSameCalendarDay(sess.startTime, htf30mTime)
+                    sess.extLowConfirmed := true
                     drawIvbExtensions(sess, false)
 
             // === HIGH MITIGATION LOGIC ===
@@ -1390,6 +1400,7 @@ if validChartContext and array.size(sessions) > 0
                     if not sess.provisionalHighMitigated and canEvaluateMitigation and high >= sess.dominantHigh
                         sess.provisionalHighMitigated := true
                         sess.provisionalHighTime := time
+                        sess.provisionalHighBar := bar_index
                         if mitigationMode == SESSION_MITIGATED
                             [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.highTime, sess.dominantHigh, sess.mitigationColor)
                             sess.highMitigationLine := solid
@@ -1440,6 +1451,7 @@ if validChartContext and array.size(sessions) > 0
                     if not sess.provisionalLowMitigated and canEvaluateMitigation and low <= sess.dominantLow
                         sess.provisionalLowMitigated := true
                         sess.provisionalLowTime := time
+                        sess.provisionalLowBar := bar_index
                         if mitigationMode == SESSION_MITIGATED
                             [solid, pending] = draw_provisional_breach_lines(showAllLines, sess.lowTime, sess.dominantLow, sess.mitigationColor)
                             sess.lowMitigationLine := solid
@@ -1513,11 +1525,14 @@ if validChartContext and array.size(sessions) > 0
                     label.delete(sess.lowUnmitigatedLabel)
                     sess.lowUnmitigatedLabel := na
 
-            // Anchor 0.618 off the first extreme taken; IVB mode may re-anchor below.
+            // Anchor 0.618 off the first extreme taken. IVB Standard arms provisionally;
+            // NY Early's IVB-based mode may re-anchor below.
             if sess.isKeySession and na(sess.retraceLevel618)
-                if sess.highMitigated and not sess.lowMitigated
+                bool highOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalHighMitigated : sess.highMitigated
+                bool lowOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalLowMitigated : sess.lowMitigated
+                if highOriginTaken and not lowOriginTaken
                     sess.retraceLevel618 := sess.wickHigh - sess.wickHeight * 0.618
-                else if sess.lowMitigated and not sess.highMitigated
+                else if lowOriginTaken and not highOriginTaken
                     sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
 
             // Draw untouched levels in Unmitigated mode or as the Rafael + Asia overlay.
@@ -1605,6 +1620,14 @@ if validChartContext and array.size(sessions) > 0
             // Standard mode anchors from the first session extreme taken. IVB mode replaces that anchor
             // and direction with the first strict IVB wick break.
             bool usesIvbRetracement = sess.sessionIndex == IDX_NY_EARLY and sess.retracementMode == RETRACE_MODE_IVB
+            bool usesProvisionalIvbOrigin = sess.sessionIndex == IDX_IVB
+            bool standardHighOriginTaken = usesProvisionalIvbOrigin ? sess.provisionalHighMitigated : sess.highMitigated
+            bool standardLowOriginTaken = usesProvisionalIvbOrigin ? sess.provisionalLowMitigated : sess.lowMitigated
+            int standardHighOriginBar = usesProvisionalIvbOrigin ? nz(sess.provisionalHighBar, 0) : nz(sess.highMitigationBar, 0)
+            int standardLowOriginBar = usesProvisionalIvbOrigin ? nz(sess.provisionalLowBar, 0) : nz(sess.lowMitigationBar, 0)
+            bool standardOriginAmbiguous = usesProvisionalIvbOrigin and standardHighOriginTaken and standardLowOriginTaken and standardHighOriginBar == standardLowOriginBar
+            bool standardLowWasFirst = standardLowOriginTaken and (not standardHighOriginTaken or standardLowOriginBar < standardHighOriginBar)
+            int standardFirstOriginBar = standardLowWasFirst ? standardLowOriginBar : standardHighOriginBar
             bool retraceGateOpen = not usesIvbRetracement
             if usesIvbRetracement
                 if na(sess.ivbBreakTime)
@@ -1623,17 +1646,16 @@ if validChartContext and array.size(sessions) > 0
                 retraceGateOpen := ivbFeatureAvailable and not na(sess.ivbBreakTime) and time > sess.ivbBreakTime
             bool canDrawRetrace = sess.showRetracement and retraceGateOpen
 
-            // Check for 50% mitigation (only after an extreme has been mitigated, only in Mitigated mode)
-            // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            bool requiredOriginMitigated = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? sess.highMitigated : sess.ivbBreakSide == -1 and sess.lowMitigated) : (sess.highMitigated or sess.lowMitigated)
-            if mitigationMode == SESSION_MITIGATED and sess.sessionIndex != IDX_PREMARKET and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginMitigated and not sess.midMitigated and not na(sess.midLevel)
+            // Check for 50% mitigation after the qualifying origin bar.
+            // IVB Standard qualifies on its provisional boundary break; other modes retain confirmation.
+            bool requiredOriginTaken = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? sess.highMitigated : sess.ivbBreakSide == -1 and sess.lowMitigated) : ((standardHighOriginTaken or standardLowOriginTaken) and not standardOriginAmbiguous)
+            if mitigationMode == SESSION_MITIGATED and sess.sessionIndex != IDX_PREMARKET and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginTaken and not sess.midMitigated and not na(sess.midLevel)
                 // Standard mode follows the first session extreme taken. IVB mode follows the first
                 // IVB wick broken: high break retraces down, low break retraces up.
-                bool lowWasFirst = sess.lowMitigated and (not sess.highMitigated or sess.lowMitigationBar < sess.highMitigationBar)
-                bool retracingUp = usesIvbRetracement ? sess.ivbBreakSide == -1 : lowWasFirst
-                firstMitigationBar = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? nz(sess.highMitigationBar, 0) : nz(sess.lowMitigationBar, 0)) : (lowWasFirst ? nz(sess.lowMitigationBar, 0) : nz(sess.highMitigationBar, 0))
-                // Only check on bars AFTER the mitigation bar (not the same bar)
-                if bar_index > firstMitigationBar
+                bool retracingUp = usesIvbRetracement ? sess.ivbBreakSide == -1 : standardLowWasFirst
+                firstOriginBar = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? nz(sess.highMitigationBar, 0) : nz(sess.lowMitigationBar, 0)) : standardFirstOriginBar
+                // The origin bar itself cannot also qualify as the return.
+                if bar_index > firstOriginBar
                     bool wasMidArmed = sess.midArmed
                     if usesIvbRetracement and not sess.midArmed and (retracingUp ? low < sess.midLevel : high > sess.midLevel)
                         sess.midArmed := true
@@ -1646,14 +1668,12 @@ if validChartContext and array.size(sessions) > 0
                             if showAllLabels and sess.isKeySession
                                 sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
 
-            // Use high/low to detect touches (including wicks), but only AFTER the first mitigation bar
-            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginMitigated and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
+            // Use high/low to detect touches (including wicks), but only after the origin bar.
+            if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginTaken and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
                 bool retracingUp618 = usesIvbRetracement ? sess.ivbBreakSide == -1 : sess.retraceLevel618 > sess.midLevel
-                // Get the FIRST mitigation bar (whichever extreme was mitigated first)
-                bool lowWasFirstCalc = sess.lowMitigated and (not sess.highMitigated or sess.lowMitigationBar < sess.highMitigationBar)
-                firstMitigationBar618 = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? nz(sess.highMitigationBar, 0) : nz(sess.lowMitigationBar, 0)) : (lowWasFirstCalc ? nz(sess.lowMitigationBar, 0) : nz(sess.highMitigationBar, 0))
-                // Only check on bars AFTER the mitigation bar (not the same bar)
-                if bar_index > firstMitigationBar618
+                firstOriginBar618 = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? nz(sess.highMitigationBar, 0) : nz(sess.lowMitigationBar, 0)) : standardFirstOriginBar
+                // The origin bar itself cannot also qualify as the return.
+                if bar_index > firstOriginBar618
                     bool was618Armed = sess.retrace618Armed
                     if usesIvbRetracement and not sess.retrace618Armed and (retracingUp618 ? low < sess.retraceLevel618 : high > sess.retraceLevel618)
                         sess.retrace618Armed := true
@@ -1677,7 +1697,7 @@ if validChartContext and array.size(sessions) > 0
 
             // Standard retracements complete once both session extremes are reached. NY Early's
             // IVB-based mode instead uses the ordered completion state above.
-            bool retracementCompleteForFade = usesIvbRetracement ? sess.ivbRetraceCompleted : sess.highMitigated and sess.lowMitigated
+            bool retracementCompleteForFade = usesIvbRetracement ? sess.ivbRetraceCompleted : usesProvisionalIvbOrigin ? (sess.provisionalHighMitigated and sess.provisionalLowMitigated) : (sess.highMitigated and sess.lowMitigated)
             if fadeCompletedRetracements and retracementCompleteForFade and (sess.midMitigated or sess.retrace618Mitigated)
                 fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                 fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
@@ -1783,16 +1803,20 @@ if validChartContext and enableDeviationGlow and array.size(sessions) > 0
                 resetGlowBox(devBox, boxKey)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// IVB EXTENSION GLOW - Widen touched projections for one fixed window
+// IVB EXTENSION GLOW - Hold each latest-IVB projection wide after its first hit
 // ═══════════════════════════════════════════════════════════════════════════
 
 if validChartContext and enableIvbExtensionGlow and array.size(sessions) > 0
     ivbGlowWindowMs = int(ivbExtensionGlowWindowHours * 60 * 60 * 1000)
     ivbGlowWidth = math.max(opening_0930_1000_extWidth, glowIvbExtensionWidth)
     canWidenIvbExtension = ivbGlowWidth > opening_0930_1000_extWidth
+    bool nextIvbActive = false
+    for activeSess in activeSessions
+        if activeSess.sessionIndex == IDX_IVB
+            nextIvbActive := true
     bool processedLatestIvb = false
 
-    // Match Deviation Glow: only the most recent session of this type remains eligible.
+    // Only the latest completed IVB remains eligible. Its lines reset when the next IVB begins.
     for j = array.size(sessions) - 1 to 0
         sess = array.get(sessions, j)
         if sess.sessionIndex != IDX_IVB
@@ -1812,21 +1836,21 @@ if validChartContext and enableIvbExtensionGlow and array.size(sessions) > 0
             for i = 0 to extensionCount - 1
                 extLine = array.get(sess.extLines, i)
                 lineKey = getIvbExtensionGlowKey(sess.startTime, i)
-                if canWidenIvbExtension
-                    lineStartTime = line.get_x1(extLine)
-                    withinWindow = time <= lineStartTime + ivbGlowWindowMs
-                    extensionLevel = line.get_y1(extLine)
-                    withinProjection = time >= lineStartTime and time <= line.get_x2(extLine)
-                    touched = withinProjection and high >= extensionLevel and low <= extensionLevel
-
-                    if withinWindow
-                        if touched and not map.contains(ivbExtensionGlowTouchTimes, lineKey)
-                            map.put(ivbExtensionGlowTouchTimes, lineKey, time)
-                            line.set_width(extLine, ivbGlowWidth)
-                    else
-                        resetIvbExtensionGlow(extLine, lineKey, opening_0930_1000_extWidth)
-                else
+                if nextIvbActive or not canWidenIvbExtension
                     resetIvbExtensionGlow(extLine, lineKey, opening_0930_1000_extWidth)
+                else if map.contains(ivbExtensionGlowTouchTimes, lineKey)
+                    touchTime = map.get(ivbExtensionGlowTouchTimes, lineKey)
+                    if time < touchTime + ivbGlowWindowMs
+                        line.set_width(extLine, ivbGlowWidth)
+                    else
+                        // Keep the recorded first hit so an expired line cannot reactivate.
+                        line.set_width(extLine, opening_0930_1000_extWidth)
+                else
+                    extensionLevel = line.get_y1(extLine)
+                    touched = time >= line.get_x1(extLine) and high >= extensionLevel and low <= extensionLevel
+                    if touched
+                        map.put(ivbExtensionGlowTouchTimes, lineKey, time)
+                        line.set_width(extLine, ivbGlowWidth)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE - Dynamic display based on active sessions
