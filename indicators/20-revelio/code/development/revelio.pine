@@ -214,6 +214,7 @@ LEVEL_HIT_HISTORY_CURRENT_WINDOW = "Current Window"
 LEVEL_HIT_HISTORY_ONE_DAY = "1 Day"
 LEVEL_HIT_HISTORY_THREE_DAYS = "3 Days"
 LEVEL_HIT_HISTORY_ONE_WEEK = "1 Week"
+LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL = "⁺"
 LEVEL_HIT_ARCHIVED_SYMBOL = "◌"
 
 // A secondary node qualifies when its volume nearly matches the POC; distance is ignored.
@@ -303,7 +304,7 @@ LABEL_TABLE_SETTING = "Setting"
 LABEL_TABLE_RGB = "RGB"
 LABEL_TABLE_TRANSPARENCY = "Trans"
 LABEL_TABLE_WIDTH = "Width"
-TOOLTIP_LEVEL_HIT_TRACE = "Touch Markers\n• Off — no markers.\n• On — retained profiles.\n• On + Focus — also profiles selected by Intraday Focus.\n\nInclude All Anchors\nAlso include anchors outside the current Quick Filter without drawing them.\n\nInclude Older Levels\nAlso include swept levels whose continuation lines are no longer displayed.\n\nLimit Daily Retouches\nRTH and Globex levels mark their first eligible touch after the source profile completes. Later retouches stay quiet, including after the level becomes older. Weekly, Monthly and Quarterly are unchanged.\n\nTouch Marker Labels\nTemporarily show touched identities at the right edge during the selected Window. Existing price settings still apply.\n\nHover notes\n• ⁺ — included through All Anchors.\n• ◌ — included through Older Levels.\n\nMarks the first eligible POC, aPOC, VAH or VAL touch. Up to 1 hour."
+TOOLTIP_LEVEL_HIT_TRACE = "Touch Markers\n• Off — no markers.\n• On — retained profiles.\n• On + Focus — also profiles selected by Intraday Focus.\n\nInclude All Anchors\nAlso include anchors outside the current Quick Filter without drawing them.\n\nInclude Older Levels\nAlso include swept levels whose continuation lines are no longer displayed.\n\nLimit Daily Retouches\nRTH and Globex levels mark their first eligible touch after the source profile completes. Later retouches stay quiet, including after the level becomes older. Weekly, Monthly and Quarterly are unchanged.\n\nTouch Marker Labels\nTemporarily show touched identities at the right edge during the selected Window. Existing price settings still apply.\n\nHover notes\n• " + LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL + " — included through All Anchors.\n• " + LEVEL_HIT_ARCHIVED_SYMBOL + " — included through Older Levels.\n\nMarks the first eligible POC, aPOC, VAH or VAL touch. Up to 1 hour."
 TOOLTIP_LEVEL_HIT_WINDOW = "Window\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\n\nHistory\nHow long markers remain. Session-based assets skip weekends; 24/7 assets count them.\n\nLimit Daily Retouches\nRTH and Globex levels mark their first eligible touch after the source profile completes. Later retouches stay quiet, including after the level becomes older. Weekly, Monthly and Quarterly are unchanged."
 
 LABEL_LAST_VALUE_AREA_COLOR = "Last VAH/L"
@@ -1886,7 +1887,7 @@ levelHitDayDistance(int hitTime) =>
     isTwentyFourSevenAsset ? math.max(0, referenceDateSerial - hitDateSerial) : weekdayDistance(hitDateSerial, referenceDateSerial)
 
 levelHitTraceActive(int hitTime, bool tracePresentationActive) =>
-tracePresentationActive and not na(hitTime) and (levelHitHistory == LEVEL_HIT_HISTORY_CURRENT_WINDOW ? sameNyDate(hitTime, time) : levelHitDayDistance(hitTime) < levelHitRetentionDays())
+    tracePresentationActive and not na(hitTime) and (levelHitHistory == LEVEL_HIT_HISTORY_CURRENT_WINDOW ? sameNyDate(hitTime, time) : levelHitDayDistance(hitTime) < levelHitRetentionDays())
 
 levelHitSourceProfileKey(int startTime, int endTime, SessionStyle style) =>
     style.labelAnchor + "|" + str.tostring(startTime) + "|" + str.tostring(endTime)
@@ -2311,7 +2312,7 @@ bufferLevelHitLabels(array<LevelHitEvent> events, bool labelsActive, map<string,
                 LevelHitPresentation presentation = map.get(presentations, hitEvent.key)
                 bool archived = levelHitArchivedSwept(hitEvent, presentation)
                 string priceText = str.tostring(hitEvent.price, format.mintick)
-                string labelIdentity = presentation.labelIdentity + (archived ? " " + LEVEL_HIT_ARCHIVED_SYMBOL : "")
+                string labelIdentity = presentation.labelIdentity + (hitEvent.unselectedAnchor ? " " + LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL : "") + (archived ? " " + LEVEL_HIT_ARCHIVED_SYMBOL : "")
                 array.push(pendingLabels, PendingLabel.new(hitEvent.price, bar_index + presentation.labelOffset, hitEvent.hitTime, hitEvent.key, labelIdentity, priceText, presentation.showPrice, true, presentation.labelColor, presentation.labelBgColor, presentation.labelSize, presentation.rank, presentation.effectiveLineWidth, na, na))
                 map.put(bufferedKeys, hitEvent.key, true)
     true
@@ -2367,7 +2368,7 @@ renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups, map<s
                     array.push(groupDominantRank, presentation.rank)
                     array.push(groupDominantOrder, eventIndex)
                 array.push(identityGroup, groupIndex)
-                string annotatedIdentity = presentation.identity + (hitEvent.unselectedAnchor ? " ⁺" : "") + (archived ? " " + LEVEL_HIT_ARCHIVED_SYMBOL : "")
+                string annotatedIdentity = presentation.identity + (hitEvent.unselectedAnchor ? " " + LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL : "") + (archived ? " " + LEVEL_HIT_ARCHIVED_SYMBOL : "")
                 array.push(identityName, annotatedIdentity)
                 array.push(identityPriority, presentation.anchorPriority)
                 array.push(identityWidth, presentation.effectiveLineWidth)
@@ -2891,21 +2892,37 @@ registerLevelHitSourceProfiles(map<string, bool> retainedSourceProfiles, array<P
             map.put(retainedSourceProfiles, levelHitSourceProfileKey(profile.startTime, profile.endTime, style), true)
     true
 
-// Historical bars retain one entry per contact sub-range; realtime ticks fold their newly covered
-// segments into a single per-bar entry so the archive stays bounded while the bar forms.
+activeLastBarUpdate() =>
+    barstate.islast
+
+levelHitUsesMarketClock() =>
+    barstate.isrealtime and (chart.is_range or (not na(time_close) and timenow >= time and timenow <= time_close))
+
+// Repeated updates merge the same timed range; Replay retains its distinct lower-timeframe ranges.
 recordLevelHitRanges(array<LevelHitRange> ranges, bool active, int barTime, int referenceTime) =>
     int contactCount = array.size(levelHitContactTimes)
+    bool marketClockUpdate = levelHitUsesMarketClock()
     if active and contactCount > 0
         for contactIndex = 0 to contactCount - 1
             float contactHigh = array.get(levelHitContactHighs, contactIndex)
             float contactLow = array.get(levelHitContactLows, contactIndex)
+            int rangeTime = marketClockUpdate ? barTime : array.get(levelHitContactTimes, contactIndex)
             int rangeCount = array.size(ranges)
-            if barstate.isrealtime and rangeCount > 0 and array.get(ranges, rangeCount - 1).barTime == barTime
-                LevelHitRange latestRange = array.get(ranges, rangeCount - 1)
-                latestRange.highPrice := math.max(latestRange.highPrice, contactHigh)
-                latestRange.lowPrice := math.min(latestRange.lowPrice, contactLow)
+            int matchingRangeIndex = -1
+            if rangeCount > 0
+                for rangeIndex = rangeCount - 1 to 0
+                    int existingTime = array.get(ranges, rangeIndex).barTime
+                    if existingTime == rangeTime
+                        matchingRangeIndex := rangeIndex
+                        break
+                    if existingTime < rangeTime
+                        break
+            if matchingRangeIndex >= 0
+                LevelHitRange existingRange = array.get(ranges, matchingRangeIndex)
+                existingRange.highPrice := math.max(existingRange.highPrice, contactHigh)
+                existingRange.lowPrice := math.min(existingRange.lowPrice, contactLow)
             else
-                array.push(ranges, LevelHitRange.new(barstate.isrealtime ? barTime : array.get(levelHitContactTimes, contactIndex), contactHigh, contactLow))
+                array.push(ranges, LevelHitRange.new(rangeTime, contactHigh, contactLow))
     int oldestAllowedTime = referenceTime - FOCUS_HIT_RANGE_RETENTION_MS
     while array.size(ranges) > 0 and (array.get(ranges, 0).barTime < oldestAllowedTime or array.size(ranges) > MAX_FOCUS_HIT_RANGES)
         array.shift(ranges)
@@ -2959,7 +2976,9 @@ firstLevelHitContactTime(float levelPrice) =>
 processLevelHit(float levelPrice, int previousHitTime, string sourceProfileKey, string key, bool focusOnly, bool archivedSwept, bool unselectedAnchor, array<LevelHitEvent> events) =>
     int contactTime = firstLevelHitContactTime(levelPrice)
     float contactPrice = not na(contactTime) ? levelPrice : na
-    processLevelHitAtTime(levelPrice, previousHitTime, sourceProfileKey, key, focusOnly, archivedSwept, unselectedAnchor, events, contactPrice, contactPrice, not na(contactTime) ? contactTime : barstate.isrealtime ? timenow : time, time, barstate.isrealtime)
+    bool activeEdgeUpdate = activeLastBarUpdate()
+    int updateTime = levelHitUsesMarketClock() ? timenow : time
+    processLevelHitAtTime(levelPrice, previousHitTime, sourceProfileKey, key, focusOnly, archivedSwept, unselectedAnchor, events, contactPrice, contactPrice, not na(contactTime) ? contactTime : updateTime, time, activeEdgeUpdate)
 
 processProfileLevelHit(float levelPrice, int previousHitTime, bool dailyTouchConsumed, string sourceProfileKey, string key, bool focusOnly, bool archivedSwept, bool unselectedAnchor, bool eligible, bool limitDailyRetouches, array<LevelHitEvent> events) =>
     int updatedHitTime = previousHitTime
@@ -3478,26 +3497,28 @@ array.clear(levelHitContactLows)
 array.clear(levelHitContactTimes)
 bool levelHitWindowActiveNow = false
 if levelHitDetectionEnabled
-    if barstate.isrealtime
-        if nyPriceWindowTimestampEligible(timenow, levelHitWindowStartMinute, isTwentyFourSevenAsset) and not na(close)
+    bool marketClockUpdate = levelHitUsesMarketClock()
+    if marketClockUpdate
+        int updateTime = timenow
+        if nyPriceWindowTimestampEligible(updateTime, levelHitWindowStartMinute, isTwentyFourSevenAsset) and not na(close)
             levelHitWindowActiveNow := true
             if nyPriceWindowTimestampEligible(time, levelHitWindowStartMinute, isTwentyFourSevenAsset)
                 if time != liveCoveredBarTime
                     array.push(levelHitContactHighs, high)
                     array.push(levelHitContactLows, low)
-                    array.push(levelHitContactTimes, timenow)
+                    array.push(levelHitContactTimes, updateTime)
                     livePreviousClose := close
                     liveCoveredBarTime := time
                 else
                     array.push(levelHitContactHighs, math.max(livePreviousClose, close))
                     array.push(levelHitContactLows, math.min(livePreviousClose, close))
-                    array.push(levelHitContactTimes, timenow)
+                    array.push(levelHitContactTimes, updateTime)
                     livePreviousClose := close
             else
                 // The bar opened before the window, so only the in-window tick price itself counts.
                 array.push(levelHitContactHighs, close)
                 array.push(levelHitContactLows, close)
-                array.push(levelHitContactTimes, timenow)
+                array.push(levelHitContactTimes, updateTime)
                 livePreviousClose := close
                 liveCoveredBarTime := time
     else if priceWindowMayContainEligiblePrice(levelHitWindowStartMinute, intrabarTimes, isTwentyFourSevenAsset, levelHitFallbackWindow)
