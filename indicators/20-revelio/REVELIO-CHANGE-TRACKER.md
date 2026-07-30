@@ -1,7 +1,7 @@
 # Revelio Change Tracker
 
-Updated: 2026-07-29
-Progress: Group A 6 / 6 validated and approved · Group B 1 / 7 code complete
+Updated: 2026-07-30
+Progress: Group A 6 / 6 code complete · 5 / 6 validated · Group B 10 / 10 code complete
 
 Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingView Validated`
 
@@ -14,10 +14,10 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
   - Done when a fresh Revelio instance draws floating gaps without historical gaps by default.
 
 - [x] **COS-02 — Current / previous temporal symbols**
-  - Status: `TradingView Validated`
-  - TradingView: `Approved`
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
   - Use `★` for every current RTH, Globex, Weekly, Monthly, and Quarterly label.
-  - Use grouped labels: `← [PREV RTH]`, `← [PREV GLOBEX]`, `← [LAST WEEK'S]`, `← [LAST MONTH'S]`, and `← [LAST QUARTER'S]`.
+  - Use grouped labels: `[PREV RTH]`, `[PREV GLOBEX]`, `[LAST WEEK'S]`, `[LAST MONTH'S]`, and `[LAST QUARTER'S]`.
   - Keep the approved text in the paired `LABEL_*_LAST` constants.
   - Removed the Previous Label Format testing dropdown, formatter, and derived variables.
   - Removed the dedicated `PREV RTH / GLOBEX` text-size control and its specialized style path.
@@ -56,62 +56,91 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
 - [x] **TOUCH-00 — Plain Touch Marker tooltip identities**
   - Status: `Code Complete`
   - TradingView: `Not Tested`
-  - Keep `← […]` decoration on right-column labels and reminders.
+  - Keep `[…]` decoration on right-column labels and reminders.
   - Remove the arrow and brackets from Touch Marker hover identities.
   - Preserve plain wording such as `PREV RTH` and `LAST WEEK'S`.
-  - Do not change swept checkmarks, marker styling, merging, or priority.
+  - Append `⁺` directly to identities detected through `Include All Anchors`.
+  - Append `◌` directly to archived swept identities.
+  - Remove the ambiguous group-level status footer.
+  - Do not change swept checkmarks, marker styling, or priority.
 
-- [ ] **TOUCH-01 — Expired-level display dropdown**
-  - Status: `Not Started`
+- [x] **TOUCH-01 — Built-in archived-swept dots**
+  - Status: `Code Complete`
   - TradingView: `Not Tested`
-  - Replace the `Expired Guide` checkbox with a more descriptive dropdown.
-  - Options:
-    - `Dot`
-    - `Dot + Guide`
-  - `Dot` keeps the Touch Marker without drawing the temporary guide.
-  - Working field name: `Expired Level Display`.
+  - Archived swept touches use the normal Touch Marker dot automatically.
+  - Remove the `Dot / Dot + Guide` control.
+  - Remove archived guide-line rendering and its drawing-budget reserve.
 
-- [ ] **TOUCH-02 — Optional expired-level symbol**
-  - Status: `Not Started`
+- [x] **TOUCH-02 — Fixed archived-swept symbol**
+  - Status: `Code Complete`
   - TradingView: `Not Tested`
-  - Optionally append a subtle symbol to an expired level’s visible identity.
+  - Append a fixed subtle `◌` to an archived swept level’s temporary right-edge label.
   - Do not replace or conflict with the existing swept checkmark.
-  - Recommended symbol: `◌`
   - Example: `RTH POC Jun 26 ◌`
-  - Depends on: `TOUCH-01`.
-
-- [ ] **TOUCH-02B — Optional expired dot/guide fade**
-  - Status: `Not Started`
-  - TradingView: `Not Tested`
-  - Expose an editable `Expired Fade %`.
-  - Use it to soften expired Touch Marker dots and their optional guides.
-  - Do not fade active-level dots or lines.
-  - `0%` should preserve the source color’s normal opacity.
-  - Open decision: one shared fade percentage or separate dot and guide percentages.
-  - Depends on: `TOUCH-01`.
-
-- [ ] **TOUCH-03 — Visible Touch Marker context**
-  - Status: `Not Started`
-  - TradingView: `Not Tested`
-  - Optionally show the touched level’s identity and price without requiring hover.
-  - Show this context only during the selected Touch Marker trading window.
-  - Include levels detected through `All Anchors`, even when their anchor is outside the active Quick Filter.
-  - Do not change the normal right-edge price-label settings.
-  - Example: `Quarterly VAH Q2 · 6125.25`
-  - Depends on: `TOUCH-01`.
-
-- [ ] **TOUCH-04 — Include expired levels in visible context**
-  - Status: `Not Started`
-  - TradingView: `Not Tested`
-  - Add a separate option to include or exclude expired levels from the visible Touch Marker context.
-  - Keep this independent from:
-    - `Dot` versus `Dot + Guide`
-    - The optional expired symbol
-    - `Expired Fade %`
+  - Keep temporal arrows and brackets out of Touch Marker tooltips.
+  - Append `◌` beside the archived identity in both its marker tooltip and temporary right-edge label.
   - Depends on: `TOUCH-03`.
 
-- [ ] **BUG-01 — Highest anchor controls a merged Touch Marker**
-  - Status: `Not Started`
+- [x] **TOUCH-02B — Remove archived-dot fade**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Remove the archived-dot fade control and rendering branch.
+  - Archived swept dots use their normal winning-anchor color and opacity.
+  - Depends on: `TOUCH-01`.
+
+- [x] **TOUCH-03 — Temporary Touch Labels**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Add one optional `Labels` control that shows touched identities without requiring hover.
+  - Show temporary labels only during the selected Touch Marker trading window.
+  - Include levels detected through `Include All Anchors`, even when their anchor is outside the active Quick Filter.
+  - Never duplicate an identity that already has a normal right-edge label.
+  - Reuse the normal right-column merge, offset, size, color, and background systems.
+  - Gate both selected-anchor and additional labels with `Touch Marker Labels` and the active detection window.
+  - Derive `◌` from the marker event’s archived provenance, not from the level’s later live-edge state.
+  - Respect the existing per-anchor price controls.
+  - Example with price enabled: `Quarterly VAH Q2 · 6125.25`.
+  - Example with price disabled: `Quarterly VAH Q2`.
+  - Depends on: `TOUCH-01`.
+
+- [x] **TOUCH-04 — Archived swept Touch Labels**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Include older swept levels when `Include Older Levels` and `Labels` are enabled.
+  - Mark them with the fixed `◌` suffix.
+  - Keep one source-scope control; do not add separate archived-label or symbol controls.
+  - Keep label visibility independent from Touch Marker source eligibility.
+  - Depends on: `TOUCH-03`.
+
+- [x] **TOUCH-05 — Quiet source defaults**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Rename the source controls to `Include All Anchors` and `Include Older Levels`.
+  - Keep `⁺` and `◌` out of the control labels and explain them in the tooltip.
+  - Default both source controls off.
+  - Default `Labels` on for right-column trading context.
+  - Older Levels means swept levels whose continuation lines are no longer displayed.
+  - Preserve scaled marker sizes and the optional `Labels` control.
+
+- [x] **TOUCH-06 — Limit daily-level retouches**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Add `Limit Daily Retouches`, default on and active only with `Include Older Levels`.
+  - RTH and Globex POC, aPOC, VAH, and VAL levels mark their first eligible touch after the source profile completes.
+  - Consume the daily identity whether its line is still visible or already older, so becoming older cannot create a second “first” touch.
+  - Keep intrabar-persistent consumed state on each retained level so realtime rollback or changing `History` cannot make it eligible again.
+  - Keep Weekly, Monthly, and Quarterly Touch Marker behavior unchanged.
+  - Keep the rule independent for every identity inside a merged marker.
+  - Apply the same older-level eligibility and consumption rule to deep Intraday Focus profiles.
+  - Reconstruct staggered swept-continuation visibility at each Focus backfill timestamp.
+  - Use the next profile’s actual finalization timestamp and only breaches known before each backfilled contact.
+  - Preserve the base profile’s original finalization boundary when short sessions merge into it.
+  - Give each recalculated short-session fold a new internal touch identity so stale hits and consumed state cannot attach to changed prices.
+  - Consume an identity only after its first eligible marker is actually recorded.
+  - Disabling the control restores the existing first-touch-per-NY-day behavior.
+
+- [x] **BUG-01 — Highest anchor controls a merged Touch Marker**
+  - Status: `Code Complete`
   - TradingView: `Not Tested`
   - When multiple levels share one Touch Marker, use this anchor priority:
     - `Quarterly`
@@ -121,20 +150,29 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
   - The winning anchor must supply:
     - Dot color
     - Dot size
-    - Optional expired-guide color
   - Keep the winning anchor first in the Touch Marker identity list.
+  - Preserve stable identity order when RTH and Globex tie.
   - Regression test: when `LAST WEEK'S VAL` merges with RTH and Globex levels, the marker must use the Weekly VAL color and Weekly marker size.
+
+- [x] **BUG-02 — Align Touch Marker and right-edge merging**
+  - Status: `Code Complete`
+  - TradingView: `Not Tested`
+  - Assign same-candle Touch Marker identities to one shared cluster.
+  - Reuse that cluster for the corresponding right-edge labels.
+  - A level included in a merged dot tooltip must appear in the same merged right-edge label.
+  - Regression test: `Globex VAL Jun 24` must not remain separate when its touch is grouped with `Weekly POC Jun 7`, `RTH VAL Jun 24`, `RTH POC Jul 2`, and `Globex POC Jul 1`.
 
 ## Open Decisions
 
 - [x] **D-01:** Should brackets contain only `PREV` / `LAST` or the complete previous-period phrase?
   - Approved with the complete previous-period phrase inside the brackets.
 
-- [ ] **D-02:** Confirm the expired-level field name and symbol.
-  - Working assumption: `Expired Level Display` and `◌`.
+- [x] **D-02:** Confirm the archived-swept symbol.
+  - Approved as one fixed `◌` suffix with no symbol control.
+  - Mirror it beside each archived swept identity.
 
-- [ ] **D-03:** Confirm the exact placement of visible Touch Marker identity and price context.
-  - Working assumption: right-column context during the active Touch Marker window only.
+- [x] **D-03:** Confirm the exact placement of visible Touch Marker labels.
+  - Approved as temporary right-column labels during the active Touch Marker window only.
 
 - [ ] **D-04:** Define the priority tie between RTH and Globex.
   - Working assumption: preserve stable displayed-identity order because both are daily anchors.
@@ -142,8 +180,15 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
 - [x] **D-05:** Confirm the default floating-gap spacing.
   - Implemented as a fixed `10` bars with no UI control.
 
-- [ ] **D-06:** Use one expired fade percentage or separate dot and guide percentages?
-  - Working assumption: one shared `Expired Fade %`.
+- [x] **D-06:** Keep archived swept dot fading adjustable?
+  - Removed; archived swept dots use normal opacity.
+
+- [x] **D-07:** Name the optional expanded Touch Marker sources.
+  - Approved as `Include All Anchors` and `Include Older Levels`.
+
+- [x] **D-08:** Reduce repeated touches from older daily levels.
+  - Approved as optional `Limit Daily Retouches`, default on.
+  - Apply to RTH and Globex only; keep Weekly, Monthly, and Quarterly unchanged.
 
 ## Validation Checklist
 
@@ -153,8 +198,25 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
 - [x] Final grouped labels preserve `WEEK'S`, `MONTH'S`, and `QUARTER'S`.
 - [x] Floating-gap offset and width remain editable; adjacent gaps keep `10` empty bars.
 - [ ] Touch Marker tooltips use plain temporal identities while right-column labels remain decorated.
-- [ ] Expired marker presentation options behave independently.
-- [ ] Active marker opacity remains unchanged when expired fading is enabled.
-- [ ] `All Anchors` context appears without enabling normal Quick Filter prices.
+- [ ] Tooltip status symbols sit beside the identities they describe; no ambiguous status footer remains.
+- [ ] `Include Older Levels` independently includes older swept markers and labels.
+- [ ] With `Limit Daily Retouches` on, an older RTH or Globex identity appears once and remains consumed after its marker leaves `History`.
+- [ ] A realtime intrabar touch remains consumed after later updates on the same open candle.
+- [ ] A realtime intrabar touch keeps its selected right-column Touch Marker label after later updates on the same open candle.
+- [ ] A visible-line touch consumes the daily identity, remains the first marker, and prevents a later older-level retouch from replacing it.
+- [ ] Regression: `Globex POC Jun 26` keeps its marker on the earlier session contact instead of moving to the later retouch when the limit is enabled.
+- [ ] Turning `Limit Daily Retouches` off restores one eligible marker per NY date for older RTH and Globex levels.
+- [ ] Weekly, Monthly, and Quarterly older levels retain their existing per-date behavior in both settings.
+- [ ] Deep Intraday Focus profiles obey `Include Older Levels` and `Limit Daily Retouches`, including backfilled ranges.
+- [ ] Focus backfill does not fill hidden gaps between staggered POC/aPOC/VAH/VAL continuation windows.
+- [ ] A sweep completed on the same candle does not retroactively resurface another level for that candle’s backfill.
+- [ ] The next profile’s final in-session candle does not retire the prior most-recent profile before finalization.
+- [ ] RTH and Globex short-session merges do not extend the preceding profile’s most-recent window.
+- [ ] Earliest, All, and Combine short-session folds do not transfer stale touch state to recalculated POC, aPOC, VAH, or VAL prices.
+- [ ] Older-level markers preserve normal winning-anchor color, opacity, and scaled size.
+- [ ] Turning `Touch Marker Labels` off hides temporary selected and unselected touch context; active anchor labels remain without the touch prefix.
+- [ ] A visible-line touch does not gain `◌` later merely because its continuation subsequently disappears.
+- [ ] `Include All Anchors` Touch Labels appear and obey the existing price controls.
 - [ ] Weekly/Monthly/Quarterly merged-marker priority is visually correct.
+- [ ] A merged Touch Marker and its right-edge label contain the same touched identities.
 - [ ] Standard charts, Replay, and the active Touch Marker trading window receive a visual pass.
