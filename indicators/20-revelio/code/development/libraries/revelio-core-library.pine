@@ -1,0 +1,1498 @@
+//@version=6
+
+//@description Private Revelio Core Library for the shared profile engine.
+library("RevelioCoreLibrary", overlay=true)
+
+const int PROFILE_ROW_COUNT = 250
+const int HISTOGRAM_SMOOTHING = 7
+const int SAMPLE_COMPACT_THRESHOLD = 60000
+const int SAMPLE_COMPACT_ROWS = 6000
+const float ALTERNATE_POC_WINDOW_FRAC = 0.03
+const float ALTERNATE_POC_MIN_RATIO = 0.90
+const int AUTO_SWEPT_POC_BIT = 1
+const int AUTO_SWEPT_ALTERNATE_POC_BIT = 2
+const int AUTO_SWEPT_VALUE_AREA_HIGH_BIT = 4
+const int AUTO_SWEPT_VALUE_AREA_LOW_BIT = 8
+
+//@type Canonical profile state shared by Revelio's anchors.
+export type Profile
+    int startTime
+    int endTime
+    int finalizedTime
+    float priceLow
+    float priceHigh
+    int rowCount
+    array<float> rowVolumes
+    float maxHistogramVolume
+    int pocRow
+    int valueAreaLowRow
+    int valueAreaHighRow
+    float pocPrice
+    float valueAreaHighPrice
+    float valueAreaLowPrice
+    int pocBreachTime
+    int valueAreaHighBreachTime
+    int valueAreaLowBreachTime
+    bool hasAlternatePoc
+    float alternatePocPrice
+    int alternatePocBreachTime
+    varip int pocHitTime
+    varip int valueAreaHighHitTime
+    varip int valueAreaLowHitTime
+    varip int alternatePocHitTime
+    varip bool pocDailyTouchConsumed
+    varip bool valueAreaHighDailyTouchConsumed
+    varip bool valueAreaLowDailyTouchConsumed
+    varip bool alternatePocDailyTouchConsumed
+    bool isValid
+    bool pocSweptAbove
+    bool pocSweptBelow
+    bool valueAreaHighSweptAbove
+    bool valueAreaHighSweptBelow
+    bool valueAreaLowSweptAbove
+    bool valueAreaLowSweptBelow
+    bool alternatePocSweptAbove
+    bool alternatePocSweptBelow
+
+//@type Mutable sample and completed-profile storage for one Revelio anchor.
+//@field barHighs Confirmed sample highs in the developing period.
+//@field barLows Confirmed sample lows in the developing period.
+//@field barVolumes Confirmed sample volumes in the developing period.
+//@field profiles Completed profiles retained for the anchor.
+//@field startTime Developing-period start timestamp.
+//@field lastBarTime Most recent confirmed sample timestamp.
+export type AnchorState
+    array<float> barHighs
+    array<float> barLows
+    array<float> barVolumes
+    array<Profile> profiles
+    int startTime
+    int lastBarTime
+
+//@type Short-period folding state for one Revelio anchor.
+//@field pendingHighs Sample highs retained as a possible merge base.
+//@field pendingLows Sample lows retained as a possible merge base.
+//@field pendingVolumes Sample volumes retained as a possible merge base.
+//@field pendingStartTime Start timestamp of the merge base.
+//@field normalSpan Longest observed non-merged period span.
+//@field foldCount Number of short periods folded into the base.
+export type MergeState
+    array<float> pendingHighs
+    array<float> pendingLows
+    array<float> pendingVolumes
+    int pendingStartTime
+    int normalSpan
+    int foldCount
+
+//@type Immutable processing policy for one Revelio anchor.
+//@field keepProfiles Completed-profile retention limit.
+//@field mergeDepth Maximum number of short periods folded into a base.
+//@field mergeAllShorts Whether every eligible short period can fold.
+//@field combineShorts Whether consecutive short periods combine.
+//@field shortSpanFraction Fraction of normal span that defines a short period.
+//@field continuousBoundary Whether the new boundary closes the previous period.
+//@field prepareHistogram Whether finalized profiles retain smoothed histogram rows.
+//@field requireObservedBoundary Whether collection waits for an explicit boundary.
+export type AnchorProcessPolicy
+    int keepProfiles
+    int mergeDepth
+    bool mergeAllShorts
+    bool combineShorts
+    float shortSpanFraction
+    bool continuousBoundary
+    bool prepareHistogram
+    bool requireObservedBoundary
+
+//@type Developing-profile maturity state shared by calendar anchors.
+//@field valueAreaHigh Previous maturity snapshot VAH.
+//@field valueAreaLow Previous maturity snapshot VAL.
+//@field poc Previous maturity snapshot POC.
+//@field stable Whether the latest snapshot stayed within tolerance.
+//@field sessionsCompleted Completed sessions in the developing period.
+//@field completedVolumes Recent completed-period volume samples.
+export type MaturityState
+    float valueAreaHigh
+    float valueAreaLow
+    float poc
+    bool stable
+    int sessionsCompleted
+    array<float> completedVolumes
+
+//@enum Independently selectable swept profile levels.
+//@field poc Point of control.
+//@field alternatePoc Alternate point of control.
+//@field valueAreaHigh Value area high.
+//@field valueAreaLow Value area low.
+export enum AutoSweptLevel
+    poc
+    alternatePoc
+    valueAreaHigh
+    valueAreaLow
+
+//@type One Auto Swept selection retained for current or historical lookup.
+//@field cycleSerial Futures or UTC trading-day identifier.
+//@field activationTime First timestamp when the level became selected in this cycle.
+//@field profileStartTime Source profile identity.
+//@field profileEndTime Source profile completion identity.
+//@field level Independently selected profile level.
+export type AutoSweptPick
+    int cycleSerial
+    int activationTime
+    int profileStartTime
+    int profileEndTime
+    AutoSweptLevel level
+    bool protectedCarry
+
+//@type Compact swept-level archive record independent of display retention.
+export type AutoSweptProfile
+    int startTime
+    int endTime
+    int finalizedTime
+    float priceLow
+    float priceHigh
+    float pocPrice
+    float alternatePocPrice
+    float valueAreaHighPrice
+    float valueAreaLowPrice
+    bool hasAlternatePoc
+    bool superseded
+    int pocBreachTime
+    int alternatePocBreachTime
+    int valueAreaHighBreachTime
+    int valueAreaLowBreachTime
+    bool pocSweptAbove
+    bool pocSweptBelow
+    bool alternatePocSweptAbove
+    bool alternatePocSweptBelow
+    bool valueAreaHighSweptAbove
+    bool valueAreaHighSweptBelow
+    bool valueAreaLowSweptAbove
+    bool valueAreaLowSweptBelow
+    varip int pocHitTime
+    varip int alternatePocHitTime
+    varip int valueAreaHighHitTime
+    varip int valueAreaLowHitTime
+    varip bool pocDailyTouchConsumed
+    varip bool alternatePocDailyTouchConsumed
+    varip bool valueAreaHighDailyTouchConsumed
+    varip bool valueAreaLowDailyTouchConsumed
+
+//@type Bounded Auto Swept archive and selection state for one anchor.
+//@field revision Incremented after each atomic daily selection.
+//@field baselineKeepMs Native minimum swept-line retention for the anchor.
+//@field sourceProfileLimit Configured recent-profile boundary for Auto eligibility.
+//@field eligibleSourceStarts Canonical profile starts currently eligible for Auto.
+//@field eligibleProfileIndices Ordered eligible indices in the compact archive.
+//@field profiles Compact swept-level archive independent of display retention.
+//@field cycleHistory Evaluated trading days, including days with no selections.
+//@field currentSelectedMasks Exact current selections grouped by profile identity.
+//@field currentProtectedMasks Exact protected selections grouped by profile identity.
+//@field historyPicks Selections retained for historical Focus reconstruction.
+export type AutoSweptState
+    int revision
+    int baselineKeepMs
+    int sourceProfileLimit
+    map<int, bool> eligibleSourceStarts
+    array<int> eligibleProfileIndices
+    float observedCloseHigh
+    float observedCloseLow
+    array<AutoSweptProfile> profiles
+    array<int> cycleHistory
+    map<string, int> currentSelectedMasks
+    map<string, int> currentProtectedMasks
+    array<AutoSweptPick> historyPicks
+
+//@type One anchor participating in the shared Auto Swept relevance plan.
+export type AutoSweptPolicy
+    AutoSweptState state
+    bool active
+    bool showPoc
+    bool showAlternatePoc
+    bool showValueArea
+    int anchorBit
+    int anchorPriority
+    int baselineKeepMs
+
+//@type Shared cycle-stable Auto Swept plan.
+export type AutoSweptPlan
+    int cycleSerial
+    float cycleOpen
+    float cycleHigh
+    float cycleLow
+    float adr
+    bool expanded
+    int selectedAdaptiveLevels
+    array<float> selectedZoneLows
+    array<float> selectedZoneHighs
+
+type AutoSweptReference
+    int policyIndex
+    int anchorBit
+    int anchorPriority
+    int profileStartTime
+    int profileEndTime
+    float price
+    AutoSweptLevel level
+    bool adaptiveCandidate
+    bool protectedAtSelection
+    int laterValueAcceptanceCount
+    int laterControlOverlapCount
+
+type AutoSweptCandidate
+    float zoneLow
+    float zoneHigh
+    float distance
+    int profileEndTime
+    int highestAnchorPriority
+    int distinctAnchorCount
+    int distinctProfileCount
+    int distinctRoleCount
+    float laterValueAcceptanceScore
+    float laterControlOverlapScore
+    int adaptiveMemberCount
+
+//@function Creates an empty canonical profile.
+//@param startTime Profile start timestamp.
+//@param endTime Profile end timestamp.
+//@param rowCount Number of histogram rows.
+//@returns A new Profile instance with the stable Revelio defaults.
+export newProfile(int startTime, int endTime, int rowCount) =>
+    Profile.new(startTime, endTime, na, na, na, rowCount, array.new<float>(rowCount, 0.0), 0.0, 0, 0, 0, na, na, na, na, na, na, false, na, na, na, na, na, na, false, false, false, false, false, false, false, false, false, false, false, false, false)
+
+//@function Creates empty sample and completed-profile storage for one anchor.
+//@param unsetTime Sentinel used for timestamps that have not been observed.
+//@returns A new AnchorState instance.
+export newAnchorState(int unsetTime) =>
+    AnchorState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), unsetTime, unsetTime)
+
+//@function Creates empty short-period folding state for one anchor.
+//@param unsetTime Sentinel used for timestamps that have not been observed.
+//@returns A new MergeState instance.
+export newMergeState(int unsetTime) =>
+    MergeState.new(array.new<float>(), array.new<float>(), array.new<float>(), unsetTime, 0, 0)
+
+//@function Creates an immutable anchor-processing policy.
+//@param keepProfiles Completed-profile retention limit.
+//@param mergeDepth Maximum short-period fold depth.
+//@param mergeAllShorts Whether every eligible short period can fold.
+//@param combineShorts Whether consecutive short periods combine.
+//@param shortSpanFraction Fraction of normal span that defines a short period.
+//@param continuousBoundary Whether the new boundary closes the previous period.
+//@param prepareHistogram Whether finalized profiles retain histogram rows.
+//@param requireObservedBoundary Whether collection waits for an explicit boundary.
+//@returns A new AnchorProcessPolicy instance.
+export newAnchorProcessPolicy(int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram, bool requireObservedBoundary) =>
+    AnchorProcessPolicy.new(keepProfiles, mergeDepth, mergeAllShorts, combineShorts, shortSpanFraction, continuousBoundary, prepareHistogram, requireObservedBoundary)
+
+//@function Creates empty developing-profile maturity state.
+//@returns A new MaturityState instance.
+export newMaturityState() =>
+    MaturityState.new(na, na, na, false, 0, array.new<float>())
+
+//@function Creates empty Auto Swept state for one anchor.
+//@returns A new bounded AutoSweptState instance.
+export newAutoSweptState() =>
+    AutoSweptState.new(0, 0, 0, map.new<int, bool>(), array.new<int>(), na, na, array.new<AutoSweptProfile>(), array.new<int>(), map.new<string, int>(), map.new<string, int>(), array.new<AutoSweptPick>())
+
+//@function Creates one anchor policy for the shared Auto Swept plan.
+export newAutoSweptPolicy(AutoSweptState state, bool active, bool showPoc, bool showAlternatePoc, bool showValueArea, int anchorBit, int anchorPriority, int baselineKeepMs) =>
+    AutoSweptPolicy.new(state, active, showPoc, showAlternatePoc, showValueArea, anchorBit, anchorPriority, baselineKeepMs)
+
+//@function Creates an empty shared Auto Swept plan.
+export newAutoSweptPlan(int unsetCycle) =>
+    AutoSweptPlan.new(unsetCycle, na, na, na, na, false, 0, array.new<float>(), array.new<float>())
+
+//@function Creates a valid profile from remote anchor levels.
+//@param startTime Profile start timestamp.
+//@param endTime Profile end timestamp.
+//@param priceLow Profile low.
+//@param priceHigh Profile high.
+//@param pocPrice Point of control price.
+//@param valueAreaHighPrice Value area high price.
+//@param valueAreaLowPrice Value area low price.
+//@param hasAlternatePoc Whether the profile has an alternate point of control.
+//@param alternatePocPrice Alternate point of control price.
+//@returns A valid Profile instance with remote level values.
+export newRemoteProfile(int startTime, int endTime, float priceLow, float priceHigh, float pocPrice, float valueAreaHighPrice, float valueAreaLowPrice, bool hasAlternatePoc, float alternatePocPrice) =>
+    Profile profile = newProfile(startTime, endTime, PROFILE_ROW_COUNT)
+    profile.priceLow := priceLow
+    profile.priceHigh := priceHigh
+    profile.pocPrice := pocPrice
+    profile.valueAreaHighPrice := valueAreaHighPrice
+    profile.valueAreaLowPrice := valueAreaLowPrice
+    profile.hasAlternatePoc := hasAlternatePoc
+    profile.alternatePocPrice := alternatePocPrice
+    profile.isValid := true
+    profile
+
+//@function Clamps a raw histogram row to the available row range.
+//@param rawRow Unbounded row coordinate.
+//@param rowCount Number of available rows.
+//@returns A valid zero-based row index.
+export clampRow(float rawRow, int rowCount) =>
+    math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
+
+//@function Compacts accumulated samples without changing the final profile resolution.
+//@param highs Sample highs to compact in place.
+//@param lows Sample lows to compact in place.
+//@param volumes Sample volumes to compact in place.
+export compactSamples(array<float> highs, array<float> lows, array<float> volumes) =>
+    int sampleCount = array.size(volumes)
+    if sampleCount > 0
+        float rawHigh = array.max(highs)
+        float rawLow = array.min(lows)
+        float priceSpan = math.max(rawHigh - rawLow, syminfo.mintick * SAMPLE_COMPACT_ROWS)
+        float compactLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+        float rowHeight = priceSpan / SAMPLE_COMPACT_ROWS
+        array<float> rowVolumes = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
+        for sampleIndex = 0 to sampleCount - 1
+            float sampleHigh = array.get(highs, sampleIndex)
+            float sampleLow = array.get(lows, sampleIndex)
+            float sampleVolume = array.get(volumes, sampleIndex)
+            int firstRow = clampRow((sampleLow - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int lastRow = clampRow((sampleHigh - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int rowsTouched = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = sampleVolume / rowsTouched
+            for rowIndex = firstRow to lastRow
+                array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + volumePerRow)
+        array.clear(highs)
+        array.clear(lows)
+        array.clear(volumes)
+        for rowIndex = 0 to SAMPLE_COMPACT_ROWS - 1
+            float rowVolume = array.get(rowVolumes, rowIndex)
+            if rowVolume > 0
+                float rowPrice = compactLow + (rowIndex + 0.5) * rowHeight
+                array.push(highs, rowPrice)
+                array.push(lows, rowPrice)
+                array.push(volumes, rowVolume)
+    true
+
+//@function Compacts accumulated samples when they exceed the safe threshold.
+//@param highs Sample highs to compact in place.
+//@param lows Sample lows to compact in place.
+//@param volumes Sample volumes to compact in place.
+export compactIfNeeded(array<float> highs, array<float> lows, array<float> volumes) =>
+    if array.size(volumes) > SAMPLE_COMPACT_THRESHOLD
+        compactSamples(highs, lows, volumes)
+    true
+
+//@function Selects valid intrabar samples or one chart-bar fallback sample.
+//@param intrabarHighs Lower-timeframe highs.
+//@param intrabarLows Lower-timeframe lows.
+//@param intrabarVolumes Lower-timeframe volumes.
+//@param chartHigh Fallback chart-bar high.
+//@param chartLow Fallback chart-bar low.
+//@param chartVolume Fallback chart-bar volume.
+//@param enabled Whether collection is active.
+//@returns Prepared high, low, and volume arrays.
+export prepareBarVolumeSamples(array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float chartHigh, float chartLow, float chartVolume, bool enabled) =>
+    array<float> preparedHighs = array.new<float>()
+    array<float> preparedLows = array.new<float>()
+    array<float> preparedVolumes = array.new<float>()
+    if enabled
+        int intrabarCount = array.size(intrabarVolumes)
+        if intrabarCount > 0
+            for intrabarIndex = 0 to intrabarCount - 1
+                float subVolume = array.get(intrabarVolumes, intrabarIndex)
+                float subHigh = array.get(intrabarHighs, intrabarIndex)
+                float subLow = array.get(intrabarLows, intrabarIndex)
+                if not na(subVolume) and subVolume > 0 and not na(subHigh) and not na(subLow)
+                    array.push(preparedHighs, subHigh)
+                    array.push(preparedLows, subLow)
+                    array.push(preparedVolumes, subVolume)
+        if array.size(preparedVolumes) == 0 and not na(chartVolume) and chartVolume > 0 and not na(chartHigh) and not na(chartLow)
+            array.push(preparedHighs, chartHigh)
+            array.push(preparedLows, chartLow)
+            array.push(preparedVolumes, chartVolume)
+    [preparedHighs, preparedLows, preparedVolumes]
+
+//@function Appends prepared samples to an anchor and optionally compacts it.
+//@param highs Destination sample highs.
+//@param lows Destination sample lows.
+//@param volumes Destination sample volumes.
+//@param preparedHighs Prepared sample highs.
+//@param preparedLows Prepared sample lows.
+//@param preparedVolumes Prepared sample volumes.
+//@param compactAfter Whether to compact after appending.
+export appendPreparedBarVolume(array<float> highs, array<float> lows, array<float> volumes, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, bool compactAfter) =>
+    if array.size(preparedVolumes) > 0
+        array.concat(highs, preparedHighs)
+        array.concat(lows, preparedLows)
+        array.concat(volumes, preparedVolumes)
+        if compactAfter
+            compactIfNeeded(highs, lows, volumes)
+    true
+
+//@function Prepares and appends one chart bar's volume samples.
+//@param highs Destination sample highs.
+//@param lows Destination sample lows.
+//@param volumes Destination sample volumes.
+//@param intrabarHighs Lower-timeframe highs.
+//@param intrabarLows Lower-timeframe lows.
+//@param intrabarVolumes Lower-timeframe volumes.
+//@param chartHigh Fallback chart-bar high.
+//@param chartLow Fallback chart-bar low.
+//@param chartVolume Fallback chart-bar volume.
+//@param compactAfter Whether to compact after appending.
+export appendBarVolume(array<float> highs, array<float> lows, array<float> volumes, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float chartHigh, float chartLow, float chartVolume, bool compactAfter) =>
+    [preparedHighs, preparedLows, preparedVolumes] = prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, chartHigh, chartLow, chartVolume, true)
+    appendPreparedBarVolume(highs, lows, volumes, preparedHighs, preparedLows, preparedVolumes, compactAfter)
+
+//@function Smooths a valid profile's histogram in place.
+//@param profile Profile whose row volumes should be prepared for rendering.
+export prepareProfileHistogram(Profile profile) =>
+    int rowCount = profile.rowCount
+    int halfWindow = HISTOGRAM_SMOOTHING / 2
+    array<float> smoothedVolumes = array.new<float>(rowCount, 0.0)
+    float maxSmoothedVolume = 0.0
+    float windowSum = 0.0
+    int windowCount = 0
+    for seedRow = 0 to math.min(halfWindow, rowCount - 1)
+        windowSum += array.get(profile.rowVolumes, seedRow)
+        windowCount += 1
+    for rowIndex = 0 to rowCount - 1
+        if rowIndex > 0
+            int enteringRow = rowIndex + halfWindow
+            if enteringRow < rowCount
+                windowSum += array.get(profile.rowVolumes, enteringRow)
+                windowCount += 1
+            int leavingRow = rowIndex - halfWindow - 1
+            if leavingRow >= 0
+                windowSum -= array.get(profile.rowVolumes, leavingRow)
+                windowCount -= 1
+        float smoothedVolume = windowSum / windowCount
+        array.set(smoothedVolumes, rowIndex, smoothedVolume)
+        maxSmoothedVolume := math.max(maxSmoothedVolume, smoothedVolume)
+    profile.rowVolumes := smoothedVolumes
+    profile.maxHistogramVolume := maxSmoothedVolume
+    true
+
+//@function Builds one profile from prepared volume samples.
+//@param highs Prepared sample highs.
+//@param lows Prepared sample lows.
+//@param volumes Prepared sample volumes.
+//@param rowCount Number of histogram rows.
+//@param valueAreaPercent Percentage of total volume included in the value area.
+//@param startTime Profile start timestamp.
+//@param endTime Profile end timestamp.
+//@param prepareHistogram Whether to retain and smooth histogram rows.
+//@returns The calculated profile.
+export buildProfile(array<float> highs, array<float> lows, array<float> volumes, int rowCount, float valueAreaPercent, int startTime, int endTime, bool prepareHistogram) =>
+    Profile profile = newProfile(startTime, endTime, rowCount)
+    int barCount = array.size(volumes)
+    if barCount > 0
+        float rawHigh = array.max(highs)
+        float rawLow = array.min(lows)
+        float priceSpan = math.max(rawHigh - rawLow, syminfo.mintick * rowCount)
+        float profileLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+        float rowHeight = priceSpan / rowCount
+
+        for barIndex = 0 to barCount - 1
+            float barHigh = array.get(highs, barIndex)
+            float barLow = array.get(lows, barIndex)
+            float barVolume = array.get(volumes, barIndex)
+            int firstRow = clampRow((barLow - profileLow) / rowHeight, rowCount)
+            int lastRow = clampRow((barHigh - profileLow) / rowHeight, rowCount)
+            int rowsTouched = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = barVolume / rowsTouched
+            for rowIndex = firstRow to lastRow
+                array.set(profile.rowVolumes, rowIndex, array.get(profile.rowVolumes, rowIndex) + volumePerRow)
+
+        float totalVolume = 0.0
+        float maxRowVolume = 0.0
+        int pocRow = 0
+        for rowIndex = 0 to rowCount - 1
+            float rowVolume = array.get(profile.rowVolumes, rowIndex)
+            totalVolume += rowVolume
+            if rowVolume > maxRowVolume
+                maxRowVolume := rowVolume
+                pocRow := rowIndex
+
+        int valueAreaLowRow = pocRow
+        int valueAreaHighRow = pocRow
+        float accumulatedVolume = array.get(profile.rowVolumes, pocRow)
+        float targetVolume = totalVolume * valueAreaPercent * 0.01
+        while accumulatedVolume < targetVolume and (valueAreaLowRow > 0 or valueAreaHighRow < rowCount - 1)
+            float volumeBelow = valueAreaLowRow > 0 ? array.get(profile.rowVolumes, valueAreaLowRow - 1) : -1.0
+            float volumeAbove = valueAreaHighRow < rowCount - 1 ? array.get(profile.rowVolumes, valueAreaHighRow + 1) : -1.0
+            if volumeAbove >= volumeBelow
+                valueAreaHighRow += 1
+                accumulatedVolume += math.max(volumeAbove, 0)
+            else
+                valueAreaLowRow -= 1
+                accumulatedVolume += math.max(volumeBelow, 0)
+
+        int pocShoulder = math.max(1, int(math.round(rowCount * ALTERNATE_POC_WINDOW_FRAC)))
+        int alternateRow = -1
+        float alternateVolume = 0.0
+        for rowIndex = 0 to rowCount - 1
+            if math.abs(rowIndex - pocRow) > pocShoulder
+                float rowVolume = array.get(profile.rowVolumes, rowIndex)
+                if rowVolume > alternateVolume
+                    alternateVolume := rowVolume
+                    alternateRow := rowIndex
+        bool hasAlternatePoc = false
+        float alternatePocPrice = na
+        if alternateRow >= 0 and maxRowVolume > 0 and alternateVolume / maxRowVolume >= ALTERNATE_POC_MIN_RATIO
+            hasAlternatePoc := true
+            alternatePocPrice := profileLow + (alternateRow + 0.5) * rowHeight
+
+        profile.priceLow := profileLow
+        profile.priceHigh := profileLow + priceSpan
+        profile.pocRow := pocRow
+        profile.valueAreaLowRow := valueAreaLowRow
+        profile.valueAreaHighRow := valueAreaHighRow
+        profile.pocPrice := profileLow + (pocRow + 0.5) * rowHeight
+        profile.valueAreaHighPrice := profileLow + (valueAreaHighRow + 1) * rowHeight
+        profile.valueAreaLowPrice := profileLow + valueAreaLowRow * rowHeight
+        profile.hasAlternatePoc := hasAlternatePoc
+        profile.alternatePocPrice := alternatePocPrice
+        profile.isValid := totalVolume > 0
+        if profile.isValid and prepareHistogram
+            prepareProfileHistogram(profile)
+        else if profile.isValid
+            array.clear(profile.rowVolumes)
+    profile
+
+averageCompletedVolume(MaturityState state) =>
+    int sampleCount = array.size(state.completedVolumes)
+    float volumeSum = 0.0
+    if sampleCount > 0
+        for historyIndex = 0 to sampleCount - 1
+            volumeSum += array.get(state.completedVolumes, historyIndex)
+    sampleCount > 0 ? volumeSum / sampleCount : na
+
+profileStructureStable(Profile profile, float previousVah, float previousVal, float previousPoc, float minimumTick, float stabilityFraction) =>
+    float valueAreaWidth = math.max(minimumTick, profile.valueAreaHighPrice - profile.valueAreaLowPrice)
+    float tolerance = valueAreaWidth * stabilityFraction
+    profile.isValid and not na(previousVah) and math.abs(profile.valueAreaHighPrice - previousVah) <= tolerance and math.abs(profile.valueAreaLowPrice - previousVal) <= tolerance and math.abs(profile.pocPrice - previousPoc) <= tolerance
+
+resetMaturityState(MaturityState state) =>
+    state.valueAreaHigh := na
+    state.valueAreaLow := na
+    state.poc := na
+    state.stable := false
+    true
+
+updateMaturityState(MaturityState state, array<float> highs, array<float> lows, array<float> volumes, int rowCount, float valueAreaPercent, float minimumTick, float stabilityFraction) =>
+    if array.size(volumes) > 0
+        Profile snapshot = buildProfile(highs, lows, volumes, rowCount, valueAreaPercent, 0, 0, false)
+        if snapshot.isValid
+            state.stable := profileStructureStable(snapshot, state.valueAreaHigh, state.valueAreaLow, state.poc, minimumTick, stabilityFraction)
+            state.valueAreaHigh := snapshot.valueAreaHighPrice
+            state.valueAreaLow := snapshot.valueAreaLowPrice
+            state.poc := snapshot.pocPrice
+    true
+
+//@function Advances developing-profile maturity at period or session boundaries.
+//@param state Maturity state to mutate.
+//@param anchor Anchor whose developing samples supply volume and structure.
+//@param periodStart Whether a new anchor period begins.
+//@param sessionComplete Whether one maturity session completed.
+//@param historyLimit Completed-volume retention limit.
+//@param rowCount Profile row count.
+//@param valueAreaPercent Percentage of volume included in value.
+//@param minimumTick Instrument tick size.
+//@param stabilityFraction Maximum structural change relative to value width.
+//@returns Whether the maturity state advanced.
+export advanceMaturityState(MaturityState state, AnchorState anchor, bool periodStart, bool sessionComplete, int historyLimit, int rowCount, float valueAreaPercent, float minimumTick, float stabilityFraction) =>
+    bool advanced = false
+    if periodStart
+        if array.size(anchor.barVolumes) > 0
+            float completedVolume = array.sum(anchor.barVolumes)
+            if completedVolume > 0
+                array.push(state.completedVolumes, completedVolume)
+                while array.size(state.completedVolumes) > historyLimit
+                    array.shift(state.completedVolumes)
+        state.sessionsCompleted := 0
+        resetMaturityState(state)
+        advanced := true
+    else if sessionComplete
+        state.sessionsCompleted += 1
+        updateMaturityState(state, anchor.barHighs, anchor.barLows, anchor.barVolumes, rowCount, valueAreaPercent, minimumTick, stabilityFraction)
+        advanced := true
+    advanced
+
+//@function Resolves whether a developing profile is mature enough to display.
+//@param state Maturity state to inspect.
+//@param anchor Anchor whose developing volume is inspected.
+//@param alwaysOn Whether developing output is forced on.
+//@param automaticMode Whether maturity controls developing output.
+//@param fallbackSessions Session threshold for standard maturity.
+//@param earlyMinimumSessions Minimum sessions for early maturity.
+//@param earlyVolumeThresholdPercent Required volume percentage for early maturity.
+//@param isLastBar Whether the caller is evaluating the chart's last bar.
+//@returns Whether the developing profile should display.
+export maturityShowsDeveloping(MaturityState state, AnchorState anchor, bool alwaysOn, bool automaticMode, int fallbackSessions, int earlyMinimumSessions, int earlyVolumeThresholdPercent, bool isLastBar) =>
+    bool sessionMature = state.sessionsCompleted >= fallbackSessions
+    bool earlyMature = false
+    if isLastBar
+        float averageVolume = averageCompletedVolume(state)
+        float currentVolume = array.size(anchor.barVolumes) > 0 ? array.sum(anchor.barVolumes) : 0.0
+        earlyMature := state.sessionsCompleted >= earlyMinimumSessions and state.stable and not na(averageVolume) and currentVolume >= averageVolume * earlyVolumeThresholdPercent * 0.01
+    alwaysOn or (automaticMode and (sessionMature or earlyMature))
+
+//@function Finalizes one anchor period and applies its short-period merge policy.
+//@param state Anchor state to finalize.
+//@param mergeState Short-period folding state to mutate.
+//@param startTime Finalized period start timestamp.
+//@param endTime Finalized period end timestamp.
+//@param lastBarTime Last confirmed sample timestamp.
+//@param keepProfiles Completed-profile retention limit.
+//@param mergeDepth Maximum short-period fold depth.
+//@param mergeAllShorts Whether every eligible short period can fold.
+//@param combineShorts Whether consecutive short periods combine.
+//@param shortSpanFraction Fraction of normal span that defines a short period.
+//@param prepareHistogram Whether the profile retains histogram rows.
+//@param rowCount Profile row count.
+//@param valueAreaPercent Percentage of volume included in value.
+//@param finalizedTime Timestamp when finalization was observed.
+//@returns True after applying finalization.
+export finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endTime, int lastBarTime, int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool prepareHistogram, int rowCount, float valueAreaPercent, int finalizedTime) =>
+    if array.size(state.barVolumes) > 0
+        int periodSpan = lastBarTime - startTime
+        int normalSpan = mergeState.normalSpan
+        bool mergeEnabled = mergeAllShorts or mergeDepth > 0
+        bool isShortPeriod = mergeEnabled and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
+        bool canMerge = isShortPeriod and (mergeAllShorts or mergeState.foldCount < mergeDepth) and array.size(mergeState.pendingVolumes) > 0 and array.size(state.profiles) > 0
+        if canMerge
+            int baseFinalizedTime = array.get(state.profiles, array.size(state.profiles) - 1).finalizedTime
+            array.concat(mergeState.pendingHighs, state.barHighs)
+            array.concat(mergeState.pendingLows, state.barLows)
+            array.concat(mergeState.pendingVolumes, state.barVolumes)
+            compactIfNeeded(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes)
+            Profile merged = buildProfile(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes, rowCount, valueAreaPercent, mergeState.pendingStartTime, endTime, prepareHistogram)
+            if merged.isValid
+                merged.finalizedTime := baseFinalizedTime
+                array.pop(state.profiles)
+                array.push(state.profiles, merged)
+                while array.size(state.profiles) > keepProfiles
+                    array.shift(state.profiles)
+            mergeState.foldCount += 1
+        else
+            Profile profile = buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, startTime, endTime, prepareHistogram)
+            if profile.isValid
+                profile.finalizedTime := finalizedTime
+                array.push(state.profiles, profile)
+                while array.size(state.profiles) > keepProfiles
+                    array.shift(state.profiles)
+                if periodSpan > normalSpan
+                    mergeState.normalSpan := periodSpan
+                if mergeEnabled
+                    bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
+                    if becomesBase
+                        array.clear(mergeState.pendingHighs)
+                        array.clear(mergeState.pendingLows)
+                        array.clear(mergeState.pendingVolumes)
+                        array.concat(mergeState.pendingHighs, state.barHighs)
+                        array.concat(mergeState.pendingLows, state.barLows)
+                        array.concat(mergeState.pendingVolumes, state.barVolumes)
+                        mergeState.pendingStartTime := startTime
+                        mergeState.foldCount := combineShorts ? 1 : 0
+                    else if combineShorts and not isShortPeriod
+                        array.clear(mergeState.pendingHighs)
+                        array.clear(mergeState.pendingLows)
+                        array.clear(mergeState.pendingVolumes)
+                        mergeState.foldCount := 0
+        array.clear(state.barHighs)
+        array.clear(state.barLows)
+        array.clear(state.barVolumes)
+    true
+
+//@function Processes one confirmed chart bar through an anchor state machine.
+//@param state Anchor state to mutate.
+//@param mergeState Short-period folding state to mutate.
+//@param policy Anchor processing policy.
+//@param enabled Whether anchor processing is active.
+//@param inWindow Whether the current bar belongs to the anchor.
+//@param periodStart Whether a new period begins.
+//@param periodEnd Whether a discontinuous period ends.
+//@param preparedHighs Prepared sample highs.
+//@param preparedLows Prepared sample lows.
+//@param preparedVolumes Prepared sample volumes.
+//@param barConfirmed Whether the chart bar is confirmed.
+//@param currentTime Current chart-bar timestamp.
+//@param previousTime Previous chart-bar timestamp.
+//@param unsetTime Sentinel for unobserved timestamps.
+//@param rowCount Profile row count.
+//@param valueAreaPercent Percentage of volume included in value.
+//@returns True after processing the bar.
+export processAnchor(AnchorState state, MergeState mergeState, AnchorProcessPolicy policy, bool enabled, bool inWindow, bool periodStart, bool periodEnd, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, bool barConfirmed, int currentTime, int previousTime, int unsetTime, int rowCount, float valueAreaPercent) =>
+    if enabled
+        bool shouldStart = periodStart or (not policy.requireObservedBoundary and state.startTime == unsetTime and inWindow)
+
+        if periodEnd and array.size(state.barVolumes) > 0
+            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
+
+        if shouldStart
+            if array.size(state.barVolumes) > 0
+                int boundaryEnd = policy.continuousBoundary ? currentTime : previousTime
+                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
+            state.startTime := currentTime
+
+        if inWindow and barConfirmed
+            appendPreparedBarVolume(state.barHighs, state.barLows, state.barVolumes, preparedHighs, preparedLows, preparedVolumes, true)
+            state.lastBarTime := currentTime
+    true
+
+//@function Copies histogram construction fields from one profile to another.
+//@param target Profile receiving histogram fields.
+//@param source Profile supplying histogram fields.
+//@returns True after copying histogram fields.
+export syncProfileHistogram(Profile target, Profile source) =>
+    target.priceLow := source.priceLow
+    target.priceHigh := source.priceHigh
+    target.rowCount := source.rowCount
+    target.rowVolumes := array.copy(source.rowVolumes)
+    target.maxHistogramVolume := source.maxHistogramVolume
+    target.pocRow := source.pocRow
+    target.valueAreaLowRow := source.valueAreaLowRow
+    target.valueAreaHighRow := source.valueAreaHighRow
+    true
+
+//@function Finds a completed profile by its start timestamp.
+//@param profiles Completed profiles to search.
+//@param startTime Target start timestamp.
+//@param unsetTime Sentinel for an unavailable target timestamp.
+//@returns The matching index or -1.
+export profileIndexByStart(array<Profile> profiles, int startTime, int unsetTime) =>
+    int profileIndex = -1
+    if startTime != unsetTime and array.size(profiles) > 0
+        for candidateIndex = array.size(profiles) - 1 to 0
+            if array.get(profiles, candidateIndex).startTime == startTime
+                profileIndex := candidateIndex
+                break
+    profileIndex
+
+//@function Finds a completed profile by its exact start and end timestamps.
+//@param profiles Completed profiles to search.
+//@param startTime Target start timestamp.
+//@param endTime Target end timestamp.
+//@param unsetTime Sentinel for an unavailable target timestamp.
+//@returns The matching index or -1.
+export profileIndexByIdentity(array<Profile> profiles, int startTime, int endTime, int unsetTime) =>
+    int profileIndex = -1
+    if startTime != unsetTime and array.size(profiles) > 0
+        for candidateIndex = array.size(profiles) - 1 to 0
+            Profile profile = array.get(profiles, candidateIndex)
+            if profile.startTime == startTime and profile.endTime == endTime
+                profileIndex := candidateIndex
+                break
+    profileIndex
+
+//@function Stores one completed profile and applies the anchor retention limit.
+//@param state Anchor receiving the profile.
+//@param profile Completed profile to store.
+//@param keepProfiles Completed-profile retention limit.
+//@param finalizedTime Timestamp when storage was observed.
+//@returns The stored profile index.
+export storeProfile(AnchorState state, Profile profile, int keepProfiles, int finalizedTime) =>
+    profile.finalizedTime := finalizedTime
+    array.push(state.profiles, profile)
+    while array.size(state.profiles) > keepProfiles
+        array.shift(state.profiles)
+    array.size(state.profiles) - 1
+
+updateMitigation(array<Profile> profiles, bool active, bool sameSessionOnly, bool inWindowNow, float breachHigh, float breachLow, int currentTime) =>
+    if active and array.size(profiles) > 0 and not (sameSessionOnly and not inWindowNow)
+        if not na(breachHigh) and not na(breachLow)
+            for profileIndex = 0 to array.size(profiles) - 1
+                Profile profile = array.get(profiles, profileIndex)
+                if currentTime > profile.endTime
+                    if na(profile.pocBreachTime) and breachLow < profile.pocPrice and breachHigh > profile.pocPrice
+                        profile.pocBreachTime := currentTime
+                    if na(profile.valueAreaHighBreachTime) and breachLow < profile.valueAreaHighPrice and breachHigh > profile.valueAreaHighPrice
+                        profile.valueAreaHighBreachTime := currentTime
+                    if na(profile.valueAreaLowBreachTime) and breachLow < profile.valueAreaLowPrice and breachHigh > profile.valueAreaLowPrice
+                        profile.valueAreaLowBreachTime := currentTime
+                    if profile.hasAlternatePoc and na(profile.alternatePocBreachTime) and breachLow < profile.alternatePocPrice and breachHigh > profile.alternatePocPrice
+                        profile.alternatePocBreachTime := currentTime
+
+sweepStep(bool reachedAbove, bool reachedBelow, float level, float margin, float currentClose, int currentTime) =>
+    bool above = reachedAbove or currentClose >= level + margin
+    bool below = reachedBelow or currentClose <= level - margin
+    int sweptTime = above and below ? currentTime : na
+    [above, below, sweptTime]
+
+updateSweep(array<Profile> profiles, bool active, float marginFraction, float currentClose, int currentTime) =>
+    if active and array.size(profiles) > 0
+        for profileIndex = 0 to array.size(profiles) - 1
+            Profile profile = array.get(profiles, profileIndex)
+            if currentTime > profile.endTime
+                float margin = (profile.priceHigh - profile.priceLow) * marginFraction
+                if na(profile.pocBreachTime)
+                    [pocAbove, pocBelow, pocSwept] = sweepStep(profile.pocSweptAbove, profile.pocSweptBelow, profile.pocPrice, margin, currentClose, currentTime)
+                    profile.pocSweptAbove := pocAbove
+                    profile.pocSweptBelow := pocBelow
+                    if not na(pocSwept)
+                        profile.pocBreachTime := pocSwept
+                if na(profile.valueAreaHighBreachTime)
+                    [vahAbove, vahBelow, vahSwept] = sweepStep(profile.valueAreaHighSweptAbove, profile.valueAreaHighSweptBelow, profile.valueAreaHighPrice, margin, currentClose, currentTime)
+                    profile.valueAreaHighSweptAbove := vahAbove
+                    profile.valueAreaHighSweptBelow := vahBelow
+                    if not na(vahSwept)
+                        profile.valueAreaHighBreachTime := vahSwept
+                if na(profile.valueAreaLowBreachTime)
+                    [valAbove, valBelow, valSwept] = sweepStep(profile.valueAreaLowSweptAbove, profile.valueAreaLowSweptBelow, profile.valueAreaLowPrice, margin, currentClose, currentTime)
+                    profile.valueAreaLowSweptAbove := valAbove
+                    profile.valueAreaLowSweptBelow := valBelow
+                    if not na(valSwept)
+                        profile.valueAreaLowBreachTime := valSwept
+                if profile.hasAlternatePoc and na(profile.alternatePocBreachTime)
+                    [apocAbove, apocBelow, apocSwept] = sweepStep(profile.alternatePocSweptAbove, profile.alternatePocSweptBelow, profile.alternatePocPrice, margin, currentClose, currentTime)
+                    profile.alternatePocSweptAbove := apocAbove
+                    profile.alternatePocSweptBelow := apocBelow
+                    if not na(apocSwept)
+                        profile.alternatePocBreachTime := apocSwept
+
+//@function Advances mitigation and manual sweep state for one anchor.
+//@param state Anchor containing the completed profiles.
+//@param mitigationActive Whether price-return mitigation is active.
+//@param sameSessionOnly Whether mitigation is limited to the active session.
+//@param inWindowNow Whether the current bar is inside the eligible session.
+//@param sweepActive Whether two-sided sweep tracking is active.
+//@param breachHigh Highest eligible traded price.
+//@param breachLow Lowest eligible traded price.
+//@param sweepMarginFraction Sweep confirmation margin relative to profile range.
+//@param currentClose Current confirmed close used by sweep tracking.
+//@param currentTime Current confirmed bar timestamp.
+export updateAnchorLevels(AnchorState state, bool mitigationActive, bool sameSessionOnly, bool inWindowNow, bool sweepActive, float breachHigh, float breachLow, float sweepMarginFraction, float currentClose, int currentTime) =>
+    updateMitigation(state.profiles, mitigationActive, sameSessionOnly, inWindowNow, breachHigh, breachLow, currentTime)
+    updateSweep(state.profiles, sweepActive, sweepMarginFraction, currentClose, currentTime)
+
+autoSweptProfileFromProfile(Profile profile) =>
+    AutoSweptProfile.new(profile.startTime, profile.endTime, profile.finalizedTime, profile.priceLow, profile.priceHigh, profile.pocPrice, profile.alternatePocPrice, profile.valueAreaHighPrice, profile.valueAreaLowPrice, profile.hasAlternatePoc, false, profile.pocBreachTime, profile.alternatePocBreachTime, profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime, profile.pocSweptAbove, profile.pocSweptBelow, profile.alternatePocSweptAbove, profile.alternatePocSweptBelow, profile.valueAreaHighSweptAbove, profile.valueAreaHighSweptBelow, profile.valueAreaLowSweptAbove, profile.valueAreaLowSweptBelow, profile.pocHitTime, profile.alternatePocHitTime, profile.valueAreaHighHitTime, profile.valueAreaLowHitTime, profile.pocDailyTouchConsumed, profile.alternatePocDailyTouchConsumed, profile.valueAreaHighDailyTouchConsumed, profile.valueAreaLowDailyTouchConsumed)
+
+autoSweptArchiveIndexByIdentity(array<AutoSweptProfile> profiles, int startTime, int endTime) =>
+    int profileIndex = -1
+    if array.size(profiles) > 0
+        for candidateIndex = array.size(profiles) - 1 to 0
+            AutoSweptProfile profile = array.get(profiles, candidateIndex)
+            if profile.startTime == startTime and profile.endTime == endTime
+                profileIndex := candidateIndex
+                break
+    profileIndex
+
+laterEventTime(int firstTime, int secondTime) =>
+    na(firstTime) ? secondTime : na(secondTime) ? firstTime : int(math.max(firstTime, secondTime))
+
+syncAutoSweptHitState(AutoSweptProfile target, Profile source) =>
+    target.pocHitTime := laterEventTime(target.pocHitTime, source.pocHitTime)
+    target.alternatePocHitTime := laterEventTime(target.alternatePocHitTime, source.alternatePocHitTime)
+    target.valueAreaHighHitTime := laterEventTime(target.valueAreaHighHitTime, source.valueAreaHighHitTime)
+    target.valueAreaLowHitTime := laterEventTime(target.valueAreaLowHitTime, source.valueAreaLowHitTime)
+    target.pocDailyTouchConsumed := target.pocDailyTouchConsumed or source.pocDailyTouchConsumed
+    target.alternatePocDailyTouchConsumed := target.alternatePocDailyTouchConsumed or source.alternatePocDailyTouchConsumed
+    target.valueAreaHighDailyTouchConsumed := target.valueAreaHighDailyTouchConsumed or source.valueAreaHighDailyTouchConsumed
+    target.valueAreaLowDailyTouchConsumed := target.valueAreaLowDailyTouchConsumed or source.valueAreaLowDailyTouchConsumed
+    true
+
+syncAutoSweptProfile(AutoSweptProfile target, Profile source) =>
+    target.endTime := source.endTime
+    target.finalizedTime := source.finalizedTime
+    target.priceLow := source.priceLow
+    target.priceHigh := source.priceHigh
+    target.pocPrice := source.pocPrice
+    target.alternatePocPrice := source.alternatePocPrice
+    target.valueAreaHighPrice := source.valueAreaHighPrice
+    target.valueAreaLowPrice := source.valueAreaLowPrice
+    target.hasAlternatePoc := source.hasAlternatePoc
+    target.pocBreachTime := source.pocBreachTime
+    target.alternatePocBreachTime := source.alternatePocBreachTime
+    target.valueAreaHighBreachTime := source.valueAreaHighBreachTime
+    target.valueAreaLowBreachTime := source.valueAreaLowBreachTime
+    target.pocSweptAbove := source.pocSweptAbove
+    target.pocSweptBelow := source.pocSweptBelow
+    target.alternatePocSweptAbove := source.alternatePocSweptAbove
+    target.alternatePocSweptBelow := source.alternatePocSweptBelow
+    target.valueAreaHighSweptAbove := source.valueAreaHighSweptAbove
+    target.valueAreaHighSweptBelow := source.valueAreaHighSweptBelow
+    target.valueAreaLowSweptAbove := source.valueAreaLowSweptAbove
+    target.valueAreaLowSweptBelow := source.valueAreaLowSweptBelow
+    syncAutoSweptHitState(target, source)
+    true
+
+autoSweptSelectionKey(int profileStartTime, int profileEndTime) =>
+    str.tostring(profileStartTime) + "|" + str.tostring(profileEndTime)
+
+autoSweptProfileCurrentlyPicked(AutoSweptState state, int profileStartTime, int profileEndTime) =>
+    map.contains(state.currentSelectedMasks, autoSweptSelectionKey(profileStartTime, profileEndTime))
+
+refreshAutoSweptSourceWindow(AutoSweptState state) =>
+    map.clear(state.eligibleSourceStarts)
+    array.clear(state.eligibleProfileIndices)
+    int sourceLimit = math.max(0, state.sourceProfileLimit)
+    if sourceLimit > 0 and array.size(state.profiles) > 0
+        for profileIndex = array.size(state.profiles) - 1 to 0
+            AutoSweptProfile profile = array.get(state.profiles, profileIndex)
+            if not profile.superseded and not map.contains(state.eligibleSourceStarts, profile.startTime)
+                map.put(state.eligibleSourceStarts, profile.startTime, true)
+                array.push(state.eligibleProfileIndices, profileIndex)
+                if array.size(state.eligibleProfileIndices) >= sourceLimit
+                    break
+        array.reverse(state.eligibleProfileIndices)
+    true
+
+autoSweptSourceEligible(AutoSweptState state, int profileStartTime) =>
+    map.contains(state.eligibleSourceStarts, profileStartTime)
+
+//@function Sets the configured recent-profile boundary used only by Auto visibility.
+export setAutoSweptSourceProfileLimit(AutoSweptState state, int sourceProfileLimit) =>
+    int normalizedLimit = math.max(1, sourceProfileLimit)
+    if state.sourceProfileLimit != normalizedLimit
+        state.sourceProfileLimit := normalizedLimit
+        refreshAutoSweptSourceWindow(state)
+        state.revision += 1
+    true
+
+//@function Synchronizes completed profiles into the compact Auto Swept archive.
+//@param state Auto Swept state for one anchor.
+//@param profiles Current completed profiles for the anchor.
+//@param active Whether the archive is required.
+//@param maximumProfiles Maximum compact records retained for ADR and Touch history.
+//@returns True after synchronization and pruning.
+export syncAutoSweptArchive(AutoSweptState state, array<Profile> profiles, bool active, int maximumProfiles) =>
+    bool addedProfile = false
+    if active and array.size(profiles) > 0
+        int archiveFromIndex = math.max(0, array.size(profiles) - math.max(1, maximumProfiles))
+        for profileIndex = archiveFromIndex to array.size(profiles) - 1
+            Profile profile = array.get(profiles, profileIndex)
+            int archiveIndex = autoSweptArchiveIndexByIdentity(state.profiles, profile.startTime, profile.endTime)
+            if archiveIndex < 0
+                if array.size(state.profiles) > 0
+                    for candidateIndex = array.size(state.profiles) - 1 to 0
+                        AutoSweptProfile candidate = array.get(state.profiles, candidateIndex)
+                        if candidate.startTime == profile.startTime and candidate.endTime != profile.endTime
+                            if autoSweptProfileCurrentlyPicked(state, candidate.startTime, candidate.endTime)
+                                candidate.superseded := true
+                            else
+                                array.remove(state.profiles, candidateIndex)
+                array.push(state.profiles, autoSweptProfileFromProfile(profile))
+                addedProfile := true
+            else
+                syncAutoSweptProfile(array.get(state.profiles, archiveIndex), profile)
+        if array.size(state.profiles) > 0
+            for profileIndex = array.size(state.profiles) - 1 to 0
+                AutoSweptProfile profile = array.get(state.profiles, profileIndex)
+                if profile.superseded and not autoSweptProfileCurrentlyPicked(state, profile.startTime, profile.endTime)
+                    array.remove(state.profiles, profileIndex)
+        while array.size(state.profiles) > maximumProfiles
+            int removalIndex = -1
+            for profileIndex = 0 to array.size(state.profiles) - 1
+                AutoSweptProfile profile = array.get(state.profiles, profileIndex)
+                if not autoSweptProfileCurrentlyPicked(state, profile.startTime, profile.endTime)
+                    removalIndex := profileIndex
+                    break
+            if removalIndex >= 0
+                array.remove(state.profiles, removalIndex)
+            else
+                break
+        refreshAutoSweptSourceWindow(state)
+        if addedProfile
+            state.observedCloseHigh := na
+            state.observedCloseLow := na
+    true
+
+//@function Synchronizes only realtime Touch state into existing archive records.
+//@param state Auto Swept state for one anchor.
+//@param profiles Current completed profiles for the anchor.
+//@param active Whether the archive is required.
+//@returns True after synchronization.
+export syncAutoSweptArchiveHits(AutoSweptState state, array<Profile> profiles, bool active) =>
+    if active and array.size(profiles) > 0
+        for profileIndex = 0 to array.size(profiles) - 1
+            Profile profile = array.get(profiles, profileIndex)
+            int archiveIndex = autoSweptArchiveIndexByIdentity(state.profiles, profile.startTime, profile.endTime)
+            if archiveIndex >= 0
+                syncAutoSweptHitState(array.get(state.profiles, archiveIndex), profile)
+    true
+
+updateAutoSweptArchiveLevel(AutoSweptProfile profile, AutoSweptLevel level, float margin, float currentClose, int currentTime) =>
+    int breachTime = level == AutoSweptLevel.poc ? profile.pocBreachTime : level == AutoSweptLevel.alternatePoc ? profile.alternatePocBreachTime : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighBreachTime : profile.valueAreaLowBreachTime
+    if na(breachTime)
+        float levelPrice = level == AutoSweptLevel.poc ? profile.pocPrice : level == AutoSweptLevel.alternatePoc ? profile.alternatePocPrice : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighPrice : profile.valueAreaLowPrice
+        bool reachedAbove = level == AutoSweptLevel.poc ? profile.pocSweptAbove : level == AutoSweptLevel.alternatePoc ? profile.alternatePocSweptAbove : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighSweptAbove : profile.valueAreaLowSweptAbove
+        bool reachedBelow = level == AutoSweptLevel.poc ? profile.pocSweptBelow : level == AutoSweptLevel.alternatePoc ? profile.alternatePocSweptBelow : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighSweptBelow : profile.valueAreaLowSweptBelow
+        [updatedAbove, updatedBelow, sweptTime] = sweepStep(reachedAbove, reachedBelow, levelPrice, margin, currentClose, currentTime)
+        if level == AutoSweptLevel.poc
+            profile.pocSweptAbove := updatedAbove
+            profile.pocSweptBelow := updatedBelow
+            profile.pocBreachTime := sweptTime
+        else if level == AutoSweptLevel.alternatePoc
+            profile.alternatePocSweptAbove := updatedAbove
+            profile.alternatePocSweptBelow := updatedBelow
+            profile.alternatePocBreachTime := sweptTime
+        else if level == AutoSweptLevel.valueAreaHigh
+            profile.valueAreaHighSweptAbove := updatedAbove
+            profile.valueAreaHighSweptBelow := updatedBelow
+            profile.valueAreaHighBreachTime := sweptTime
+        else
+            profile.valueAreaLowSweptAbove := updatedAbove
+            profile.valueAreaLowSweptBelow := updatedBelow
+            profile.valueAreaLowBreachTime := sweptTime
+    true
+
+autoSweptLevelAvailable(AutoSweptProfile profile, AutoSweptLevel level) =>
+    level != AutoSweptLevel.alternatePoc or profile.hasAlternatePoc
+
+autoSweptLevelPrice(AutoSweptProfile profile, AutoSweptLevel level) =>
+    level == AutoSweptLevel.poc ? profile.pocPrice : level == AutoSweptLevel.alternatePoc ? profile.alternatePocPrice : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighPrice : profile.valueAreaLowPrice
+
+autoSweptLevelBreachTime(AutoSweptProfile profile, AutoSweptLevel level) =>
+    level == AutoSweptLevel.poc ? profile.pocBreachTime : level == AutoSweptLevel.alternatePoc ? profile.alternatePocBreachTime : level == AutoSweptLevel.valueAreaHigh ? profile.valueAreaHighBreachTime : profile.valueAreaLowBreachTime
+
+autoSweptLevelBit(AutoSweptLevel level) =>
+    level == AutoSweptLevel.poc ? AUTO_SWEPT_POC_BIT : level == AutoSweptLevel.alternatePoc ? AUTO_SWEPT_ALTERNATE_POC_BIT : level == AutoSweptLevel.valueAreaHigh ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : AUTO_SWEPT_VALUE_AREA_LOW_BIT
+
+//@function Finds the first archived same-anchor finalization after an event.
+//@param state Auto Swept state for one anchor.
+//@param eventTime Sweep timestamp.
+//@returns The earliest later finalization, or na while grace remains active.
+export firstAutoSweptFinalizedAfter(AutoSweptState state, int eventTime) =>
+    int firstFinalizedTime = na
+    if not na(eventTime) and array.size(state.profiles) > 0
+        int leftIndex = 0
+        int rightIndex = array.size(state.profiles)
+        while leftIndex < rightIndex
+            int middleIndex = int(math.floor((leftIndex + rightIndex) / 2))
+            int finalizedTime = array.get(state.profiles, middleIndex).finalizedTime
+            if na(finalizedTime) or finalizedTime <= eventTime
+                leftIndex := middleIndex + 1
+            else
+                rightIndex := middleIndex
+        if leftIndex < array.size(state.profiles)
+            firstFinalizedTime := array.get(state.profiles, leftIndex).finalizedTime
+    firstFinalizedTime
+
+autoSweptSelectionMask(map<string, int> masks, string profileKey) =>
+    map.contains(masks, profileKey) ? map.get(masks, profileKey) : 0
+
+autoSweptSelectionContains(map<string, int> masks, int profileStartTime, int profileEndTime, AutoSweptLevel level) =>
+    int selectionMask = autoSweptSelectionMask(masks, autoSweptSelectionKey(profileStartTime, profileEndTime))
+    int levelBit = autoSweptLevelBit(level)
+    int(math.floor(selectionMask / levelBit)) % 2 == 1
+
+autoSweptProtectedPickExists(AutoSweptState state, int profileStartTime, int profileEndTime, AutoSweptLevel level) =>
+    autoSweptSelectionContains(state.currentProtectedMasks, profileStartTime, profileEndTime, level)
+
+autoSweptBaselineActive(AutoSweptState state, int breachTime, int eventTime) =>
+    state.baselineKeepMs > 0 and not na(breachTime) and eventTime >= breachTime and eventTime - breachTime <= state.baselineKeepMs
+
+appendAutoSweptPick(AutoSweptState state, int cycleSerial, int activationTime, int profileStartTime, int profileEndTime, AutoSweptLevel level, bool protectedCarry) =>
+    string profileKey = autoSweptSelectionKey(profileStartTime, profileEndTime)
+    int levelBit = autoSweptLevelBit(level)
+    int selectedMask = autoSweptSelectionMask(state.currentSelectedMasks, profileKey)
+    bool added = int(math.floor(selectedMask / levelBit)) % 2 == 0
+    if added
+        AutoSweptPick pick = AutoSweptPick.new(cycleSerial, activationTime, profileStartTime, profileEndTime, level, protectedCarry)
+        map.put(state.currentSelectedMasks, profileKey, selectedMask + levelBit)
+        if protectedCarry
+            int protectedMask = autoSweptSelectionMask(state.currentProtectedMasks, profileKey)
+            map.put(state.currentProtectedMasks, profileKey, protectedMask + levelBit)
+        array.push(state.historyPicks, pick)
+    added
+
+//@function Advances unresolved sweep state in the compact archive.
+export updateAutoSweptArchive(AutoSweptState state, bool active, float marginFraction, float currentClose, int currentTime) =>
+    bool extendsObservedRange = active and not na(currentClose) and (na(state.observedCloseHigh) or na(state.observedCloseLow) or currentClose > state.observedCloseHigh or currentClose < state.observedCloseLow)
+    if extendsObservedRange and array.size(state.profiles) > 0
+        for profileIndex = 0 to array.size(state.profiles) - 1
+            AutoSweptProfile profile = array.get(state.profiles, profileIndex)
+            if currentTime > profile.endTime
+                float margin = (profile.priceHigh - profile.priceLow) * marginFraction
+                if na(profile.pocBreachTime)
+                    updateAutoSweptArchiveLevel(profile, AutoSweptLevel.poc, margin, currentClose, currentTime)
+                if na(profile.valueAreaHighBreachTime)
+                    updateAutoSweptArchiveLevel(profile, AutoSweptLevel.valueAreaHigh, margin, currentClose, currentTime)
+                if na(profile.valueAreaLowBreachTime)
+                    updateAutoSweptArchiveLevel(profile, AutoSweptLevel.valueAreaLow, margin, currentClose, currentTime)
+                if profile.hasAlternatePoc and na(profile.alternatePocBreachTime)
+                    updateAutoSweptArchiveLevel(profile, AutoSweptLevel.alternatePoc, margin, currentClose, currentTime)
+    if extendsObservedRange
+        state.observedCloseHigh := na(state.observedCloseHigh) ? currentClose : math.max(state.observedCloseHigh, currentClose)
+        state.observedCloseLow := na(state.observedCloseLow) ? currentClose : math.min(state.observedCloseLow, currentClose)
+    true
+
+pruneAutoSweptHistory(AutoSweptState state, int historyCycles) =>
+    int retainedCycles = math.max(1, historyCycles)
+    while array.size(state.cycleHistory) > retainedCycles
+        int expiredCycle = array.shift(state.cycleHistory)
+        bool pruningPicks = array.size(state.historyPicks) > 0
+        while pruningPicks
+            AutoSweptPick oldestPick = array.first(state.historyPicks)
+            if oldestPick.cycleSerial == expiredCycle
+                array.shift(state.historyPicks)
+                pruningPicks := array.size(state.historyPicks) > 0
+            else
+                pruningPicks := false
+    true
+
+//@function Returns a robust ADR from the latest completed compact daily profiles.
+export autoSweptTrimmedAdr(AutoSweptState state, int lookback, int minimumTrimSamples) =>
+    int requested = math.max(0, lookback)
+    float total = 0.0
+    float largest = na
+    float smallest = na
+    int count = 0
+    int profileIndex = array.size(state.profiles) - 1
+    while profileIndex >= 0 and count < requested
+        AutoSweptProfile profile = array.get(state.profiles, profileIndex)
+        if not profile.superseded
+            float profileRange = profile.priceHigh - profile.priceLow
+            if not na(profileRange) and profileRange > 0
+                total += profileRange
+                largest := na(largest) ? profileRange : math.max(largest, profileRange)
+                smallest := na(smallest) ? profileRange : math.min(smallest, profileRange)
+                count += 1
+        profileIndex -= 1
+    count >= minimumTrimSamples and count > 2 ? (total - largest - smallest) / (count - 2) : count > 0 ? total / count : float(na)
+
+autoSweptRoleBit(AutoSweptLevel level) =>
+    autoSweptLevelBit(level)
+
+autoSweptMaskCount(int value, int maximumBit) =>
+    int count = 0
+    int bit = 1
+    while bit <= maximumBit
+        count += int(math.floor(value / bit)) % 2
+        bit *= 2
+    count
+
+autoSweptProfileVoteKey(AutoSweptReference reference) =>
+    str.tostring(reference.anchorBit) + "|" + str.tostring(reference.profileStartTime)
+
+autoSweptTemporalProtected(AutoSweptState state, int breachTime, int profileLastBreachTime, int eventTime) =>
+    bool protected = false
+    if not na(breachTime)
+        int graceEndTime = firstAutoSweptFinalizedAfter(state, breachTime)
+        bool graceActive = na(graceEndTime) or eventTime <= graceEndTime
+        protected := graceActive or autoSweptBaselineActive(state, profileLastBreachTime, eventTime)
+    protected
+
+autoSweptLaterEvidence(AutoSweptState state, AutoSweptProfile source, float levelPrice, float clusterTolerance) =>
+    int valueAcceptanceCount = 0
+    int controlOverlapCount = 0
+    if array.size(state.eligibleProfileIndices) > 0
+        for eligiblePosition = 0 to array.size(state.eligibleProfileIndices) - 1
+            int profileIndex = array.get(state.eligibleProfileIndices, eligiblePosition)
+            AutoSweptProfile later = array.get(state.profiles, profileIndex)
+            if not later.superseded and later.finalizedTime > source.finalizedTime
+                if not na(later.valueAreaLowPrice) and not na(later.valueAreaHighPrice) and later.valueAreaLowPrice <= levelPrice and later.valueAreaHighPrice >= levelPrice
+                    valueAcceptanceCount += 1
+                bool pocOverlap = not na(later.pocPrice) and math.abs(later.pocPrice - levelPrice) <= clusterTolerance
+                bool alternateOverlap = later.hasAlternatePoc and not na(later.alternatePocPrice) and math.abs(later.alternatePocPrice - levelPrice) <= clusterTolerance
+                if pocOverlap or alternateOverlap
+                    controlOverlapCount += 1
+    [valueAcceptanceCount, controlOverlapCount]
+
+appendAutoSweptReference(array<AutoSweptReference> references, AutoSweptPolicy policy, int policyIndex, AutoSweptProfile profile, AutoSweptLevel level, int selectionTime, bool addOnly, float entryLowerReach, float entryUpperReach, float exitLowerReach, float exitUpperReach, float collectionLowerReach, float collectionUpperReach, float clusterTolerance) =>
+    if autoSweptLevelAvailable(profile, level)
+        float levelPrice = autoSweptLevelPrice(profile, level)
+        if not na(levelPrice)
+            int breachTime = autoSweptLevelBreachTime(profile, level)
+            int profileLastBreachTime = laterEventTime(laterEventTime(profile.pocBreachTime, profile.alternatePocBreachTime), laterEventTime(profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime))
+            bool protectedCarry = addOnly and autoSweptProtectedPickExists(policy.state, profile.startTime, profile.endTime, level)
+            bool protectedAtSelection = autoSweptTemporalProtected(policy.state, breachTime, profileLastBreachTime, selectionTime) or protectedCarry
+            bool previouslyAdaptive = autoSweptSelectionContains(policy.state.currentSelectedMasks, profile.startTime, profile.endTime, level) and not autoSweptProtectedPickExists(policy.state, profile.startTime, profile.endTime, level)
+            bool withinEntryReach = levelPrice >= entryLowerReach and levelPrice <= entryUpperReach
+            bool withinExitReach = levelPrice >= exitLowerReach and levelPrice <= exitUpperReach
+            bool withinCollectionReach = levelPrice >= collectionLowerReach and levelPrice <= collectionUpperReach
+            if protectedAtSelection or withinCollectionReach
+                bool adaptiveCandidate = not na(breachTime) and not protectedAtSelection and (previouslyAdaptive ? withinExitReach : withinEntryReach)
+                int valueAcceptanceCount = 0
+                int controlOverlapCount = 0
+                if adaptiveCandidate
+                    [calculatedValueAcceptanceCount, calculatedControlOverlapCount] = autoSweptLaterEvidence(policy.state, profile, levelPrice, clusterTolerance)
+                    valueAcceptanceCount := calculatedValueAcceptanceCount
+                    controlOverlapCount := calculatedControlOverlapCount
+                array.push(references, AutoSweptReference.new(policyIndex, policy.anchorBit, policy.anchorPriority, profile.startTime, profile.endTime, levelPrice, level, adaptiveCandidate, protectedAtSelection, valueAcceptanceCount, controlOverlapCount))
+    true
+
+appendAutoSweptPolicyReferences(array<AutoSweptReference> references, AutoSweptPolicy policy, int policyIndex, int selectionTime, bool addOnly, float entryLowerReach, float entryUpperReach, float exitLowerReach, float exitUpperReach, float collectionLowerReach, float collectionUpperReach, float clusterTolerance) =>
+    if policy.active and array.size(policy.state.eligibleProfileIndices) > 0
+        for eligiblePosition = 0 to array.size(policy.state.eligibleProfileIndices) - 1
+            int profileIndex = array.get(policy.state.eligibleProfileIndices, eligiblePosition)
+            AutoSweptProfile profile = array.get(policy.state.profiles, profileIndex)
+            if not profile.superseded
+                if policy.showPoc
+                    appendAutoSweptReference(references, policy, policyIndex, profile, AutoSweptLevel.poc, selectionTime, addOnly, entryLowerReach, entryUpperReach, exitLowerReach, exitUpperReach, collectionLowerReach, collectionUpperReach, clusterTolerance)
+                if policy.showAlternatePoc and profile.hasAlternatePoc
+                    appendAutoSweptReference(references, policy, policyIndex, profile, AutoSweptLevel.alternatePoc, selectionTime, addOnly, entryLowerReach, entryUpperReach, exitLowerReach, exitUpperReach, collectionLowerReach, collectionUpperReach, clusterTolerance)
+                if policy.showValueArea
+                    appendAutoSweptReference(references, policy, policyIndex, profile, AutoSweptLevel.valueAreaHigh, selectionTime, addOnly, entryLowerReach, entryUpperReach, exitLowerReach, exitUpperReach, collectionLowerReach, collectionUpperReach, clusterTolerance)
+                    appendAutoSweptReference(references, policy, policyIndex, profile, AutoSweptLevel.valueAreaLow, selectionTime, addOnly, entryLowerReach, entryUpperReach, exitLowerReach, exitUpperReach, collectionLowerReach, collectionUpperReach, clusterTolerance)
+    true
+
+autoSweptCandidateOutranks(AutoSweptCandidate candidate, AutoSweptCandidate other) =>
+    candidate.highestAnchorPriority != other.highestAnchorPriority ? candidate.highestAnchorPriority > other.highestAnchorPriority : candidate.distinctAnchorCount != other.distinctAnchorCount ? candidate.distinctAnchorCount > other.distinctAnchorCount : candidate.distinctProfileCount != other.distinctProfileCount ? candidate.distinctProfileCount > other.distinctProfileCount : candidate.distinctRoleCount != other.distinctRoleCount ? candidate.distinctRoleCount > other.distinctRoleCount : candidate.laterControlOverlapScore != other.laterControlOverlapScore ? candidate.laterControlOverlapScore > other.laterControlOverlapScore : candidate.laterValueAcceptanceScore != other.laterValueAcceptanceScore ? candidate.laterValueAcceptanceScore < other.laterValueAcceptanceScore : candidate.distance != other.distance ? candidate.distance < other.distance : candidate.profileEndTime > other.profileEndTime
+
+buildAutoSweptCandidates(array<AutoSweptReference> references, float referencePrice, float clusterTolerance) =>
+    array<AutoSweptCandidate> candidates = array.new<AutoSweptCandidate>()
+    if array.size(references) > 0
+        array<float> prices = array.new<float>()
+        for referenceIndex = 0 to array.size(references) - 1
+            array.push(prices, array.get(references, referenceIndex).price)
+        array<int> sortedIndices = array.sort_indices(prices)
+        map<string, bool> profileVotes = map.new<string, bool>()
+        int clusterStart = 0
+        while clusterStart < array.size(sortedIndices)
+            int firstReferenceIndex = array.get(sortedIndices, clusterStart)
+            float zoneLow = array.get(references, firstReferenceIndex).price
+            int clusterEnd = clusterStart
+            while clusterEnd + 1 < array.size(sortedIndices) and array.get(references, array.get(sortedIndices, clusterEnd + 1)).price - zoneLow <= clusterTolerance
+                clusterEnd += 1
+            float closestDistance = na
+            int newestProfileEndTime = 0
+            int highestAnchorPriority = 0
+            int anchorMask = 0
+            int roleMask = 0
+            int adaptiveMemberCount = 0
+            float valueAcceptanceTotal = 0.0
+            float controlOverlapTotal = 0.0
+            map.clear(profileVotes)
+            for sortedPosition = clusterStart to clusterEnd
+                int referenceIndex = array.get(sortedIndices, sortedPosition)
+                AutoSweptReference reference = array.get(references, referenceIndex)
+                if int(math.floor(anchorMask / reference.anchorBit)) % 2 == 0
+                    anchorMask += reference.anchorBit
+                int roleBit = autoSweptRoleBit(reference.level)
+                if int(math.floor(roleMask / roleBit)) % 2 == 0
+                    roleMask += roleBit
+                highestAnchorPriority := math.max(highestAnchorPriority, reference.anchorPriority)
+                map.put(profileVotes, autoSweptProfileVoteKey(reference), true)
+                if reference.adaptiveCandidate
+                    float distance = math.abs(referencePrice - reference.price)
+                    if na(closestDistance) or distance < closestDistance or distance == closestDistance and reference.profileEndTime > newestProfileEndTime
+                        closestDistance := distance
+                    newestProfileEndTime := math.max(newestProfileEndTime, reference.profileEndTime)
+                    valueAcceptanceTotal += reference.laterValueAcceptanceCount
+                    controlOverlapTotal += reference.laterControlOverlapCount
+                    adaptiveMemberCount += 1
+            int distinctProfileCount = map.size(profileVotes)
+            if adaptiveMemberCount > 0 and distinctProfileCount > 1
+                float zoneHigh = array.get(references, array.get(sortedIndices, clusterEnd)).price
+                float valueAcceptanceScore = valueAcceptanceTotal / adaptiveMemberCount
+                float controlOverlapScore = controlOverlapTotal / adaptiveMemberCount
+                array.push(candidates, AutoSweptCandidate.new(zoneLow, zoneHigh, closestDistance, newestProfileEndTime, highestAnchorPriority, autoSweptMaskCount(anchorMask, 16), distinctProfileCount, autoSweptMaskCount(roleMask, AUTO_SWEPT_VALUE_AREA_LOW_BIT), valueAcceptanceScore, controlOverlapScore, adaptiveMemberCount))
+            clusterStart := clusterEnd + 1
+    candidates
+
+autoSweptZoneOverlaps(AutoSweptPlan plan, float zoneLow, float zoneHigh) =>
+    bool overlaps = false
+    if array.size(plan.selectedZoneLows) > 0
+        for zoneIndex = 0 to array.size(plan.selectedZoneLows) - 1
+            if zoneHigh >= array.get(plan.selectedZoneLows, zoneIndex) and zoneLow <= array.get(plan.selectedZoneHighs, zoneIndex)
+                overlaps := true
+                break
+    overlaps
+
+resetAutoSweptPolicyCycle(AutoSweptPolicy policy, int cycleSerial, int historyCycles) =>
+    policy.state.revision += 1
+    policy.state.baselineKeepMs := policy.baselineKeepMs
+    map.clear(policy.state.currentSelectedMasks)
+    map.clear(policy.state.currentProtectedMasks)
+    array.push(policy.state.cycleHistory, cycleSerial)
+    pruneAutoSweptHistory(policy.state, historyCycles)
+    true
+
+applyAutoSweptProtected(array<AutoSweptReference> references, array<AutoSweptPolicy> policies, int cycleSerial, int activationTime) =>
+    bool added = false
+    if array.size(references) > 0
+        for referenceIndex = 0 to array.size(references) - 1
+            AutoSweptReference reference = array.get(references, referenceIndex)
+            if reference.protectedAtSelection
+                AutoSweptPolicy policy = array.get(policies, reference.policyIndex)
+                added := appendAutoSweptPick(policy.state, cycleSerial, activationTime, reference.profileStartTime, reference.profileEndTime, reference.level, true) or added
+    added
+
+applyAutoSweptCandidate(array<AutoSweptReference> references, array<AutoSweptPolicy> policies, AutoSweptCandidate candidate, int cycleSerial, int activationTime) =>
+    int addedCount = 0
+    if array.size(references) > 0
+        for referenceIndex = 0 to array.size(references) - 1
+            AutoSweptReference reference = array.get(references, referenceIndex)
+            if reference.adaptiveCandidate and reference.price >= candidate.zoneLow and reference.price <= candidate.zoneHigh
+                AutoSweptPolicy policy = array.get(policies, reference.policyIndex)
+                if appendAutoSweptPick(policy.state, cycleSerial, activationTime, reference.profileStartTime, reference.profileEndTime, reference.level, false)
+                    addedCount += 1
+    addedCount
+
+//@function Builds or additively expands the global Auto Swept relevance plan.
+export selectAutoSweptPlan(AutoSweptPlan plan, array<AutoSweptPolicy> policies, int cycleSerial, int selectionTime, float referencePrice, float adr, bool addOnly, float entryAdrFraction, float exitAdrFraction, float expansionBufferAdrFraction, float clusterAdrFraction, int minimumClusterTicks, int maximumZones, int maximumLevels, int historyCycles, float minimumTick) =>
+    bool cycleChanged = cycleSerial != plan.cycleSerial
+    bool evaluate = not na(referencePrice) and not na(adr) and adr > 0 and (cycleChanged or addOnly)
+    if cycleChanged
+        plan.cycleSerial := cycleSerial
+        plan.cycleOpen := referencePrice
+        plan.cycleHigh := referencePrice
+        plan.cycleLow := referencePrice
+        plan.adr := adr
+        plan.expanded := false
+        plan.selectedAdaptiveLevels := 0
+        array.clear(plan.selectedZoneLows)
+        array.clear(plan.selectedZoneHighs)
+    array<AutoSweptReference> references = array.new<AutoSweptReference>()
+    float clusterTolerance = na
+    if evaluate
+        float entryDistance = adr * entryAdrFraction
+        float exitDistance = adr * exitAdrFraction
+        float expansionBuffer = adr * expansionBufferAdrFraction
+        float entryLowerReach = addOnly ? math.min(plan.cycleOpen - entryDistance, plan.cycleLow - expansionBuffer) : plan.cycleOpen - entryDistance
+        float entryUpperReach = addOnly ? math.max(plan.cycleOpen + entryDistance, plan.cycleHigh + expansionBuffer) : plan.cycleOpen + entryDistance
+        float exitLowerReach = plan.cycleOpen - exitDistance
+        float exitUpperReach = plan.cycleOpen + exitDistance
+        float collectionLowerReach = math.min(entryLowerReach, exitLowerReach)
+        float collectionUpperReach = math.max(entryUpperReach, exitUpperReach)
+        clusterTolerance := math.max(minimumTick * minimumClusterTicks, adr * clusterAdrFraction)
+        if array.size(policies) > 0
+            for policyIndex = 0 to array.size(policies) - 1
+                AutoSweptPolicy policy = array.get(policies, policyIndex)
+                policy.state.baselineKeepMs := policy.baselineKeepMs
+                appendAutoSweptPolicyReferences(references, policy, policyIndex, selectionTime, addOnly, entryLowerReach, entryUpperReach, exitLowerReach, exitUpperReach, collectionLowerReach, collectionUpperReach, clusterTolerance)
+    if cycleChanged and array.size(policies) > 0
+        for policyIndex = 0 to array.size(policies) - 1
+            resetAutoSweptPolicyCycle(array.get(policies, policyIndex), cycleSerial, historyCycles)
+    if evaluate
+        bool added = applyAutoSweptProtected(references, policies, cycleSerial, selectionTime)
+        array<AutoSweptCandidate> candidates = buildAutoSweptCandidates(references, plan.cycleOpen, clusterTolerance)
+        bool selecting = array.size(candidates) > 0
+        while selecting and array.size(plan.selectedZoneLows) < maximumZones and plan.selectedAdaptiveLevels < maximumLevels
+            int bestCandidateIndex = -1
+            for candidateIndex = 0 to array.size(candidates) - 1
+                AutoSweptCandidate candidate = array.get(candidates, candidateIndex)
+                bool eligible = plan.selectedAdaptiveLevels + candidate.adaptiveMemberCount <= maximumLevels and not autoSweptZoneOverlaps(plan, candidate.zoneLow, candidate.zoneHigh)
+                if eligible and (bestCandidateIndex < 0 or autoSweptCandidateOutranks(candidate, array.get(candidates, bestCandidateIndex)))
+                    bestCandidateIndex := candidateIndex
+            selecting := bestCandidateIndex >= 0
+            if selecting
+                AutoSweptCandidate candidate = array.get(candidates, bestCandidateIndex)
+                array.push(plan.selectedZoneLows, candidate.zoneLow)
+                array.push(plan.selectedZoneHighs, candidate.zoneHigh)
+                int addedCount = applyAutoSweptCandidate(references, policies, candidate, cycleSerial, selectionTime)
+                plan.selectedAdaptiveLevels += addedCount
+                added := added or addedCount > 0
+        if added
+            if array.size(policies) > 0
+                for policyIndex = 0 to array.size(policies) - 1
+                    AutoSweptPolicy policy = array.get(policies, policyIndex)
+                    policy.state.revision += 1
+    evaluate
+
+//@function Updates realized range and opens the single add-only expansion checkpoint.
+export autoSweptExpansionReady(AutoSweptPlan plan, bool active, float currentHigh, float currentLow, float triggerAdrFraction) =>
+    bool ready = false
+    if active and not na(plan.adr) and plan.adr > 0
+        plan.cycleHigh := na(plan.cycleHigh) ? currentHigh : math.max(plan.cycleHigh, currentHigh)
+        plan.cycleLow := na(plan.cycleLow) ? currentLow : math.min(plan.cycleLow, currentLow)
+        float directionalExcursion = math.max(plan.cycleHigh - plan.cycleOpen, plan.cycleOpen - plan.cycleLow)
+        ready := not plan.expanded and directionalExcursion >= plan.adr * triggerAdrFraction
+        if ready
+            plan.expanded := true
+    ready
+
+//@function Tests whether one level is selected in the current trading day.
+//@param state Auto Swept state for one anchor.
+//@param profileStartTime Source profile identity.
+//@param level Independent profile level.
+//@returns True when the current selection contains the exact level.
+export autoSweptCurrentSelected(AutoSweptState state, int profileStartTime, int profileEndTime, AutoSweptLevel level) =>
+    autoSweptSelectionContains(state.currentSelectedMasks, profileStartTime, profileEndTime, level)
+
+autoSweptLevelProtected(AutoSweptState state, int profileStartTime, int profileEndTime, int breachTime, int profileLastBreachTime, AutoSweptLevel level, int eventTime) =>
+    bool selected = autoSweptCurrentSelected(state, profileStartTime, profileEndTime, level)
+    bool sourceEligible = autoSweptSourceEligible(state, profileStartTime) or selected
+    sourceEligible and (autoSweptTemporalProtected(state, breachTime, profileLastBreachTime, eventTime) or autoSweptProtectedPickExists(state, profileStartTime, profileEndTime, level))
+
+autoSweptLevelVisible(AutoSweptState state, int profileStartTime, int profileEndTime, int breachTime, int profileLastBreachTime, AutoSweptLevel level, int eventTime, bool focusSurfaced) =>
+    bool visible = false
+    if not na(breachTime)
+        visible := focusSurfaced or autoSweptLevelProtected(state, profileStartTime, profileEndTime, breachTime, profileLastBreachTime, level, eventTime) or autoSweptCurrentSelected(state, profileStartTime, profileEndTime, level)
+    visible
+
+//@function Returns a compact mask for all swept levels in one profile.
+//@param profile Source profile.
+//@returns Four-bit mask for breached POC, aPOC, VAH, and VAL levels.
+export sweptLevelMask(Profile profile) =>
+    int sweptMask = 0
+    sweptMask += not na(profile.pocBreachTime) ? AUTO_SWEPT_POC_BIT : 0
+    sweptMask += not na(profile.alternatePocBreachTime) ? AUTO_SWEPT_ALTERNATE_POC_BIT : 0
+    sweptMask += not na(profile.valueAreaHighBreachTime) ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : 0
+    sweptMask += not na(profile.valueAreaLowBreachTime) ? AUTO_SWEPT_VALUE_AREA_LOW_BIT : 0
+    sweptMask
+
+//@function Returns one compact per-profile mask for current Auto Swept visibility.
+//@param state Auto Swept state for one anchor.
+//@param profile Source profile.
+//@param eventTime Current visibility timestamp.
+//@param focusSurfaced Whether Focus explicitly surfaces swept levels.
+//@returns Four-bit mask for independently visible POC, aPOC, VAH, and VAL continuations.
+export autoSweptVisibilityMask(AutoSweptState state, Profile profile, int eventTime, bool focusSurfaced) =>
+    int visibilityMask = 0
+    int profileLastBreachTime = laterEventTime(laterEventTime(profile.pocBreachTime, profile.alternatePocBreachTime), laterEventTime(profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime))
+    visibilityMask += autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.pocBreachTime, profileLastBreachTime, AutoSweptLevel.poc, eventTime, focusSurfaced) ? AUTO_SWEPT_POC_BIT : 0
+    visibilityMask += autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.alternatePocBreachTime, profileLastBreachTime, AutoSweptLevel.alternatePoc, eventTime, focusSurfaced) ? AUTO_SWEPT_ALTERNATE_POC_BIT : 0
+    visibilityMask += autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.valueAreaHighBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaHigh, eventTime, focusSurfaced) ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : 0
+    visibilityMask += autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.valueAreaLowBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaLow, eventTime, focusSurfaced) ? AUTO_SWEPT_VALUE_AREA_LOW_BIT : 0
+    visibilityMask
+
+//@function Returns grace and manual-floor visibility for one retained profile.
+//@param state Auto Swept state for the profile's anchor.
+//@param profile Retained completed profile.
+//@param eventTime Current visibility timestamp.
+//@returns Four-bit mask for protected POC, aPOC, VAH, and VAL continuations.
+export autoSweptProtectedVisibilityMask(AutoSweptState state, Profile profile, int eventTime) =>
+    int visibilityMask = 0
+    int profileLastBreachTime = laterEventTime(laterEventTime(profile.pocBreachTime, profile.alternatePocBreachTime), laterEventTime(profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime))
+    visibilityMask += autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.pocBreachTime, profileLastBreachTime, AutoSweptLevel.poc, eventTime) ? AUTO_SWEPT_POC_BIT : 0
+    visibilityMask += autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.alternatePocBreachTime, profileLastBreachTime, AutoSweptLevel.alternatePoc, eventTime) ? AUTO_SWEPT_ALTERNATE_POC_BIT : 0
+    visibilityMask += autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.valueAreaHighBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaHigh, eventTime) ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : 0
+    visibilityMask += autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.valueAreaLowBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaLow, eventTime) ? AUTO_SWEPT_VALUE_AREA_LOW_BIT : 0
+    visibilityMask
+
+//@function Returns current visibility for one compact archived profile.
+export autoSweptArchiveVisibilityMask(AutoSweptState state, AutoSweptProfile profile, int eventTime) =>
+    int visibilityMask = 0
+    int profileLastBreachTime = laterEventTime(laterEventTime(profile.pocBreachTime, profile.alternatePocBreachTime), laterEventTime(profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime))
+    bool superseded = profile.superseded
+    visibilityMask += (not superseded and autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.pocBreachTime, profileLastBreachTime, AutoSweptLevel.poc, eventTime, false) or superseded and autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.poc)) ? AUTO_SWEPT_POC_BIT : 0
+    visibilityMask += (not superseded and autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.alternatePocBreachTime, profileLastBreachTime, AutoSweptLevel.alternatePoc, eventTime, false) or superseded and autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.alternatePoc)) ? AUTO_SWEPT_ALTERNATE_POC_BIT : 0
+    visibilityMask += (not superseded and autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.valueAreaHighBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaHigh, eventTime, false) or superseded and autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.valueAreaHigh)) ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : 0
+    visibilityMask += (not superseded and autoSweptLevelVisible(state, profile.startTime, profile.endTime, profile.valueAreaLowBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaLow, eventTime, false) or superseded and autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.valueAreaLow)) ? AUTO_SWEPT_VALUE_AREA_LOW_BIT : 0
+    visibilityMask
+
+//@function Returns grace and manual-floor visibility for one compact archived profile.
+export autoSweptArchiveProtectedVisibilityMask(AutoSweptState state, AutoSweptProfile profile, int eventTime) =>
+    int visibilityMask = 0
+    int profileLastBreachTime = laterEventTime(laterEventTime(profile.pocBreachTime, profile.alternatePocBreachTime), laterEventTime(profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime))
+    bool superseded = profile.superseded
+    visibilityMask += (not superseded or autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.poc)) and autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.pocBreachTime, profileLastBreachTime, AutoSweptLevel.poc, eventTime) ? AUTO_SWEPT_POC_BIT : 0
+    visibilityMask += (not superseded or autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.alternatePoc)) and autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.alternatePocBreachTime, profileLastBreachTime, AutoSweptLevel.alternatePoc, eventTime) ? AUTO_SWEPT_ALTERNATE_POC_BIT : 0
+    visibilityMask += (not superseded or autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.valueAreaHigh)) and autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.valueAreaHighBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaHigh, eventTime) ? AUTO_SWEPT_VALUE_AREA_HIGH_BIT : 0
+    visibilityMask += (not superseded or autoSweptCurrentSelected(state, profile.startTime, profile.endTime, AutoSweptLevel.valueAreaLow)) and autoSweptLevelProtected(state, profile.startTime, profile.endTime, profile.valueAreaLowBreachTime, profileLastBreachTime, AutoSweptLevel.valueAreaLow, eventTime) ? AUTO_SWEPT_VALUE_AREA_LOW_BIT : 0
+    visibilityMask
+
+//@function Tests one Auto Swept level bit in a compact visibility mask.
+//@param visibilityMask Per-profile visibility mask.
+//@param level Independent profile level.
+//@returns True when the requested level is visible.
+export autoSweptMaskContains(int visibilityMask, AutoSweptLevel level) =>
+    int levelBit = autoSweptLevelBit(level)
+    int(math.floor(visibilityMask / levelBit)) % 2 == 1
+
+//@function Tests whether one level was active at a retained historical timestamp.
+//@param state Auto Swept state for one anchor.
+//@param profileStartTime Source profile identity.
+//@param level Independent profile level.
+//@param cycleSerial Historical futures or UTC trading-day identifier.
+//@param eventTime Historical contact timestamp.
+//@returns True after the exact level's activation in that cycle.
+export autoSweptSelectedAtTime(AutoSweptState state, int profileStartTime, int profileEndTime, AutoSweptLevel level, int cycleSerial, int eventTime) =>
+    bool selected = false
+    if array.size(state.historyPicks) > 0
+        for pickIndex = array.size(state.historyPicks) - 1 to 0
+            AutoSweptPick pick = array.get(state.historyPicks, pickIndex)
+            if pick.cycleSerial < cycleSerial
+                break
+            if pick.cycleSerial == cycleSerial and pick.activationTime <= eventTime and pick.profileStartTime == profileStartTime and pick.profileEndTime == profileEndTime and pick.level == level
+                selected := true
+                break
+    selected

@@ -1,0 +1,232 @@
+//@version=6
+
+//@description Private Revelio Gaps Library for value-gap lifecycle logic.
+library("RevelioGapsLibrary", overlay=true)
+
+import midnightpaws87/RevelioCoreLibrary/1 as revelioCore
+
+const int MAX_STORED_VALUE_GAPS = 100
+
+//@enum Direction from which price most recently entered a Value Gap.
+//@field fromBelow Price entered from below the remaining core.
+//@field fromAbove Price entered from above the remaining core.
+export enum ValueGapEntryDirection
+    fromBelow
+    fromAbove
+
+//@type Confirmed non-overlap between consecutive source value areas.
+//@field leftTime Left drawing timestamp.
+//@field creationTime Confirming profile end timestamp.
+//@field top Original upper boundary.
+//@field bottom Original lower boundary.
+//@field bullish Whether the gap is bullish.
+//@field fillTime Full-fill timestamp, or na while open.
+//@field entryDirection Most recent traversal entry direction.
+//@field coreTop Remaining unfilled upper boundary.
+//@field coreBottom Remaining unfilled lower boundary.
+export type ValueGap
+    int leftTime
+    int creationTime
+    float top
+    float bottom
+    bool bullish
+    int fillTime
+    ValueGapEntryDirection entryDirection
+    float coreTop
+    float coreBottom
+
+erodeCoreFromAbove(ValueGap gap, float returnLow) =>
+    gap.coreTop := math.max(gap.coreBottom, math.min(gap.coreTop, returnLow))
+
+erodeCoreFromBelow(ValueGap gap, float returnHigh) =>
+    gap.coreBottom := math.min(gap.coreTop, math.max(gap.coreBottom, returnHigh))
+
+advance(ValueGap gap, float returnHigh, float returnLow, int eventTime, bool traversalFill) =>
+    if na(gap.fillTime)
+        if traversalFill
+            bool reachesBelow = returnLow <= gap.coreBottom
+            bool reachesAbove = returnHigh >= gap.coreTop
+            if returnHigh >= gap.coreBottom and returnLow <= gap.coreTop
+                if reachesBelow and reachesAbove
+                    gap.coreTop := gap.coreBottom
+                else if reachesBelow
+                    erodeCoreFromBelow(gap, returnHigh)
+                    gap.entryDirection := ValueGapEntryDirection.fromBelow
+                else if reachesAbove
+                    erodeCoreFromAbove(gap, returnLow)
+                    gap.entryDirection := ValueGapEntryDirection.fromAbove
+                else if gap.entryDirection == ValueGapEntryDirection.fromAbove
+                    erodeCoreFromAbove(gap, returnLow)
+                else
+                    erodeCoreFromBelow(gap, returnHigh)
+            else if reachesAbove
+                gap.entryDirection := ValueGapEntryDirection.fromAbove
+            else
+                gap.entryDirection := ValueGapEntryDirection.fromBelow
+        else if gap.entryDirection == ValueGapEntryDirection.fromAbove
+            erodeCoreFromAbove(gap, returnLow)
+        else
+            erodeCoreFromBelow(gap, returnHigh)
+        if gap.coreTop <= gap.coreBottom
+            gap.fillTime := eventTime
+
+//@function Creates a Value Gap from two consecutive profiles.
+//@param previousProfile Previous completed source profile.
+//@param currentProfile Current completed or developing source profile.
+//@param leftTime Left drawing timestamp.
+//@param creationTime Gap creation timestamp.
+//@param minimumTick Symbol minimum tick.
+//@returns A ValueGap when the value areas do not overlap; otherwise na.
+export fromProfiles(revelioCore.Profile previousProfile, revelioCore.Profile currentProfile, int leftTime, int creationTime, float minimumTick) =>
+    float bullishTop = currentProfile.valueAreaLowPrice
+    float bullishBottom = previousProfile.valueAreaHighPrice
+    float bearishTop = previousProfile.valueAreaLowPrice
+    float bearishBottom = currentProfile.valueAreaHighPrice
+    ValueGap gap = na
+    if bullishTop - bullishBottom >= minimumTick
+        gap := ValueGap.new(leftTime, creationTime, bullishTop, bullishBottom, true, na, ValueGapEntryDirection.fromAbove, bullishTop, bullishBottom)
+    else if bearishTop - bearishBottom >= minimumTick
+        gap := ValueGap.new(leftTime, creationTime, bearishTop, bearishBottom, false, na, ValueGapEntryDirection.fromBelow, bearishTop, bearishBottom)
+    gap
+
+appendGap(revelioCore.Profile previousProfile, revelioCore.Profile completedProfile, array<ValueGap> valueGaps, float minimumTick, float minimumPercent) =>
+    ValueGap gap = fromProfiles(previousProfile, completedProfile, completedProfile.startTime, completedProfile.endTime, minimumTick)
+    if not na(gap)
+        float previousRange = math.max(previousProfile.priceHigh - previousProfile.priceLow, minimumTick)
+        float confirmedPercent = (gap.top - gap.bottom) / previousRange * 100
+        if confirmedPercent >= minimumPercent
+            array.push(valueGaps, gap)
+
+//@function Synchronizes completed source profiles and confirmed Value Gaps.
+//@param profiles Completed profiles from the selected source anchor.
+//@param sourceProfiles Two-profile synchronization queue.
+//@param valueGaps Retained confirmed Value Gaps.
+//@param minimumTick Symbol minimum tick.
+//@param minimumPercent Minimum confirmed gap size versus the previous profile range.
+export syncProfile(array<revelioCore.Profile> profiles, array<revelioCore.Profile> sourceProfiles, array<ValueGap> valueGaps, float minimumTick, float minimumPercent) =>
+    if array.size(profiles) > 0
+        revelioCore.Profile completedProfile = array.last(profiles)
+        int sourceCount = array.size(sourceProfiles)
+        bool sourceChanged = sourceCount == 0
+        if sourceCount > 0
+            revelioCore.Profile latestSource = array.last(sourceProfiles)
+            sourceChanged := completedProfile.startTime != latestSource.startTime or completedProfile.endTime != latestSource.endTime
+        if sourceChanged
+            if array.size(valueGaps) > 0
+                for gapIndex = array.size(valueGaps) - 1 to 0
+                    ValueGap candidate = array.get(valueGaps, gapIndex)
+                    if candidate.leftTime == completedProfile.startTime
+                        array.remove(valueGaps, gapIndex)
+
+            bool replacesLatest = false
+            if sourceCount > 0
+                revelioCore.Profile currentSource = array.last(sourceProfiles)
+                replacesLatest := currentSource.startTime == completedProfile.startTime
+            if replacesLatest
+                array.set(sourceProfiles, sourceCount - 1, completedProfile)
+            else
+                array.push(sourceProfiles, completedProfile)
+                if array.size(sourceProfiles) > 2
+                    array.shift(sourceProfiles)
+
+            if array.size(sourceProfiles) == 2
+                appendGap(array.first(sourceProfiles), array.last(sourceProfiles), valueGaps, minimumTick, minimumPercent)
+
+            while array.size(valueGaps) > MAX_STORED_VALUE_GAPS
+                array.shift(valueGaps)
+
+//@function Applies eligible price returns to retained Value Gaps.
+//@param valueGaps Retained confirmed Value Gaps.
+//@param breachHigh Highest eligible traded price.
+//@param breachLow Lowest eligible traded price.
+//@param currentTime Current bar timestamp.
+//@param traversalFill Whether fills erode only traded portions.
+export updatePriceFills(array<ValueGap> valueGaps, float breachHigh, float breachLow, int currentTime, bool traversalFill) =>
+    if array.size(valueGaps) > 0 and not na(breachHigh) and not na(breachLow)
+        for gapIndex = 0 to array.size(valueGaps) - 1
+            ValueGap gap = array.get(valueGaps, gapIndex)
+            if na(gap.fillTime) and currentTime > gap.creationTime
+                advance(gap, breachHigh, breachLow, currentTime, traversalFill)
+
+//@function Tests whether a Value Gap has never been entered.
+//@param gap Value Gap to inspect.
+//@returns True while the full original core remains.
+export isUntouched(ValueGap gap) =>
+    gap.coreTop >= gap.top and gap.coreBottom <= gap.bottom
+
+//@function Calculates the filled percentage of a Value Gap.
+//@param gap Value Gap to inspect.
+//@returns Rounded fill percentage from 0 to 100.
+export fillPercent(ValueGap gap) =>
+    float gapRange = gap.top - gap.bottom
+    if gapRange <= 0
+        0
+    else
+        float rawPercent = (gapRange - (gap.coreTop - gap.coreBottom)) / gapRange * 100
+        int(math.min(na(gap.fillTime) ? 99 : 100, math.round(math.max(0, math.min(100, rawPercent)))))
+
+//@function Returns filled and unfilled vertical segments for rendering.
+//@param gap Value Gap to inspect.
+//@returns Top fill, core, and bottom fill boundaries.
+export boxGeometry(ValueGap gap) =>
+    [gap.top, gap.coreTop, gap.coreTop, gap.coreBottom, gap.coreBottom, gap.bottom]
+
+//@function Finds the most recently filled Value Gap.
+//@param valueGaps Retained confirmed Value Gaps.
+//@param enabled Whether the lookup is required.
+//@returns Array index, or -1 when none qualifies.
+export latestFilledIndex(array<ValueGap> valueGaps, bool enabled) =>
+    int latestIndex = -1
+    if enabled and array.size(valueGaps) > 0
+        int latestFill = -1
+        for gapIndex = 0 to array.size(valueGaps) - 1
+            ValueGap gap = array.get(valueGaps, gapIndex)
+            if not na(gap.fillTime) and gap.fillTime > latestFill
+                latestFill := gap.fillTime
+                latestIndex := gapIndex
+    latestIndex
+
+//@function Selects the recent and nearest open Value Gaps for floating display.
+//@param valueGaps Retained confirmed Value Gaps.
+//@param enabled Whether floating selection is active.
+//@param nearestCount Additional nearest gaps to select.
+//@param currentClose Current chart close used for distance ranking.
+//@returns Selected array indices.
+export selectFloats(array<ValueGap> valueGaps, bool enabled, int nearestCount, float currentClose) =>
+    array<int> selected = array.new<int>()
+    int gapCount = array.size(valueGaps)
+    if enabled and gapCount > 0
+        for gapIndex = gapCount - 1 to 0
+            ValueGap candidate = array.get(valueGaps, gapIndex)
+            if na(candidate.fillTime)
+                array.push(selected, gapIndex)
+                break
+        int additionalCount = math.min(nearestCount, gapCount - array.size(selected))
+        if additionalCount > 0
+            for selection = 1 to additionalCount
+                float nearestDistance = 1e20
+                int nearestIndex = -1
+                for gapIndex = 0 to gapCount - 1
+                    ValueGap gap = array.get(valueGaps, gapIndex)
+                    if na(gap.fillTime) and not array.includes(selected, gapIndex)
+                        float distance = currentClose >= gap.bottom and currentClose <= gap.top ? 0.0 : math.min(math.abs(currentClose - gap.bottom), math.abs(currentClose - gap.top))
+                        if distance < nearestDistance
+                            nearestDistance := distance
+                            nearestIndex := gapIndex
+                if nearestIndex >= 0
+                    array.push(selected, nearestIndex)
+    selected
+
+//@function Tests whether an internal reference level is filled.
+//@param gap Value Gap to inspect.
+//@param levelPrice Reference price.
+//@returns True when the gap or reference level is filled.
+export levelFilled(ValueGap gap, float levelPrice) =>
+    not na(gap.fillTime) or levelPrice >= gap.coreTop or levelPrice <= gap.coreBottom
+
+//@function Calculates the box budget required to render a Value Gap.
+//@param gap Value Gap to inspect.
+//@returns Number of fill and border boxes required.
+export boxCost(ValueGap gap) =>
+    [topFilledTop, topFilledBottom, coreTop, coreBottom, bottomFilledTop, bottomFilledBottom] = boxGeometry(gap)
+    (topFilledTop != topFilledBottom ? 1 : 0) + (coreTop != coreBottom ? 1 : 0) + (bottomFilledTop != bottomFilledBottom ? 1 : 0) + 1

@@ -1,7 +1,7 @@
 # Revelio Change Tracker
 
-Updated: 2026-07-30
-Progress: Group A 6 / 6 validated and approved · Group B 12 / 12 code complete · 11 / 12 validated and approved
+Updated: 2026-07-31
+Progress: Group A 6 / 6 validated and approved · Group B 12 / 12 code complete · 11 / 12 validated and approved · Group C `/6` compiled with qualitative production-performance parity · Group D code complete and awaiting TradingView validation
 Committed baseline: `962eb334` — approved
 
 Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingView Validated`
@@ -179,7 +179,81 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
   - Append the shared `⁺` symbol to each temporary right-column identity included through `Include All Anchors`.
   - Keep the symbol attached to the affected identity inside merged labels, matching its Touch Marker tooltip.
 
-## Open Decisions
+- [x] **BUG-05 — Stable Quarterly Replay below 15m**
+  - Status: `TradingView Validated`
+  - TradingView: `Approved`
+  - Preserve the latest valid developing Quarterly snapshot between sparse 15-minute remote updates.
+  - Clear the cache at a new quarter and whenever Quarterly developing output is inactive.
+  - Keep completed Quarterly histogram copies sparse and leave 15m behavior unchanged.
+  - Regression case: NQ1! on 5m Bar Replay around 10 Nov 2025 in Macro mode must not flicker while advancing; compare against 15m.
+
+- [x] **BUG-06 — Immediate Quarterly On below 15m**
+  - Status: `TradingView Validated`
+  - TradingView: `Approved`
+  - Principal review: `Approved for TradingView testing` with no P0–P3 defect found statically.
+  - Resolve explicit `On` in the host instead of waiting for a sparse 15-minute maturity response.
+  - Carry the latest developing Quarterly snapshot onto each lower-timeframe host bar.
+  - Copy each completed Quarterly histogram only once even though the remote tuple is forward-filled.
+  - Regression case: toggle `+Quarterly` from `Off` or `Auto` to `On` on an intermediate 5m Replay bar; the current Quarterly profile must appear immediately and match 15m.
+  - Boundary case: step across a quarter rollover on 5m and confirm the prior-quarter developing snapshot is not briefly readmitted after the cache clears.
+
+## Group C — Automatic Swept Lines
+
+- [x] **SWEEP-AUTO-01 — Session-latched automatic visibility**
+  - Status: `Approved`
+  - TradingView: `Approved`
+  - Current decision: `REVELIO-AUTO-SWEPT-ADR.md`.
+  - Rejected `/2` and `/3` history: `REVELIO-AUTO-SWEPT-PARKED.md`.
+  - Add `Auto Swept Lines`, default off while the behavior is evaluated.
+  - Preserve the existing five retention settings as an unconditional floor in both modes.
+  - Preserve post-sweep grace through the next same-anchor finalization.
+  - Restrict every new Auto candidate and protected-floor line to the configured RTH, Globex, Weekly, Monthly, or Quarterly profile count.
+  - Preserve a separate deep canonical archive only for ADR, optional older Touch Markers, and exact current-cycle carry.
+  - Evaluate POC, aPOC, VAH, and VAL independently so one sibling sweep cannot revive another in Auto.
+  - Build one global plan across enabled anchors at each Futures/UTC trading-day boundary.
+  - Use trimmed 14-profile Globex/UTC ADR only to bound plausible reach.
+  - Rank zones by higher-timeframe participation, distinct anchors, source-profile repetition, complementary roles, later control overlap, later value acceptance, ADR distance, and recency.
+  - Keep admitted identities at their exact source prices so merged labels expose confluence.
+  - Allow one directionally bounded add-only expansion after price travels 1.00 ADR from the cycle open.
+  - Never evict or reorder an admitted line intraday.
+  - Keep Intraday Focus `Swept Levels` as an explicit visibility override.
+  - Keep Auto visibility independent from Touch Marker mode, window, history, older-level inclusion, and retouch limits.
+  - Preserve archived Touch Marker provenance in live detection and Focus backfill.
+  - Reserve bounded drawing capacity for both protected manual/grace lines and adaptive selections before ordinary completed-profile history.
+  - Use ordered recent-profile indices, exact selection bitmasks, and reusable visibility-mask caches without changing the product model.
+  - Rebuild retained Touch source identities only when the last-bar pruning phase consumes them.
+  - Add a temporary `Ⓐ` audit that marks only the lines contributed beyond the current manual/grace floor.
+  - Show the plan's current trimmed Globex/UTC ADR as `Ⓐ ADR` in the status line and Data Window while auditing.
+  - Keep the default-off `Ⓐ` audit temporarily for periodic post-approval observation; remove it only when the user closes the soak period.
+  - Publish Core `/6`, then Gaps `/6`, then compile the aligned indicator before behavior testing.
+
+## Group D — Mature Appearance Input Cleanup
+
+- [x] **INPUT-CLEANUP-01 — Remove settled appearance controls**
+  - Status: `Approved`
+  - TradingView: `Approved`
+  - Begin only after Auto Swept `/6` performance and parity validation.
+  - Preserve every current visual value exactly; this is an input-surface cleanup, not a redesign.
+  - Remove settled color inputs across profile levels, labels, Value Gaps, Gap text, and other mature elements.
+  - Preserve the current per-anchor histogram colors while removing their inputs.
+  - Preserve all current level and gap widths while removing their inputs.
+  - Preserve all current solid, dashed, and dotted style choices while removing their inputs.
+  - Preserve all current price-label and text sizes while removing their dropdowns, including Gap and 50% Gap text.
+  - Keep Manual Focus price, width, and offset adjustable; preserve its settled color directly in rendering.
+  - Keep behavioral toggles, counts, retention, offsets, thresholds, and other non-appearance controls unless separately approved.
+  - Remove obsolete variables and branches completely; use settled values directly rather than creating hard-coded replacement controls.
+  - Remove the color reference table after the final editable color is retired.
+  - Repack anchor controls into plain compact rows without category prefixes: Extension; VAH/L, POC, aPOC; Box, Histogram, Fade Mitigated Levels; Developing Profile and cutoff.
+  - Inventory every affected input and its exact current default before implementation.
+  - Make the 5% sweep-confirmation margin a code constant and remove its UI input.
+  - Make every Value Gap show its main label and 25% / 50% / 75% lines; keep the 50% internal label on historical gaps only and remove quartile labels.
+  - Default Upcoming Value Gaps to off for the first production release; users can enable them explicitly.
+  - Fix Value Area at 70%, Anchor Labels at Reminders, confirmed Gap minimum at 5%, Upcoming Gap minimum at 45%, and all settled fade percentages through named constants.
+  - Remove the Manual Focus color input and the complete reference-table type, helpers, state, rendering, and Utility group.
+  - Remove the obsolete Anchor Label mode contract through Interactions `/2`; reminders are now the library's only behavior.
+  - Implementation result: remove 131 settled inputs and 303 host lines; retain 106 behavioral/manual inputs.
+
+## Closed Decisions
 
 - [x] **D-01:** Should brackets contain only `PREV` / `LAST` or the complete previous-period phrase?
   - Approved with the complete previous-period phrase inside the brackets.
@@ -210,6 +284,11 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
 ## Validation Checklist
 
 - [x] Pine delimiter, constructor-arity, and stale-reference checks pass.
+- [x] Group D leaves no style or text-size dropdown and no color inputs.
+- [x] Group D preserves all five `SessionStyle` constructor arities and all three `ValueGapStyle` constructor arities.
+- [x] Group D compiles in TradingView and matches the preceding development build visually.
+- [x] Manual Focus price, width, and offset remain editable; its settled color is preserved and the reference table is absent.
+- [x] The production Core, Gaps, and Interactions `/1` chain compiles in the deployed `revelio` indicator and receives final user approval.
 - [x] TradingView compilation passes for Group A.
 - [x] TradingView compilation and product testing pass for committed Group B baseline `962eb334`.
 - [x] Fresh-instance defaults match the requested gap display and offsets.
@@ -240,3 +319,34 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
 - [x] Playing Bar Replay forward records Touch Markers from the replay candle’s NY window and timestamp.
 - [ ] The Replay correction does not delay Touch Markers on an open realtime candle.
 - [ ] Standard charts, Replay, and the active Touch Marker trading window receive a visual pass.
+- [x] Quarterly remains continuously visible while stepping the 5m Replay regression case and still matches 15m at each completed 15-minute boundary.
+- [ ] Manual swept-line output and retention controls match the training build after Auto parking.
+- Adaptive Auto `/6` validation matrix:
+- [ ] Auto off matches the approved library-backed manual build.
+- [ ] Auto on contains every line visible with the same manual retention settings.
+- [ ] With daily profile counts set to 10, every adaptive RTH/Globex identity comes from those 10 retained source profiles.
+- [ ] Weekly, Monthly, and Quarterly adaptive identities stay inside their configured profile counts.
+- [ ] A price-isolated level supported by only one source profile is not admitted merely because capacity remains.
+- [ ] ADR still samples up to 14 canonical Globex/UTC profiles when the Globex display count is below 14.
+- [ ] `Include Older Levels` still detects eligible older Touch Marker sources beyond the Auto source window.
+- [ ] A current-cycle pick remains stable when an intracycle profile finalization rolls its source outside recent N, then is re-evaluated at the next cycle boundary.
+- [ ] Intraday Focus can surface an older swept level without allowing that older profile to seed a global Auto selection.
+- [ ] Outside the protected manual/grace floor, Auto does not let a later VAH/VAL/aPOC sweep revive an older sibling continuation.
+- [ ] A known older-marker case has its selected line visible before contact.
+- [ ] Same-anchor repetition and RTH/Globex-to-Weekly/Monthly/Quarterly confluence retain the expected exact identities.
+- [ ] Auto candidates remain fixed throughout a trading day except for one add-only expansion.
+- [ ] The 1.00-ADR directional expansion adds without removing, moving, or symmetrically widening existing lines.
+- [ ] Auto line visibility is identical with Touch Markers off and on.
+- [ ] Auto grace follows actual RTH, Globex, Weekly, Monthly, and Quarterly finalizations.
+- [ ] Intraday Focus retains a newly swept manual/grace line under maximum line pressure.
+- [ ] A same-start holiday/short-session fold does not move or remove a selected line before the next cycle.
+- [ ] A selected superseded holiday/short-session snapshot keeps its exact Touch Marker identity while visible.
+- [ ] When that exact selection expires, the superseded snapshot cannot create another Touch Marker before archive cleanup.
+- [ ] Auto and Custom preserve Focus `Swept Levels` overrides and archived `◌` provenance.
+- [ ] Auto works on 4h and 180R/360R charts where Touch Marker availability differs.
+- [ ] Auto stays within line budgets with every anchor, histogram, and Value Gap family enabled.
+- [ ] Three comparable cold loads keep Auto overhead within the two-second target.
+- [ ] Touch Marker identities, pruning, Focus, Include All Anchors, and Include Older Levels match before and after the last-bar retained-source optimization.
+- [ ] `Ⓐ` appears only on lines absent under the current manual/grace floor.
+- [ ] Disabling `Ⓐ` removes every audit suffix without changing visible lines.
+- [ ] `Ⓐ ADR` appears only while auditing and matches the plan's current ADR value.

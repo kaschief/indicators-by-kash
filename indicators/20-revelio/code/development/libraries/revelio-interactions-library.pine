@@ -1,0 +1,607 @@
+//@version=6
+
+//@description Private Revelio Interactions Library for Touch Marker and level-label presentation.
+library("RevelioInteractionsLibrary", overlay=true)
+
+//@type One recorded interaction between price and a retained profile level.
+export type LevelHitEvent
+    int hitTime
+    int barTime
+    float price
+    string sourceProfileKey
+    string key
+    bool focusOnly
+    bool archivedSwept
+    bool unselectedAnchor
+
+//@type Presentation metadata for one retained profile level.
+export type LevelHitPresentation
+    string identity
+    string labelIdentity
+    color lineColor
+    color labelColor
+    color labelBgColor
+    bool showPrice
+    string circleSize
+    string labelSize
+    int labelOffset
+    int effectiveLineWidth
+    int rank
+    int anchorPriority
+    bool lineVisibleAtLiveEdge
+
+//@type Buffered right-edge label awaiting cluster composition.
+export type PendingLabel
+    float price
+    int xPos
+    int recencyTime
+    string touchKey
+    string namePart
+    string pricePart
+    bool wantPrice
+    bool hitTrace
+    color textColor
+    color bgColor
+    string sizeName
+    int rank
+    int effectiveLineWidth
+    line activeLine
+    color activeLineColor
+
+//@type Buffered swept reminder awaiting cluster composition.
+export type PendingReminder
+    float price
+    int endTime
+    string namePart
+    color textColor
+    color bgColor
+    string sizeName
+    string levelName
+    int rank
+    int effectiveLineWidth
+
+//@type Buffered active-anchor reminder awaiting cluster composition.
+export type PendingAnchorReminder
+    float price
+    int anchorEndTime
+    int runEndTime
+    string namePart
+    color textColor
+    color bgColor
+    string sizeName
+    string levelName
+    int rank
+    int effectiveLineWidth
+
+//@type Host-owned presentation settings required by the interaction compositor.
+export type PresentationConfig
+    float mergeDistancePercent
+    float minimumTick
+    int maxLabels
+    string nameSeparator
+    string brandBullet
+    int mergedLineFadePercent
+    string sizeTiny
+    string sizeNormal
+    string sizeLarge
+    string sizeHuge
+    int anchorReminderSpacingMs
+    int anchorReminderMaxPerLevel
+    int sweptReminderBaseMs
+    int sweptReminderMaxPerLine
+    string alternatePocName
+    string valueAreaHighName
+    string valueAreaLowName
+    string unselectedAnchorSymbol
+    string archivedSymbol
+    string newYorkTimezone
+    int currentTime
+    int currentBarIndex
+
+//@type Host-owned Touch Marker retention policy.
+export type HitTracePolicy
+    bool presentationActive
+    bool currentWindowOnly
+    int retentionDays
+    int referenceDateSerial
+    bool twentyFourSevenAsset
+    string utcTimezone
+    int millisecondsPerDay
+    int maxTradingDayScan
+    int maxWeekdayRetentionDays
+
+identityPrecedes(int candidateWidth, int candidateRank, int candidateOrder, int currentWidth, int currentRank, int currentOrder) =>
+    candidateWidth > currentWidth or (candidateWidth == currentWidth and (candidateRank > currentRank or (candidateRank == currentRank and candidateOrder < currentOrder)))
+
+prioritizedIdentityPrecedes(int candidatePriority, int candidateWidth, int candidateRank, int candidateOrder, int currentPriority, int currentWidth, int currentRank, int currentOrder) =>
+    candidatePriority > currentPriority or (candidatePriority == currentPriority and identityPrecedes(candidateWidth, candidateRank, candidateOrder, currentWidth, currentRank, currentOrder))
+
+labelMergeTolerance(float price, PresentationConfig config) =>
+    math.max(config.minimumTick, math.abs(price) * config.mergeDistancePercent / 100.0)
+
+nearestLabelCluster(float price, bool dedupe, array<float> clusterPrices, PresentationConfig config) =>
+    int foundIndex = -1
+    float tolerance = labelMergeTolerance(price, config)
+    float minDistance = tolerance + config.minimumTick
+    if dedupe and array.size(clusterPrices) > 0
+        for clusterIndex = 0 to array.size(clusterPrices) - 1
+            float distance = math.abs(array.get(clusterPrices, clusterIndex) - price)
+            if distance <= tolerance and distance < minDistance
+                minDistance := distance
+                foundIndex := clusterIndex
+    foundIndex
+
+newestUnusedIndex(array<int> recencyTimes, array<bool> used) =>
+    int newestIndex = -1
+    int newestTime = -1
+    if array.size(recencyTimes) > 0
+        for candidateIndex = 0 to array.size(recencyTimes) - 1
+            int candidateTime = array.get(recencyTimes, candidateIndex)
+            if not array.get(used, candidateIndex) and (newestIndex < 0 or candidateTime > newestTime)
+                newestIndex := candidateIndex
+                newestTime := candidateTime
+    newestIndex
+
+orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    string body = ""
+    int clusterIdentityCount = 0
+    if array.size(identityName) > 0
+        for identityIndex = 0 to array.size(identityName) - 1
+            if array.get(identityCluster, identityIndex) == clusterIndex
+                clusterIdentityCount += 1
+    array<bool> identityUsed = array.new<bool>(array.size(identityName), false)
+    if clusterIdentityCount > 0
+        for identityPosition = 1 to clusterIdentityCount
+            int bestIdentityIndex = -1
+            int bestPriority = -1
+            int bestWidth = -1
+            int bestRank = -1
+            int bestOrder = fallbackOrder
+            for identityIndex = 0 to array.size(identityName) - 1
+                if array.get(identityCluster, identityIndex) == clusterIndex and not array.get(identityUsed, identityIndex)
+                    int candidatePriority = array.get(identityPriority, identityIndex)
+                    int candidateWidth = array.get(identityWidth, identityIndex)
+                    int candidateRank = array.get(identityRank, identityIndex)
+                    int candidateOrder = array.get(identityOrder, identityIndex)
+                    if prioritizedIdentityPrecedes(candidatePriority, candidateWidth, candidateRank, candidateOrder, bestPriority, bestWidth, bestRank, bestOrder)
+                        bestIdentityIndex := identityIndex
+                        bestPriority := candidatePriority
+                        bestWidth := candidateWidth
+                        bestRank := candidateRank
+                        bestOrder := candidateOrder
+            if bestIdentityIndex >= 0
+                string nextName = array.get(identityName, bestIdentityIndex)
+                body := body == "" ? nextName : body + separator + nextName
+                array.set(identityUsed, bestIdentityIndex, true)
+    body
+
+labelSizeRank(string sizeName, PresentationConfig config) =>
+    sizeName == config.sizeTiny ? 0 : sizeName == config.sizeNormal ? 2 : sizeName == config.sizeLarge ? 3 : sizeName == config.sizeHuge ? 4 : 1
+
+largerLabelSize(string a, string b, PresentationConfig config) =>
+    labelSizeRank(a, config) >= labelSizeRank(b, config) ? a : b
+
+toLabelSize(string sizeName, PresentationConfig config) =>
+    sizeName == config.sizeTiny ? size.tiny : sizeName == config.sizeNormal ? size.normal : sizeName == config.sizeLarge ? size.large : sizeName == config.sizeHuge ? size.huge : size.small
+
+fadeColor(color baseColor, float fadeFraction) =>
+    color.new(baseColor, 100 - (100 - color.t(baseColor)) * (1 - fadeFraction))
+
+trackLabel(array<label> drawnLabels, int maxLabels, label drawing) =>
+    bool retained = array.size(drawnLabels) < maxLabels
+    if retained
+        array.push(drawnLabels, drawing)
+    else
+        label.delete(drawing)
+    retained
+
+reminderPlacements(int runMs, int spacingMs, int maxCount) =>
+    math.min(maxCount, math.max(1, int(math.floor(math.sqrt(float(runMs) / math.max(1, spacingMs))))))
+
+sameDate(int firstTime, int secondTime, string timezone) =>
+    year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
+
+calendarDateSerial(int eventTime, string timezone, string utcTimezone, int millisecondsPerDay) =>
+    int dateTimestamp = timestamp(utcTimezone, year(eventTime, timezone), month(eventTime, timezone), dayofmonth(eventTime, timezone), 0, 0)
+    int(dateTimestamp / millisecondsPerDay)
+
+weekdayDistance(int firstDateSerial, int secondDateSerial, HitTracePolicy policy) =>
+    int calendarSpan = math.max(0, secondDateSerial - firstDateSerial)
+    int tradingDays = calendarSpan > policy.maxTradingDayScan ? policy.maxWeekdayRetentionDays : 0
+    if calendarSpan > 0 and calendarSpan <= policy.maxTradingDayScan
+        for dayOffset = 1 to calendarSpan
+            int weekday = dayofweek((firstDateSerial + dayOffset) * policy.millisecondsPerDay, policy.utcTimezone)
+            if weekday >= dayofweek.monday and weekday <= dayofweek.friday
+                tradingDays += 1
+    tradingDays
+
+eventActive(int hitTime, PresentationConfig config, HitTracePolicy policy) =>
+    bool active = false
+    if policy.presentationActive and not na(hitTime)
+        int hitDateSerial = calendarDateSerial(hitTime, config.newYorkTimezone, policy.utcTimezone, policy.millisecondsPerDay)
+        int dayDistance = policy.twentyFourSevenAsset ? math.max(0, policy.referenceDateSerial - hitDateSerial) : weekdayDistance(hitDateSerial, policy.referenceDateSerial, policy)
+        active := policy.currentWindowOnly ? sameDate(hitTime, config.currentTime, config.newYorkTimezone) : dayDistance < policy.retentionDays
+    active
+
+levelHitArchivedSwept(LevelHitEvent hitEvent, LevelHitPresentation presentation) =>
+    hitEvent.archivedSwept and not presentation.lineVisibleAtLiveEdge
+
+//@function Composes nearby right-edge labels and fades non-carrier lines.
+export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<string, int> touchClusters, array<line> drawnLines, array<label> drawnLabels, PresentationConfig config) =>
+    int pendingCount = array.size(pendingLabels)
+    if pendingCount > 0
+        map<int, int> touchGroupLabelClusters = map.new<int, int>()
+        array<float> clusterPrice = array.new<float>()
+        array<bool> clusterWantPrice = array.new<bool>()
+        array<bool> clusterHitTrace = array.new<bool>()
+        array<string> clusterPriceText = array.new<string>()
+        array<color> clusterColor = array.new<color>()
+        array<color> clusterBg = array.new<color>()
+        array<string> clusterSize = array.new<string>()
+        array<int> clusterX = array.new<int>()
+        array<int> clusterRecencyTime = array.new<int>()
+        array<int> clusterDominantWidth = array.new<int>()
+        array<int> clusterDominantRank = array.new<int>()
+        array<int> clusterDominantOrder = array.new<int>()
+        array<int> clusterDominantPending = array.new<int>()
+        array<bool> clusterDominantHasActiveLine = array.new<bool>()
+        array<int> pendingCluster = array.new<int>(pendingCount, -1)
+        array<int> identityCluster = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityPriority = array.new<int>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
+        for pendingIndex = 0 to pendingCount - 1
+            PendingLabel pending = array.get(pendingLabels, pendingIndex)
+            int touchGroup = pending.touchKey != "" and map.contains(touchClusters, pending.touchKey) ? map.get(touchClusters, pending.touchKey) : -1
+            int foundIndex = touchGroup >= 0 and map.contains(touchGroupLabelClusters, touchGroup) ? map.get(touchGroupLabelClusters, touchGroup) : nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
+            if foundIndex >= 0
+                array.set(clusterRecencyTime, foundIndex, math.max(array.get(clusterRecencyTime, foundIndex), pending.recencyTime))
+                array.set(clusterWantPrice, foundIndex, array.get(clusterWantPrice, foundIndex) or pending.wantPrice)
+                array.set(clusterHitTrace, foundIndex, array.get(clusterHitTrace, foundIndex) or pending.hitTrace)
+                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                bool pendingHasActiveLine = not na(pending.activeLine)
+                bool dominantHasActiveLine = array.get(clusterDominantHasActiveLine, foundIndex)
+                bool pendingPrecedes = (pendingHasActiveLine and not dominantHasActiveLine) or (pendingHasActiveLine == dominantHasActiveLine and identityPrecedes(pending.effectiveLineWidth, pending.rank, pendingIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex)))
+                if pendingPrecedes
+                    array.set(clusterColor, foundIndex, pending.textColor)
+                    array.set(clusterBg, foundIndex, pending.bgColor)
+                    array.set(clusterPrice, foundIndex, pending.price)
+                    array.set(clusterPriceText, foundIndex, pending.pricePart)
+                    array.set(clusterX, foundIndex, pending.xPos)
+                    array.set(clusterDominantWidth, foundIndex, pending.effectiveLineWidth)
+                    array.set(clusterDominantRank, foundIndex, pending.rank)
+                    array.set(clusterDominantOrder, foundIndex, pendingIndex)
+                    array.set(clusterDominantPending, foundIndex, pendingIndex)
+                    array.set(clusterDominantHasActiveLine, foundIndex, pendingHasActiveLine)
+            else
+                array.push(clusterPrice, pending.price)
+                array.push(clusterWantPrice, pending.wantPrice)
+                array.push(clusterHitTrace, pending.hitTrace)
+                array.push(clusterPriceText, pending.pricePart)
+                array.push(clusterColor, pending.textColor)
+                array.push(clusterBg, pending.bgColor)
+                array.push(clusterSize, pending.sizeName)
+                array.push(clusterX, pending.xPos)
+                array.push(clusterRecencyTime, pending.recencyTime)
+                array.push(clusterDominantWidth, pending.effectiveLineWidth)
+                array.push(clusterDominantRank, pending.rank)
+                array.push(clusterDominantOrder, pendingIndex)
+                array.push(clusterDominantPending, pendingIndex)
+                array.push(clusterDominantHasActiveLine, not na(pending.activeLine))
+                foundIndex := array.size(clusterPrice) - 1
+            if touchGroup >= 0
+                map.put(touchGroupLabelClusters, touchGroup, foundIndex)
+            array.set(pendingCluster, pendingIndex, foundIndex)
+            if pending.namePart != ""
+                array.push(identityCluster, foundIndex)
+                array.push(identityName, pending.namePart)
+                array.push(identityPriority, 0)
+                array.push(identityWidth, pending.effectiveLineWidth)
+                array.push(identityRank, pending.rank)
+                array.push(identityOrder, pendingIndex)
+        if dedupe and config.mergedLineFadePercent > 0
+            float mergedLineFadeFraction = config.mergedLineFadePercent / 100.0
+            for pendingIndex = 0 to pendingCount - 1
+                int clusterIndex = array.get(pendingCluster, pendingIndex)
+                if pendingIndex != array.get(clusterDominantPending, clusterIndex)
+                    PendingLabel pending = array.get(pendingLabels, pendingIndex)
+                    if not na(pending.activeLine) and array.includes(drawnLines, pending.activeLine)
+                        line.set_color(pending.activeLine, fadeColor(pending.activeLineColor, mergedLineFadeFraction))
+        int clusterCount = array.size(clusterPrice)
+        array<bool> clusterRendered = array.new<bool>(clusterCount, false)
+        for renderPosition = 0 to clusterCount - 1
+            if array.size(drawnLabels) >= config.maxLabels
+                break
+            int clusterIndex = newestUnusedIndex(clusterRecencyTime, clusterRendered)
+            if clusterIndex >= 0
+                array.set(clusterRendered, clusterIndex, true)
+                string body = orderedClusterIdentities(clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                string labelText = array.get(clusterWantPrice, clusterIndex) ? (body == "" ? array.get(clusterPriceText, clusterIndex) : body + " " + config.brandBullet + " " + array.get(clusterPriceText, clusterIndex)) : body
+                string finalText = array.get(clusterHitTrace, clusterIndex) ? "● " + labelText : labelText
+                trackLabel(drawnLabels, config.maxLabels, label.new(array.get(clusterX, clusterIndex), array.get(clusterPrice, clusterIndex), finalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex), config), color=array.get(clusterBg, clusterIndex)))
+        array.clear(pendingLabels)
+    true
+
+//@function Composes active-anchor reminder labels.
+export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders, bool dedupe, array<label> drawnLabels, PresentationConfig config) =>
+    int pendingCount = array.size(pendingReminders)
+    if pendingCount > 0
+        array<float> clusterPrice = array.new<float>()
+        array<int> clusterAnchorEndTime = array.new<int>()
+        array<int> clusterRunEndTime = array.new<int>()
+        array<color> clusterColor = array.new<color>()
+        array<color> clusterBg = array.new<color>()
+        array<string> clusterSize = array.new<string>()
+        array<string> clusterLevelName = array.new<string>()
+        array<int> clusterDominantWidth = array.new<int>()
+        array<int> clusterDominantRank = array.new<int>()
+        array<int> clusterDominantOrder = array.new<int>()
+        array<int> identityCluster = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityPriority = array.new<int>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
+        for reminderIndex = 0 to pendingCount - 1
+            PendingAnchorReminder pending = array.get(pendingReminders, reminderIndex)
+            int foundIndex = nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
+            if foundIndex >= 0
+                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                if identityPrecedes(pending.effectiveLineWidth, pending.rank, reminderIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex))
+                    array.set(clusterPrice, foundIndex, pending.price)
+                    array.set(clusterAnchorEndTime, foundIndex, pending.anchorEndTime)
+                    array.set(clusterRunEndTime, foundIndex, pending.runEndTime)
+                    array.set(clusterColor, foundIndex, pending.textColor)
+                    array.set(clusterBg, foundIndex, pending.bgColor)
+                    array.set(clusterLevelName, foundIndex, pending.levelName)
+                    array.set(clusterDominantWidth, foundIndex, pending.effectiveLineWidth)
+                    array.set(clusterDominantRank, foundIndex, pending.rank)
+                    array.set(clusterDominantOrder, foundIndex, reminderIndex)
+            else
+                array.push(clusterPrice, pending.price)
+                array.push(clusterAnchorEndTime, pending.anchorEndTime)
+                array.push(clusterRunEndTime, pending.runEndTime)
+                array.push(clusterColor, pending.textColor)
+                array.push(clusterBg, pending.bgColor)
+                array.push(clusterSize, pending.sizeName)
+                array.push(clusterLevelName, pending.levelName)
+                array.push(clusterDominantWidth, pending.effectiveLineWidth)
+                array.push(clusterDominantRank, pending.rank)
+                array.push(clusterDominantOrder, reminderIndex)
+                foundIndex := array.size(clusterPrice) - 1
+            array.push(identityCluster, foundIndex)
+            array.push(identityName, pending.namePart)
+            array.push(identityPriority, 0)
+            array.push(identityWidth, pending.effectiveLineWidth)
+            array.push(identityRank, pending.rank)
+            array.push(identityOrder, reminderIndex)
+        for clusterIndex = 0 to array.size(clusterPrice) - 1
+            int reminderRunStart = array.get(clusterAnchorEndTime, clusterIndex) + config.anchorReminderSpacingMs
+            int reminderRunEnd = math.min(array.get(clusterRunEndTime, clusterIndex), config.currentTime - config.anchorReminderSpacingMs)
+            int eligibleRunMs = reminderRunEnd - reminderRunStart
+            if eligibleRunMs > 0
+                int reminderCount = reminderPlacements(eligibleRunMs, config.anchorReminderSpacingMs, config.anchorReminderMaxPerLevel)
+                string levelName = array.get(clusterLevelName, clusterIndex)
+                float levelFrac = levelName == config.valueAreaHighName ? 0.5 : levelName == config.valueAreaLowName ? 0.85 : 0.15
+                string reminderText = orderedClusterIdentities(clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                for placement = 1 to reminderCount
+                    int reminderTime = reminderRunStart + int(eligibleRunMs * (placement - 1 + levelFrac) / reminderCount)
+                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, array.get(clusterPrice, clusterIndex), reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex), config), color=array.get(clusterBg, clusterIndex)))
+        array.clear(pendingReminders)
+    true
+
+//@function Composes swept reminder labels.
+export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedupe, array<label> drawnLabels, PresentationConfig config) =>
+    int reminderCount = array.size(pendingReminders)
+    if reminderCount > 0
+        array<float> clusterPrice = array.new<float>()
+        array<int> clusterEndTime = array.new<int>()
+        array<color> clusterColor = array.new<color>()
+        array<color> clusterBg = array.new<color>()
+        array<string> clusterSize = array.new<string>()
+        array<string> clusterLevelName = array.new<string>()
+        array<int> clusterDominantWidth = array.new<int>()
+        array<int> clusterDominantRank = array.new<int>()
+        array<int> clusterDominantOrder = array.new<int>()
+        array<int> identityCluster = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityPriority = array.new<int>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
+        for reminderIndex = 0 to reminderCount - 1
+            PendingReminder pending = array.get(pendingReminders, reminderIndex)
+            int foundIndex = nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
+            if foundIndex >= 0
+                array.set(clusterEndTime, foundIndex, math.min(array.get(clusterEndTime, foundIndex), pending.endTime))
+                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                if identityPrecedes(pending.effectiveLineWidth, pending.rank, reminderIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex))
+                    array.set(clusterColor, foundIndex, pending.textColor)
+                    array.set(clusterBg, foundIndex, pending.bgColor)
+                    array.set(clusterLevelName, foundIndex, pending.levelName)
+                    array.set(clusterPrice, foundIndex, pending.price)
+                    array.set(clusterDominantWidth, foundIndex, pending.effectiveLineWidth)
+                    array.set(clusterDominantRank, foundIndex, pending.rank)
+                    array.set(clusterDominantOrder, foundIndex, reminderIndex)
+            else
+                array.push(clusterPrice, pending.price)
+                array.push(clusterEndTime, pending.endTime)
+                array.push(clusterColor, pending.textColor)
+                array.push(clusterBg, pending.bgColor)
+                array.push(clusterSize, pending.sizeName)
+                array.push(clusterLevelName, pending.levelName)
+                array.push(clusterDominantWidth, pending.effectiveLineWidth)
+                array.push(clusterDominantRank, pending.rank)
+                array.push(clusterDominantOrder, reminderIndex)
+                foundIndex := array.size(clusterPrice) - 1
+            array.push(identityCluster, foundIndex)
+            array.push(identityName, pending.namePart)
+            array.push(identityPriority, 0)
+            array.push(identityWidth, pending.effectiveLineWidth)
+            array.push(identityRank, pending.rank)
+            array.push(identityOrder, reminderIndex)
+        for clusterIndex = 0 to array.size(clusterPrice) - 1
+            int endTime = array.get(clusterEndTime, clusterIndex)
+            int sweptRunMs = (config.currentTime - config.sweptReminderBaseMs) - endTime
+            if sweptRunMs > 0
+                int runReminderCount = reminderPlacements(sweptRunMs, config.sweptReminderBaseMs, config.sweptReminderMaxPerLine)
+                string levelName = array.get(clusterLevelName, clusterIndex)
+                float levelFrac = levelName == config.valueAreaHighName ? 0.4 : levelName == config.valueAreaLowName ? 0.6 : levelName == config.alternatePocName ? 0.8 : 0.2
+                float price = array.get(clusterPrice, clusterIndex)
+                string reminderText = orderedClusterIdentities(clusterIndex, config.nameSeparator, reminderCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                color textColor = array.get(clusterColor, clusterIndex)
+                color bgColor = array.get(clusterBg, clusterIndex)
+                string sizeName = array.get(clusterSize, clusterIndex)
+                for placement = 1 to runReminderCount
+                    int reminderTime = endTime + int(sweptRunMs * (placement - 1 + levelFrac) / runReminderCount)
+                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, price, reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=textColor, size=toLabelSize(sizeName, config), color=bgColor))
+        array.clear(pendingReminders)
+    true
+
+//@function Removes expired or orphaned Touch Marker events.
+export pruneLevelHitEvents(array<LevelHitEvent> events, map<string, bool> retainedSourceProfiles, PresentationConfig config, HitTracePolicy policy) =>
+    if not policy.presentationActive
+        array.clear(events)
+    else if array.size(events) > 0
+        for eventIndex = array.size(events) - 1 to 0
+            LevelHitEvent hitEvent = array.get(events, eventIndex)
+            bool sourceProfileRetained = map.contains(retainedSourceProfiles, hitEvent.sourceProfileKey)
+            if not eventActive(hitEvent.hitTime, config, policy) or not sourceProfileRetained
+                array.remove(events, eventIndex)
+    true
+
+//@function Registers archived hit levels that need a visible continuation.
+export registerArchivedLevelHitKeys(array<LevelHitEvent> events, map<string, LevelHitPresentation> presentations, map<string, bool> archivedLevelHitKeys, PresentationConfig config) =>
+    map.clear(archivedLevelHitKeys)
+    if array.size(events) > 0
+        for eventIndex = 0 to array.size(events) - 1
+            LevelHitEvent hitEvent = array.get(events, eventIndex)
+            if sameDate(hitEvent.hitTime, config.currentTime, config.newYorkTimezone) and map.contains(presentations, hitEvent.key) and levelHitArchivedSwept(hitEvent, map.get(presentations, hitEvent.key))
+                map.put(archivedLevelHitKeys, hitEvent.key, true)
+    true
+
+//@function Assigns visible same-candle hits to shared marker groups.
+export levelHitEventGroups(array<LevelHitEvent> events, map<string, bool> renderedLevelHitKeys, map<string, LevelHitPresentation> presentations, PresentationConfig config, HitTracePolicy policy) =>
+    int eventCount = array.size(events)
+    array<int> eventGroups = array.new<int>(eventCount, -1)
+    array<int> groupBarTimes = array.new<int>()
+    array<float> groupPrices = array.new<float>()
+    if policy.presentationActive and eventCount > 0
+        for eventIndex = 0 to eventCount - 1
+            LevelHitEvent hitEvent = array.get(events, eventIndex)
+            bool focusSourceVisible = not hitEvent.focusOnly or map.contains(renderedLevelHitKeys, hitEvent.key)
+            if eventActive(hitEvent.hitTime, config, policy) and focusSourceVisible and map.contains(presentations, hitEvent.key)
+                int groupIndex = -1
+                float tolerance = labelMergeTolerance(hitEvent.price, config)
+                if array.size(groupBarTimes) > 0
+                    for candidateIndex = 0 to array.size(groupBarTimes) - 1
+                        bool sameCandle = array.get(groupBarTimes, candidateIndex) == hitEvent.barTime
+                        bool samePrice = math.abs(array.get(groupPrices, candidateIndex) - hitEvent.price) <= tolerance
+                        if sameCandle and samePrice
+                            groupIndex := candidateIndex
+                            break
+                if groupIndex < 0
+                    array.push(groupBarTimes, hitEvent.barTime)
+                    array.push(groupPrices, hitEvent.price)
+                    groupIndex := array.size(groupBarTimes) - 1
+                array.set(eventGroups, eventIndex, groupIndex)
+    eventGroups
+
+//@function Maps each visible level identity to its shared marker group.
+export registerLevelHitLabelClusters(array<LevelHitEvent> events, array<int> eventGroups, map<string, int> touchClusters) =>
+    map.clear(touchClusters)
+    if array.size(events) > 0
+        for eventIndex = 0 to array.size(events) - 1
+            int groupIndex = array.get(eventGroups, eventIndex)
+            if groupIndex >= 0
+                map.put(touchClusters, array.get(events, eventIndex).key, groupIndex)
+    true
+
+//@function Buffers labels for hit levels without a rendered carrier line.
+export bufferLevelHitLabels(array<LevelHitEvent> events, bool labelsActive, map<string, bool> renderedLevelHitKeys, map<string, LevelHitPresentation> presentations, array<PendingLabel> pendingLabels, PresentationConfig config) =>
+    if labelsActive and array.size(events) > 0
+        map<string, bool> bufferedKeys = map.new<string, bool>()
+        for eventIndex = array.size(events) - 1 to 0
+            LevelHitEvent hitEvent = array.get(events, eventIndex)
+            bool focusSourceVisible = not hitEvent.focusOnly or map.contains(renderedLevelHitKeys, hitEvent.key)
+            bool presentationAvailable = map.contains(presentations, hitEvent.key)
+            bool alreadyVisible = map.contains(renderedLevelHitKeys, hitEvent.key)
+            bool alreadyBuffered = map.contains(bufferedKeys, hitEvent.key)
+            if sameDate(hitEvent.hitTime, config.currentTime, config.newYorkTimezone) and focusSourceVisible and presentationAvailable and not alreadyVisible and not alreadyBuffered
+                LevelHitPresentation presentation = map.get(presentations, hitEvent.key)
+                bool archived = levelHitArchivedSwept(hitEvent, presentation)
+                string priceText = str.tostring(hitEvent.price, format.mintick)
+                string labelIdentity = presentation.labelIdentity + (hitEvent.unselectedAnchor ? " " + config.unselectedAnchorSymbol : "") + (archived ? " " + config.archivedSymbol : "")
+                array.push(pendingLabels, PendingLabel.new(hitEvent.price, config.currentBarIndex + presentation.labelOffset, hitEvent.hitTime, hitEvent.key, labelIdentity, priceText, presentation.showPrice, true, presentation.labelColor, presentation.labelBgColor, presentation.labelSize, presentation.rank, presentation.effectiveLineWidth, na, na))
+                map.put(bufferedKeys, hitEvent.key, true)
+    true
+
+twoDigitText(int value) =>
+    (value < 10 ? "0" : "") + str.tostring(value)
+
+levelHitTimeText(int hitTime, string newYorkTimezone) =>
+    twoDigitText(hour(hitTime, newYorkTimezone)) + ":" + twoDigitText(minute(hitTime, newYorkTimezone)) + " NY"
+
+//@function Renders one Touch Marker circle per visible same-candle hit cluster.
+export renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups, map<string, LevelHitPresentation> presentations, array<label> drawnLabels, PresentationConfig config) =>
+    int eventCount = array.size(events)
+    if eventCount > 0
+        array<int> groupBarTimes = array.new<int>()
+        array<int> groupHitTimes = array.new<int>()
+        array<float> groupPrices = array.new<float>()
+        array<color> groupColors = array.new<color>()
+        array<string> groupSizes = array.new<string>()
+        array<int> groupDominantPriority = array.new<int>()
+        array<int> groupDominantWidth = array.new<int>()
+        array<int> groupDominantRank = array.new<int>()
+        array<int> groupDominantOrder = array.new<int>()
+        array<int> identityGroup = array.new<int>()
+        array<string> identityName = array.new<string>()
+        array<int> identityPriority = array.new<int>()
+        array<int> identityWidth = array.new<int>()
+        array<int> identityRank = array.new<int>()
+        array<int> identityOrder = array.new<int>()
+        for eventIndex = 0 to eventCount - 1
+            int groupIndex = array.get(eventGroups, eventIndex)
+            LevelHitEvent hitEvent = array.get(events, eventIndex)
+            if groupIndex >= 0 and map.contains(presentations, hitEvent.key)
+                LevelHitPresentation presentation = map.get(presentations, hitEvent.key)
+                bool archived = levelHitArchivedSwept(hitEvent, presentation)
+                if groupIndex < array.size(groupBarTimes)
+                    bool presentationPrecedes = prioritizedIdentityPrecedes(presentation.anchorPriority, presentation.effectiveLineWidth, presentation.rank, eventIndex, array.get(groupDominantPriority, groupIndex), array.get(groupDominantWidth, groupIndex), array.get(groupDominantRank, groupIndex), array.get(groupDominantOrder, groupIndex))
+                    if presentationPrecedes
+                        array.set(groupColors, groupIndex, presentation.lineColor)
+                        array.set(groupSizes, groupIndex, presentation.circleSize)
+                        array.set(groupDominantPriority, groupIndex, presentation.anchorPriority)
+                        array.set(groupDominantWidth, groupIndex, presentation.effectiveLineWidth)
+                        array.set(groupDominantRank, groupIndex, presentation.rank)
+                        array.set(groupDominantOrder, groupIndex, eventIndex)
+                else
+                    array.push(groupBarTimes, hitEvent.barTime)
+                    array.push(groupHitTimes, hitEvent.hitTime)
+                    array.push(groupPrices, hitEvent.price)
+                    array.push(groupColors, presentation.lineColor)
+                    array.push(groupSizes, presentation.circleSize)
+                    array.push(groupDominantPriority, presentation.anchorPriority)
+                    array.push(groupDominantWidth, presentation.effectiveLineWidth)
+                    array.push(groupDominantRank, presentation.rank)
+                    array.push(groupDominantOrder, eventIndex)
+                array.push(identityGroup, groupIndex)
+                string annotatedIdentity = presentation.identity + (hitEvent.unselectedAnchor ? " " + config.unselectedAnchorSymbol : "") + (archived ? " " + config.archivedSymbol : "")
+                array.push(identityName, annotatedIdentity)
+                array.push(identityPriority, presentation.anchorPriority)
+                array.push(identityWidth, presentation.effectiveLineWidth)
+                array.push(identityRank, presentation.rank)
+                array.push(identityOrder, eventIndex)
+        if array.size(groupBarTimes) > 0
+            for groupIndex = array.size(groupBarTimes) - 1 to 0
+                int barTime = array.get(groupBarTimes, groupIndex)
+                int hitTime = array.get(groupHitTimes, groupIndex)
+                float hitPrice = array.get(groupPrices, groupIndex)
+                color hitColor = array.get(groupColors, groupIndex)
+                string identities = orderedClusterIdentities(groupIndex, "\n", eventCount, identityGroup, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                string tooltipText = identities + "\nHit " + levelHitTimeText(hitTime, config.newYorkTimezone)
+                trackLabel(drawnLabels, config.maxLabels, label.new(barTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(hitColor, 0), size=toLabelSize(array.get(groupSizes, groupIndex), config), tooltip=tooltipText))
+    true
