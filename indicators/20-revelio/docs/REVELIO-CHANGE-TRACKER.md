@@ -1,8 +1,10 @@
 # Revelio Change Tracker
 
-Updated: 2026-07-31
-Progress: Group A 6 / 6 validated and approved · Group B 12 / 12 code complete · 11 / 12 validated and approved · Group C `/6` compiled with qualitative production-performance parity · Group D code complete and awaiting TradingView validation
+Updated: 2026-08-01
+Progress: Group A validated and approved · Group B first-hit context published, validated, and approved · Group C `/6` compiled with qualitative production-performance parity · Group D code complete and awaiting TradingView validation
 Committed baseline: `962eb334` — approved
+
+Canonical library versions, publication instructions, source fingerprints, and copy-ready notes: [`TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md`](../../../TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md). This tracker does not maintain a second current-version ledger.
 
 Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingView Validated`
 
@@ -139,6 +141,23 @@ Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingVie
   - Give each recalculated short-session fold a new internal touch identity so stale hits and consumed state cannot attach to changed prices.
   - Consume an identity only after its first eligible marker is actually recorded.
   - Disabling the control restores the existing first-touch-per-NY-day behavior.
+
+- [x] **TOUCH-07 — Optional first-hit direction context**
+  - Status: `TradingView Validated`
+  - Principal Review: `Approved — no P0–P3 findings after remediation`
+  - TradingView: `Approved`
+  - Add a `First Hit` checkbox, default `Off`, active only while `Touch Marker Labels` is enabled.
+  - When enabled, render the first right-column Touch Marker cluster as `● ① ▼ [LAST WEEK'S] VAL | [PREV RTH] POC` when price arrives from above; use `▲` when price arrives from below.
+  - Keep the marker tooltip compact: the identities stay on separate lines and the footer reads `① FIRST · From above · 09:42 NY`; use `From below` for an approach from below and do not repeat the arrow.
+  - If the first contact starts exactly at the level or direction cannot be resolved, retain only `①` in the right column and `① FIRST · 09:42 NY` in the tooltip.
+  - Use the earliest hit inside the selected Touch Marker `Window`; retained history does not carry a prior window's badge into the current one.
+  - Give a merged Touch Marker one shared badge and preserve its established identity merge, winning-anchor color, and winning-anchor size.
+  - Treat separate clusters with the same earliest lower-timeframe timestamp as co-first instead of inventing an order.
+  - Historical and Replay direction starts from the lower-timeframe open; continuous live direction starts from the prior update price.
+  - Keep the legacy `Hit hh:mm NY` time unchanged when `First Hit` is off; the new contact time is used only to select and describe the first cluster.
+  - Compact dynamic live-Focus backfill into bounded one-minute ranges, preserving the first update origin and chart-bar marker placement without exhausting the multi-day retention cap.
+  - Interactions `/4` and the Revelio host were published; the user approved the feature after TradingView testing.
+  - Approved test surface: `First Hit` off/on, NQ1! 5m Replay from above and below, merged first cluster, co-first timestamp, Labels off, Window change, reload, and one forming-candle live touch.
 
 - [x] **BUG-01 — Highest anchor controls a merged Touch Marker**
   - Status: `TradingView Validated`

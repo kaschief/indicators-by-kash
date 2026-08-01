@@ -1,8 +1,10 @@
 # Revelio Library Migration Tracker
 
-Updated: 2026-07-31
+Updated: 2026-08-01
 Migration status: `Complete` — library migration, Auto Swept, input cleanup, and production promotion approved
-Publishing status: Production Core, Gaps, and Interactions Libraries `/1` and the library-backed `revelio` indicator are deployed and user-approved
+Publishing status: The current canonical Revelio source and library chain are deployed and user-approved; exact versions live in the registry below
+
+Canonical current library versions, publication instructions, source fingerprints, and copy-ready notes: [`TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md`](../../../TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md). Version references below are historical; current status lives only in the registry.
 
 Status flow: `Not Started` → `In Progress` → `Local Code Complete` → `TradingView Validated` → `Approved`
 
@@ -13,12 +15,12 @@ Status flow: `Not Started` → `In Progress` → `Local Code Complete` → `Trad
 | Last committed pre-restructure `code/development/revelio.pine` at `968c5969c7a8059a89514ff54a5af8385154fbd8` | Stable Revelio baseline | Selected as migration source; staged and working-tree versions excluded |
 | Commit `534b1904f04b74d4b641c8f296eebc9201223813` | Approved Slices 1–3 migration checkpoint | TradingView compiled, user tested, and principal reviewed |
 | Commit `5cfa01f` | Approved Slice 5 migration checkpoint | Core/Gaps split compiled and passed user comparison |
-| `code/development/indicator/revelio.pine` | Promoted first-release indicator source | Canonical production source titled `revelio`; imports production Core, Gaps, and Interactions `/1` |
+| `code/development/indicator/revelio.pine` | Canonical production indicator source | Published first-hit build titled `revelio •`; current imports are enforced by the canonical version registry |
 | `REVELIO-AUTO-SWEPT-ADR.md` | Auto Swept architecture decision | Accepted and closed after `/6` production approval |
 | `REVELIO-AUTO-SWEPT-PARKED.md` | Auto Swept history and superseded designs | `/2` and `/3` behavior retained as historical evidence |
 | `code/development/libraries/revelio-core-library.pine` | Promoted Revelio Core Library source | Production `/1` published as `midnightpaws87/RevelioCoreLibrary/1` |
 | `code/development/libraries/revelio-gaps-library.pine` | Promoted Revelio Gaps Library source | Production `/1` published as `midnightpaws87/RevelioGapsLibrary/1` with Core `/1` |
-| `code/development/libraries/revelio-interactions-library.pine` | Promoted Revelio Interactions Library source | Production `/1` published as `midnightpaws87/RevelioInteractionsLibrary/1` |
+| `code/development/libraries/revelio-interactions-library.pine` | Canonical Revelio Interactions Library source | Published and approved first-hit implementation; current publication status and fingerprint are maintained in the canonical version registry |
 | `REVELIO-LIBRARY-MIGRATION-ASSESSMENT.md` | Architecture, effort, risks, and roadmap | Complete |
 
 The two temporary spike clients were deleted after their historical, realtime, reload, and Range-chart gates passed. Their evidence remains below.
@@ -509,11 +511,36 @@ Auto Swept Lines may advance from local development when:
 - [x] Publish the promoted Interactions source as `midnightpaws87/RevelioInteractionsLibrary/1`.
 - [x] Pin the promoted indicator to the production `/1` library versions.
 - [x] Replace the obsolete manual host with the promoted library-backed `revelio.pine` source.
-- [x] Change the promoted indicator title to `revelio`.
+- [x] Change the promoted indicator title to `revelio •`, removing only `development` and retaining the permanent bullet.
 - [x] Default Upcoming Value Gaps to off without changing their enabled behavior.
 - [x] Compile the complete production import chain and run the final TradingView smoke test.
 - [x] Prepare the first production release commit.
 - [x] Publish the first production indicator release.
 - [x] Record final user approval of the deployed production indicator.
 
-Final result: the production `/1` library chain and `revelio` indicator were deployed successfully. The user confirmed that the production indicator works and approved the complete migration and release.
+Final result: the production `/1` library chain and `revelio •` indicator were deployed successfully. The user confirmed that the production indicator works and approved the complete migration and release.
+
+## Post-release Interactions — optional first-hit direction context
+
+- [x] Extend Touch Marker events with approach direction.
+- [x] Reuse the existing lower-timeframe request by adding the sub-bar open; do not add another request.
+- [x] Preserve consecutive-update live crossing detection and use its prior price as the approach origin.
+- [x] Add a default-off `First Hit` control that is active only with `Touch Marker Labels`.
+- [x] Register `① ▼` or `① ▲` only for the earliest current-window marker cluster; use `①` alone when direction cannot be resolved.
+- [x] Render the selected right-column format: `● ① ▼ [LAST WEEK'S] VAL | [PREV RTH] POC`.
+- [x] Render the selected tooltip footer without an arrow: `① FIRST · From above · 09:42 NY`.
+- [x] Reuse the established right-column merge and keep the first-hit context outside individual identities.
+- [x] Preserve merged-dot identity, color, and size priority.
+- [x] Preserve the legacy tooltip timestamp when `First Hit` is off by carrying a separate first-contact time.
+- [x] Compact live Focus backfill to one range per minute per chart bar so first-contact context remains bounded by the existing retention budget.
+- [x] Complete principal review, remediate both P2 findings, and pass re-review with no remaining P0–P3 findings.
+- [x] Record the already-published pre-remediation version, corrected pending candidate, source fingerprint, and publication-instruction history in the canonical version registry.
+- [x] Pin the canonical Revelio source to the registry's reserved Interactions `/4` version.
+- [x] Publish the private Interactions `/4` version recorded in the canonical registry.
+- [x] Compile and publish the canonical Revelio source against Interactions `/4`.
+- [x] Validate NQ1! 5m Bar Replay from above and below.
+- [x] Validate a merged first marker and a same-timestamp co-first case.
+- [x] Validate `First Hit` off/on, Labels off, Window changes, reload, and a forming-candle live touch.
+- [x] Record user approval of the published feature; the development source remains the canonical production source.
+
+Final result: private `midnightpaws87/RevelioInteractionsLibrary/4` and the Revelio host importing `/4` were published. The user confirmed that the optional first-hit Touch Marker feature is good to go.

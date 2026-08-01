@@ -2,15 +2,23 @@
 
 ## Development Naming Rule
 
+Every committed Pine indicator title must use exactly one of these two forms:
+
+- `<indicator name> • development`
+- `<indicator name> •`
+
+The bullet is permanent brand punctuation. A bare title such as `revelio` is never acceptable in a committed indicator source.
+
 **During Development**
 
-- Append "development" to every indicator title
-- This signals the indicator is in active development
+- Use `<indicator name> • development`.
+- This signals the indicator is in active development.
 
 **During Final Commit**
 
-- Automatically remove "devvelopment" from the title before build or publish
-- The production version should never contain the "-dev" suffix
+- Remove only the word ` development` before build, publish, or commit.
+- Preserve the preceding bullet, producing `<indicator name> •`.
+- Run `node scripts/check-pine-indicator-titles.mjs --staged`; any failure blocks the commit.
 
 ### Example
 
@@ -260,6 +268,22 @@ if show_color_table and barstate.islast
 5. **Row counter** - Use a `row` variable and increment it (no magic numbers like 1, 2, 3)
 6. **Transparency** - Use `int(color.t(clr))` to round transparency values
 
+# TradingView Library Version Registry
+
+`TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md` is the repository-wide single source of truth for published, superseded, and pending TradingView library versions.
+
+Before changing a library, changing a host import, or telling the user to publish:
+
+1. Read the registry and verify the complete publication history.
+2. Reserve the next version as `highest published + 1`; never infer it from the production import.
+3. Update the pending version, development import, source SHA-256, publication-instruction log, current handoff, and copy-ready version notes in the registry.
+4. Update the actual development import.
+5. Run `node scripts/check-library-version-registry.mjs` and resolve every failure before handing off.
+
+Every instruction to publish must be logged before it is sent. Once the user confirms publication, mark it published immediately. Any later source edit requires another version. Do not describe the feature as testable or complete until the required library is published and the host compiles against it.
+
+For Revelio, `indicators/20-revelio/code/development` is the sole canonical indicator/library source and the source published to production. Do not create or maintain a parallel production source copy. When there is no pending library release, its development and production imports in the registry must both match the highest published version. During an unpublished change, the development import may point to the reserved next version while the production import continues to record the currently published version.
+
 # Change Handoff Rules
 
 ## Always Include a Product-Owner Explanation
@@ -341,6 +365,7 @@ This authorizes the complete local workflow needed for that specific commit:
 2. Run a path-scoped `git add` for the requested files when needed
 3. Run the requested `git commit` with a useful subject and body
 4. Verify the commit result with `git status`
+5. For TradingView work, include clearly labeled, concise, copy-ready publication notes in the final commit handoff. Give these notes after every TradingView commit, even when publication is already complete or no library version changed. State the exact library version/import when applicable and explicitly say when no new library version is required.
 
 Do not include unrelated files, and do not push unless the user separately requests it.
 
@@ -350,9 +375,11 @@ Do not include unrelated files, and do not push unless the user separately reque
 
 - Keep the subject in the repository's required `type(scope): summary` format
 - Add a blank line between the subject and body
+- Separate body paragraphs with real blank lines. When using `git commit`, pass the subject and each paragraph with separate `-m` arguments; never put literal `\n` sequences in a `-m` argument.
 - Summarize the user-facing changes and the important implementation or refactoring work
 - Include relevant validation performed and any intentionally deferred follow-ups
 - Keep the body concise, factual, and useful to someone reviewing history later
+- After committing, inspect the rendered commit message and amend immediately if it contains literal `\n` text or missing paragraph spacing.
 
 ## Enforcement
 

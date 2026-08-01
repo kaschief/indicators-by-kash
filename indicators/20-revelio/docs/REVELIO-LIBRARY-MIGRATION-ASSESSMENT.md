@@ -795,7 +795,7 @@ The completed spike clients were deleted after passing their historical, realtim
 2. Pin that version in the library-backed Revelio client.
 3. Complete the full TradingView test card.
 4. Replace the main development implementation only after approval.
-5. Remove `development` from the indicator title only for an explicitly authorized final commit/publish step.
+5. Remove only the word ` development` from the indicator title for an explicitly authorized final commit/publish step; retain the permanent bullet so the production title ends in ` •`.
 
 ### Rollback
 
