@@ -347,3 +347,15 @@ The principal must debug independently with fresh eyes. Pre-feeding solutions bi
 - ✅ **CORRECT**: Reading the actual functions involved, then explaining what the code does
 
 Speculation wastes time, erodes trust, and leads to wrong fixes. Read first, speak second.
+
+# Communication Rules
+
+## Be Concise
+
+The user has ADHD. Long answers are hard to process and bury the useful part.
+
+- Default to short answers: the direct answer first, minimal supporting text
+- Prefer a few bullets or a small table over prose
+- No preamble, no recap of the question, no summary of what you just said
+- Expand only when the user explicitly asks for detail, an explanation, or a deep dive
+- When there are many options, lead with the recommendation — don't list everything and make the user choose
