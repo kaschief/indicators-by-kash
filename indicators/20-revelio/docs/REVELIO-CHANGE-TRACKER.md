@@ -1,12 +1,93 @@
 # Revelio Change Tracker
 
-Updated: 2026-08-01
-Progress: Group A validated and approved · Group B first-hit context published, validated, and approved · Group C `/6` compiled with qualitative production-performance parity · Group D code complete and awaiting TradingView validation
+Updated: 2026-08-02
+Progress: Group A validated and approved · Group B first-hit context published, validated, and approved · Group C `/6` compiled with qualitative production-performance parity · Group D code complete and awaiting TradingView validation · Group E `/8` published, visually validated, and approved · Group F `/10` published, validated, and approved · Group G Quarterly histogram transport validated and approved
 Committed baseline: `962eb334` — approved
 
 Canonical library versions, publication instructions, source fingerprints, and copy-ready notes: [`TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md`](../../../TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md). This tracker does not maintain a second current-version ledger.
 
 Status flow: `Not Started` → `In Progress` → `Code Complete` → `TradingView Validated`
+
+## Group G — Quarterly Histogram Cross-Timeframe Transport
+
+- [x] **BUG-07 — Preserve completed Quarterly histogram rows above 15m**
+  - Status: `TradingView Validated`
+  - TradingView: `Approved`
+  - Principal Review: `Approved — prior transfer blocker resolved; no P0–P3 findings in final source review`
+  - User evidence: NQ1! on 4h shows completed Quarterly VAH, POC, and VAL without the histogram silhouette in both published and development instances; the user reports the same symptom on multiple chart timeframes.
+  - The 15m Quarterly context returns scalar level fields continuously but returns the `Profile` carrying histogram rows only on sparse completion-day, weekly, or last-bar snapshots.
+  - On chart timeframes above 15m, `request.security()` returns one 15m intrabar per chart bar, so an exact sparse snapshot bar can be skipped while the scalar profile still arrives.
+  - The host consequently stores a valid remote Quarterly profile with 250 zero-filled rows and `maxHistogramVolume == 0`; the former empty-array guard never copies the real rows, and rendering rejects the silhouette while still drawing the levels.
+  - The 15m context now exposes the completed histogram on every 15m bar of its bounded completion day instead of only one minute per hour. Existing sparse Monday and last-bar recovery snapshots remain.
+  - The host now copies only a valid incoming histogram into a matching stored profile whose maximum is still zero. After that copy, repeated completion-day exposure cannot repeat the host-side array copy.
+  - The correction adds no request, profile calculation, drawing path, or persistent host state. Label formatting remains isolated.
+  - [x] Design a bounded snapshot-transfer window that survives intraday higher-timeframe sampling without returning histogram arrays continuously.
+  - [x] Correct the one-time host copy guard to use histogram readiness instead of preallocated array length.
+  - [x] User confirmed the corrected `/10` build passed TradingView testing and approved the release.
+  - [ ] Extended soak: verify retained completed quarters, reload, quarter rollover, Bar Replay where supported, and the current developing Quarterly profile.
+  - [ ] Capture TradingView Profiler evidence before and after the correction.
+
+## Group F — Profile Label Formatting
+
+- [x] **LABEL-06 — Progressive profile-label format**
+  - Status: `TradingView Validated`
+  - Principal Review: `Approved — no P0–P3 findings; source-level performance and DRYness approved`
+  - Separate `Profile Label Order` (`Profile First`, `Level First`) from `Shorten` (`None`, `Dated Profiles`, `Dated + Previous`, `All Profiles`).
+  - Keep `Level First` plus `None` as the default and preserve the approved `/8` output exactly.
+  - `Dated Profiles` shortens only completed dated profiles; live and previous identities keep full anchor wording.
+  - `Dated + Previous` also shortens previous identities; live identities keep full anchor wording.
+  - `All Profiles` also shortens live identities.
+  - Apply the selected order independently: `Profile First` produces `G POC Jul 22`; `Level First` produces `POC G Jul 22`.
+  - Use `R`, `G`, `W`, `M`, and `Q` consistently in shortened identities, including `M POC Jul 2026` and `Q VAL Q2 2026`.
+  - Keep `✓` and `Ⓐ` attached to their identities. Keep `⁺` and `◌` at the rear of affected shortened identities as well as in Touch Marker hover.
+  - Apply the same selected scope to right-edge labels, active-anchor reminders, and swept reminders.
+  - Preserve Touch Marker and First Hit prefixes, shared price, carrier styling, merge distances, and merge-off behavior.
+- [x] **LABEL-07 — `/9` publication and test**
+  - Status: `Superseded by later source revisions`
+  - [x] Publish `RevelioInteractionsLibrary/9` privately.
+  - [x] Compile the development host importing `/9`.
+  - [x] User testing exposed unclear control scope and led to the separate Order and Shorten controls carried by `/10`.
+- [x] **LABEL-08 — `/10` publication and TradingView validation**
+  - Status: `TradingView Validated`
+  - TradingView: `Approved`
+  - Principal Re-review: `Approved — histogram and compact-provenance remediations resolved; no P0–P3 findings`
+  - [x] Publish `RevelioInteractionsLibrary/10` privately.
+  - [x] Compile the development host importing `/10`.
+  - [x] User tested and approved the combined label-formatting release in TradingView.
+  - [x] Confirm statically that the formatter adds no `request.*()` calls and no drawing-emission paths.
+  - [ ] Optional quantitative follow-up: compare `/9` and `/10` with TradingView Profiler on the same chart, settings, and loaded history; record total runtime and the label-compositor and Quarterly request regions.
+
+## Group E — Complete Merged-Label Compression
+
+- [x] **LABEL-01 — One condensation system across all merged labels**
+  - Status: `Code Complete`
+  - Carry structured identities through right-edge labels, active-anchor reminders, and swept reminders.
+  - Use the same compositor and `Condense Merged Labels` toggle for all three paths.
+  - Turning condensation off restores full identities separated by ` | ` everywhere.
+  - Keep brackets, capitalization, dates, status symbols, winning presentation, optional price, and merge-off behavior unchanged.
+- [x] **LABEL-02 — Extra-wide merge distance**
+  - Status: `Code Complete`
+  - Add `Extra Wide` at `0.050%` to the existing merge-distance dropdown.
+  - Raise the Custom merge-distance maximum from `0.1%` to `0.5%`.
+- [ ] **LABEL-03 — TradingView validation**
+  - Status: `Superseded`
+  - [x] Publish `RevelioInteractionsLibrary/7`.
+  - [x] Publish the development host importing `/7`.
+  - Visual testing found that adaptive grouping did not materially improve scanability.
+- [x] **LABEL-04 — Fixed level-first compositor**
+  - Status: `Code Complete`
+  - Make `POC`, `aPOC`, `VAH`, or `VAL` the first token of every condensed group.
+  - Regroup the complete cluster by level and anchor instead of requiring adjacent identities.
+  - Use ` | ` for a new level/anchor group and commas only for additional periods in the same group.
+  - Keep live and bracketed previous identities complete, and preserve each member's `✓Ⓐ⁺◌` suffix.
+  - Preserve Touch Marker, First Hit, shared price, winning presentation, merge-distance, and condensation-off behavior.
+- [x] **LABEL-05 — `/8` publication and validation**
+  - Status: `TradingView Validated`
+  - [x] Publish `RevelioInteractionsLibrary/8`.
+  - [x] Compile and publish the development host importing `/8`.
+  - [x] User approved the visible fixed level-first label system.
+  - [x] Preserve Touch Marker, First Hit, member suffixes, shared price, and non-adjacent regrouping.
+  - [x] Preserve `Strict`, `Balanced`, `Wide`, `Extra Wide`, and Custom `0.5%` merge settings.
 
 ## Group A — Cosmetic Tweaks
 

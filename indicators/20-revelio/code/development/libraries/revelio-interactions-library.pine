@@ -16,10 +16,27 @@ export type LevelHitEvent
     bool unselectedAnchor
     int approachDirection
 
+//@type Structured fields for one profile-level label identity.
+export type LabelIdentity
+    string fullText
+    string anchorName
+    string profilePrefix
+    string compactProfilePrefix
+    string levelName
+    string periodText
+    string periodContextKey
+    string periodMember
+    bool compactContextAfterMembers
+    string suffix
+    string compactSuffix
+    bool liveProfile
+    bool previousProfile
+    bool datedProfile
+
 //@type Presentation metadata for one retained profile level.
 export type LevelHitPresentation
     string identity
-    string labelIdentity
+    LabelIdentity labelIdentity
     color lineColor
     color labelColor
     color labelBgColor
@@ -38,7 +55,7 @@ export type PendingLabel
     int xPos
     int recencyTime
     string touchKey
-    string namePart
+    LabelIdentity labelIdentity
     string pricePart
     bool wantPrice
     bool hitTrace
@@ -54,7 +71,7 @@ export type PendingLabel
 export type PendingReminder
     float price
     int endTime
-    string namePart
+    LabelIdentity labelIdentity
     color textColor
     color bgColor
     string sizeName
@@ -67,7 +84,7 @@ export type PendingAnchorReminder
     float price
     int anchorEndTime
     int runEndTime
-    string namePart
+    LabelIdentity labelIdentity
     color textColor
     color bgColor
     string sizeName
@@ -149,14 +166,14 @@ newestUnusedIndex(array<int> recencyTimes, array<bool> used) =>
                 newestTime := candidateTime
     newestIndex
 
-orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
-    string body = ""
+orderedClusterIdentityIndices(int clusterIndex, int fallbackOrder, array<int> identityCluster, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
     int clusterIdentityCount = 0
-    if array.size(identityName) > 0
-        for identityIndex = 0 to array.size(identityName) - 1
+    if array.size(identityCluster) > 0
+        for identityIndex = 0 to array.size(identityCluster) - 1
             if array.get(identityCluster, identityIndex) == clusterIndex
                 clusterIdentityCount += 1
-    array<bool> identityUsed = array.new<bool>(array.size(identityName), false)
+    array<bool> identityUsed = array.new<bool>(array.size(identityCluster), false)
+    array<int> orderedIndices = array.new<int>()
     if clusterIdentityCount > 0
         for identityPosition = 1 to clusterIdentityCount
             int bestIdentityIndex = -1
@@ -164,7 +181,7 @@ orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, 
             int bestWidth = -1
             int bestRank = -1
             int bestOrder = fallbackOrder
-            for identityIndex = 0 to array.size(identityName) - 1
+            for identityIndex = 0 to array.size(identityCluster) - 1
                 if array.get(identityCluster, identityIndex) == clusterIndex and not array.get(identityUsed, identityIndex)
                     int candidatePriority = array.get(identityPriority, identityIndex)
                     int candidateWidth = array.get(identityWidth, identityIndex)
@@ -177,10 +194,148 @@ orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, 
                         bestRank := candidateRank
                         bestOrder := candidateOrder
             if bestIdentityIndex >= 0
-                string nextName = array.get(identityName, bestIdentityIndex)
-                body := body == "" ? nextName : body + separator + nextName
+                array.push(orderedIndices, bestIdentityIndex)
                 array.set(identityUsed, bestIdentityIndex, true)
+    orderedIndices
+
+orderedClusterIdentities(int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    string body = ""
+    array<int> orderedIndices = orderedClusterIdentityIndices(clusterIndex, fallbackOrder, identityCluster, identityPriority, identityWidth, identityRank, identityOrder)
+    if array.size(orderedIndices) > 0
+        for orderedPosition = 0 to array.size(orderedIndices) - 1
+            string nextName = array.get(identityName, array.get(orderedIndices, orderedPosition))
+            body := body == "" ? nextName : body + separator + nextName
     body
+
+labelIdentityWithSuffix(LabelIdentity identity, string extraSuffix) =>
+    LabelIdentity.new(identity.fullText + extraSuffix, identity.anchorName, identity.profilePrefix, identity.compactProfilePrefix, identity.levelName, identity.periodText, identity.periodContextKey, identity.periodMember, identity.compactContextAfterMembers, identity.suffix + extraSuffix, identity.compactSuffix + extraSuffix, identity.liveProfile, identity.previousProfile, identity.datedProfile)
+
+identityUsesShortenedScope(LabelIdentity identity, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles) =>
+    identity.datedProfile ? shortenDatedProfiles : identity.previousProfile ? shortenPreviousProfiles : identity.liveProfile and shortenLiveProfiles
+
+levelFirstGroupKey(LabelIdentity identity, int identityIndex) =>
+    identity.datedProfile and identity.levelName != "" and identity.anchorName != "" ? "D|" + identity.levelName + "|" + identity.anchorName : "S|" + str.tostring(identityIndex)
+
+structuredGroupText(int groupIndex, array<int> orderedIndices, array<int> orderedGroups, array<LabelIdentity> identities, bool compactGroup, bool profileFirstLabels) =>
+    int firstIdentityIndex = -1
+    int groupMemberCount = 0
+    string sharedContextKey = ""
+    bool sharedContext = true
+    for orderedPosition = 0 to array.size(orderedIndices) - 1
+        if array.get(orderedGroups, orderedPosition) == groupIndex
+            groupMemberCount += 1
+            int identityIndex = array.get(orderedIndices, orderedPosition)
+            LabelIdentity identity = array.get(identities, identityIndex)
+            if firstIdentityIndex < 0
+                firstIdentityIndex := identityIndex
+                sharedContextKey := identity.periodContextKey
+                sharedContext := identity.datedProfile and identity.periodContextKey != "" and identity.periodMember != ""
+            else if identity.periodContextKey != sharedContextKey or identity.periodMember == ""
+                sharedContext := false
+    LabelIdentity first = array.get(identities, firstIdentityIndex)
+    string body = ""
+    if compactGroup
+        if first.datedProfile
+            body := profileFirstLabels ? first.compactProfilePrefix + " " + first.levelName + " " : first.levelName + " " + first.compactProfilePrefix + " "
+            if groupMemberCount == 1
+                body += first.periodText + first.compactSuffix
+            else if sharedContext
+                bool firstMember = true
+                if not first.compactContextAfterMembers
+                    body += sharedContextKey + " "
+                for orderedPosition = 0 to array.size(orderedIndices) - 1
+                    if array.get(orderedGroups, orderedPosition) == groupIndex
+                        LabelIdentity identity = array.get(identities, array.get(orderedIndices, orderedPosition))
+                        body += (firstMember ? "" : ", ") + identity.periodMember + identity.compactSuffix
+                        firstMember := false
+                if first.compactContextAfterMembers
+                    body += " " + sharedContextKey
+            else
+                bool firstMember = true
+                for orderedPosition = 0 to array.size(orderedIndices) - 1
+                    if array.get(orderedGroups, orderedPosition) == groupIndex
+                        LabelIdentity identity = array.get(identities, array.get(orderedIndices, orderedPosition))
+                        body += (firstMember ? "" : ", ") + identity.periodText + identity.compactSuffix
+                        firstMember := false
+        else
+            body := (profileFirstLabels ? first.compactProfilePrefix + " " + first.levelName : first.levelName + " " + first.compactProfilePrefix) + first.compactSuffix
+    else if profileFirstLabels
+        body := first.fullText
+    else
+        body := first.levelName + " " + (first.datedProfile ? first.anchorName : first.profilePrefix)
+        if first.datedProfile
+            body += " "
+            if sharedContext
+                body += sharedContextKey + " "
+            bool firstMember = true
+            for orderedPosition = 0 to array.size(orderedIndices) - 1
+                if array.get(orderedGroups, orderedPosition) == groupIndex
+                    LabelIdentity identity = array.get(identities, array.get(orderedIndices, orderedPosition))
+                    string fullPeriodMember = identity.periodContextKey != "" and identity.periodMember != "" ? identity.periodContextKey + " " + identity.periodMember : identity.periodText
+                    string member = (sharedContext ? identity.periodMember : fullPeriodMember) + identity.suffix
+                    body += (firstMember ? "" : ", ") + member
+                    firstMember := false
+        else
+            body += first.suffix
+    body
+
+levelFirstClusterIdentities(int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<LabelIdentity> identities, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    string body = ""
+    array<int> orderedIndices = orderedClusterIdentityIndices(clusterIndex, fallbackOrder, identityCluster, identityPriority, identityWidth, identityRank, identityOrder)
+    array<string> groupKeys = array.new<string>()
+    array<int> orderedGroups = array.new<int>()
+    if array.size(orderedIndices) > 0
+        for orderedPosition = 0 to array.size(orderedIndices) - 1
+            int identityIndex = array.get(orderedIndices, orderedPosition)
+            LabelIdentity identity = array.get(identities, identityIndex)
+            string groupKey = levelFirstGroupKey(identity, identityIndex)
+            int groupIndex = -1
+            if array.size(groupKeys) > 0
+                for candidateGroup = 0 to array.size(groupKeys) - 1
+                    if array.get(groupKeys, candidateGroup) == groupKey
+                        groupIndex := candidateGroup
+                        break
+            if groupIndex < 0
+                array.push(groupKeys, groupKey)
+                groupIndex := array.size(groupKeys) - 1
+            array.push(orderedGroups, groupIndex)
+        for groupIndex = 0 to array.size(groupKeys) - 1
+            string nextText = structuredGroupText(groupIndex, orderedIndices, orderedGroups, identities, false, false)
+            body := body == "" ? nextText : body + separator + nextText
+    body
+
+scopedShortenedClusterIdentities(bool profileFirstLabels, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles, int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<LabelIdentity> identities, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    string body = ""
+    array<int> orderedIndices = orderedClusterIdentityIndices(clusterIndex, fallbackOrder, identityCluster, identityPriority, identityWidth, identityRank, identityOrder)
+    array<string> groupKeys = array.new<string>()
+    array<bool> groupCompact = array.new<bool>()
+    array<int> orderedGroups = array.new<int>()
+    if array.size(orderedIndices) > 0
+        for orderedPosition = 0 to array.size(orderedIndices) - 1
+            int identityIndex = array.get(orderedIndices, orderedPosition)
+            LabelIdentity identity = array.get(identities, identityIndex)
+            bool compactIdentity = identityUsesShortenedScope(identity, shortenDatedProfiles, shortenPreviousProfiles, shortenLiveProfiles)
+            string groupKey = compactIdentity and identity.datedProfile ? levelFirstGroupKey(identity, identityIndex) : "S|" + str.tostring(identityIndex)
+            int groupIndex = -1
+            if array.size(groupKeys) > 0
+                for candidateGroup = 0 to array.size(groupKeys) - 1
+                    if array.get(groupKeys, candidateGroup) == groupKey
+                        groupIndex := candidateGroup
+                        break
+            if groupIndex < 0
+                array.push(groupKeys, groupKey)
+                array.push(groupCompact, compactIdentity)
+                groupIndex := array.size(groupKeys) - 1
+            array.push(orderedGroups, groupIndex)
+        for groupIndex = 0 to array.size(groupKeys) - 1
+            bool compactGroup = array.get(groupCompact, groupIndex)
+            string nextText = structuredGroupText(groupIndex, orderedIndices, orderedGroups, identities, compactGroup, profileFirstLabels)
+            body := body == "" ? nextText : body + separator + nextText
+    body
+
+composedClusterIdentities(bool profileFirstLabels, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles, int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<LabelIdentity> identityLabel, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
+    bool scopedShortening = shortenDatedProfiles or shortenPreviousProfiles or shortenLiveProfiles
+    scopedShortening ? scopedShortenedClusterIdentities(profileFirstLabels, shortenDatedProfiles, shortenPreviousProfiles, shortenLiveProfiles, clusterIndex, separator, fallbackOrder, identityCluster, identityLabel, identityPriority, identityWidth, identityRank, identityOrder) : profileFirstLabels ? orderedClusterIdentities(clusterIndex, separator, fallbackOrder, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder) : levelFirstClusterIdentities(clusterIndex, separator, fallbackOrder, identityCluster, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
 
 labelSizeRank(string sizeName, PresentationConfig config) =>
     sizeName == config.sizeTiny ? 0 : sizeName == config.sizeNormal ? 2 : sizeName == config.sizeLarge ? 3 : sizeName == config.sizeHuge ? 4 : 1
@@ -234,7 +389,7 @@ levelHitArchivedSwept(LevelHitEvent hitEvent, LevelHitPresentation presentation)
     hitEvent.archivedSwept and not presentation.lineVisibleAtLiveEdge
 
 //@function Composes nearby right-edge labels and fades non-carrier lines.
-export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<string, int> touchClusters, map<int, int> firstHitDirections, array<line> drawnLines, array<label> drawnLabels, PresentationConfig config) =>
+export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool profileFirstLabels, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles, map<string, int> touchClusters, map<int, int> firstHitDirections, array<line> drawnLines, array<label> drawnLabels, PresentationConfig config) =>
     int pendingCount = array.size(pendingLabels)
     if pendingCount > 0
         map<int, int> touchGroupLabelClusters = map.new<int, int>()
@@ -257,6 +412,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<st
         array<int> pendingCluster = array.new<int>(pendingCount, -1)
         array<int> identityCluster = array.new<int>()
         array<string> identityName = array.new<string>()
+        array<LabelIdentity> identityLabel = array.new<LabelIdentity>()
         array<int> identityPriority = array.new<int>()
         array<int> identityWidth = array.new<int>()
         array<int> identityRank = array.new<int>()
@@ -312,9 +468,10 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<st
             if touchGroup >= 0
                 map.put(touchGroupLabelClusters, touchGroup, foundIndex)
             array.set(pendingCluster, pendingIndex, foundIndex)
-            if pending.namePart != ""
+            if pending.labelIdentity.fullText != ""
                 array.push(identityCluster, foundIndex)
-                array.push(identityName, pending.namePart)
+                array.push(identityName, pending.labelIdentity.fullText)
+                array.push(identityLabel, pending.labelIdentity)
                 array.push(identityPriority, 0)
                 array.push(identityWidth, pending.effectiveLineWidth)
                 array.push(identityRank, pending.rank)
@@ -335,7 +492,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<st
             int clusterIndex = newestUnusedIndex(clusterRecencyTime, clusterRendered)
             if clusterIndex >= 0
                 array.set(clusterRendered, clusterIndex, true)
-                string body = orderedClusterIdentities(clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                string body = composedClusterIdentities(profileFirstLabels, shortenDatedProfiles, shortenPreviousProfiles, shortenLiveProfiles, clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 string labelText = array.get(clusterWantPrice, clusterIndex) ? (body == "" ? array.get(clusterPriceText, clusterIndex) : body + " " + config.brandBullet + " " + array.get(clusterPriceText, clusterIndex)) : body
                 int firstHitDirection = array.get(clusterFirstHitDirection, clusterIndex)
                 string directionSymbol = firstHitDirection < 0 ? config.fromAboveSymbol : firstHitDirection > 0 ? config.fromBelowSymbol : ""
@@ -347,7 +504,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, map<st
     true
 
 //@function Composes active-anchor reminder labels.
-export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders, bool dedupe, array<label> drawnLabels, PresentationConfig config) =>
+export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders, bool dedupe, bool profileFirstLabels, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles, array<label> drawnLabels, PresentationConfig config) =>
     int pendingCount = array.size(pendingReminders)
     if pendingCount > 0
         array<float> clusterPrice = array.new<float>()
@@ -362,6 +519,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
         array<int> clusterDominantOrder = array.new<int>()
         array<int> identityCluster = array.new<int>()
         array<string> identityName = array.new<string>()
+        array<LabelIdentity> identityLabel = array.new<LabelIdentity>()
         array<int> identityPriority = array.new<int>()
         array<int> identityWidth = array.new<int>()
         array<int> identityRank = array.new<int>()
@@ -394,7 +552,8 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
                 array.push(clusterDominantOrder, reminderIndex)
                 foundIndex := array.size(clusterPrice) - 1
             array.push(identityCluster, foundIndex)
-            array.push(identityName, pending.namePart)
+            array.push(identityName, pending.labelIdentity.fullText)
+            array.push(identityLabel, pending.labelIdentity)
             array.push(identityPriority, 0)
             array.push(identityWidth, pending.effectiveLineWidth)
             array.push(identityRank, pending.rank)
@@ -407,7 +566,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
                 int reminderCount = reminderPlacements(eligibleRunMs, config.anchorReminderSpacingMs, config.anchorReminderMaxPerLevel)
                 string levelName = array.get(clusterLevelName, clusterIndex)
                 float levelFrac = levelName == config.valueAreaHighName ? 0.5 : levelName == config.valueAreaLowName ? 0.85 : 0.15
-                string reminderText = orderedClusterIdentities(clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                string reminderText = composedClusterIdentities(profileFirstLabels, shortenDatedProfiles, shortenPreviousProfiles, shortenLiveProfiles, clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 for placement = 1 to reminderCount
                     int reminderTime = reminderRunStart + int(eligibleRunMs * (placement - 1 + levelFrac) / reminderCount)
                     trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, array.get(clusterPrice, clusterIndex), reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex), config), color=array.get(clusterBg, clusterIndex)))
@@ -415,7 +574,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
     true
 
 //@function Composes swept reminder labels.
-export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedupe, array<label> drawnLabels, PresentationConfig config) =>
+export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedupe, bool profileFirstLabels, bool shortenDatedProfiles, bool shortenPreviousProfiles, bool shortenLiveProfiles, array<label> drawnLabels, PresentationConfig config) =>
     int reminderCount = array.size(pendingReminders)
     if reminderCount > 0
         array<float> clusterPrice = array.new<float>()
@@ -429,6 +588,7 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
         array<int> clusterDominantOrder = array.new<int>()
         array<int> identityCluster = array.new<int>()
         array<string> identityName = array.new<string>()
+        array<LabelIdentity> identityLabel = array.new<LabelIdentity>()
         array<int> identityPriority = array.new<int>()
         array<int> identityWidth = array.new<int>()
         array<int> identityRank = array.new<int>()
@@ -459,7 +619,8 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
                 array.push(clusterDominantOrder, reminderIndex)
                 foundIndex := array.size(clusterPrice) - 1
             array.push(identityCluster, foundIndex)
-            array.push(identityName, pending.namePart)
+            array.push(identityName, pending.labelIdentity.fullText)
+            array.push(identityLabel, pending.labelIdentity)
             array.push(identityPriority, 0)
             array.push(identityWidth, pending.effectiveLineWidth)
             array.push(identityRank, pending.rank)
@@ -472,7 +633,7 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
                 string levelName = array.get(clusterLevelName, clusterIndex)
                 float levelFrac = levelName == config.valueAreaHighName ? 0.4 : levelName == config.valueAreaLowName ? 0.6 : levelName == config.alternatePocName ? 0.8 : 0.2
                 float price = array.get(clusterPrice, clusterIndex)
-                string reminderText = orderedClusterIdentities(clusterIndex, config.nameSeparator, reminderCount, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
+                string reminderText = composedClusterIdentities(profileFirstLabels, shortenDatedProfiles, shortenPreviousProfiles, shortenLiveProfiles, clusterIndex, config.nameSeparator, reminderCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 color textColor = array.get(clusterColor, clusterIndex)
                 color bgColor = array.get(clusterBg, clusterIndex)
                 string sizeName = array.get(clusterSize, clusterIndex)
@@ -580,7 +741,8 @@ export bufferLevelHitLabels(array<LevelHitEvent> events, bool labelsActive, map<
                 LevelHitPresentation presentation = map.get(presentations, hitEvent.key)
                 bool archived = levelHitArchivedSwept(hitEvent, presentation)
                 string priceText = str.tostring(hitEvent.price, format.mintick)
-                string labelIdentity = presentation.labelIdentity + (hitEvent.unselectedAnchor ? " " + config.unselectedAnchorSymbol : "") + (archived ? " " + config.archivedSymbol : "")
+                string extraSuffix = (hitEvent.unselectedAnchor ? config.unselectedAnchorSymbol : "") + (archived ? config.archivedSymbol : "")
+                LabelIdentity labelIdentity = labelIdentityWithSuffix(presentation.labelIdentity, extraSuffix)
                 array.push(pendingLabels, PendingLabel.new(hitEvent.price, config.currentBarIndex + presentation.labelOffset, hitEvent.hitTime, hitEvent.key, labelIdentity, priceText, presentation.showPrice, true, presentation.labelColor, presentation.labelBgColor, presentation.labelSize, presentation.rank, presentation.effectiveLineWidth, na, na))
                 map.put(bufferedKeys, hitEvent.key, true)
     true
