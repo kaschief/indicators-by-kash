@@ -162,7 +162,10 @@ is_displacement_candle(htf2_o2, htf2_c2, htf2_o3, htf2_c3, htf2_o4, htf2_c4) // 
 - Prefer one short technical sentence over multi-line commentary.
 - Preserve section dividers because they are navigation aids.
 - Keep single-purpose tooltips brief.
-- When a tooltip covers multiple controls or behaviors, use short headings, blank lines, and bullets.
+- When a tooltip covers multiple controls or behaviors, use short headings and blank lines; use bullets when the points are meaningfully separate or important to scan independently.
+- For multi-control inline tooltips, prefer a short heading followed by one concise explanation per control. Use `• Control — Explanation.` lines when that improves scanning; otherwise use a compact sentence or paragraph.
+- Use one blank line between distinct tooltip sections. Use `———` only when separating independently labeled concepts, then place one blank line on each side of it.
+- Attach the composed tooltip only to the final control in the inline row; do not compress multiple controls into dense `Control • explanation` lines.
 - Do not repeat information already clear from the control label or group name.
 - Split unrelated concepts into separate paragraphs instead of one continuous block.
 - Optimize for quick scanning in TradingView's narrow tooltip panel.
