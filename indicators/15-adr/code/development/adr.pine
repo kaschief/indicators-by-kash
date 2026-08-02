@@ -1,5 +1,5 @@
 //@version=6
-indicator("adr •", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+indicator("adr •", overlay=true, max_lines_count=500, max_labels_count=50, max_boxes_count=50)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -8,6 +8,7 @@ indicator("adr •", overlay=true, max_lines_count=500, max_labels_count=500, ma
 // Calculation type options
 CALC_NY_MIDNIGHT = "NY Midnight"
 CALC_DAILY_CANDLE = "Daily Candle"
+NY_TIMEZONE = "America/New_York"
 
 // Judas condition options
 JUDAS_THIRD = "1/3 ADR"
@@ -23,71 +24,183 @@ SIZE_TINY = "Tiny"
 SIZE_SMALL = "Small"
 SIZE_NORMAL = "Normal"
 
+// Quick Filter options
+FILTER_ALL = "All"
+FILTER_OFF = "Off"
+FILTER_ADR = "ADR"
+FILTER_AWR = "AWR"
+FILTER_AMR = "AMR"
+FILTER_ADR_AWR = "ADR + AWR"
+FILTER_ADR_AMR = "ADR + AMR"
+FILTER_AWR_AMR = "AWR + AMR"
+FILTER_ADR_AWR_AMR = "ADR + AWR + AMR"
+
+// Show Only options
+SESSION_WINDOW_OVERNIGHT = "1600-0500:1234567"
+SESSION_WINDOW_FROM_0500 = "0500-1600:1234567"
+SESSION_WINDOW_FROM_0830 = "0830-1600:1234567"
+SESSION_WINDOW_RTH = "0930-1600:1234567"
+WINDOW_LABEL_OVERNIGHT = "Overnight"
+WINDOW_LABEL_FROM_0500 = "● ● RTH"
+WINDOW_LABEL_FROM_0830 = "● RTH"
+WINDOW_LABEL_RTH = "RTH"
+
 // Input groups
-GROUP_SETTINGS = "Settings"
-GROUP_STYLE = "Styling"
+GROUP_QUICK_FILTER = "⚡ Quick Filter"
+GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
+GROUP_ADR = "Average Daily Range"
+GROUP_ADR_STYLES = "Average Daily Range: Styles"
+GROUP_AWR = "Average Weekly Range"
+GROUP_AWR_STYLES = "Average Weekly Range: Styles"
+GROUP_AMR = "Average Monthly Range"
+GROUP_AMR_STYLES = "Average Monthly Range: Styles"
 GROUP_JUDAS = "Judas Detection"
-GROUP_ALERTS = "Alerts"
+GROUP_ALERTS = "ADR Alerts"
+GROUP_STATISTICS_TABLE = "Statistics Table"
 GROUP_COLOR_TABLE = "Color Reference"
 
-// Drawing
-MAX_HISTORY = 20
+// Resource ceiling: 3 features × (3 level pairs + 1 open) × (20 completed + 1 current) = 441 lines.
+// Only current periods keep labels (21 maximum); Judas retains at most 21 boxes.
+MAX_LOOKBACK = 20
+MAX_HISTORY_PERIODS = 20
+DEFAULT_ADR_LOOKBACK = 5
+DEFAULT_AWR_LOOKBACK = 4
+DEFAULT_AMR_LOOKBACK = 4
+DEFAULT_HISTORY = 1
+STATISTICS_SECTION_ROWS = 6
+STATISTICS_TABLE_ROWS = STATISTICS_SECTION_ROWS * 3
+COLOR_TABLE_ROWS = 15
+NEXT_DAY_PROBE_MS = 36 * 60 * 60 * 1000
+SHOW_ONLY_MAX_TIMEFRAME_SECONDS = 60 * 60
+RANGE_STYLE_TOOLTIP = "Color, style, and width • Full range"
+LABEL_SIZE_TOOLTIP = "Current-period label size"
+QUICK_FILTER_TOOLTIP = "Override the ADR, AWR, and AMR checkboxes with a preset.\n\n• All: Respect individual checkboxes\n• Off: Hide all three ranges\n• Other presets: Force exactly the named ranges on"
+SHOW_ONLY_TOOLTIP = "Dims candles outside the selected New York window. Range drawings and calculations stay unchanged.\n\n• Overnight — 16:00–05:00.\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\n\nAvailable through 1-hour and on Range charts."
+MOST_RECENT_ONLY_TOOLTIP = "Most Recent Only\nShows the selected window only on the current New York date.\n\nOff — show the window every day."
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Settings
-adrLookback = input.int(5, "ADR Lookback", minval=1, maxval=MAX_HISTORY, group=GROUP_SETTINGS)
-calcType = input.string(CALC_NY_MIDNIGHT, "Calculation", options=[CALC_NY_MIDNIGHT, CALC_DAILY_CANDLE], group=GROUP_SETTINGS, tooltip="• NY Midnight: Uses 00:00-00:00 NY Time ranges (ICT method)\n• Daily Candle: Uses standard daily candle high-low")
-showHistorical = input.bool(false, "Show Historical", inline="hist", group=GROUP_SETTINGS)
-historyDays = input.int(10, "Days", minval=1, maxval=MAX_HISTORY, inline="hist", group=GROUP_SETTINGS)
-labelSize = input.string(SIZE_TINY, "Labels", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_SETTINGS)
+quickFilter = input.string(FILTER_ALL, "Quick Filter", options=[FILTER_ALL, FILTER_OFF, FILTER_ADR, FILTER_AWR, FILTER_AMR, FILTER_ADR_AWR, FILTER_ADR_AMR, FILTER_AWR_AMR, FILTER_ADR_AWR_AMR], group=GROUP_QUICK_FILTER, tooltip=QUICK_FILTER_TOOLTIP)
+quickFilterUsesToggles = quickFilter == FILTER_ALL
+// Direct expressions retain the input qualifier required by input.active.
+filterAdr = quickFilter == FILTER_ADR or quickFilter == FILTER_ADR_AWR or quickFilter == FILTER_ADR_AMR or quickFilter == FILTER_ADR_AWR_AMR
+filterAwr = quickFilter == FILTER_AWR or quickFilter == FILTER_ADR_AWR or quickFilter == FILTER_AWR_AMR or quickFilter == FILTER_ADR_AWR_AMR
+filterAmr = quickFilter == FILTER_AMR or quickFilter == FILTER_ADR_AMR or quickFilter == FILTER_AWR_AMR or quickFilter == FILTER_ADR_AWR_AMR
 
-// Styling - ADR
-showAdr = input.bool(true, "ADR", inline="adr", group=GROUP_STYLE)
-adrColor = input.color(color.rgb(242, 54, 69), "", inline="adr", group=GROUP_STYLE)
-adrStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr", group=GROUP_STYLE)
-adrWidth = input.int(1, "", minval=1, maxval=4, inline="adr", group=GROUP_STYLE)
+// Quick Filter: Show Only
+showOnlyEnabled = input.bool(true, "Show Only", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY)
+hiddenCandleColor = input.color(color.new(color.rgb(245, 245, 245), 10), "", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
+visibleWindow = input.string(WINDOW_LABEL_RTH, "", options=[WINDOW_LABEL_OVERNIGHT, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
+showOnlyMostRecent = input.bool(false, "Most Recent Only", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled, tooltip=SHOW_ONLY_TOOLTIP + "\n\n———\n\n" + MOST_RECENT_ONLY_TOOLTIP)
 
-// Styling - 1/3 ADR
-showThirds = input.bool(true, "1/3 ADR", inline="thirds", group=GROUP_STYLE)
-thirdsColor = input.color(color.rgb(41, 98, 255), "", inline="thirds", group=GROUP_STYLE)
-thirdsStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="thirds", group=GROUP_STYLE)
-thirdsWidth = input.int(1, "", minval=1, maxval=4, inline="thirds", group=GROUP_STYLE)
+// Average Daily Range
+showAdr = input.bool(true, "ADR", inline="adr_main", group=GROUP_ADR, active=quickFilterUsesToggles)
+adrEnabled = quickFilterUsesToggles ? showAdr : filterAdr
+adrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="adr_main", group=GROUP_ADR, active=adrEnabled, tooltip="ADR • Enable the feature\n× • Range multiplier")
+adrLookback = input.int(DEFAULT_ADR_LOOKBACK, "Lookback", minval=1, maxval=MAX_LOOKBACK, inline="adr_policy", group=GROUP_ADR, active=adrEnabled)
+adrHistory = input.int(DEFAULT_HISTORY, "History", minval=1, maxval=MAX_HISTORY_PERIODS, inline="adr_policy", group=GROUP_ADR, active=adrEnabled, tooltip="Lookback • Completed daily ranges used in the average\nHistory • Completed daily projections retained")
+calcType = input.string(CALC_NY_MIDNIGHT, "Calculation", options=[CALC_NY_MIDNIGHT, CALC_DAILY_CANDLE], group=GROUP_ADR, active=adrEnabled, tooltip="• NY Midnight: Uses 00:00-00:00 NY Time ranges (ICT method)\n• Daily Candle: Uses standard daily candle high-low")
 
-// Styling - 2/3 ADR
-showTwoThirds = input.bool(true, "2/3 ADR", inline="twothirds", group=GROUP_STYLE)
-twoThirdsColor = input.color(color.rgb(144, 191, 249), "", inline="twothirds", group=GROUP_STYLE)
-twoThirdsStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="twothirds", group=GROUP_STYLE)
-twoThirdsWidth = input.int(1, "", minval=1, maxval=4, inline="twothirds", group=GROUP_STYLE)
+// Average Daily Range: Styles
+adrColor = input.color(color.rgb(242, 54, 69), "ADR", inline="adr_style", group=GROUP_ADR_STYLES, active=adrEnabled)
+adrStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr_style", group=GROUP_ADR_STYLES, active=adrEnabled)
+adrWidth = input.int(2, "", options=[1, 2, 3, 4], inline="adr_style", group=GROUP_ADR_STYLES, active=adrEnabled, tooltip=RANGE_STYLE_TOOLTIP)
+showAdrThirds = input.bool(true, "1/3 ADR", inline="adr_thirds", group=GROUP_ADR_STYLES, active=adrEnabled)
+adrThirdsColor = input.color(color.rgb(41, 98, 255), "", inline="adr_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrThirds)
+adrThirdsStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrThirds)
+adrThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="adr_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrThirds)
+showAdrTwoThirds = input.bool(true, "2/3 ADR", inline="adr_two_thirds", group=GROUP_ADR_STYLES, active=adrEnabled)
+adrTwoThirdsColor = input.color(color.rgb(144, 191, 249), "", inline="adr_two_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrTwoThirds)
+adrTwoThirdsStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr_two_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrTwoThirds)
+adrTwoThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="adr_two_thirds", group=GROUP_ADR_STYLES, active=adrEnabled and showAdrTwoThirds)
+showMno = input.bool(true, "MNO", inline="adr_open", group=GROUP_ADR_STYLES, active=adrEnabled)
+mnoColor = input.color(color.rgb(41, 98, 255), "", inline="adr_open", group=GROUP_ADR_STYLES, active=adrEnabled and showMno)
+mnoStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="adr_open", group=GROUP_ADR_STYLES, active=adrEnabled and showMno)
+mnoWidth = input.int(1, "", options=[1, 2, 3, 4], inline="adr_open", group=GROUP_ADR_STYLES, active=adrEnabled and showMno)
+adrLabelSize = input.string(SIZE_TINY, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_ADR_STYLES, active=adrEnabled, tooltip=LABEL_SIZE_TOOLTIP)
 
-// Styling - MNO
-showMno = input.bool(true, "MNO", inline="mno", group=GROUP_STYLE)
-mnoColor = input.color(color.rgb(41, 98, 255), "", inline="mno", group=GROUP_STYLE)
-mnoStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="mno", group=GROUP_STYLE)
-mnoWidth = input.int(1, "", minval=1, maxval=4, inline="mno", group=GROUP_STYLE)
+// Average Weekly Range
+showAwr = input.bool(false, "AWR", inline="awr_main", group=GROUP_AWR, active=quickFilterUsesToggles)
+awrEnabled = quickFilterUsesToggles ? showAwr : filterAwr
+awrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="awr_main", group=GROUP_AWR, active=awrEnabled, tooltip="AWR • Enable the feature\n× • Range multiplier")
+awrLookback = input.int(DEFAULT_AWR_LOOKBACK, "Lookback", minval=1, maxval=MAX_LOOKBACK, inline="awr_policy", group=GROUP_AWR, active=awrEnabled)
+awrHistory = input.int(DEFAULT_HISTORY, "History", minval=1, maxval=MAX_HISTORY_PERIODS, inline="awr_policy", group=GROUP_AWR, active=awrEnabled, tooltip="Lookback • Completed weekly ranges used in the average\nHistory • Completed weekly projections retained")
+
+// Average Weekly Range: Styles
+awrColor = input.color(color.rgb(156, 39, 176), "AWR", inline="awr_style", group=GROUP_AWR_STYLES, active=awrEnabled)
+awrStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="awr_style", group=GROUP_AWR_STYLES, active=awrEnabled)
+awrWidth = input.int(2, "", options=[1, 2, 3, 4], inline="awr_style", group=GROUP_AWR_STYLES, active=awrEnabled, tooltip=RANGE_STYLE_TOOLTIP)
+showAwrThirds = input.bool(true, "1/3 AWR", inline="awr_thirds", group=GROUP_AWR_STYLES, active=awrEnabled)
+awrThirdsColor = input.color(color.rgb(156, 39, 176), "", inline="awr_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrThirds)
+awrThirdsStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="awr_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrThirds)
+awrThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="awr_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrThirds)
+showAwrTwoThirds = input.bool(true, "2/3 AWR", inline="awr_two_thirds", group=GROUP_AWR_STYLES, active=awrEnabled)
+awrTwoThirdsColor = input.color(color.rgb(206, 147, 216), "", inline="awr_two_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrTwoThirds)
+awrTwoThirdsStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="awr_two_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrTwoThirds)
+awrTwoThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="awr_two_thirds", group=GROUP_AWR_STYLES, active=awrEnabled and showAwrTwoThirds)
+showWeeklyOpen = input.bool(true, "Weekly Open", inline="awr_open", group=GROUP_AWR_STYLES, active=awrEnabled)
+weeklyOpenColor = input.color(color.rgb(41, 98, 255), "", inline="awr_open", group=GROUP_AWR_STYLES, active=awrEnabled and showWeeklyOpen)
+weeklyOpenStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="awr_open", group=GROUP_AWR_STYLES, active=awrEnabled and showWeeklyOpen)
+weeklyOpenWidth = input.int(1, "", options=[1, 2, 3, 4], inline="awr_open", group=GROUP_AWR_STYLES, active=awrEnabled and showWeeklyOpen)
+awrLabelSize = input.string(SIZE_SMALL, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_AWR_STYLES, active=awrEnabled, tooltip=LABEL_SIZE_TOOLTIP)
+
+// Average Monthly Range
+showAmr = input.bool(false, "AMR", inline="amr_main", group=GROUP_AMR, active=quickFilterUsesToggles)
+amrEnabled = quickFilterUsesToggles ? showAmr : filterAmr
+amrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="amr_main", group=GROUP_AMR, active=amrEnabled, tooltip="AMR • Enable the feature\n× • Range multiplier")
+amrLookback = input.int(DEFAULT_AMR_LOOKBACK, "Lookback", minval=1, maxval=MAX_LOOKBACK, inline="amr_policy", group=GROUP_AMR, active=amrEnabled)
+amrHistory = input.int(DEFAULT_HISTORY, "History", minval=1, maxval=MAX_HISTORY_PERIODS, inline="amr_policy", group=GROUP_AMR, active=amrEnabled, tooltip="Lookback • Completed monthly ranges used in the average\nHistory • Completed monthly projections retained")
+
+// Average Monthly Range: Styles
+amrColor = input.color(color.rgb(0, 150, 136), "AMR", inline="amr_style", group=GROUP_AMR_STYLES, active=amrEnabled)
+amrStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="amr_style", group=GROUP_AMR_STYLES, active=amrEnabled)
+amrWidth = input.int(2, "", options=[1, 2, 3, 4], inline="amr_style", group=GROUP_AMR_STYLES, active=amrEnabled, tooltip=RANGE_STYLE_TOOLTIP)
+showAmrThirds = input.bool(true, "1/3 AMR", inline="amr_thirds", group=GROUP_AMR_STYLES, active=amrEnabled)
+amrThirdsColor = input.color(color.rgb(0, 150, 136), "", inline="amr_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrThirds)
+amrThirdsStyle = input.string(STYLE_DASHED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="amr_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrThirds)
+amrThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="amr_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrThirds)
+showAmrTwoThirds = input.bool(true, "2/3 AMR", inline="amr_two_thirds", group=GROUP_AMR_STYLES, active=amrEnabled)
+amrTwoThirdsColor = input.color(color.rgb(128, 203, 196), "", inline="amr_two_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrTwoThirds)
+amrTwoThirdsStyle = input.string(STYLE_DOTTED, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="amr_two_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrTwoThirds)
+amrTwoThirdsWidth = input.int(1, "", options=[1, 2, 3, 4], inline="amr_two_thirds", group=GROUP_AMR_STYLES, active=amrEnabled and showAmrTwoThirds)
+showMonthlyOpen = input.bool(true, "Monthly Open", inline="amr_open", group=GROUP_AMR_STYLES, active=amrEnabled)
+monthlyOpenColor = input.color(color.rgb(41, 98, 255), "", inline="amr_open", group=GROUP_AMR_STYLES, active=amrEnabled and showMonthlyOpen)
+monthlyOpenStyle = input.string(STYLE_SOLID, "", options=[STYLE_SOLID, STYLE_DASHED, STYLE_DOTTED], inline="amr_open", group=GROUP_AMR_STYLES, active=amrEnabled and showMonthlyOpen)
+monthlyOpenWidth = input.int(1, "", options=[1, 2, 3, 4], inline="amr_open", group=GROUP_AMR_STYLES, active=amrEnabled and showMonthlyOpen)
+amrLabelSize = input.string(SIZE_NORMAL, "", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], group=GROUP_AMR_STYLES, active=amrEnabled, tooltip=LABEL_SIZE_TOOLTIP)
 
 // Judas Detection
-judasEnabled = input.bool(false, "Enable", inline="judas", group=GROUP_JUDAS)
-judasCondition = input.string(JUDAS_THIRD, "", options=[JUDAS_THIRD, JUDAS_80PCT], inline="judas", group=GROUP_JUDAS)
-judasColor = input.color(color.orange, "", inline="judas", group=GROUP_JUDAS)
-judasWidth = input.int(3, "", minval=1, maxval=4, inline="judas", group=GROUP_JUDAS)
-judasHour = input.int(8, "Cutoff (NY)", minval=0, maxval=23, inline="cutoff", group=GROUP_JUDAS)
-judasMinute = input.int(0, ":", minval=0, maxval=59, inline="cutoff", group=GROUP_JUDAS, tooltip="Judas Swing: price exhausts early in session before this cutoff time")
+judasEnabled = input.bool(false, "Enable", inline="judas", group=GROUP_JUDAS, active=adrEnabled)
+judasCondition = input.string(JUDAS_THIRD, "", options=[JUDAS_THIRD, JUDAS_80PCT], inline="judas", group=GROUP_JUDAS, active=adrEnabled and judasEnabled)
+judasColor = input.color(color.orange, "", inline="judas", group=GROUP_JUDAS, active=adrEnabled and judasEnabled)
+judasWidth = input.int(3, "", options=[1, 2, 3, 4], inline="judas", group=GROUP_JUDAS, active=adrEnabled and judasEnabled)
+judasHour = input.int(8, "Cutoff (NY)", minval=0, maxval=23, inline="cutoff", group=GROUP_JUDAS, active=adrEnabled and judasEnabled)
+judasMinute = input.int(0, ":", minval=0, maxval=59, inline="cutoff", group=GROUP_JUDAS, active=adrEnabled and judasEnabled, tooltip="Judas Swing: price exhausts early in session before this cutoff time")
 
 // Alerts
-alertAdrEnabled = input.bool(true, "ADR", inline="alert_adr", group=GROUP_ALERTS)
-alertThirdsEnabled = input.bool(true, "1/3 ADR", inline="alert_thirds", group=GROUP_ALERTS)
-alertTwoThirdsEnabled = input.bool(true, "2/3 ADR", inline="alert_twothirds", group=GROUP_ALERTS)
-alertJudasEnabled = input.bool(true, "Judas", inline="alert_judas", group=GROUP_ALERTS)
+alertAdrEnabled = input.bool(true, "ADR", inline="alert_adr", group=GROUP_ALERTS, active=adrEnabled)
+alertThirdsEnabled = input.bool(true, "1/3 ADR", inline="alert_thirds", group=GROUP_ALERTS, active=adrEnabled)
+alertTwoThirdsEnabled = input.bool(true, "2/3 ADR", inline="alert_twothirds", group=GROUP_ALERTS, active=adrEnabled)
+alertJudasEnabled = input.bool(true, "Judas", inline="alert_judas", group=GROUP_ALERTS, active=adrEnabled and judasEnabled)
+
+// Statistics Table
+showStatisticsTable = input.bool(false, "Show", inline="statistics_table", group=GROUP_STATISTICS_TABLE, tooltip="Count displayed completed periods within cumulative ±⅓, ±⅔, and full-range bands")
+statisticsTextSize = input.string(SIZE_TINY, "Text", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL], inline="statistics_table", group=GROUP_STATISTICS_TABLE, active=showStatisticsTable)
 
 // Color Reference
-showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a table showing all color settings with RGB values and transparency levels")
+showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Show enabled range elements with their RGB values and transparency")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPE DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
+
+type LineStyleConfig
+    bool show
+    color col
+    string style
+    int width
 
 type LevelConfig
     float multiplier
@@ -103,10 +216,21 @@ type LevelPair
     label lblUpper
     label lblLower
 
-type DayLevels
+type PeriodLevels
     array<LevelPair> pairs
-    int startTime
-    int endTime
+
+type RangeObservation
+    float openPrice
+    float highPrice
+    float lowPrice
+    float averageRange
+
+type PeriodProjectionState
+    PeriodLevels current
+    array<PeriodLevels> history
+    RangeObservation currentObservation
+    array<RangeObservation> historyObservations
+    int drawnStartTime
 
 type DayData
     float openPrice
@@ -117,6 +241,13 @@ type DayData
     int startTime
     int endTime
     bool judasHit
+
+type RangeStats
+    int displayed
+    int withinThird
+    int withinTwoThirds
+    int withinFull
+    int exceededFull
 
 type AlertState
     bool adrPlus
@@ -133,6 +264,9 @@ method reset(AlertState this) =>
     this.thirdsMinus := false
     this.twoThirdsPlus := false
     this.twoThirdsMinus := false
+
+newPeriodProjectionState() =>
+    PeriodProjectionState.new(history=array.new<PeriodLevels>(), historyObservations=array.new<RangeObservation>())
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
@@ -162,31 +296,44 @@ calcAdr(array<float> ranges, int lookback) =>
     else
         float(na)
 
+nyDayTimestamp(int barTime) =>
+    timestamp(NY_TIMEZONE, year(barTime, NY_TIMEZONE), month(barTime, NY_TIMEZONE), dayofmonth(barTime, NY_TIMEZONE), 0, 0)
+
+nextNyDayTimestamp(int dayTime) =>
+    nextDayProbe = dayTime + NEXT_DAY_PROBE_MS
+    timestamp(NY_TIMEZONE, year(nextDayProbe, NY_TIMEZONE), month(nextDayProbe, NY_TIMEZONE), dayofmonth(nextDayProbe, NY_TIMEZONE), 0, 0)
+
+withinRangeBand(float periodHigh, float periodLow, float periodOpen, float projectedRange, float fraction) =>
+    not na(projectedRange) and periodHigh <= periodOpen + projectedRange * fraction and periodLow >= periodOpen - projectedRange * fraction
+
+// The average uses completed periods; current OHLC is retained only after its projection becomes historical.
+requestRangeSnapshot(string tickerId, string period, int lookback) =>
+    request.security(tickerId, period, [open, ta.sma(high - low, lookback)[1], time, time_close, high, low], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // LEVEL DRAWING METHODS
 // ═══════════════════════════════════════════════════════════════════════════
 
-method draw(LevelConfig this, int t1, int t2, float anchor, float adrValue, bool showLabel, string labelSize) =>
+method draw(LevelConfig this, int t1, int t2, float anchor, float rangeValue, string labelSize) =>
     LevelPair pair = LevelPair.new()
 
     if not this.show
         pair
     else
-        upperPrice = anchor + (adrValue * this.multiplier)
-        lowerPrice = anchor - (adrValue * this.multiplier)
+        upperPrice = anchor + (rangeValue * this.multiplier)
+        lowerPrice = anchor - (rangeValue * this.multiplier)
         lineStyle = toLineStyle(this.style)
         lblSize = toLabelSize(labelSize)
 
         pair.upper := line.new(t1, upperPrice, t2, upperPrice, color=this.col, style=lineStyle, width=this.width, xloc=xloc.bar_time)
         pair.lower := line.new(t1, lowerPrice, t2, lowerPrice, color=this.col, style=lineStyle, width=this.width, xloc=xloc.bar_time)
 
-        if showLabel
-            pair.lblUpper := label.new(t2, upperPrice, this.labelText + "+", style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
-            pair.lblLower := label.new(t2, lowerPrice, this.labelText + "-", style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
+        pair.lblUpper := label.new(t2, upperPrice, this.labelText + "+", style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
+        pair.lblLower := label.new(t2, lowerPrice, this.labelText + "-", style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
 
         pair
 
-method drawAnchor(LevelConfig this, int t1, int t2, float anchor, bool showLabel, string labelSize) =>
+method drawAnchor(LevelConfig this, int t1, int t2, float anchor, string labelSize) =>
     LevelPair pair = LevelPair.new()
 
     if not this.show
@@ -197,8 +344,7 @@ method drawAnchor(LevelConfig this, int t1, int t2, float anchor, bool showLabel
 
         pair.upper := line.new(t1, anchor, t2, anchor, color=this.col, style=lineStyle, width=this.width, xloc=xloc.bar_time)
 
-        if showLabel
-            pair.lblUpper := label.new(t2, anchor, this.labelText, style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
+        pair.lblUpper := label.new(t2, anchor, this.labelText, style=label.style_label_left, textcolor=this.col, color=color.new(color.white, 100), size=lblSize, xloc=xloc.bar_time)
 
         pair
 
@@ -208,6 +354,13 @@ method delete(LevelPair this) =>
         line.delete(this.lower)
         label.delete(this.lblUpper)
         label.delete(this.lblLower)
+
+method deleteLabels(LevelPair this) =>
+    if not na(this)
+        label.delete(this.lblUpper)
+        label.delete(this.lblLower)
+        this.lblUpper := na
+        this.lblLower := na
 
 method extend(LevelPair this, int t2) =>
     if not na(this)
@@ -223,24 +376,22 @@ method updateLabelX(LevelPair this, int t) =>
         if not na(this.lblLower)
             label.set_x(this.lblLower, t)
 
-method updateLabelText(LevelPair this, string upperText, string lowerText) =>
-    if not na(this)
-        if not na(this.lblUpper)
-            label.set_text(this.lblUpper, upperText)
-        if not na(this.lblLower)
-            label.set_text(this.lblLower, lowerText)
-
-method delete(DayLevels this) =>
+method delete(PeriodLevels this) =>
     if not na(this) and not na(this.pairs)
         for pair in this.pairs
             pair.delete()
 
-method extend(DayLevels this, int t2) =>
+method deleteLabels(PeriodLevels this) =>
+    if not na(this) and not na(this.pairs)
+        for pair in this.pairs
+            pair.deleteLabels()
+
+method extend(PeriodLevels this, int t2) =>
     if not na(this) and not na(this.pairs)
         for pair in this.pairs
             pair.extend(t2)
 
-method updateLabels(DayLevels this, int t) =>
+method updateLabels(PeriodLevels this, int t) =>
     if not na(this) and not na(this.pairs)
         for pair in this.pairs
             pair.updateLabelX(t)
@@ -249,51 +400,108 @@ method updateLabels(DayLevels this, int t) =>
 // LEVEL CONFIGURATION BUILDER
 // ═══════════════════════════════════════════════════════════════════════════
 
-buildConfigs(int days) =>
+method toLevelConfig(LineStyleConfig this, float multiplier, string labelText) =>
+    LevelConfig.new(multiplier, labelText, this.col, this.style, this.width, this.show)
+
+buildRangeConfigs(string rangeName, int lookback, float rangeMultiplier, LineStyleConfig rangeStyle, LineStyleConfig thirdsStyle, LineStyleConfig twoThirdsStyle) =>
     array<LevelConfig> configs = array.new<LevelConfig>()
-
-    // ADR levels (multiplier = 1.0)
-    configs.push(LevelConfig.new(1.0, str.tostring(days) + "ADR", adrColor, adrStyle, adrWidth, showAdr))
-
-    // 2/3 ADR levels
-    configs.push(LevelConfig.new(2.0/3.0, "2/3ADR", twoThirdsColor, twoThirdsStyle, twoThirdsWidth, showTwoThirds))
-
-    // 1/3 ADR levels
-    configs.push(LevelConfig.new(1.0/3.0, "1/3ADR", thirdsColor, thirdsStyle, thirdsWidth, showThirds))
-
+    multiplierSuffix = rangeMultiplier == 1.0 ? "" : " ×" + str.tostring(rangeMultiplier, "#.#")
+    configs.push(rangeStyle.toLevelConfig(rangeMultiplier, str.tostring(lookback) + rangeName + multiplierSuffix))
+    configs.push(thirdsStyle.toLevelConfig(rangeMultiplier / 3.0, "1/3" + rangeName + multiplierSuffix))
+    configs.push(twoThirdsStyle.toLevelConfig(rangeMultiplier * 2.0 / 3.0, "2/3" + rangeName + multiplierSuffix))
     configs
 
-buildMnoConfig() =>
-    LevelConfig.new(0.0, "MNO", mnoColor, mnoStyle, mnoWidth, showMno)
+buildOpenConfig(string labelText, LineStyleConfig openStyle) =>
+    openStyle.toLevelConfig(0.0, labelText)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DRAW ALL LEVELS FOR A DAY
+// PERIOD DRAWING AND LIFECYCLE
 // ═══════════════════════════════════════════════════════════════════════════
 
-drawDayLevels(int t1, int t2, float anchor, float adrValue, bool showLabels, int days) =>
-    DayLevels dayLevels = DayLevels.new(array.new<LevelPair>(), t1, t2)
-    configs = buildConfigs(days)
-    mnoConfig = buildMnoConfig()
-
-    // Draw ADR levels
+drawPeriodLevels(int t1, int t2, float anchor, float rangeValue, array<LevelConfig> configs, LevelConfig anchorConfig, string featureLabelSize) =>
+    PeriodLevels periodLevels = PeriodLevels.new(array.new<LevelPair>())
     for config in configs
-        pair = config.draw(t1, t2, anchor, adrValue, showLabels, labelSize)
-        dayLevels.pairs.push(pair)
+        periodLevels.pairs.push(config.draw(t1, t2, anchor, rangeValue, featureLabelSize))
+    periodLevels.pairs.push(anchorConfig.drawAnchor(t1, t2, anchor, featureLabelSize))
+    periodLevels
 
-    // Draw MNO
-    mnoPair = mnoConfig.drawAnchor(t1, t2, anchor, showLabels, labelSize)
-    dayLevels.pairs.push(mnoPair)
+method clearHistory(PeriodProjectionState this) =>
+    if not na(this.history)
+        for levels in this.history
+            levels.delete()
+        array.clear(this.history)
+    if not na(this.historyObservations)
+        array.clear(this.historyObservations)
 
-    dayLevels
+method pruneHistory(PeriodProjectionState this, int historyDepth) =>
+    while array.size(this.history) > historyDepth
+        expiredLevels = array.pop(this.history)
+        expiredLevels.delete()
+        array.pop(this.historyObservations)
+
+method sync(PeriodProjectionState this, bool enabled, int startTime, int endTime, int completedPeriodEndTime, float anchor, float averageRange, float periodHigh, float periodLow, array<LevelConfig> configs, LevelConfig anchorConfig, string featureLabelSize, int historyDepth) =>
+    if not enabled
+        if not na(this.current) or array.size(this.history) > 0
+            this.current.delete()
+            this.current := na
+            this.clearHistory()
+        this.currentObservation := na
+        this.drawnStartTime := na
+    else if not na(averageRange)
+        if na(this.drawnStartTime) or startTime != this.drawnStartTime
+            if not na(this.current)
+                if not na(completedPeriodEndTime)
+                    this.current.extend(completedPeriodEndTime)
+                if historyDepth > 0
+                    this.current.deleteLabels()
+                    array.unshift(this.history, this.current)
+                    array.unshift(this.historyObservations, this.currentObservation)
+                else
+                    this.current.delete()
+            this.current := drawPeriodLevels(startTime, endTime, anchor, averageRange, configs, anchorConfig, featureLabelSize)
+            this.drawnStartTime := startTime
+            this.pruneHistory(historyDepth)
+        this.currentObservation := RangeObservation.new(anchor, periodHigh, periodLow, averageRange)
+
+    this.current.extend(endTime)
+    this.current.updateLabels(endTime)
+
+var array<LevelConfig> adrConfigs = buildRangeConfigs("ADR", adrLookback, adrMultiplier, LineStyleConfig.new(true, adrColor, adrStyle, adrWidth), LineStyleConfig.new(showAdrThirds, adrThirdsColor, adrThirdsStyle, adrThirdsWidth), LineStyleConfig.new(showAdrTwoThirds, adrTwoThirdsColor, adrTwoThirdsStyle, adrTwoThirdsWidth))
+var LevelConfig adrOpenConfig = buildOpenConfig("MNO", LineStyleConfig.new(showMno, mnoColor, mnoStyle, mnoWidth))
+var array<LevelConfig> awrConfigs = buildRangeConfigs("AWR", awrLookback, awrMultiplier, LineStyleConfig.new(true, awrColor, awrStyle, awrWidth), LineStyleConfig.new(showAwrThirds, awrThirdsColor, awrThirdsStyle, awrThirdsWidth), LineStyleConfig.new(showAwrTwoThirds, awrTwoThirdsColor, awrTwoThirdsStyle, awrTwoThirdsWidth))
+var LevelConfig awrOpenConfig = buildOpenConfig("W Open", LineStyleConfig.new(showWeeklyOpen, weeklyOpenColor, weeklyOpenStyle, weeklyOpenWidth))
+var array<LevelConfig> amrConfigs = buildRangeConfigs("AMR", amrLookback, amrMultiplier, LineStyleConfig.new(true, amrColor, amrStyle, amrWidth), LineStyleConfig.new(showAmrThirds, amrThirdsColor, amrThirdsStyle, amrThirdsWidth), LineStyleConfig.new(showAmrTwoThirds, amrTwoThirdsColor, amrTwoThirdsStyle, amrTwoThirdsWidth))
+var LevelConfig amrOpenConfig = buildOpenConfig("M Open", LineStyleConfig.new(showMonthlyOpen, monthlyOpenColor, monthlyOpenStyle, monthlyOpenWidth))
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIME DETECTION
 // ═══════════════════════════════════════════════════════════════════════════
 
-nyHour = hour(time, "America/New_York")
-prevNyHour = hour(time[1], "America/New_York")
-isNewNyDay = nyHour == 0 and prevNyHour == 23
+nyHour = hour(time, NY_TIMEZONE)
+nyDayStartTime = nyDayTimestamp(time)
+nyDateChanged = ta.change(nyDayStartTime) != 0
+isFuturesSundayReopen = nyDateChanged and syminfo.type == "futures" and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday
+isNewNyDay = nyDateChanged and not isFuturesSundayReopen
 isNewDailyCandle = timeframe.change("D")
+barSpansNyDay = not na(time_close) and nyDayTimestamp(time) != nyDayTimestamp(time_close - 1)
+var bool adrBoundarySafe = true
+if barSpansNyDay
+    adrBoundarySafe := false
+
+adrChartSupported = (timeframe.isintraday or chart.is_range) and adrBoundarySafe
+awrChartSupported = chart.is_range or timeframe.in_seconds() <= timeframe.in_seconds("D")
+amrChartSupported = chart.is_range or timeframe.in_seconds() <= timeframe.in_seconds("W")
+awrRequestPeriod = awrChartSupported ? "W" : timeframe.period
+amrRequestPeriod = amrChartSupported ? "M" : timeframe.period
+
+// Preserve the visible feed on standard charts; normalize only synthetic chart prices.
+htfTickerId = chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid)
+[weeklyOpen, averageWeeklyRange, weeklyStartTime, weeklyEndTime, weeklyHigh, weeklyLow] = requestRangeSnapshot(htfTickerId, awrRequestPeriod, awrLookback)
+[monthlyOpen, averageMonthlyRange, monthlyStartTime, monthlyEndTime, monthlyHigh, monthlyLow] = requestRangeSnapshot(htfTickerId, amrRequestPeriod, amrLookback)
+
+adrActive = adrEnabled and adrChartSupported
+awrActive = awrEnabled and awrChartSupported
+amrActive = amrEnabled and amrChartSupported
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DATA STORAGE
@@ -314,6 +522,21 @@ var array<box> judasBoxes = array.new<box>()
 var AlertState alertHit = AlertState.new()
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DAILY CANDLE TRACKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+if isNewDailyCandle
+    if dailyCandleHigh > 0 and dailyCandleLow > 0
+        array.unshift(dailyRanges, dailyCandleHigh - dailyCandleLow)
+        if array.size(dailyRanges) > MAX_LOOKBACK
+            array.pop(dailyRanges)
+    dailyCandleHigh := high
+    dailyCandleLow := low
+else
+    dailyCandleHigh := math.max(dailyCandleHigh, high)
+    dailyCandleLow := math.min(dailyCandleLow, low)
+
+// ═══════════════════════════════════════════════════════════════════════════
 // NY MIDNIGHT TRACKING
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -323,14 +546,14 @@ if isNewNyDay
         currentDay.endTime := time
         currentDay.judasHit := judasHitToday
         array.unshift(nyRanges, currentDay.dayRange)
-        if array.size(nyRanges) > MAX_HISTORY
+        if array.size(nyRanges) > MAX_LOOKBACK
             array.pop(nyRanges)
 
     todayAdr = calcType == CALC_NY_MIDNIGHT ? calcAdr(nyRanges, adrLookback) : calcAdr(dailyRanges, adrLookback)
 
     if not na(currentDay.openPrice) and currentDay.highPrice > 0
         array.unshift(completedDays, currentDay.copy())
-        if array.size(completedDays) > MAX_HISTORY
+        if array.size(completedDays) > MAX_HISTORY_PERIODS
             array.pop(completedDays)
 
     currentDay := DayData.new(open, high, low, 0.0, todayAdr, time, na, false)
@@ -341,31 +564,18 @@ else
     currentDay.lowPrice := math.min(currentDay.lowPrice, low)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DAILY CANDLE TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
-
-if isNewDailyCandle
-    if dailyCandleHigh > 0 and dailyCandleLow > 0
-        array.unshift(dailyRanges, dailyCandleHigh - dailyCandleLow)
-        if array.size(dailyRanges) > MAX_HISTORY
-            array.pop(dailyRanges)
-    dailyCandleHigh := high
-    dailyCandleLow := low
-else
-    dailyCandleHigh := math.max(dailyCandleHigh, high)
-    dailyCandleLow := math.min(dailyCandleLow, low)
-
-// ═══════════════════════════════════════════════════════════════════════════
 // JUDAS DETECTION
 // ═══════════════════════════════════════════════════════════════════════════
 
-if judasEnabled and not judasHitToday and not na(currentDay.adr)
-    nyMinute = minute(time, "America/New_York")
+projectedAdrRange = currentDay.adr * adrMultiplier
+
+if adrActive and judasEnabled and not judasHitToday and not na(projectedAdrRange)
+    nyMinute = minute(time, NY_TIMEZONE)
     cutoffMinutes = judasHour * 60 + judasMinute
     currentMinutes = nyHour * 60 + nyMinute
 
     if currentMinutes <= cutoffMinutes
-        levelOffset = judasCondition == JUDAS_THIRD ? currentDay.adr / 3 : currentDay.adr * 0.8
+        levelOffset = judasCondition == JUDAS_THIRD ? projectedAdrRange / 3 : projectedAdrRange * 0.8
         levelPlus = currentDay.openPrice + levelOffset
         levelMinus = currentDay.openPrice - levelOffset
 
@@ -380,16 +590,15 @@ if judasEnabled and not judasHitToday and not na(currentDay.adr)
 
 // Calculate level prices from anchor
 anchor = currentDay.openPrice
-adr = currentDay.adr
-hasAdr = not na(adr)
+hasAdr = adrActive and not na(projectedAdrRange)
 
 // Check reaches and determine alerts (once per day per level)
-alertAdrPlus = hasAdr and high >= anchor + adr and not alertHit.adrPlus
-alertAdrMinus = hasAdr and low <= anchor - adr and not alertHit.adrMinus
-alertThirdsPlus = hasAdr and high >= anchor + adr / 3 and not alertHit.thirdsPlus
-alertThirdsMinus = hasAdr and low <= anchor - adr / 3 and not alertHit.thirdsMinus
-alertTwoThirdsPlus = hasAdr and high >= anchor + adr * 2 / 3 and not alertHit.twoThirdsPlus
-alertTwoThirdsMinus = hasAdr and low <= anchor - adr * 2 / 3 and not alertHit.twoThirdsMinus
+alertAdrPlus = hasAdr and high >= anchor + projectedAdrRange and not alertHit.adrPlus
+alertAdrMinus = hasAdr and low <= anchor - projectedAdrRange and not alertHit.adrMinus
+alertThirdsPlus = hasAdr and high >= anchor + projectedAdrRange / 3 and not alertHit.thirdsPlus
+alertThirdsMinus = hasAdr and low <= anchor - projectedAdrRange / 3 and not alertHit.thirdsMinus
+alertTwoThirdsPlus = hasAdr and high >= anchor + projectedAdrRange * 2 / 3 and not alertHit.twoThirdsPlus
+alertTwoThirdsMinus = hasAdr and low <= anchor - projectedAdrRange * 2 / 3 and not alertHit.twoThirdsMinus
 
 // Update hit tracking
 if alertAdrPlus
@@ -406,57 +615,31 @@ if alertTwoThirdsMinus
     alertHit.twoThirdsMinus := true
 
 // Fire alerts
-if alertAdrEnabled and alertAdrPlus
+if adrActive and alertAdrEnabled and alertAdrPlus
     alert("ADR+ reached", alert.freq_once_per_bar)
-if alertAdrEnabled and alertAdrMinus
+if adrActive and alertAdrEnabled and alertAdrMinus
     alert("ADR- reached", alert.freq_once_per_bar)
-if alertThirdsEnabled and alertThirdsPlus
+if adrActive and alertThirdsEnabled and alertThirdsPlus
     alert("1/3 ADR+ reached", alert.freq_once_per_bar)
-if alertThirdsEnabled and alertThirdsMinus
+if adrActive and alertThirdsEnabled and alertThirdsMinus
     alert("1/3 ADR- reached", alert.freq_once_per_bar)
-if alertTwoThirdsEnabled and alertTwoThirdsPlus
+if adrActive and alertTwoThirdsEnabled and alertTwoThirdsPlus
     alert("2/3 ADR+ reached", alert.freq_once_per_bar)
-if alertTwoThirdsEnabled and alertTwoThirdsMinus
+if adrActive and alertTwoThirdsEnabled and alertTwoThirdsMinus
     alert("2/3 ADR- reached", alert.freq_once_per_bar)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DRAWING - CURRENT DAY
+// RANGE FEATURE DRAWING
 // ═══════════════════════════════════════════════════════════════════════════
 
-var DayLevels currentLevels = na
-var int currentDayEndTime = na
+var PeriodProjectionState adrProjection = newPeriodProjectionState()
+var PeriodProjectionState awrProjection = newPeriodProjectionState()
+var PeriodProjectionState amrProjection = newPeriodProjectionState()
+currentDayEndTime = nextNyDayTimestamp(nyDayStartTime)
 
-if isNewNyDay and not na(currentDay.adr)
-    currentLevels.delete()
-    currentDayEndTime := currentDay.startTime + 86400000  // 24 hours in milliseconds
-    currentLevels := drawDayLevels(currentDay.startTime, currentDayEndTime, currentDay.openPrice, currentDay.adr, true, adrLookback)
-
-currentLevels.extend(currentDayEndTime)
-currentLevels.updateLabels(currentDayEndTime)
-
-// Update ADR label text with current lookback days
-if not na(currentLevels) and not na(currentLevels.pairs) and array.size(currentLevels.pairs) > 0
-    adrPair = array.get(currentLevels.pairs, 0)
-    adrPair.updateLabelText(str.tostring(adrLookback) + "ADR+", str.tostring(adrLookback) + "ADR-")
-
-// ═══════════════════════════════════════════════════════════════════════════
-// DRAWING - HISTORICAL
-// ═══════════════════════════════════════════════════════════════════════════
-
-var array<DayLevels> histLevels = array.new<DayLevels>()
-
-if isNewNyDay and showHistorical and array.size(completedDays) > 0
-    for levels in histLevels
-        levels.delete()
-    array.clear(histLevels)
-
-    drawCount = math.min(historyDays, array.size(completedDays))
-    for i = 0 to drawCount - 1
-        day = array.get(completedDays, i)
-        if not na(day.adr)
-            endTime = i == 0 ? currentDay.startTime : array.get(completedDays, i - 1).startTime
-            levels = drawDayLevels(day.startTime, endTime, day.openPrice, day.adr, false, adrLookback)
-            array.push(histLevels, levels)
+adrProjection.sync(adrActive, currentDay.startTime, currentDayEndTime, isNewNyDay ? time : int(na), currentDay.openPrice, currentDay.adr, currentDay.highPrice, currentDay.lowPrice, adrConfigs, adrOpenConfig, adrLabelSize, adrHistory)
+awrProjection.sync(awrActive, weeklyStartTime, weeklyEndTime, int(na), weeklyOpen, averageWeeklyRange, weeklyHigh, weeklyLow, awrConfigs, awrOpenConfig, awrLabelSize, awrHistory)
+amrProjection.sync(amrActive, monthlyStartTime, monthlyEndTime, int(na), monthlyOpen, averageMonthlyRange, monthlyHigh, monthlyLow, amrConfigs, amrOpenConfig, amrLabelSize, amrHistory)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JUDAS BOXES
@@ -464,25 +647,103 @@ if isNewNyDay and showHistorical and array.size(completedDays) > 0
 
 var box currentJudasBox = na
 
-if judasEnabled and isNewNyDay
+resetJudasDrawings = not adrActive or not judasEnabled or isNewNyDay
+if resetJudasDrawings and (array.size(judasBoxes) > 0 or not na(currentJudasBox))
     for b in judasBoxes
         box.delete(b)
     array.clear(judasBoxes)
     box.delete(currentJudasBox)
     currentJudasBox := na
 
+if adrActive and judasEnabled and isNewNyDay
     for day in completedDays
         if day.judasHit and not na(day.endTime)
             b = box.new(day.startTime, day.highPrice, day.endTime, day.lowPrice, border_color=judasColor, border_width=judasWidth, bgcolor=na, xloc=xloc.bar_time)
             array.push(judasBoxes, b)
 
-if judasEnabled and judasHitToday
+if adrActive and judasEnabled and judasHitToday
     if na(currentJudasBox)
         currentJudasBox := box.new(currentDay.startTime, currentDay.highPrice, time, currentDay.lowPrice, border_color=judasColor, border_width=judasWidth, bgcolor=na, xloc=xloc.bar_time)
     else
         box.set_top(currentJudasBox, currentDay.highPrice)
         box.set_bottom(currentJudasBox, currentDay.lowPrice)
         box.set_right(currentJudasBox, time)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHOW ONLY
+// ═══════════════════════════════════════════════════════════════════════════
+
+showOnlyTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
+activeShowOnlySession = visibleWindow == WINDOW_LABEL_FROM_0500 ? SESSION_WINDOW_FROM_0500 : visibleWindow == WINDOW_LABEL_FROM_0830 ? SESSION_WINDOW_FROM_0830 : visibleWindow == WINDOW_LABEL_RTH ? SESSION_WINDOW_RTH : SESSION_WINDOW_OVERNIGHT
+showOnlyInVisibleWindow = not na(time(timeframe.period, activeShowOnlySession, NY_TIMEZONE))
+bool showOnlyInMostRecentDay = true
+if showOnlyMostRecent
+    showOnlyInMostRecentDay := year(time, NY_TIMEZONE) == year(timenow, NY_TIMEZONE) and month(time, NY_TIMEZONE) == month(timenow, NY_TIMEZONE) and dayofmonth(time, NY_TIMEZONE) == dayofmonth(timenow, NY_TIMEZONE)
+hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not (showOnlyInVisibleWindow and (not showOnlyMostRecent or showOnlyInMostRecentDay))
+
+plotcandle(hideThisBar ? open : na, high, low, close, color=hiddenCandleColor, wickcolor=hiddenCandleColor, bordercolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATISTICS TABLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+calculateRetainedRangeStats(array<RangeObservation> periods, float rangeMultiplier) =>
+    RangeStats stats = RangeStats.new(0, 0, 0, 0, 0)
+    stats.displayed := array.size(periods)
+    if stats.displayed > 0
+        for period in periods
+            float projectedRange = period.averageRange * rangeMultiplier
+            if withinRangeBand(period.highPrice, period.lowPrice, period.openPrice, projectedRange, 1.0 / 3.0)
+                stats.withinThird += 1
+            if withinRangeBand(period.highPrice, period.lowPrice, period.openPrice, projectedRange, 2.0 / 3.0)
+                stats.withinTwoThirds += 1
+            if withinRangeBand(period.highPrice, period.lowPrice, period.openPrice, projectedRange, 1.0)
+                stats.withinFull += 1
+    stats.exceededFull := stats.displayed - stats.withinFull
+    stats
+
+statisticsRate(int count, int total) =>
+    total > 0 ? str.tostring(count * 100.0 / total, "#.0") + "%" : "—"
+
+statisticsRangeLabel(string rangeName, float rangeMultiplier) =>
+    rangeMultiplier == 1.0 ? rangeName : str.tostring(rangeMultiplier, "#.#") + "× " + rangeName
+
+setStatisticsRow(table tbl, int row, string metric, int count, int total, string textSize) =>
+    table.cell(tbl, 0, row, metric, text_size=textSize, text_color=color.black)
+    table.cell(tbl, 1, row, str.tostring(count), text_size=textSize, text_color=color.black)
+    table.cell(tbl, 2, row, statisticsRate(count, total), text_size=textSize, text_color=color.black)
+
+addStatisticsSection(table tbl, int startRow, string rangeName, string periodUnit, float rangeMultiplier, RangeStats stats, string textSize) =>
+    table.cell(tbl, 0, startRow, "Completed " + rangeName, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=textSize)
+    table.cell(tbl, 1, startRow, periodUnit, bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=textSize)
+    table.cell(tbl, 2, startRow, "Rate", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=textSize)
+    setStatisticsRow(tbl, startRow + 1, "Displayed", stats.displayed, stats.displayed, textSize)
+    setStatisticsRow(tbl, startRow + 2, "Within ±⅓", stats.withinThird, stats.displayed, textSize)
+    setStatisticsRow(tbl, startRow + 3, "Within ±⅔", stats.withinTwoThirds, stats.displayed, textSize)
+    string fullRangeLabel = statisticsRangeLabel(rangeName, rangeMultiplier)
+    setStatisticsRow(tbl, startRow + 4, "Within ±" + fullRangeLabel, stats.withinFull, stats.displayed, textSize)
+    setStatisticsRow(tbl, startRow + 5, "Exceeded " + fullRangeLabel, stats.exceededFull, stats.displayed, textSize)
+    startRow + STATISTICS_SECTION_ROWS
+
+var table statisticsTable = table.new(position.bottom_right, 3, STATISTICS_TABLE_ROWS, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+if barstate.islast
+    table.clear(statisticsTable, 0, 0, 2, STATISTICS_TABLE_ROWS - 1)
+    if showStatisticsTable
+        string tableTextSize = toLabelSize(statisticsTextSize)
+        int statisticsRow = 0
+
+        if adrActive
+            RangeStats adrStats = calculateRetainedRangeStats(adrProjection.historyObservations, adrMultiplier)
+            statisticsRow := addStatisticsSection(statisticsTable, statisticsRow, "ADR", "Days", adrMultiplier, adrStats, tableTextSize)
+
+        if awrActive
+            RangeStats awrStats = calculateRetainedRangeStats(awrProjection.historyObservations, awrMultiplier)
+            statisticsRow := addStatisticsSection(statisticsTable, statisticsRow, "AWR", "Weeks", awrMultiplier, awrStats, tableTextSize)
+
+        if amrActive
+            RangeStats amrStats = calculateRetainedRangeStats(amrProjection.historyObservations, amrMultiplier)
+            statisticsRow := addStatisticsSection(statisticsTable, statisticsRow, "AMR", "Months", amrMultiplier, amrStats, tableTextSize)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE
@@ -494,30 +755,59 @@ addColorRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 if showColorTable and barstate.islast
-    var table color_table = table.new(position.top_right, 3, 10, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table colorTable = table.new(position.top_right, 3, COLOR_TABLE_ROWS, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    table.clear(colorTable, 0, 0, 2, COLOR_TABLE_ROWS - 1)
 
-    // Header row
-    table.cell(color_table, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
-    table.cell(color_table, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
-    table.cell(color_table, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
 
-    int currentRow = 1
+    int colorRow = 1
 
-    // ADR levels
-    if showAdr
-        addColorRow(color_table, currentRow, "ADR", adrColor)
-        currentRow += 1
-    if showThirds
-        addColorRow(color_table, currentRow, "1/3 ADR", thirdsColor)
-        currentRow += 1
-    if showTwoThirds
-        addColorRow(color_table, currentRow, "2/3 ADR", twoThirdsColor)
-        currentRow += 1
-    if showMno
-        addColorRow(color_table, currentRow, "MNO", mnoColor)
-        currentRow += 1
-    if judasEnabled
-        addColorRow(color_table, currentRow, "Judas", judasColor)
-        currentRow += 1
+    if showOnlyEnabled
+        addColorRow(colorTable, colorRow, "Hidden Candles", hiddenCandleColor)
+        colorRow += 1
+
+    if adrActive
+        addColorRow(colorTable, colorRow, "ADR", adrColor)
+        colorRow += 1
+        if showAdrThirds
+            addColorRow(colorTable, colorRow, "1/3 ADR", adrThirdsColor)
+            colorRow += 1
+        if showAdrTwoThirds
+            addColorRow(colorTable, colorRow, "2/3 ADR", adrTwoThirdsColor)
+            colorRow += 1
+        if showMno
+            addColorRow(colorTable, colorRow, "MNO", mnoColor)
+            colorRow += 1
+        if judasEnabled
+            addColorRow(colorTable, colorRow, "Judas", judasColor)
+            colorRow += 1
+
+    if awrActive
+        addColorRow(colorTable, colorRow, "AWR", awrColor)
+        colorRow += 1
+        if showAwrThirds
+            addColorRow(colorTable, colorRow, "1/3 AWR", awrThirdsColor)
+            colorRow += 1
+        if showAwrTwoThirds
+            addColorRow(colorTable, colorRow, "2/3 AWR", awrTwoThirdsColor)
+            colorRow += 1
+        if showWeeklyOpen
+            addColorRow(colorTable, colorRow, "Weekly Open", weeklyOpenColor)
+            colorRow += 1
+
+    if amrActive
+        addColorRow(colorTable, colorRow, "AMR", amrColor)
+        colorRow += 1
+        if showAmrThirds
+            addColorRow(colorTable, colorRow, "1/3 AMR", amrThirdsColor)
+            colorRow += 1
+        if showAmrTwoThirds
+            addColorRow(colorTable, colorRow, "2/3 AMR", amrTwoThirdsColor)
+            colorRow += 1
+        if showMonthlyOpen
+            addColorRow(colorTable, colorRow, "Monthly Open", monthlyOpenColor)
+            colorRow += 1
 
 // adr •
