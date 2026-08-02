@@ -2,10 +2,6 @@
 indicator("parallax •", overlay=true,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
-// Multi-HTF statistical expansion zones.
-// Up to 4 HTF slots, each projecting Inner/Outer/Distribution levels from its own open.
-// Inner = median of (H−O)/(O−L) over last N HTF candles. Outer = mean. Distribution = Outer ± k·σ.
-
 // CONSTANTS
 
 const string GROUP_GENERAL    = "General"
@@ -16,6 +12,21 @@ const string GROUP_FIB        = "Fibonacci"
 const string GROUP_FIB_LEVELS = "Fibonacci Levels"
 const string GROUP_FIB_LABELS = "Fibonacci Labels"
 const string GROUP_TABLE      = "Color Reference Table"
+const string GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
+const string GROUP_SECONDARY_PANE = "Secondary Pane"
+
+const string PLACEMENT_MAIN_CHART = "Main Chart"
+const string PLACEMENT_SECONDARY_PANE = "Secondary Pane"
+const string NY_TIMEZONE = "America/New_York"
+const string SESSION_WINDOW_OVERNIGHT = "1600-0500:1234567"
+const string SESSION_WINDOW_FROM_0500 = "0500-1600:1234567"
+const string SESSION_WINDOW_FROM_0830 = "0830-1600:1234567"
+const string SESSION_WINDOW_RTH = "0930-1600:1234567"
+const string WINDOW_LABEL_OVERNIGHT = "Overnight"
+const string WINDOW_LABEL_FROM_0500 = "● ● RTH"
+const string WINDOW_LABEL_FROM_0830 = "● RTH"
+const string WINDOW_LABEL_RTH = "RTH"
+const int SHOW_ONLY_MAX_TIMEFRAME_SECONDS = 60 * 60
 
 const float FIB_LEVEL_0   = 0.0
 const float FIB_LEVEL_214 = 0.214
@@ -40,6 +51,12 @@ const color DEFAULT_FIB_382_COLOR = color.new(color.rgb(102, 187, 106), 45)
 const color DEFAULT_FIB_295_COLOR = color.new(color.rgb(102, 187, 106), 15)
 const color DEFAULT_FIB_214_COLOR = color.new(color.rgb(102, 187, 106), 15)
 const color DEFAULT_FIB_0_COLOR   = color.new(color.rgb(74,  74,  74),  65)
+const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
+const color DEFAULT_PANE_UP_BODY_COLOR = #fafafa
+const color DEFAULT_PANE_DOWN_BODY_COLOR = color.new(#5b9cf6, 25)
+const color DEFAULT_PANE_UP_BORDER_COLOR = color.new(#808080, 25)
+const color DEFAULT_PANE_DOWN_BORDER_COLOR = color.new(#808080, 20)
+const color DEFAULT_PANE_WICK_COLOR = #9c9c9c
 
 // Grayscale tier palette: dark = closest, light = farthest.
 const color SLOT1_COLOR = color.rgb(74,  74,  74)
@@ -168,6 +185,13 @@ get_tf_pairing(string chart_tf, int slot) =>
 
 lookbackN  = input.int(100, "Lookback", group=GROUP_GENERAL, minval=10, maxval=500,
      tooltip="Maximum HTF candles for the expansion stats. Effective N is min(this, available HTF bars).")
+
+// SHOW ONLY
+
+showOnlyEnabled = input.bool(true, "Show Only", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY)
+hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
+visibleWindow = input.string(WINDOW_LABEL_RTH, "", options=[WINDOW_LABEL_OVERNIGHT, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
+showOnlyMostRecent = input.bool(false, "Most Recent Only", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled, tooltip="Dims candles outside the selected New York window. Parallax calculations and drawings stay unchanged.\n\n• Overnight — 16:00–05:00.\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\n\nAvailable through 1-hour and on Range charts. In Secondary Pane mode, this affects only pane candles.\n\n———\n\nMost Recent Only\nShows the selected window only on the current New York date.\n\nOff — show the window every day.")
 
 // Consolidated row tooltip — Pine only renders the tooltip on the last inline input.
 const string SLOT_ROW_TOOLTIP = "Slot row controls (left → right):\n\n• Enable — toggle this slot on/off\n• Manual — use the TF picker beside it (otherwise auto-pairs to N tiers above chart)\n• TF — manual timeframe; Range charts use this picker because they have no time interval\n• Color — slot identity color\n• History — total visible zones (1 = current only, N = current + N−1 past)\n• Fib — draw fib levels for this slot (count comes from the global Fib History in the Fibonacci group)"
@@ -352,8 +376,22 @@ get_label_size(string s) =>
      s == LBL_HUGE   ? size.huge   :
                        size.small
 
+// SECONDARY PANE
+
+placementMode = input.string(PLACEMENT_MAIN_CHART, "Placement", options=[PLACEMENT_MAIN_CHART, PLACEMENT_SECONDARY_PANE], group=GROUP_SECONDARY_PANE, tooltip="Main Chart: keep Parallax on price.\n\nSecondary Pane: keep candle effects local to the indicator pane and disable main-chart candle effects.")
+secondaryPaneMode = placementMode == PLACEMENT_SECONDARY_PANE
+showPriceCandlesInPane = input.bool(true, "Show Price Candles in Pane", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode, tooltip="Draw the chart's OHLC candles in the indicator pane.")
+paneUpBodyColor = input.color(DEFAULT_PANE_UP_BODY_COLOR, "Candles", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownBodyColor = input.color(DEFAULT_PANE_DOWN_BODY_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneUpBorderColor = input.color(DEFAULT_PANE_UP_BORDER_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownBorderColor = input.color(DEFAULT_PANE_DOWN_BORDER_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneUpWickColor = input.color(DEFAULT_PANE_WICK_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownWickColor = input.color(DEFAULT_PANE_WICK_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane, tooltip="Order: Up Body, Down Body, Up Border, Down Border, Up Wick, Down Wick.")
+
+// COLOR REFERENCE TABLE
+
 showTable = input.bool(false, "Show", group=GROUP_TABLE,
-     tooltip="RGB cheat-sheet for slot colors, top-right.")
+     tooltip="RGB cheat-sheet for slot and candle colors, top-right.")
 
 // HTF RESOLUTION
 
@@ -766,6 +804,25 @@ if barstate.islast
     draw_slot_current(slot3, s3Valid, s3Safe, s3StartT, s3StartIndex, s3CurRightT, currentRightIndex, s3OEff, s3RHi, s3RLo, slot3Color, s3ZoneLabel, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLabel3On, get_label_size(fibLabelSize3), fibLabelPos3, fibLabelOff3 * chartBarMs, fibLabelOff3)
     draw_slot_current(slot4, s4Valid, s4Safe, s4StartT, s4StartIndex, s4CurRightT, currentRightIndex, s4OEff, s4RHi, s4RLo, slot4Color, s4ZoneLabel, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLabel4On, get_label_size(fibLabelSize4), fibLabelPos4, fibLabelOff4 * chartBarMs, fibLabelOff4)
 
+showOnlyTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
+activeShowOnlySession = visibleWindow == WINDOW_LABEL_FROM_0500 ? SESSION_WINDOW_FROM_0500 : visibleWindow == WINDOW_LABEL_FROM_0830 ? SESSION_WINDOW_FROM_0830 : visibleWindow == WINDOW_LABEL_RTH ? SESSION_WINDOW_RTH : SESSION_WINDOW_OVERNIGHT
+showOnlyInVisibleWindow = not na(time(timeframe.period, activeShowOnlySession, NY_TIMEZONE))
+bool showOnlyInMostRecentDay = true
+if showOnlyMostRecent
+    showOnlyInMostRecentDay := year(time, NY_TIMEZONE) == year(timenow, NY_TIMEZONE) and month(time, NY_TIMEZONE) == month(timenow, NY_TIMEZONE) and dayofmonth(time, NY_TIMEZONE) == dayofmonth(timenow, NY_TIMEZONE)
+hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not (showOnlyInVisibleWindow and (not showOnlyMostRecent or showOnlyInMostRecentDay))
+
+showPanePriceCandles = secondaryPaneMode and showPriceCandlesInPane
+paneBodyColor = close >= open ? paneUpBodyColor : paneDownBodyColor
+paneBorderColor = close >= open ? paneUpBorderColor : paneDownBorderColor
+paneWickColor = close >= open ? paneUpWickColor : paneDownWickColor
+hideMainChartCandle = not secondaryPaneMode and hideThisBar
+hidePaneCandle = showPanePriceCandles and hideThisBar
+
+plotcandle(showPanePriceCandles ? open : na, high, low, close, title="Pane Price Candles", color=paneBodyColor, bordercolor=paneBorderColor, wickcolor=paneWickColor, editable=false, display=display.pane)
+plotcandle(hidePaneCandle ? open : na, high, low, close, title="Pane Hidden Candles", color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane)
+plotcandle(hideMainChartCandle ? open : na, high, low, close, title="Hidden Candles", color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
+
 // COLOR REFERENCE TABLE
 
 addRow(table tbl, int row, string name, color clr) =>
@@ -774,7 +831,7 @@ addRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 if showTable and barstate.islast
-    var table colorTable = table.new(position.top_right, 3, 15, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+    var table colorTable = table.new(position.top_right, 3, 22, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
     table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(colorTable, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -819,5 +876,23 @@ if showTable and barstate.islast
         if showFib0
             addRow(colorTable, row, "Fib 0", fibColor0)
             row += 1
+
+    if secondaryPaneMode and showPriceCandlesInPane
+        addRow(colorTable, row, "Up Body", paneUpBodyColor)
+        row += 1
+        addRow(colorTable, row, "Down Body", paneDownBodyColor)
+        row += 1
+        addRow(colorTable, row, "Up Border", paneUpBorderColor)
+        row += 1
+        addRow(colorTable, row, "Down Border", paneDownBorderColor)
+        row += 1
+        addRow(colorTable, row, "Up Wick", paneUpWickColor)
+        row += 1
+        addRow(colorTable, row, "Down Wick", paneDownWickColor)
+        row += 1
+
+    if showOnlyEnabled and showOnlyTimeframeAllowed
+        addRow(colorTable, row, "Hidden Candles", hiddenCandleColor)
+        row += 1
 
 // parallax •
