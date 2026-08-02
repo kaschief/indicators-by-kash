@@ -124,6 +124,7 @@ WINDOW_LABEL_FROM_0500 = "● ● RTH"
 WINDOW_LABEL_FROM_0830 = "● RTH"
 WINDOW_LABEL_RTH = "RTH"
 SHOW_ONLY_MAX_TIMEFRAME_SECONDS = 60 * 60
+PANE_VISIBLE_PRICE_PADDING_RATIO = 0.10
 
 // Alert messages
 const string ALERT_DAILY_HIGH_BREACH = "Daily High Breached"
@@ -677,7 +678,7 @@ pool_debug_mode = input.string("Off", "Pool Debug", options=["Off", "Daily", "We
 // ─── Secondary Pane ───
 placementMode = input.string(PLACEMENT_MAIN_CHART, "Placement", options=[PLACEMENT_MAIN_CHART, PLACEMENT_SECONDARY_PANE], group=GROUP_SECONDARY_PANE, tooltip="Main Chart: keep Pulse on price.\n\nSecondary Pane: keep candle effects local to the indicator pane and disable main-chart candle effects.")
 secondaryPaneMode = placementMode == PLACEMENT_SECONDARY_PANE
-showPriceCandlesInPane = input.bool(true, "Show Price Candles in Pane", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode, tooltip="Draw the chart's OHLC candles in the indicator pane.")
+showPriceCandlesInPane = input.bool(true, "Show Price Candles in Pane", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode, tooltip="Draw the chart's OHLC candles in the indicator pane and keep pane visuals within the visible candle-price range.")
 paneUpBodyColor = input.color(DEFAULT_PANE_UP_BODY_COLOR, "Candles", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
 paneDownBodyColor = input.color(DEFAULT_PANE_DOWN_BODY_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
 paneUpBorderColor = input.color(DEFAULT_PANE_UP_BORDER_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
@@ -687,6 +688,28 @@ paneDownWickColor = input.color(DEFAULT_PANE_WICK_COLOR, "", inline="pane_candle
 
 // ─── Color Reference Table ───
 showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a table showing all color settings with RGB values and transparency levels")
+
+// Keep price candles readable when distant Pulse levels share the secondary-pane scale.
+panePriceContextActive = secondaryPaneMode and showPriceCandlesInPane
+paneVisibleBar = time >= chart.left_visible_bar_time and time <= chart.right_visible_bar_time
+var float paneVisibleHigh = na
+var float paneVisibleLow = na
+if paneVisibleBar
+    paneVisibleHigh := na(paneVisibleHigh) ? high : math.max(paneVisibleHigh, high)
+    paneVisibleLow := na(paneVisibleLow) ? low : math.min(paneVisibleLow, low)
+
+paneVisibleRange = paneVisibleHigh - paneVisibleLow
+paneVisiblePadding = math.max(paneVisibleRange * PANE_VISIBLE_PRICE_PADDING_RATIO, syminfo.mintick * 10)
+paneVisiblePriceHigh = paneVisibleHigh + paneVisiblePadding
+paneVisiblePriceLow = paneVisibleLow - paneVisiblePadding
+
+pane_price_visible(float price) =>
+    not panePriceContextActive or na(paneVisiblePriceHigh) or (price >= paneVisiblePriceLow and price <= paneVisiblePriceHigh)
+
+pane_price_range_visible(float price1, float price2) =>
+    range_high = math.max(price1, price2)
+    range_low = math.min(price1, price2)
+    not panePriceContextActive or na(paneVisiblePriceHigh) or (range_high <= paneVisiblePriceHigh and range_low >= paneVisiblePriceLow)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PULSE MODE FILTER LOGIC
@@ -955,7 +978,7 @@ calc_open_end_time(int start_time, int default_end, int extend_to_hour) =>
 draw_timeframe_opens(TimeframeOpenTracker tracker, int showLast, color lineColor, int lineWidth, string prefix, bool use_hour_format, bool showLabels, color labelTextColor, array<line> all_lines, array<label> all_labels, int extend_to_hour = na, int filter_hour = na) =>
     levels_drawn = 0
 
-    if not na(tracker.current_open) and (na(filter_hour) or tracker.current_hour == filter_hour)
+    if not na(tracker.current_open) and (na(filter_hour) or tracker.current_hour == filter_hour) and pane_price_visible(tracker.current_open)
         current_end = calc_open_end_time(tracker.current_time, time, extend_to_hour)
         current_line = line.new(tracker.current_time, tracker.current_open, current_end, tracker.current_open, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid)
         array.push(all_lines, current_line)
@@ -976,6 +999,8 @@ draw_timeframe_opens(TimeframeOpenTracker tracker, int showLast, color lineColor
                 continue
 
             open_price = array.get(tracker.opens, i)
+            if not pane_price_visible(open_price)
+                continue
             open_time = array.get(tracker.times, i)
             default_end = i < array.size(tracker.opens) - 1 ? array.get(tracker.times, i + 1) : (not na(tracker.current_time) ? tracker.current_time : time)
             end_time = calc_open_end_time(open_time, default_end, extend_to_hour)
@@ -994,7 +1019,7 @@ draw_intraday_closes(IntradayClosingPriceTracker tracker, int showLast, int maxU
     unmitigated_drawn = 0
     untapped_width_assigned = false
 
-    if not na(tracker.current_close)
+    if not na(tracker.current_close) and pane_price_visible(tracker.current_close)
         current_is_mitigated = tracker.current_mitigated
         // Skip if unmitigated only mode and current is mitigated
         if not (showUnmitigatedOnly and current_is_mitigated)
@@ -1024,6 +1049,8 @@ draw_intraday_closes(IntradayClosingPriceTracker tracker, int showLast, int maxU
             if not is_mitigated and unmitigated_drawn >= maxUnmitigated
                 continue
             close_price = array.get(tracker.closes, i)
+            if not pane_price_visible(close_price)
+                continue
             close_time = array.get(tracker.times, i)
             mitigation_time = array.get(tracker.mitigation_times, i)
             end_time = (is_mitigated and not na(mitigation_time)) ? mitigation_time : time
@@ -1297,13 +1324,19 @@ create_liq_depth_label(label_time, label_index, price_val, level_idx, is_high, p
     label_text = showSessionOnSweepLabels and pool_type != "" ? level_str + " " + pool_type : level_str
     label_style = is_high ? label.style_label_down : label.style_label_up
     range_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    chart.is_range ? label.new(range_label_index, price_val, label_text, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+    label result = na
+    if pane_price_visible(price_val)
+        result := chart.is_range ? label.new(range_label_index, price_val, label_text, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+    result
 
 // Helper: Create pool label (high/low)
 create_pool_label(label_time, label_index, price_val, label_str, is_high) =>
     label_style = is_high ? label.style_label_down : label.style_label_up
     range_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    chart.is_range ? label.new(range_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_str, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+    label result = na
+    if pane_price_visible(price_val)
+        result := chart.is_range ? label.new(range_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_str, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+    result
 
 // Range charts are spaced by bar order rather than elapsed time. Keep both coordinates
 // so a breach endpoint lands on the actual range candle instead of a later candle that
@@ -1311,12 +1344,18 @@ create_pool_label(label_time, label_index, price_val, label_str, is_high) =>
 create_pool_line(start_time, start_index, price_val, end_time, end_index, line_color, line_width, line_style) =>
     range_start_index = math.max(start_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
     range_end_index = math.max(end_index, range_start_index)
-    chart.is_range ? line.new(range_start_index, price_val, range_end_index, price_val, xloc=xloc.bar_index, color=line_color, width=line_width, style=line_style) : line.new(start_time, price_val, end_time, price_val, xloc=xloc.bar_time, color=line_color, width=line_width, style=line_style)
+    line result = na
+    if pane_price_visible(price_val)
+        result := chart.is_range ? line.new(range_start_index, price_val, range_end_index, price_val, xloc=xloc.bar_index, color=line_color, width=line_width, style=line_style) : line.new(start_time, price_val, end_time, price_val, xloc=xloc.bar_time, color=line_color, width=line_width, style=line_style)
+    result
 
 // Fixed thin width so the connector never obscures wicks, regardless of depth-line width.
 create_liq_depth_connector(x_time, x_index, start_price, end_price, connector_color) =>
     range_x_index = math.max(x_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    chart.is_range ? line.new(range_x_index, start_price, range_x_index, end_price, xloc=xloc.bar_index, color=color.new(connector_color, 80), width=LINE_WIDTH_1, style=line.style_dashed) : line.new(x_time, start_price, x_time, end_price, xloc=xloc.bar_time, color=color.new(connector_color, 80), width=LINE_WIDTH_1, style=line.style_dashed)
+    line result = na
+    if pane_price_range_visible(start_price, end_price)
+        result := chart.is_range ? line.new(range_x_index, start_price, range_x_index, end_price, xloc=xloc.bar_index, color=color.new(connector_color, 80), width=LINE_WIDTH_1, style=line.style_dashed) : line.new(x_time, start_price, x_time, end_price, xloc=xloc.bar_time, color=color.new(connector_color, 80), width=LINE_WIDTH_1, style=line.style_dashed)
+    result
 
 // Helper: Get liquidity depth color for any pool type
 get_pool_liq_depth_color(poolType, level_idx, lineColor) =>
@@ -2213,14 +2252,14 @@ draw_session_backgrounds(pool, showLast, bgColor) =>
             session_high = array.get(pool.highs, idx)
             session_low = array.get(pool.lows, idx)
 
-            // Draw background box for completed session
-            session_box = box.new(start_time, session_high, end_time, session_low, xloc=xloc.bar_time, bgcolor=bgColor, border_color=color.new(bgColor, 100), border_width=LINE_WIDTH_1)
-            array.push(all_boxes, session_box)
+            if pane_price_range_visible(session_low, session_high)
+                session_box = box.new(start_time, session_high, end_time, session_low, xloc=xloc.bar_time, bgcolor=bgColor, border_color=color.new(bgColor, 100), border_width=LINE_WIDTH_1)
+                array.push(all_boxes, session_box)
 
 // Draw live background for active session
 draw_live_session_background(pool, sessionString, bgColor) =>
     inSession = not na(time(timeframe.period, sessionString, NY_TIMEZONE))
-    if inSession and not na(pool.current_high) and not na(pool.current_low) and not na(pool.current_session_start_time)
+    if inSession and not na(pool.current_high) and not na(pool.current_low) and not na(pool.current_session_start_time) and pane_price_range_visible(pool.current_low, pool.current_high)
         live_box = box.new(pool.current_session_start_time, pool.current_high, time, pool.current_low, xloc=xloc.bar_time, bgcolor=bgColor, border_color=color.new(bgColor, 100), border_width=LINE_WIDTH_1)
         array.push(all_boxes, live_box)
 
@@ -2821,6 +2860,8 @@ if barstate.islast
 
             high_val = array.get(range_box.highs, idx)
             low_val = array.get(range_box.lows, idx)
+            if not pane_price_range_visible(low_val, high_val)
+                continue
             start_time = array.get(range_box.start_times, idx)
             end_time = array.get(range_box.end_times, idx)
 
