@@ -28,6 +28,15 @@ Development host: `indicators/20-revelio/code/development/indicator/revelio.pine
 
 Current truthful status: Interactions `/10` and the Revelio host importing `/10` are published, compiled, tested, and approved by the user. The release includes the profile-label order and shortening controls plus the bounded Quarterly histogram transport correction. Final principal source review found no P0–P3 issue. There is no pending library version.
 
+## External pinned dependencies
+
+These libraries are maintained outside this repository. Their versions are pinned in the host source and do not enter the internal publication workflow above. Check the linked TradingView release pages before intentionally advancing either import, then compile and visually test the dependent host.
+
+| Host | External library | Pinned version | TradingView release page | Last verified |
+|---|---|---:|---|---|
+| `indicators/23-news/code/development/news.pine` | `toodegrees/forex_factory_utility` | 17 | [forex factory utility](https://www.tradingview.com/script/DHRsmWy1-forex-factory-utility/) | 2026-08-02 |
+| `indicators/23-news/code/development/news.pine` | `toodegrees/forex_factory_decoding` | 44 | [forex factory decoding](https://www.tradingview.com/script/Q78LeoTL-forex-factory-decoding/) | 2026-08-02 |
+
 ## Publication history
 
 | Library | Version | Status | Change carried by that version | Source fingerprint |
