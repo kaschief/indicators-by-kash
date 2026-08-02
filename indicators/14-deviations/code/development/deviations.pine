@@ -103,6 +103,12 @@ type SessionData
     line retrace618Line
     array<label> retrace618Labels
     bool retrace618Armed
+    int retraceOriginSide  // 1 = high, -1 = low
+    int retraceOriginBar
+    bool retraceOriginProvisional
+    int retraceLegStartBar
+    bool retraceTraversalCompleted
+    bool retraceFadeApplied
     int ivbBreakTime
     int ivbBreakSide  // 1 = IVB high broke first, -1 = IVB low broke first
     int ivbRetraceBar
@@ -157,6 +163,7 @@ GROUP_GENERAL = "General"
 GROUP_MITIGATION = "Mitigation"
 GROUP_LABELS = "Labels"
 GROUP_DISPLAY = "Display"
+GROUP_SECONDARY_PANE = "Secondary Pane"
 GROUP_2130_0129 = "Key Session: Rafael (21:30–01:29)"
 GROUP_0500_0915 = "Extended Opening: Premarket (05:00–09:15)"
 GROUP_0600_0900 = "Key Session: NY Early Hours (06:00–09:00)"
@@ -177,8 +184,9 @@ LABEL_OFFSET = "Offset"
 LABEL_SHOW_ONLY = "Show Only"
 LABEL_HIDDEN_CANDLES = "Hidden Candles"
 LABEL_MOST_RECENT_ONLY = "Most Recent Only"
+LABEL_SHOW_PANE_CANDLES = "Show Price Candles in Pane"
 TOOLTIP_MOST_RECENT_ONLY = "Narrows Show Only to a single occurrence: mutes every EARLIER copy of the chosen window too, leaving only the current NY date's occurrence lit, so today's price action reads in isolation. Deviation zones, lines and labels stay fully visible.\n\nMutes on the candle level only, so 'most recent' follows the calendar date — while a session is live this is the latest occurrence; with no session today (weekend/holiday) nothing in the window is lit until the next one opens.\n\nOff = every day's window stays lit."
-TOOLTIP_SHOW_ONLY = "Keep only the chosen NY-time window lit and grey out (recolor body, wick and outline) every candle outside it, every day, so the deviation zones read cleanly without manually changing chart colors. The color picker sets the hidden-candle color; the dropdown picks WHICH session stays visible:\n• Overnight (16:00–05:00) — the standard overnight\n• ● ● RTH (05:00–16:00) — premarket into the cash session (default)\n• ● RTH (08:30–16:00) — the 08:30 open through the cash close\n• RTH (09:30–16:00) — the regular trading hours cash session\n\nIntraday only — no effect above the 1-hour timeframe."
+TOOLTIP_SHOW_ONLY = "Keep only the chosen NY-time window lit and grey out (recolor body, wick and outline) every candle outside it, every day, so the deviation zones read cleanly without manually changing chart colors. The color picker sets the hidden-candle color; the dropdown picks WHICH session stays visible:\n• Overnight (16:00–05:00) — the standard overnight\n• ● ● RTH (05:00–16:00) — premarket into the cash session (default)\n• ● RTH (08:30–16:00) — the 08:30 open through the cash close\n• RTH (09:30–16:00) — the regular trading hours cash session\n\nSecondary pane: applies only to pane candles and never changes main-chart candles.\n\nIntraday only — no effect above the 1-hour timeframe."
 LABEL_MITIGATION = "Mitigation"
 LABEL_RETRACE_50 = "0.5"
 LABEL_RETRACE_618 = "0.618"
@@ -222,6 +230,9 @@ SHOW_FROM_0500 = "● ● RTH"
 SHOW_FROM_0830 = "● RTH"
 SHOW_RTH = "RTH"
 
+PLACEMENT_MAIN_CHART = "Main Chart"
+PLACEMENT_SECONDARY_PANE = "Secondary Pane"
+
 // Style constants
 MITIGATION_LINE_WIDTH = 2
 MITIGATION_50_LINE_WIDTH = 1
@@ -229,7 +240,7 @@ MITIGATION_618_LINE_WIDTH = 1
 MITIGATION_PENDING_LINE_WIDTH = 1
 PENDING_LABEL_TRANSPARENCY_REDUCTION = 55.0
 PENDING_LABEL_TRANSPARENCY_MAX = 12.0
-COLOR_TABLE_MAX_ROWS = 60
+COLOR_TABLE_MAX_ROWS = 66
 
 // Reminder density keys off a line's absolute length, not the session period, so physical chart distance
 // drives spacing uniformly (matches Revelio). Floored sqrt over an 8h base: a line earns a 2nd tag past
@@ -239,6 +250,11 @@ MITIGATION_REMINDER_MAX_PER_LINE = 3
 
 // Show Only — color the hidden (greyed) candles take
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
+const color DEFAULT_PANE_UP_BODY_COLOR = #fafafa
+const color DEFAULT_PANE_DOWN_BODY_COLOR = color.new(#5b9cf6, 25)
+const color DEFAULT_PANE_UP_BORDER_COLOR = color.new(#808080, 25)
+const color DEFAULT_PANE_DOWN_BORDER_COLOR = color.new(#808080, 20)
+const color DEFAULT_PANE_WICK_COLOR = #9c9c9c
 
 
 // Tooltips
@@ -260,10 +276,11 @@ IVB_END_MIN = 600
 
 // IVB breakout extensions - minimum recorded samples before projections draw
 IVB_EXT_MIN_SAMPLES = 5
+IVB_EXT_MIN_VISIBLE_MS = 6 * 60 * 60 * 1000
 LABEL_EXT_AVG = "ivb avg"
 LABEL_EXT_STD = "ivb +1σ"
 
-TOOLTIP_IVB_EXTENSIONS = "Projects IVB Average and +1σ breakout levels to 16:00 after a confirmed 30-minute close outside the IVB wick range. Lookback sets the sample count. Requires at least 5 samples and IVB Mitigation."
+TOOLTIP_IVB_EXTENSIONS = "Projects IVB Average and +1σ breakout levels after a confirmed 30-minute close outside the IVB wick range. Lines end at 16:00 or after six hours for late breakouts. Lookback sets the sample count. Requires at least 5 samples and IVB Mitigation."
 
 // Option values
 OPT_HIDDEN = "Hidden"
@@ -288,6 +305,8 @@ SESSION_UNMITIGATED = "Unmitigated"
 
 RETRACE_MODE_STANDARD = "Standard"
 RETRACE_MODE_IVB = "IVB-Based"
+REPLACEMENT_TRIGGER_618 = "0.618"
+REPLACEMENT_TRIGGER_50 = "0.5"
 
 // Quick filter presets
 FILTER_ALL = "All"
@@ -309,7 +328,7 @@ FOCUS_ANCHOR_PRICE = "Current Price"
 FOCUS_ANCHOR_MANUAL = "Manual"
 // Must match the max_*_count limits declared in indicator().
 FOCUS_DRAWING_LIMIT = 500
-// Must exceed one focus session's full drawing footprint.
+// Reserved for non-Focus drawings that can still grow after Focus admission.
 FOCUS_DRAWING_HEADROOM = 50
 LABEL_FOCUS_ANCHOR = "ASIA + RAFAEL FOCUS ANCHOR"
 LABEL_FOCUS_ANCHOR_UNSET = "ASIA + RAFAEL FOCUS ANCHOR UNSET"
@@ -365,6 +384,8 @@ focusAnchorPrice = focusAnchorMode == FOCUS_ANCHOR_MANUAL and focusManualPricePl
 
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
 showUnmitigatedRafaelAsiaOpenLevels = input.bool(false, "Show Unmitigated Rafael + Asia Open Levels", group=GROUP_MITIGATION, tooltip="Keep unmitigated Rafael and Asia Open highs and lows visible while using Mitigated mode.")
+enableProvisionalRetracements = input.bool(true, "Enable Provisional Retracements", group=GROUP_MITIGATION, tooltip="Track Rafael and Asia Open 0.5 / 0.618 returns from the first provisional overnight mitigation.")
+confirmedMitigationReplacementTrigger = input.string(REPLACEMENT_TRIGGER_618, "Confirmed mitigation replacement trigger", options=[REPLACEMENT_TRIGGER_618, REPLACEMENT_TRIGGER_50], group=GROUP_MITIGATION, active=enableProvisionalRetracements, tooltip="After confirmation, 0.618 replaces on the first inward 0.618 crossing. 0.5 waits for the midpoint.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Labels
@@ -425,7 +446,6 @@ opening_1800_2100_retraceLabelTextColor = input.color(color.new(color.rgb(99, 99
 opening_1800_2100_retraceLabelBgColor = input.color(color.new(color.rgb(200, 230, 201), 75), LABEL_RETRACE_BG, inline="1800_retrace_colors", group=GROUP_1800_2100, tooltip=TOOLTIP_RETRACE_BG_COLOR)
 opening_1800_2100_showLabels = input.string(OPT_NONE, LABEL_DEVIATION_LABELS, inline="1800_3", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_1800_2100)
 opening_1800_2100_labelPosition = input.string(OPT_BELOW, LABEL_SESSION_NAME_POSITION, inline="1800_3", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_1800_2100)
-opening_1800_2100_delayedMitigation = input.bool(true, "Delay Mitigation Until 05:00", group=GROUP_1800_2100, tooltip="Overnight touches show as provisional (dashed) until 05:00.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Key Session: Rafael (21:30-01:29)
@@ -444,7 +464,6 @@ opening_2130_0129_retraceLabelTextColor = input.color(color.new(color.rgb(99, 99
 opening_2130_0129_retraceLabelBgColor = input.color(color.new(color.rgb(249, 121, 246), 95), LABEL_RETRACE_BG, inline="0129_retrace_colors", group=GROUP_2130_0129, tooltip=TOOLTIP_RETRACE_BG_COLOR)
 opening_2130_0129_showLabels = input.string(OPT_WICK, LABEL_DEVIATION_LABELS, inline="0129_labels", options=[OPT_NONE, OPT_BODY, OPT_WICK, OPT_BOTH], group=GROUP_2130_0129)
 opening_2130_0129_labelPosition = input.string(OPT_ABOVE, LABEL_SESSION_NAME_POSITION, inline="0129_labels", options=[OPT_ABOVE, OPT_BELOW], group=GROUP_2130_0129)
-opening_2130_0129_delayedMitigation = input.bool(true, "Delay Mitigation Until 05:00", group=GROUP_2130_0129, tooltip="Overnight touches show as provisional (dashed) until 05:00.")
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Key Session: NY Early Hours (06:00-09:00)
@@ -489,6 +508,20 @@ opening_0930_1000_extColor = input.color(color.new(color.rgb(245, 65, 240), 30),
 opening_0930_1000_extWidth = input.int(1, "Width", options=[1, 2, 3, 4, 5], inline="0930_1000_ext", group=GROUP_0930_1000, tooltip=TOOLTIP_IVB_EXTENSIONS)
 
 // ═══════════════════════════════════════════════════════════════════════════
+// INPUTS - Secondary Pane
+// ═══════════════════════════════════════════════════════════════════════════
+
+placementMode = input.string(PLACEMENT_MAIN_CHART, "Placement", options=[PLACEMENT_MAIN_CHART, PLACEMENT_SECONDARY_PANE], group=GROUP_SECONDARY_PANE, tooltip="Main Chart: keep Deviations on price.\n\nSecondary Pane: keep candle effects local to the indicator pane and disable main-chart candle effects.")
+secondaryPaneMode = placementMode == PLACEMENT_SECONDARY_PANE
+showPriceCandlesInPane = input.bool(true, LABEL_SHOW_PANE_CANDLES, group=GROUP_SECONDARY_PANE, active=secondaryPaneMode, tooltip="Draw the chart's OHLC candles in the indicator pane.")
+paneUpBodyColor = input.color(DEFAULT_PANE_UP_BODY_COLOR, "Candles", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownBodyColor = input.color(DEFAULT_PANE_DOWN_BODY_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneUpBorderColor = input.color(DEFAULT_PANE_UP_BORDER_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownBorderColor = input.color(DEFAULT_PANE_DOWN_BORDER_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneUpWickColor = input.color(DEFAULT_PANE_WICK_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane)
+paneDownWickColor = input.color(DEFAULT_PANE_WICK_COLOR, "", inline="pane_candles", group=GROUP_SECONDARY_PANE, active=secondaryPaneMode and showPriceCandlesInPane, tooltip="Order: Up Body, Down Body, Up Border, Down Border, Up Wick, Down Wick.")
+
+// ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Color Reference Table
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -500,6 +533,16 @@ showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COL
 
 var array<SessionData> sessions = array.new<SessionData>()
 var array<SessionData> activeSessions = array.new<SessionData>()
+var array<SessionData> lifecycleSessions = array.new<SessionData>()
+var array<SessionData> latestCompletedSessions = array.new<SessionData>(5)
+var array<SessionData> latestGlowSessions = array.new<SessionData>(5)
+var array<SessionData> renderedFocusSessions = array.new<SessionData>()
+var array<int> completedLifecycleIndices = array.new<int>()
+var array<FocusCandidate> focusCandidatesCache = array.new<FocusCandidate>()
+var array<FocusCandidate> focusRankedCache = array.new<FocusCandidate>()
+var array<int> selectedFocusIndices = array.new<int>()
+var array<SessionData> highOverlapCandidates = array.new<SessionData>()
+var array<SessionData> lowOverlapCandidates = array.new<SessionData>()
 var line focusAnchorLine = na
 var label focusAnchorLabel = na
 
@@ -514,6 +557,11 @@ var array<DeviationZone> cachedDeviations_asia_open = na
 var map<string, int> glowTouchTimes = map.new<string, int>()
 var map<string, color> glowOriginalColors = map.new<string, color>()
 var map<string, int> ivbExtensionGlowTouchTimes = map.new<string, int>()  // lineKey -> touch timestamp
+var map<int, float> ivbHighByDay = map.new<int, float>()
+var map<int, float> ivbLowByDay = map.new<int, float>()
+var map<int, int> ivbBreakTimeByDay = map.new<int, int>()
+var map<int, int> ivbBreakSideByDay = map.new<int, int>()
+var map<int, bool> selectedFocusSessionKeys = map.new<int, bool>()
 
 // Constants for performance
 BODY_SUFFIX = "B"
@@ -604,6 +652,42 @@ resetIvbExtensionGlow(line extLine, string lineKey, int normalWidth) =>
         line.set_width(extLine, normalWidth)
         map.remove(ivbExtensionGlowTouchTimes, lineKey)
 
+resetSessionDeviationGlow(SessionData sess) =>
+    int boxCount = array.size(sess.deviationBoxes)
+    if boxCount > 0
+        for i = 0 to boxCount - 1
+            resetGlowBox(array.get(sess.deviationBoxes, i), getGlowBoxKey(sess.sessionIndex, sess.startTime, i))
+
+resetSessionIvbExtensionGlow(SessionData sess) =>
+    int extensionCount = array.size(sess.extLines)
+    if extensionCount > 0
+        for i = 0 to extensionCount - 1
+            resetIvbExtensionGlow(array.get(sess.extLines, i), getIvbExtensionGlowKey(sess.startTime, i), opening_0930_1000_extWidth)
+
+setLatestGlowSession(int sessionIndex, SessionData candidate) =>
+    SessionData previous = array.get(latestGlowSessions, sessionIndex)
+    bool changed = na(previous) != na(candidate) or (not na(previous) and not na(candidate) and previous.startTime != candidate.startTime)
+    if changed
+        if not na(previous)
+            resetSessionDeviationGlow(previous)
+        array.set(latestGlowSessions, sessionIndex, candidate)
+
+registerLatestCompletedSession(SessionData sess) =>
+    SessionData previous = array.get(latestCompletedSessions, sess.sessionIndex)
+    if not na(previous) and previous.startTime != sess.startTime and sess.sessionIndex == IDX_IVB
+        resetSessionIvbExtensionGlow(previous)
+    array.set(latestCompletedSessions, sess.sessionIndex, sess)
+    bool focusDeferred = focusActive and (sess.sessionIndex == IDX_0129 or sess.sessionIndex == IDX_ASIA_OPEN)
+    if not focusDeferred
+        setLatestGlowSession(sess.sessionIndex, sess)
+
+refreshFocusGlowSession(int sessionIndex) =>
+    SessionData latestRendered = na
+    for renderedSess in renderedFocusSessions
+        if renderedSess.sessionIndex == sessionIndex and array.size(renderedSess.deviationBoxes) > 0 and (na(latestRendered) or renderedSess.startTime > latestRendered.startTime)
+            latestRendered := renderedSess
+    setLatestGlowSession(sessionIndex, latestRendered)
+
 // Convert extension preset to hours
 getExtendHours(string preset) =>
     switch preset
@@ -644,31 +728,90 @@ isDelayedProvisionalWindow(SessionData sess, int currentMinutes, int premarketSt
     bool isInNextDayOvernightWindow = sess.delayedMitigation and sess.nextDayKey == currentDayKey and currentMinutes < premarketStartMinute
     sess.delayedMitigation and not canConfirmDelayedMitigation(sess, currentMinutes, premarketStartMinute, closeMinute) and (isOnSessionStartDay or isInNextDayOvernightWindow)
 
-// Earliest strict IVB break on refStartTime's day. A bar that breaks both sides has no knowable
-// sequence, so it cannot establish a directional break.
+provisionalRetracementsEnabled(int sessionIndex) =>
+    enableProvisionalRetracements and (sessionIndex == IDX_0129 or sessionIndex == IDX_ASIA_OPEN)
+
+bothSessionBoundariesConfirmed(SessionData sess) =>
+    sess.highMitigated and sess.lowMitigated
+
+retracement618ForSide(SessionData sess, int side) =>
+    side == 1 ? sess.wickHigh - sess.wickHeight * 0.618 : sess.wickLow + sess.wickHeight * 0.618
+
+replacement618ForSide(SessionData sess, int side) =>
+    side == 1 ? sess.wickLow + sess.wickHeight * 0.618 : sess.wickHigh - sess.wickHeight * 0.618
+
+crossedConfirmedReplacementBoundary(SessionData sess, int confirmedSide, int confirmedBar, int currentBar, float barHigh, float barLow, float previousBarClose, string trigger) =>
+    float replacementBoundary = trigger == REPLACEMENT_TRIGGER_50 ? sess.midLevel : replacement618ForSide(sess, confirmedSide)
+    currentBar > confirmedBar and (confirmedSide == 1 ? previousBarClose > replacementBoundary and barLow <= replacementBoundary : previousBarClose < replacementBoundary and barHigh >= replacementBoundary)
+
+initializeRetracementOrigin(SessionData sess) =>
+    bool highTaken = sess.provisionalHighMitigated or sess.highMitigated
+    bool lowTaken = sess.provisionalLowMitigated or sess.lowMitigated
+    int highOriginBar = sess.provisionalHighMitigated ? sess.provisionalHighBar : sess.highMitigationBar
+    int lowOriginBar = sess.provisionalLowMitigated ? sess.provisionalLowBar : sess.lowMitigationBar
+    bool highWasFirst = highTaken and (not lowTaken or highOriginBar < lowOriginBar)
+    bool lowWasFirst = lowTaken and (not highTaken or lowOriginBar < highOriginBar)
+    if sess.retraceOriginSide == 0 and (highWasFirst or lowWasFirst)
+        sess.retraceOriginSide := highWasFirst ? 1 : -1
+        sess.retraceOriginBar := highWasFirst ? highOriginBar : lowOriginBar
+        sess.retraceOriginProvisional := highWasFirst ? not sess.highMitigated : not sess.lowMitigated
+        sess.retraceLegStartBar := sess.retraceOriginBar
+    true
+
+clearRetracementLeg(SessionData sess) =>
+    if not na(sess.midMitigationLine)
+        line.delete(sess.midMitigationLine)
+        sess.midMitigationLine := na
+    deleteLabels(sess.midMitigationLabels)
+    if not na(sess.retrace618Line)
+        line.delete(sess.retrace618Line)
+        sess.retrace618Line := na
+    deleteLabels(sess.retrace618Labels)
+    sess.midMitigated := false
+    sess.midMitigationTime := na
+    sess.midArmed := false
+    sess.retraceLevel618 := na
+    sess.retrace618Mitigated := false
+    sess.retrace618Time := na
+    sess.retrace618Armed := false
+    sess.retraceTraversalCompleted := false
+    sess.retraceFadeApplied := false
+    true
+
+replaceProvisionalWithConfirmedOrigin(SessionData sess, int replacementBar) =>
+    clearRetracementLeg(sess)
+    sess.retraceOriginProvisional := false
+    sess.retraceOriginBar := sess.retraceOriginSide == 1 ? sess.highMitigationBar : sess.lowMitigationBar
+    sess.retraceLegStartBar := replacementBar
+    sess.retraceLevel618 := retracement618ForSide(sess, sess.retraceOriginSide)
+    true
+
+replaceProvisionalWithOppositeConfirmedOrigin(SessionData sess, int confirmedSide, int confirmedBar, int replacementBar) =>
+    clearRetracementLeg(sess)
+    sess.retraceOriginSide := confirmedSide
+    sess.retraceOriginBar := confirmedBar
+    sess.retraceOriginProvisional := false
+    sess.retraceLegStartBar := replacementBar
+    sess.retraceLevel618 := retracement618ForSide(sess, confirmedSide)
+    true
+
+oppositeConfirmedReplacementSide(SessionData sess) =>
+    sess.retraceOriginSide == -1 and sess.highMitigated ? 1 : sess.retraceOriginSide == 1 and sess.lowMitigated ? -1 : 0
+
+// Cache the first directional IVB break for the NY day. A bar that breaks both sides cannot
+// establish sequence; a later one-sided break can still qualify.
+updateIvbBreakCache(int refDayKey, float barHigh, float barLow, int barTime) =>
+    if not map.contains(ivbBreakTimeByDay, refDayKey) and map.contains(ivbHighByDay, refDayKey) and map.contains(ivbLowByDay, refDayKey)
+        bool breaksHigh = barHigh > map.get(ivbHighByDay, refDayKey)
+        bool breaksLow = barLow < map.get(ivbLowByDay, refDayKey)
+        if breaksHigh != breaksLow
+            map.put(ivbBreakTimeByDay, refDayKey, barTime)
+            map.put(ivbBreakSideByDay, refDayKey, breaksHigh ? 1 : -1)
+
 ivbBreakForDay(int refDayKey) =>
-    int earliest = na
-    int side = 0
-    for s in sessions
-        if s.sessionIndex == IDX_IVB and s.startDayKey == refDayKey
-            int highBreakTime = s.extHighTime
-            int lowBreakTime = s.extLowTime
-            // IVB is iterated after its consumers, so its stored break time lags one bar here.
-            bool breaksHighNow = high > s.wickHigh
-            bool breaksLowNow = low < s.wickLow
-            if na(highBreakTime) and breaksHighNow and not breaksLowNow
-                highBreakTime := time
-            if na(lowBreakTime) and breaksLowNow and not breaksHighNow
-                lowBreakTime := time
-            if not na(highBreakTime) and (na(lowBreakTime) or highBreakTime < lowBreakTime)
-                earliest := highBreakTime
-                side := 1
-            else if not na(lowBreakTime) and (na(highBreakTime) or lowBreakTime < highBreakTime)
-                earliest := lowBreakTime
-                side := -1
-            else if not na(highBreakTime) and highBreakTime == lowBreakTime
-                earliest := time
-                side := 0
+    updateIvbBreakCache(refDayKey, high, low, time)
+    int earliest = map.contains(ivbBreakTimeByDay, refDayKey) ? map.get(ivbBreakTimeByDay, refDayKey) : na
+    int side = map.contains(ivbBreakSideByDay, refDayKey) ? map.get(ivbBreakSideByDay, refDayKey) : 0
     [earliest, side]
 
 // Draw confirmed mitigation line - extend pending line (if provisional) or draw new solid line
@@ -773,22 +916,28 @@ shouldShowMitigationName(SessionData sess, bool isHigh) =>
         bool wasOvernightProvisional = sess.delayedMitigation and wasProvisional
         isMitigated and not wasOvernightProvisional
 
-// Standard retracements complete once both session extremes are reached. IVB completes on both
-// provisional sweeps; NY Early's IVB-based mode uses its ordered completion state instead.
+// Standard retracements complete once their active leg reaches the opposite session boundary.
 isRetraceTraversalComplete(SessionData sess) =>
     if sess.sessionIndex == IDX_NY_EARLY and sess.retracementMode == RETRACE_MODE_IVB
         sess.ivbRetraceCompleted
     else if sess.sessionIndex == IDX_IVB
         sess.provisionalHighMitigated and sess.provisionalLowMitigated
+    else if provisionalRetracementsEnabled(sess.sessionIndex) and sess.retraceOriginSide != 0
+        sess.retraceTraversalCompleted
     else
         sess.highMitigated and sess.lowMitigated
 
 // Monotone once true — Phase 4 stops walking the session. na retraceLevel618 with both extremes
 // taken counts as complete: the 0.618 anchor can no longer be established.
-focusLifecycleComplete(SessionData sess) =>
+sessionLifecycleComplete(SessionData sess) =>
     bool boundariesComplete = sess.highMitigated and sess.lowMitigated
-    bool retracementsComplete = mitigationMode == SESSION_UNMITIGATED or not sess.showRetracement or (sess.midMitigated and (sess.retrace618Mitigated or na(sess.retraceLevel618)))
-    boundariesComplete and retracementsComplete
+    bool provisionalLifecycle = mitigationMode == SESSION_MITIGATED and sess.showRetracement and provisionalRetracementsEnabled(sess.sessionIndex)
+    bool ambiguousTraversalComplete = provisionalLifecycle and boundariesComplete and sess.retraceOriginSide == 0
+    bool retracementsComplete = mitigationMode == SESSION_UNMITIGATED or not sess.showRetracement or ambiguousTraversalComplete or (sess.midMitigated and (sess.retrace618Mitigated or na(sess.retraceLevel618)))
+    bool originConfirmed = sess.retraceOriginSide == 1 ? sess.highMitigated : sess.retraceOriginSide == -1 and sess.lowMitigated
+    bool replacementPending = provisionalLifecycle and sess.retraceOriginProvisional and (originConfirmed or oppositeConfirmedReplacementSide(sess) != 0)
+    bool traversalPending = provisionalLifecycle and sess.retraceOriginSide != 0 and not sess.retraceTraversalCompleted
+    boundariesComplete and retracementsComplete and not replacementPending and not traversalPending
 
 // Convert a bar offset to a time offset (used for xloc.bar_time drawing)
 timeWithOffset(int baseTime, int barOffset) =>
@@ -1058,8 +1207,8 @@ retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int
         if array.size(ranked) > focusCount
             array.pop(ranked)
 
-collectFocusCandidates(array<SessionData> source, array<FocusCandidate> combined, int sessionIndex, float anchorPrice, int focusCount) =>
-    array<FocusCandidate> rankedByType = array.new<FocusCandidate>()
+collectFocusCandidates(array<SessionData> source, array<FocusCandidate> combined, array<FocusCandidate> rankedByType, int sessionIndex, float anchorPrice, int focusCount) =>
+    array.clear(rankedByType)
     if array.size(source) > 0
         for sourceIndex = 0 to array.size(source) - 1
             SessionData sess = array.get(source, sourceIndex)
@@ -1081,11 +1230,105 @@ collectRecentFocusSessions(array<SessionData> source, array<int> selected, int s
             array.push(selected, sourceIndex)
             kept += 1
 
-// Rendering one focus session while this holds cannot cross a drawing cap, so TradingView
-// never silently garbage-collects drawings.
-focusBudgetAvailable() =>
-    int budget = FOCUS_DRAWING_LIMIT - FOCUS_DRAWING_HEADROOM
-    array.size(box.all) <= budget and array.size(line.all) <= budget and array.size(label.all) <= budget
+mergeOverlappingUnmitigatedLabels(array<SessionData> candidates, bool isHigh, float overlapPct) =>
+    int candidateCount = array.size(candidates)
+    if candidateCount > 1
+        for i = 0 to candidateCount - 2
+            SessionData sessA = array.get(candidates, i)
+            label labelA = isHigh ? sessA.highUnmitigatedLabel : sessA.lowUnmitigatedLabel
+            if na(labelA)
+                continue
+            float levelA = isHigh ? sessA.dominantHigh : sessA.dominantLow
+            float tolerance = levelA * overlapPct / 100
+            for j = i + 1 to candidateCount - 1
+                SessionData sessB = array.get(candidates, j)
+                label labelB = isHigh ? sessB.highUnmitigatedLabel : sessB.lowUnmitigatedLabel
+                if na(labelB)
+                    continue
+                float levelB = isHigh ? sessB.dominantHigh : sessB.dominantLow
+                if math.abs(levelA - levelB) <= tolerance
+                    label.set_text(labelA, label.get_text(labelA) + " / " + sessB.chartLabel)
+                    label.delete(labelB)
+                    if isHigh
+                        sessB.highUnmitigatedLabel := na
+                    else
+                        sessB.lowUnmitigatedLabel := na
+
+sessionCurrentLifecycleDrawingCounts(SessionData sess) =>
+    int lineCount = array.size(sess.extLines)
+    lineCount += na(sess.highMitigationLine) ? 0 : 1
+    lineCount += na(sess.lowMitigationLine) ? 0 : 1
+    lineCount += na(sess.highUnmitigatedLine) ? 0 : 1
+    lineCount += na(sess.lowUnmitigatedLine) ? 0 : 1
+    lineCount += na(sess.midMitigationLine) ? 0 : 1
+    lineCount += na(sess.retrace618Line) ? 0 : 1
+    lineCount += na(sess.highPendingLine) ? 0 : 1
+    lineCount += na(sess.lowPendingLine) ? 0 : 1
+    int labelCount = array.size(sess.extLabels)
+    labelCount += array.size(sess.highMitigationReminders) + array.size(sess.lowMitigationReminders)
+    labelCount += array.size(sess.highUnmitigatedReminders) + array.size(sess.lowUnmitigatedReminders)
+    labelCount += array.size(sess.midMitigationLabels) + array.size(sess.retrace618Labels)
+    labelCount += na(sess.highUnmitigatedLabel) ? 0 : 1
+    labelCount += na(sess.lowUnmitigatedLabel) ? 0 : 1
+    labelCount += na(sess.highPendingLabel) ? 0 : 1
+    labelCount += na(sess.lowPendingLabel) ? 0 : 1
+    [lineCount, labelCount]
+
+sessionPotentialLifecycleDrawingCounts(SessionData sess) =>
+    int lineCount = 0
+    int labelCount = 0
+    if showAllLines and sess.showMitigation
+        lineCount += 4
+        if mitigationMode == SESSION_MITIGATED and sess.showRetracement
+            lineCount += 2
+        if showAllLabels
+            int tiledLabelCount = showMitigationReminders ? MITIGATION_REMINDER_MAX_PER_LINE : 1
+            int openBoundaryLabelCount = 1 + (showMitigationReminders ? MITIGATION_REMINDER_MAX_PER_LINE : 0)
+            int mitigationBoundaryLabelCount = showSessionNameOnMitigation and sess.isKeySession ? tiledLabelCount : 0
+            int provisionalBoundaryLabelCount = showPendingLabels ? 1 : 0
+            int boundaryLabelCount = math.max(openBoundaryLabelCount, math.max(mitigationBoundaryLabelCount, provisionalBoundaryLabelCount))
+            labelCount += boundaryLabelCount * 2
+            if mitigationMode == SESSION_MITIGATED and sess.showRetracement
+                labelCount += tiledLabelCount * 2
+    bool ivbExtensionsPotential = sess.sessionIndex == IDX_IVB and opening_0930_1000_showExtensions and opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB) and showAllLines
+    if ivbExtensionsPotential
+        lineCount += 4
+        labelCount += showAllLabels ? 4 : 0
+    [lineCount, labelCount]
+
+focusCurrentDrawingCounts(SessionData sess) =>
+    int boxCount = array.size(sess.deviationBoxes) + (na(sess.bodyBox) ? 0 : 1) + (na(sess.wickBox) ? 0 : 1)
+    [lifecycleLineCount, lifecycleLabelCount] = sessionCurrentLifecycleDrawingCounts(sess)
+    int lineCount = array.size(sess.lines) + lifecycleLineCount
+    int labelCount = array.size(sess.labels) + lifecycleLabelCount
+    [boxCount, lineCount, labelCount]
+
+// Reserve each selected session's complete possible footprint so later lifecycle transitions
+// cannot push Focus through TradingView's drawing caps.
+focusPotentialDrawingCounts(SessionData sess) =>
+    bool drawBodyDeviations = sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH
+    bool drawWickDeviations = sess.deviationMode == OPT_WICK or sess.deviationMode == OPT_BOTH
+    bool labelBodyDeviations = showAllLabels and (sess.deviationLabelsMode == OPT_BODY or sess.deviationLabelsMode == OPT_BOTH)
+    bool labelWickDeviations = showAllLabels and (sess.deviationLabelsMode == OPT_WICK or sess.deviationLabelsMode == OPT_BOTH)
+    int boxCount = skipsCore(sess.sessionIndex) ? 0 : 2
+    int lineCount = 0
+    int labelCount = showAllLabels and showSessionNames ? 1 : 0
+    array<DeviationZone> zones = getCachedZones(sess.sessionIndex)
+    for zone in zones
+        if zone.isRange
+            boxCount += drawBodyDeviations ? 2 : 0
+            boxCount += drawWickDeviations ? 2 : 0
+            labelCount += labelBodyDeviations ? 4 : 0
+            labelCount += labelWickDeviations ? 4 : 0
+        else if showAllLines
+            lineCount += drawBodyDeviations ? 2 : 0
+            lineCount += drawWickDeviations ? 2 : 0
+            labelCount += labelBodyDeviations ? 2 : 0
+            labelCount += labelWickDeviations ? 2 : 0
+    [lifecycleLineCount, lifecycleLabelCount] = sessionPotentialLifecycleDrawingCounts(sess)
+    lineCount += lifecycleLineCount
+    labelCount += lifecycleLabelCount
+    [boxCount, lineCount, labelCount]
 
 // Deferred last-bar reconstruction of one high/low boundary from Phase 4 state.
 renderFocusBoundary(SessionData sess, bool isHigh) =>
@@ -1106,19 +1349,15 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
         int solidEndTime = provisional ? provisionalTime : mitigated ? mitigationTime : time
         if na(renderedSolid)
             renderedSolid := line.new(originTime, level, solidEndTime, level, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
-        else
-            line.set_xy1(renderedSolid, originTime, level)
-            line.set_xy2(renderedSolid, solidEndTime, level)
-            line.set_color(renderedSolid, sess.mitigationColor)
+        else if line.get_x2(renderedSolid) != solidEndTime
+            line.set_x2(renderedSolid, solidEndTime)
 
         if provisional
             int pendingEndTime = mitigated ? mitigationTime : time
             if na(renderedPending)
                 renderedPending := line.new(provisionalTime, level, pendingEndTime, level, color=sess.mitigationColor, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
-            else
-                line.set_xy1(renderedPending, provisionalTime, level)
-                line.set_xy2(renderedPending, pendingEndTime, level)
-                line.set_color(renderedPending, sess.mitigationColor)
+            else if line.get_x2(renderedPending) != pendingEndTime
+                line.set_x2(renderedPending, pendingEndTime)
         else if not na(renderedPending)
             line.delete(renderedPending)
             renderedPending := na
@@ -1131,7 +1370,6 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
                 renderedOpenLabel := label.new(time, level, sess.chartLabel, style=label.style_label_left, textcolor=labelColor, size=size.tiny, color=color.new(color.white, 100), xloc=xloc.bar_time)
             else
                 label.set_x(renderedOpenLabel, time)
-                label.set_y(renderedOpenLabel, level)
         else if not na(renderedOpenLabel)
             label.delete(renderedOpenLabel)
             renderedOpenLabel := na
@@ -1156,7 +1394,7 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
         resolve_open_level_reminders(false, openReminders, renderedSolid, level, str.lower(sess.chartLabel))
     [renderedSolid, renderedPending, renderedOpenLabel, renderedProvisionalLabel]
 
-renderFocusRetracement(bool reached, int originTime, int reachedTime, float level, string tagText, color lineColor, color textColor, color bgColor, bool faded, line target, array<label> labels) =>
+renderFocusRetracement(bool reached, int originTime, int reachedTime, float level, string tagText, color lineColor, color textColor, color bgColor, bool faded, bool refreshStyle, line target, array<label> labels) =>
     line rendered = target
     if reached and showAllLines
         color renderedLineColor = faded ? fadeToward100(lineColor, completedRetraceFade) : lineColor
@@ -1164,15 +1402,13 @@ renderFocusRetracement(bool reached, int originTime, int reachedTime, float leve
         color renderedBgColor = faded ? fadeToward100(bgColor, completedRetraceFade) : bgColor
         if na(rendered)
             rendered := line.new(originTime, level, reachedTime, level, color=renderedLineColor, style=line.style_dotted, width=tagText == LABEL_RETRACE_50 ? MITIGATION_50_LINE_WIDTH : MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
-        else
-            line.set_xy1(rendered, originTime, level)
-            line.set_xy2(rendered, reachedTime, level)
+        else if refreshStyle
             line.set_color(rendered, renderedLineColor)
         if showAllLabels
             if array.size(labels) == 0
                 for lbl in tile_line_labels(rendered, level, tagText, showMitigationReminders, renderedTextColor, renderedBgColor)
                     array.push(labels, lbl)
-            else
+            else if refreshStyle
                 for lbl in labels
                     label.set_textcolor(lbl, renderedTextColor)
                     label.set_color(lbl, renderedBgColor)
@@ -1214,8 +1450,10 @@ renderFocusSession(SessionData sess, bool selected) =>
             sess.lowPendingLabel := lowProvisionalLabel
 
             bool retracementsFaded = fadeCompletedRetracements and isRetraceTraversalComplete(sess)
-            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, sess.midMitigationLine, sess.midMitigationLabels)
-            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, sess.retrace618Line, sess.retrace618Labels)
+            bool refreshRetracementStyle = retracementsFaded != sess.retraceFadeApplied
+            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
+            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.retrace618Line, sess.retrace618Labels)
+            sess.retraceFadeApplied := retracementsFaded
 
 // Clear live drawings from active session (keeps session data, just removes visuals for redraw)
 clearLiveDrawings(SessionData sess) =>
@@ -1256,6 +1494,125 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
 
     drawSessionNameLabel(sess)
 
+updateDeviationGeometry(SessionData sess, float highPrice, float lowPrice, float height, array<DeviationZone> zones, bool showLines, bool showLabels, string labelPosition, int startBarOffset, int endBarOffset, int boxCursor, int lineCursor, int labelCursor) =>
+    int nextBox = boxCursor
+    int nextLine = lineCursor
+    int nextLabel = labelCursor
+    int baseLabelTime = labelPosition == "Left" ? sess.startTime : sess.endTime
+    int labelOffset = labelPosition == "Left" ? startBarOffset : endBarOffset
+    int labelX = timeWithOffset(baseLabelTime, labelOffset)
+    int startX = timeWithOffset(sess.startTime, startBarOffset)
+    int endX = timeWithOffset(sess.endTime, endBarOffset) + nz(sess.deviationExtendMs, 0)
+
+    for zone in zones
+        if zone.isRange
+            float aboveFrom = highPrice + height * zone.innerLevel
+            float aboveTo = highPrice + height * zone.outerLevel
+            box aboveBox = array.get(sess.deviationBoxes, nextBox)
+            box.set_left(aboveBox, startX)
+            box.set_right(aboveBox, endX)
+            box.set_top(aboveBox, aboveFrom)
+            box.set_bottom(aboveBox, aboveTo)
+            nextBox += 1
+            if showLabels
+                label aboveInnerLabel = array.get(sess.labels, nextLabel)
+                label.set_x(aboveInnerLabel, labelX)
+                label.set_y(aboveInnerLabel, aboveFrom)
+                nextLabel += 1
+                label aboveOuterLabel = array.get(sess.labels, nextLabel)
+                label.set_x(aboveOuterLabel, labelX)
+                label.set_y(aboveOuterLabel, aboveTo)
+                nextLabel += 1
+
+            float belowFrom = lowPrice - height * zone.innerLevel
+            float belowTo = lowPrice - height * zone.outerLevel
+            box belowBox = array.get(sess.deviationBoxes, nextBox)
+            box.set_left(belowBox, startX)
+            box.set_right(belowBox, endX)
+            box.set_top(belowBox, belowFrom)
+            box.set_bottom(belowBox, belowTo)
+            nextBox += 1
+            if showLabels
+                label belowInnerLabel = array.get(sess.labels, nextLabel)
+                label.set_x(belowInnerLabel, labelX)
+                label.set_y(belowInnerLabel, belowFrom)
+                nextLabel += 1
+                label belowOuterLabel = array.get(sess.labels, nextLabel)
+                label.set_x(belowOuterLabel, labelX)
+                label.set_y(belowOuterLabel, belowTo)
+                nextLabel += 1
+        else if showLines
+            float aboveLevel = highPrice + height * zone.outerLevel
+            line aboveLine = array.get(sess.lines, nextLine)
+            line.set_xy1(aboveLine, startX, aboveLevel)
+            line.set_xy2(aboveLine, endX, aboveLevel)
+            nextLine += 1
+            if showLabels
+                label aboveLabel = array.get(sess.labels, nextLabel)
+                label.set_x(aboveLabel, labelX)
+                label.set_y(aboveLabel, aboveLevel)
+                nextLabel += 1
+
+            float belowLevel = lowPrice - height * zone.outerLevel
+            line belowLine = array.get(sess.lines, nextLine)
+            line.set_xy1(belowLine, startX, belowLevel)
+            line.set_xy2(belowLine, endX, belowLevel)
+            nextLine += 1
+            if showLabels
+                label belowLabel = array.get(sess.labels, nextLabel)
+                label.set_x(belowLabel, labelX)
+                label.set_y(belowLabel, belowLevel)
+                nextLabel += 1
+    [nextBox, nextLine, nextLabel]
+
+updateCoreDeviationGeometry(SessionData sess, float highPrice, float lowPrice, float height, bool isBody, int boxCursor, int lineCursor, int labelCursor) =>
+    int nextBox = boxCursor
+    int nextLine = lineCursor
+    int nextLabel = labelCursor
+    bool skipDeviations = quickCheckMode and isQuickCheckSession(sess.sessionIndex)
+    if not skipDeviations
+        [startOffset, endOffset] = calculateOffsets(sess, isBody)
+        string labelPosition = sess.deviationMode == OPT_BOTH ? (isBody ? "Right" : "Left") : "Left"
+        bool showLabels = showAllLabels and (sess.deviationLabelsMode == OPT_BOTH or (sess.deviationLabelsMode == OPT_BODY and isBody) or (sess.deviationLabelsMode == OPT_WICK and not isBody))
+        [updatedBox, updatedLine, updatedLabel] = updateDeviationGeometry(sess, highPrice, lowPrice, height, getCachedZones(sess.sessionIndex), showAllLines, showLabels, labelPosition, startOffset, endOffset, nextBox, nextLine, nextLabel)
+        nextBox := updatedBox
+        nextLine := updatedLine
+        nextLabel := updatedLabel
+    [nextBox, nextLine, nextLabel]
+
+updateLiveSessionDrawings(SessionData sess, int projectedEndTime, int currentBarIndex) =>
+    sess.endTime := projectedEndTime
+    sess.endBar := currentBarIndex
+    float bodyHeight = sess.bodyHigh - sess.bodyLow
+    float wickHeight = sess.wickHigh - sess.wickLow
+
+    if not skipsCore(sess.sessionIndex)
+        box.set_right(sess.bodyBox, projectedEndTime)
+        box.set_top(sess.bodyBox, sess.bodyHigh)
+        box.set_bottom(sess.bodyBox, sess.bodyLow)
+        box.set_right(sess.wickBox, projectedEndTime)
+        box.set_top(sess.wickBox, sess.wickHigh)
+        box.set_bottom(sess.wickBox, sess.wickLow)
+
+    int boxCursor = 0
+    int lineCursor = 0
+    int labelCursor = 0
+    if sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH
+        [bodyNextBox, bodyNextLine, bodyNextLabel] = updateCoreDeviationGeometry(sess, sess.bodyHigh, sess.bodyLow, bodyHeight, true, boxCursor, lineCursor, labelCursor)
+        boxCursor := bodyNextBox
+        lineCursor := bodyNextLine
+        labelCursor := bodyNextLabel
+    if sess.deviationMode == OPT_WICK or sess.deviationMode == OPT_BOTH
+        [wickNextBox, wickNextLine, wickNextLabel] = updateCoreDeviationGeometry(sess, sess.wickHigh, sess.wickLow, wickHeight, false, boxCursor, lineCursor, labelCursor)
+        boxCursor := wickNextBox
+        lineCursor := wickNextLine
+        labelCursor := wickNextLabel
+
+    if showAllLabels and showSessionNames
+        label sessionLabel = array.get(sess.labels, labelCursor)
+        label.set_x(sessionLabel, int(math.round((sess.startTime + sess.endTime) / 2)))
+        label.set_y(sessionLabel, sess.labelPosition == OPT_ABOVE ? sess.wickHigh : sess.wickLow)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1273,10 +1630,10 @@ if na(cachedDeviations_0129)
 // ═══════════════════════════════════════════════════════════════════════════
 
 var array<SessionConfig> sessionConfigs = array.from(
-    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, opening_2130_0129_delayedMitigation, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, true, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
     SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, opening_1800_2100_delayedMitigation, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, true, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, IVB_START_MIN, IVB_END_MIN, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
 )
 
@@ -1288,6 +1645,12 @@ barMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_
 currentDayKey = validChartContext ? dayKey(time) : 0
 prevBarMinutes = validChartContext ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
 currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
+
+if validChartContext and bar_index > 0 and currentDayKey != currentDayKey[1]
+    map.clear(ivbHighByDay)
+    map.clear(ivbLowByDay)
+    map.clear(ivbBreakTimeByDay)
+    map.clear(ivbBreakSideByDay)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 30M DATA - Confirmed close for IVB mitigation
@@ -1317,6 +1680,10 @@ if validChartContext
             sessionStarted = currentlyInSession and not previouslyInSession
 
             if sessionStarted
+                if i == IDX_IVB
+                    SessionData previousIvb = array.get(latestCompletedSessions, IDX_IVB)
+                    if not na(previousIvb)
+                        resetSessionIvbExtensionGlow(previousIvb)
                 initBodyHigh = math.max(open, close)
                 initBodyLow = math.min(open, close)
                 initWickHigh = high
@@ -1382,6 +1749,12 @@ if validChartContext
                      retrace618Line=na,
                      retrace618Labels=array.new<label>(),
                      retrace618Armed=false,
+                     retraceOriginSide=0,
+                     retraceOriginBar=na,
+                     retraceOriginProvisional=false,
+                     retraceLegStartBar=na,
+                     retraceTraversalCompleted=false,
+                     retraceFadeApplied=false,
                      ivbBreakTime=na,
                      ivbBreakSide=0,
                      ivbRetraceBar=na,
@@ -1438,6 +1811,10 @@ if validChartContext and array.size(activeSessions) > 0
             // Update session high/low values with current bar
             currentBodyHigh = math.max(open, close)
             currentBodyLow = math.min(open, close)
+            bool bodyGeometryChanged = currentBodyHigh > sess.bodyHigh or currentBodyLow < sess.bodyLow
+            bool wickGeometryChanged = high > sess.wickHigh or low < sess.wickLow
+            bool offsetGeometryChanged = sess.useOffset and sess.deviationMode == OPT_BOTH and sess.endBar != bar_index
+            bool liveGeometryChanged = na(sess.endBar) or bodyGeometryChanged or wickGeometryChanged or offsetGeometryChanged
 
             // Track the bar time when new highs/lows are formed
             if high > sess.wickHigh
@@ -1451,11 +1828,13 @@ if validChartContext and array.size(activeSessions) > 0
             sess.wickHigh := math.max(sess.wickHigh, high)
             sess.wickLow := math.min(sess.wickLow, low)
 
-            // Live deviation drawing - clear and redraw each bar
-            clearLiveDrawings(sess)
-            // Calculate projected end time based on session's end minute
-            projectedEndTime = crossesMidnight and barMinutes >= sessCfg.startMin ? currentDayStart + 24 * 60 * 60 * 1000 + sessCfg.endMin * 60 * 1000 : currentDayStart + sessCfg.endMin * 60 * 1000
-            drawLiveSessionDeviations(sess, projectedEndTime, bar_index)
+            if liveGeometryChanged
+                // Calculate projected end time based on session's end minute
+                projectedEndTime = crossesMidnight and barMinutes >= sessCfg.startMin ? currentDayStart + 24 * 60 * 60 * 1000 + sessCfg.endMin * 60 * 1000 : currentDayStart + sessCfg.endMin * 60 * 1000
+                if na(sess.endBar)
+                    drawLiveSessionDeviations(sess, projectedEndTime, bar_index)
+                else
+                    updateLiveSessionDrawings(sess, projectedEndTime, bar_index)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3: SESSION FINALIZATION - Finalize and remove ended sessions
@@ -1526,22 +1905,35 @@ if validChartContext and array.size(activeSessions) > 0
                 drawSessionNameLabel(sess)
 
             // Add to completed sessions
+            registerLatestCompletedSession(sess)
+            if sess.sessionIndex == IDX_IVB
+                map.put(ivbHighByDay, sess.startDayKey, sess.wickHigh)
+                map.put(ivbLowByDay, sess.startDayKey, sess.wickLow)
             sessions.push(sess)
+            if sess.showMitigation
+                lifecycleSessions.push(sess)
 
             // Focus-managed sessions retain all loaded history for deep ranking.
             if not focusManaged(idx)
-                sessionsOfThisType = 0
-                for s in sessions
-                    if s.sessionIndex == sess.sessionIndex
+                int sessionsOfThisType = 0
+                int oldestSessionIndex = na
+                for j = 0 to array.size(sessions) - 1
+                    SessionData retainedSess = array.get(sessions, j)
+                    if retainedSess.sessionIndex == sess.sessionIndex
                         sessionsOfThisType += 1
+                        if na(oldestSessionIndex)
+                            oldestSessionIndex := j
 
-                if sessionsOfThisType > maxSessions
-                    for j = 0 to array.size(sessions) - 1
-                        oldSession = array.get(sessions, j)
-                        if oldSession.sessionIndex == sess.sessionIndex
-                            deleteSession(oldSession)
-                            array.remove(sessions, j)
-                            break
+                if sessionsOfThisType > maxSessions and not na(oldestSessionIndex)
+                    SessionData oldSession = array.get(sessions, oldestSessionIndex)
+                    if array.size(lifecycleSessions) > 0
+                        for lifecycleIndex = array.size(lifecycleSessions) - 1 to 0
+                            SessionData lifecycleSession = array.get(lifecycleSessions, lifecycleIndex)
+                            if lifecycleSession.sessionIndex == oldSession.sessionIndex and lifecycleSession.startTime == oldSession.startTime
+                                array.remove(lifecycleSessions, lifecycleIndex)
+                                break
+                    deleteSession(oldSession)
+                    array.remove(sessions, oldestSessionIndex)
 
             // Remove from active sessions
             array.remove(activeSessions, i)
@@ -1609,9 +2001,10 @@ drawIvbExtensions(SessionData sess, bool brokeHigh) =>
         float edge = brokeHigh ? sess.wickHigh : sess.wickLow
         float avgLevel = edge + direction * rangeHeight * avgRatio
         float stdLevel = edge + direction * rangeHeight * (avgRatio + stdRatio)
-        int endOfDay = currentDayStart + CLOSE_1600_MIN * 60 * 1000
-        line avgLine = line.new(projectionStartTime, avgLevel, endOfDay, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
-        line stdLine = line.new(projectionStartTime, stdLevel, endOfDay, stdLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
+        int scheduledEndTime = currentDayStart + CLOSE_1600_MIN * 60 * 1000
+        int projectionEndTime = math.max(scheduledEndTime, projectionStartTime + IVB_EXT_MIN_VISIBLE_MS)
+        line avgLine = line.new(projectionStartTime, avgLevel, projectionEndTime, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
+        line stdLine = line.new(projectionStartTime, stdLevel, projectionEndTime, stdLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
         array.push(sess.extLines, avgLine)
         array.push(sess.extLines, stdLine)
         if showAllLabels
@@ -1658,9 +2051,11 @@ if validChartContext and barstate.islast
 // IVB-based retracement requires IVB enabled and in the active filter.
 ivbFeatureAvailable = opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
 
-if validChartContext and array.size(sessions) > 0
-    for sess in sessions
-        if sess.showMitigation and not na(sess.dominantHigh) and not (focusManaged(sess.sessionIndex) and focusLifecycleComplete(sess))
+if validChartContext and array.size(lifecycleSessions) > 0
+    array.clear(completedLifecycleIndices)
+    for lifecycleIndex = 0 to array.size(lifecycleSessions) - 1
+        SessionData sess = array.get(lifecycleSessions, lifecycleIndex)
+        if not na(sess.dominantHigh)
             // Focus-managed sessions run full state here but draw nothing; Phase 4.5 renders them.
             bool eagerDraw = not focusManaged(sess.sessionIndex)
             bool drawMitigationLines = showAllLines and eagerDraw
@@ -1691,10 +2086,12 @@ if validChartContext and array.size(sessions) > 0
                     sess.extLowTime := time
                 if not sess.extHighConfirmed and not na(htf30mClose) and htf30mClose > sess.wickHigh and sess.startDayKey == htf30mDayKey
                     sess.extHighConfirmed := true
-                    drawIvbExtensions(sess, true)
+                    if eagerDraw
+                        drawIvbExtensions(sess, true)
                 if not sess.extLowConfirmed and not na(htf30mClose) and htf30mClose < sess.wickLow and sess.startDayKey == htf30mDayKey
                     sess.extLowConfirmed := true
-                    drawIvbExtensions(sess, false)
+                    if eagerDraw
+                        drawIvbExtensions(sess, false)
 
             // === HIGH MITIGATION LOGIC ===
             if not sess.highMitigated
@@ -1806,6 +2203,28 @@ if validChartContext and array.size(sessions) > 0
                 if sess.sessionIndex != IDX_IVB and sess.provisionalLowMitigated and not na(sess.lowPendingLine) and not sess.lowMitigated
                     line.set_x2(sess.lowPendingLine, time)
 
+            bool usesProvisionalOvernightRetracement = provisionalRetracementsEnabled(sess.sessionIndex)
+            if usesProvisionalOvernightRetracement
+                initializeRetracementOrigin(sess)
+                if sess.retraceOriginProvisional
+                    bool replacementApplied = false
+                    bool bothBoundariesConfirmed = bothSessionBoundariesConfirmed(sess)
+                    int confirmedOppositeSide = oppositeConfirmedReplacementSide(sess)
+                    // A confirmed opposite side already proves that price traversed the range.
+                    if confirmedOppositeSide != 0
+                        int confirmedOppositeBar = confirmedOppositeSide == 1 ? sess.highMitigationBar : sess.lowMitigationBar
+                        if crossedConfirmedReplacementBoundary(sess, confirmedOppositeSide, confirmedOppositeBar, bar_index, high, low, close[1], confirmedMitigationReplacementTrigger)
+                            replaceProvisionalWithOppositeConfirmedOrigin(sess, confirmedOppositeSide, confirmedOppositeBar, bar_index)
+                            replacementApplied := true
+                    // Once both sides are confirmed, only a later inward crossing from the opposite
+                    // side can replace the completed provisional leg.
+                    if not replacementApplied and not bothBoundariesConfirmed
+                        bool originConfirmed = sess.retraceOriginSide == 1 ? sess.highMitigated : sess.retraceOriginSide == -1 and sess.lowMitigated
+                        if originConfirmed
+                            int confirmedOriginBar = sess.retraceOriginSide == 1 ? sess.highMitigationBar : sess.lowMitigationBar
+                            if crossedConfirmedReplacementBoundary(sess, sess.retraceOriginSide, confirmedOriginBar, bar_index, high, low, close[1], confirmedMitigationReplacementTrigger)
+                                replaceProvisionalWithConfirmedOrigin(sess, bar_index)
+
             // Right-edge session labels on still-open dashed pending lines; removed once mitigated (Unmitigated mode labels these itself)
             if mitigationMode == SESSION_MITIGATED and eagerDraw
                 sess.highPendingLabel := resolve_pending_label(showAllLines and showAllLabels and showPendingLabels and not sess.highMitigated, sess.highPendingLabel, sess.highPendingLine, sess.dominantHigh, sess.chartLabel, sess.mitigationColor)
@@ -1836,15 +2255,18 @@ if validChartContext and array.size(sessions) > 0
                     label.delete(sess.lowUnmitigatedLabel)
                     sess.lowUnmitigatedLabel := na
 
-            // Anchor 0.618 off the first extreme taken. IVB Standard arms provisionally;
+            // Anchor 0.618 off the selected standard origin. IVB Standard arms provisionally;
             // NY Early's IVB-based mode may re-anchor below.
             if sess.isKeySession and na(sess.retraceLevel618)
-                bool highOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalHighMitigated : sess.highMitigated
-                bool lowOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalLowMitigated : sess.lowMitigated
-                if highOriginTaken and not lowOriginTaken
-                    sess.retraceLevel618 := sess.wickHigh - sess.wickHeight * 0.618
-                else if lowOriginTaken and not highOriginTaken
-                    sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
+                if usesProvisionalOvernightRetracement and sess.retraceOriginSide != 0
+                    sess.retraceLevel618 := retracement618ForSide(sess, sess.retraceOriginSide)
+                else
+                    bool highOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalHighMitigated : sess.highMitigated
+                    bool lowOriginTaken = sess.sessionIndex == IDX_IVB ? sess.provisionalLowMitigated : sess.lowMitigated
+                    if highOriginTaken and not lowOriginTaken
+                        sess.retraceLevel618 := sess.wickHigh - sess.wickHeight * 0.618
+                    else if lowOriginTaken and not highOriginTaken
+                        sess.retraceLevel618 := sess.wickLow + sess.wickHeight * 0.618
 
             // Draw untouched levels in Unmitigated mode or as the Rafael + Asia overlay.
             if showPersistentLevels and drawMitigationLines
@@ -1937,10 +2359,10 @@ if validChartContext and array.size(sessions) > 0
             // and direction with the first strict IVB wick break.
             bool usesIvbRetracement = sess.sessionIndex == IDX_NY_EARLY and sess.retracementMode == RETRACE_MODE_IVB
             bool usesProvisionalIvbOrigin = sess.sessionIndex == IDX_IVB
-            bool standardHighOriginTaken = usesProvisionalIvbOrigin ? sess.provisionalHighMitigated : sess.highMitigated
-            bool standardLowOriginTaken = usesProvisionalIvbOrigin ? sess.provisionalLowMitigated : sess.lowMitigated
-            int standardHighOriginBar = usesProvisionalIvbOrigin ? nz(sess.provisionalHighBar, 0) : nz(sess.highMitigationBar, 0)
-            int standardLowOriginBar = usesProvisionalIvbOrigin ? nz(sess.provisionalLowBar, 0) : nz(sess.lowMitigationBar, 0)
+            bool standardHighOriginTaken = usesProvisionalOvernightRetracement ? sess.retraceOriginSide == 1 : usesProvisionalIvbOrigin ? sess.provisionalHighMitigated : sess.highMitigated
+            bool standardLowOriginTaken = usesProvisionalOvernightRetracement ? sess.retraceOriginSide == -1 : usesProvisionalIvbOrigin ? sess.provisionalLowMitigated : sess.lowMitigated
+            int standardHighOriginBar = usesProvisionalOvernightRetracement and standardHighOriginTaken ? nz(sess.retraceOriginBar, 0) : usesProvisionalIvbOrigin ? nz(sess.provisionalHighBar, 0) : nz(sess.highMitigationBar, 0)
+            int standardLowOriginBar = usesProvisionalOvernightRetracement and standardLowOriginTaken ? nz(sess.retraceOriginBar, 0) : usesProvisionalIvbOrigin ? nz(sess.provisionalLowBar, 0) : nz(sess.lowMitigationBar, 0)
             bool standardOriginAmbiguous = usesProvisionalIvbOrigin and standardHighOriginTaken and standardLowOriginTaken and standardHighOriginBar == standardLowOriginBar
             bool standardLowWasFirst = standardLowOriginTaken and (not standardHighOriginTaken or standardLowOriginBar < standardHighOriginBar)
             int standardFirstOriginBar = standardLowWasFirst ? standardLowOriginBar : standardHighOriginBar
@@ -1963,8 +2385,8 @@ if validChartContext and array.size(sessions) > 0
             bool canDrawRetrace = sess.showRetracement and retraceGateOpen
 
             // Check for 50% mitigation after the qualifying origin bar.
-            // IVB Standard qualifies on its provisional boundary break; other modes retain confirmation.
-            bool requiredOriginTaken = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? sess.highMitigated : sess.ivbBreakSide == -1 and sess.lowMitigated) : ((standardHighOriginTaken or standardLowOriginTaken) and not standardOriginAmbiguous)
+            bool currentStandardLegActive = not usesProvisionalOvernightRetracement or not sess.retraceTraversalCompleted
+            bool requiredOriginTaken = usesIvbRetracement ? (sess.ivbBreakSide == 1 ? sess.highMitigated : sess.ivbBreakSide == -1 and sess.lowMitigated) : ((standardHighOriginTaken or standardLowOriginTaken) and not standardOriginAmbiguous and currentStandardLegActive)
             if mitigationMode == SESSION_MITIGATED and sess.sessionIndex != IDX_PREMARKET and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginTaken and not sess.midMitigated and not na(sess.midLevel)
                 // Standard mode follows the first session extreme taken. IVB mode follows the first
                 // IVB wick broken: high break retraces down, low break retraces up.
@@ -2013,47 +2435,41 @@ if validChartContext and array.size(sessions) > 0
                 if reachedOppositeBoundary
                     sess.ivbRetraceCompleted := true
 
-            if eagerDraw and fadeCompletedRetracements and isRetraceTraversalComplete(sess) and (sess.midMitigated or sess.retrace618Mitigated)
+            int retraceLegStartBar = nz(sess.retraceLegStartBar, sess.retraceOriginBar)
+            bool replacementActivationBar = not sess.retraceOriginProvisional and retraceLegStartBar > nz(sess.retraceOriginBar, retraceLegStartBar) and bar_index == retraceLegStartBar
+            if usesProvisionalOvernightRetracement and not sess.retraceTraversalCompleted and sess.retraceOriginSide != 0 and (bar_index > retraceLegStartBar or replacementActivationBar)
+                bool reachedOppositeBoundary = sess.retraceOriginSide == 1 ? low <= sess.dominantLow : high >= sess.dominantHigh
+                if reachedOppositeBoundary
+                    sess.retraceTraversalCompleted := true
+
+            if eagerDraw and fadeCompletedRetracements and not sess.retraceFadeApplied and isRetraceTraversalComplete(sess) and (sess.midMitigated or sess.retrace618Mitigated)
                 fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                 fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                sess.retraceFadeApplied := true
 
-    // Combine overlapping unmitigated labels (only on last bar for performance). Focus-managed
-    // sessions are excluded: Phase 4.5 recreates their labels each tick, so merging would regrow
-    // the combined text without bound.
-    if barstate.islast and showAllLines and showAllLabels and mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
-        LABEL_OVERLAP_PCT = 0.005  // 0.005% of price tolerance
-        // Combine HIGH labels at same price
-        for i = 0 to array.size(sessions) - 2
-            sessA = array.get(sessions, i)
-            if na(sessA.highUnmitigatedLabel) or na(sessA.dominantHigh) or focusManaged(sessA.sessionIndex)
-                continue
-            tolerance = sessA.dominantHigh * LABEL_OVERLAP_PCT / 100
-            for j = i + 1 to array.size(sessions) - 1
-                sessB = array.get(sessions, j)
-                if na(sessB.highUnmitigatedLabel) or na(sessB.dominantHigh) or focusManaged(sessB.sessionIndex)
-                    continue
-                if math.abs(sessA.dominantHigh - sessB.dominantHigh) <= tolerance
-                    existingText = label.get_text(sessA.highUnmitigatedLabel)
-                    newText = existingText + " / " + sessB.chartLabel
-                    label.set_text(sessA.highUnmitigatedLabel, newText)
-                    label.delete(sessB.highUnmitigatedLabel)
-                    sessB.highUnmitigatedLabel := na
-        // Combine LOW labels at same price
-        for i = 0 to array.size(sessions) - 2
-            sessA = array.get(sessions, i)
-            if na(sessA.lowUnmitigatedLabel) or na(sessA.dominantLow) or focusManaged(sessA.sessionIndex)
-                continue
-            tolerance = sessA.dominantLow * LABEL_OVERLAP_PCT / 100
-            for j = i + 1 to array.size(sessions) - 1
-                sessB = array.get(sessions, j)
-                if na(sessB.lowUnmitigatedLabel) or na(sessB.dominantLow) or focusManaged(sessB.sessionIndex)
-                    continue
-                if math.abs(sessA.dominantLow - sessB.dominantLow) <= tolerance
-                    existingText = label.get_text(sessA.lowUnmitigatedLabel)
-                    newText = existingText + " / " + sessB.chartLabel
-                    label.set_text(sessA.lowUnmitigatedLabel, newText)
-                    label.delete(sessB.lowUnmitigatedLabel)
-                    sessB.lowUnmitigatedLabel := na
+            bool lifecycleExpired = not alwaysTrackMitigation(sess.sessionIndex) and not isOnActualSessionDay and currentDayKey != sess.startDayKey
+            if sessionLifecycleComplete(sess) or lifecycleExpired
+                array.push(completedLifecycleIndices, lifecycleIndex)
+
+    if array.size(completedLifecycleIndices) > 0
+        for removalIndex = array.size(completedLifecycleIndices) - 1 to 0
+            array.remove(lifecycleSessions, array.get(completedLifecycleIndices, removalIndex))
+
+// Combine overlapping unmitigated labels on compact eligible sets. Focus-managed sessions are
+// excluded because Phase 4.5 owns their labels.
+if validChartContext and barstate.islast and showAllLines and showAllLabels and mitigationMode == SESSION_UNMITIGATED and array.size(sessions) > 1
+    LABEL_OVERLAP_PCT = 0.005  // 0.005% of price tolerance
+    array.clear(highOverlapCandidates)
+    array.clear(lowOverlapCandidates)
+    for candidateSess in sessions
+        if focusManaged(candidateSess.sessionIndex)
+            continue
+        if not na(candidateSess.highUnmitigatedLabel) and not na(candidateSess.dominantHigh)
+            array.push(highOverlapCandidates, candidateSess)
+        if not na(candidateSess.lowUnmitigatedLabel) and not na(candidateSess.dominantLow)
+            array.push(lowOverlapCandidates, candidateSess)
+    mergeOverlappingUnmitigatedLabels(highOverlapCandidates, true, LABEL_OVERLAP_PCT)
+    mergeOverlappingUnmitigatedLabels(lowOverlapCandidates, false, LABEL_OVERLAP_PCT)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 4.5: ASIA + RAFAEL FOCUS - Selection and drawing budget
@@ -2062,24 +2478,71 @@ if validChartContext and array.size(sessions) > 0
 // tick because a Current Price anchor moves with each tick.
 
 if validChartContext and focusActive and barstate.islast and array.size(sessions) > 0
-    array<FocusCandidate> focusCandidates = array.new<FocusCandidate>()
-    collectFocusCandidates(sessions, focusCandidates, IDX_0129, focusAnchorPrice, focusSessionCount)
-    collectFocusCandidates(sessions, focusCandidates, IDX_ASIA_OPEN, focusAnchorPrice, focusSessionCount)
+    map.clear(selectedFocusSessionKeys)
+    array.clear(focusCandidatesCache)
+    array.clear(selectedFocusIndices)
+    int currentFocusBoxCount = 0
+    int currentFocusLineCount = 0
+    int currentFocusLabelCount = 0
+    for renderedSess in renderedFocusSessions
+        [renderedBoxCount, renderedLineCount, renderedLabelCount] = focusCurrentDrawingCounts(renderedSess)
+        currentFocusBoxCount += renderedBoxCount
+        currentFocusLineCount += renderedLineCount
+        currentFocusLabelCount += renderedLabelCount
+    int focusBudget = FOCUS_DRAWING_LIMIT - FOCUS_DRAWING_HEADROOM
+    // Calculate the non-Focus base before deleting old Focus members so their drawings are
+    // subtracted exactly once during a membership change.
+    int baseBoxCount = math.max(0, array.size(box.all) - currentFocusBoxCount)
+    int baseLineCount = math.max(0, array.size(line.all) - currentFocusLineCount)
+    int baseLabelCount = math.max(0, array.size(label.all) - currentFocusLabelCount)
+    int nonFocusGrowthLineCount = 0
+    int nonFocusGrowthLabelCount = 0
+    for lifecycleSess in lifecycleSessions
+        if not focusManaged(lifecycleSess.sessionIndex)
+            [currentLifecycleLineCount, currentLifecycleLabelCount] = sessionCurrentLifecycleDrawingCounts(lifecycleSess)
+            [potentialLifecycleLineCount, potentialLifecycleLabelCount] = sessionPotentialLifecycleDrawingCounts(lifecycleSess)
+            nonFocusGrowthLineCount += math.max(0, potentialLifecycleLineCount - currentLifecycleLineCount)
+            nonFocusGrowthLabelCount += math.max(0, potentialLifecycleLabelCount - currentLifecycleLabelCount)
+    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_0129, focusAnchorPrice, focusSessionCount)
+    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_ASIA_OPEN, focusAnchorPrice, focusSessionCount)
     // The recent view comes first so it can never lose its slots to a better-ranked distant level.
-    array<int> selectedIndices = array.new<int>()
-    collectRecentFocusSessions(sessions, selectedIndices, IDX_0129, maxSessions)
-    collectRecentFocusSessions(sessions, selectedIndices, IDX_ASIA_OPEN, maxSessions)
-    for candidate in focusCandidates
-        if not array.includes(selectedIndices, candidate.sourceIndex)
-            array.push(selectedIndices, candidate.sourceIndex)
-    // Release non-selected first so a re-rank cannot transiently cross the object caps.
-    for sessionsIndex = 0 to array.size(sessions) - 1
-        SessionData focusSess = array.get(sessions, sessionsIndex)
-        if focusManaged(focusSess.sessionIndex) and not array.includes(selectedIndices, sessionsIndex)
-            renderFocusSession(focusSess, false)
-    // Admit in selection order against the real drawing counts; the rest release their drawings.
-    for selectedIndex in selectedIndices
-        renderFocusSession(array.get(sessions, selectedIndex), focusBudgetAvailable())
+    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_0129, maxSessions)
+    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_ASIA_OPEN, maxSessions)
+    for selectedIndex in selectedFocusIndices
+        SessionData recentSess = array.get(sessions, selectedIndex)
+        map.put(selectedFocusSessionKeys, recentSess.startTime, true)
+    for candidate in focusCandidatesCache
+        SessionData candidateSess = array.get(sessions, candidate.sourceIndex)
+        int candidateKey = candidateSess.startTime
+        if not map.contains(selectedFocusSessionKeys, candidateKey)
+            array.push(selectedFocusIndices, candidate.sourceIndex)
+            map.put(selectedFocusSessionKeys, candidateKey, true)
+    // Release only previously rendered sessions whose membership changed.
+    for renderedSess in renderedFocusSessions
+        if not map.contains(selectedFocusSessionKeys, renderedSess.startTime)
+            renderFocusSession(renderedSess, false)
+    array.clear(renderedFocusSessions)
+    int reservedFocusBoxCount = 0
+    int reservedFocusLineCount = 0
+    int reservedFocusLabelCount = 0
+    // Recent sessions are admitted first. Each reservation covers current drawings and all
+    // lifecycle growth, so selected sessions cannot silently lose older objects later.
+    for selectedIndex in selectedFocusIndices
+        SessionData selectedSess = array.get(sessions, selectedIndex)
+        [currentBoxCount, currentLineCount, currentLabelCount] = focusCurrentDrawingCounts(selectedSess)
+        [potentialBoxCount, potentialLineCount, potentialLabelCount] = focusPotentialDrawingCounts(selectedSess)
+        int requiredBoxCount = math.max(currentBoxCount, potentialBoxCount)
+        int requiredLineCount = math.max(currentLineCount, potentialLineCount)
+        int requiredLabelCount = math.max(currentLabelCount, potentialLabelCount)
+        bool admitted = baseBoxCount + reservedFocusBoxCount + requiredBoxCount <= focusBudget and baseLineCount + nonFocusGrowthLineCount + reservedFocusLineCount + requiredLineCount <= focusBudget and baseLabelCount + nonFocusGrowthLabelCount + reservedFocusLabelCount + requiredLabelCount <= focusBudget
+        renderFocusSession(selectedSess, admitted)
+        if admitted
+            array.push(renderedFocusSessions, selectedSess)
+            reservedFocusBoxCount += requiredBoxCount
+            reservedFocusLineCount += requiredLineCount
+            reservedFocusLabelCount += requiredLabelCount
+    refreshFocusGlowSession(IDX_0129)
+    refreshFocusGlowSession(IDX_ASIA_OPEN)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 5: DEVIATION GLOW - Darken deviation zones when price touches them
@@ -2093,28 +2556,16 @@ if validChartContext and focusActive and barstate.islast and array.size(sessions
 // 3. A first touch darkens the box for the rest of that window
 // 4. Window expiry restores the box and permanently ends its glow eligibility
 
-if validChartContext and enableDeviationGlow and array.size(sessions) > 0
+if validChartContext and enableDeviationGlow
     glowWindowMs = int(glowWindowHours * 60 * 60 * 1000)
 
-    // Track which session types we've processed (reset each bar)
-    var array<int> processedTypes = array.new<int>()
-    array.clear(processedTypes)
-
-    // Process sessions newest-first to find most recent of each type
-    for j = array.size(sessions) - 1 to 0
-        sess = array.get(sessions, j)
-
-        // Skip if no deviation boxes
+    for sessionIndex = 0 to array.size(latestGlowSessions) - 1
+        SessionData sess = array.get(latestGlowSessions, sessionIndex)
+        if na(sess)
+            continue
         boxCount = array.size(sess.deviationBoxes)
         if boxCount == 0
             continue
-
-        // If we've already processed a newer session of this type, reset this older one
-        if array.includes(processedTypes, sess.sessionIndex)
-            for i = 0 to boxCount - 1
-                resetGlowBox(array.get(sess.deviationBoxes, i), getGlowBoxKey(sess.sessionIndex, sess.startTime, i))
-            continue
-        array.push(processedTypes, sess.sessionIndex)
 
         sessionEndTime = nz(sess.actualEndTime, sess.endTime)
         if na(sessionEndTime) or sessionEndTime == 0
@@ -2135,13 +2586,9 @@ if validChartContext and enableDeviationGlow and array.size(sessions) > 0
                 boxLow = math.min(box.get_top(devBox), box.get_bottom(devBox))
                 touched = high >= boxLow and low <= boxHigh
 
-                if touched
+                if touched and not map.contains(glowTouchTimes, boxKey)
                     map.put(glowTouchTimes, boxKey, time)
                     box.set_bgcolor(devBox, darkenColor(originalColor, glowDarkenPercent))
-                else if map.contains(glowTouchTimes, boxKey)
-                    box.set_bgcolor(devBox, darkenColor(originalColor, glowDarkenPercent))
-                else
-                    box.set_bgcolor(devBox, originalColor)
             else
                 resetGlowBox(devBox, boxKey)
 
@@ -2149,7 +2596,7 @@ if validChartContext and enableDeviationGlow and array.size(sessions) > 0
 // IVB EXTENSION GLOW - Hold each latest-IVB projection wide after its first hit
 // ═══════════════════════════════════════════════════════════════════════════
 
-if validChartContext and enableIvbExtensionGlow and array.size(sessions) > 0
+if validChartContext and enableIvbExtensionGlow
     ivbGlowWindowMs = int(ivbExtensionGlowWindowHours * 60 * 60 * 1000)
     ivbGlowWidth = math.max(opening_0930_1000_extWidth, glowIvbExtensionWidth)
     canWidenIvbExtension = ivbGlowWidth > opening_0930_1000_extWidth
@@ -2157,24 +2604,9 @@ if validChartContext and enableIvbExtensionGlow and array.size(sessions) > 0
     for activeSess in activeSessions
         if activeSess.sessionIndex == IDX_IVB
             nextIvbActive := true
-    bool processedLatestIvb = false
-
-    // Only the latest completed IVB remains eligible. Its lines reset when the next IVB begins.
-    for j = array.size(sessions) - 1 to 0
-        sess = array.get(sessions, j)
-        if sess.sessionIndex != IDX_IVB
-            continue
-
+    SessionData sess = array.get(latestCompletedSessions, IDX_IVB)
+    if not na(sess)
         extensionCount = array.size(sess.extLines)
-        if processedLatestIvb
-            if extensionCount > 0
-                for i = 0 to extensionCount - 1
-                    extLine = array.get(sess.extLines, i)
-                    resetIvbExtensionGlow(extLine, getIvbExtensionGlowKey(sess.startTime, i), opening_0930_1000_extWidth)
-            continue
-
-        processedLatestIvb := true
-
         if extensionCount > 0
             for i = 0 to extensionCount - 1
                 extLine = array.get(sess.extLines, i)
@@ -2183,11 +2615,10 @@ if validChartContext and enableIvbExtensionGlow and array.size(sessions) > 0
                     resetIvbExtensionGlow(extLine, lineKey, opening_0930_1000_extWidth)
                 else if map.contains(ivbExtensionGlowTouchTimes, lineKey)
                     touchTime = map.get(ivbExtensionGlowTouchTimes, lineKey)
-                    if time < touchTime + ivbGlowWindowMs
-                        line.set_width(extLine, ivbGlowWidth)
-                    else
+                    if touchTime > 0 and time >= touchTime + ivbGlowWindowMs
                         // Keep the recorded first hit so an expired line cannot reactivate.
                         line.set_width(extLine, opening_0930_1000_extWidth)
+                        map.put(ivbExtensionGlowTouchTimes, lineKey, -touchTime)
                 else
                     extensionLevel = line.get_y1(extLine)
                     touched = time >= line.get_x1(extLine) and high >= extensionLevel and low <= extensionLevel
@@ -2283,6 +2714,20 @@ if validChartContext and showColorTable and barstate.islast
         addSingleColorRow(colorTable, currentRow, LABEL_FOCUS_ANCHOR_COLOR, focusAnchorColor)
         currentRow += 1
 
+    if secondaryPaneMode and showPriceCandlesInPane
+        addSingleColorRow(colorTable, currentRow, "Up Body", paneUpBodyColor)
+        currentRow += 1
+        addSingleColorRow(colorTable, currentRow, "Down Body", paneDownBodyColor)
+        currentRow += 1
+        addSingleColorRow(colorTable, currentRow, "Up Border", paneUpBorderColor)
+        currentRow += 1
+        addSingleColorRow(colorTable, currentRow, "Down Border", paneDownBorderColor)
+        currentRow += 1
+        addSingleColorRow(colorTable, currentRow, "Up Wick", paneUpWickColor)
+        currentRow += 1
+        addSingleColorRow(colorTable, currentRow, "Down Wick", paneDownWickColor)
+        currentRow += 1
+
     if showOnlyEnabled
         addSingleColorRow(colorTable, currentRow, LABEL_HIDDEN_CANDLES, hiddenCandleColor)
 
@@ -2301,6 +2746,15 @@ if showOnlyMostRecent
     inMostRecentDay := dayofmonth(time, NY_TIMEZONE) == dayofmonth(timenow, NY_TIMEZONE) and month(time, NY_TIMEZONE) == month(timenow, NY_TIMEZONE) and year(time, NY_TIMEZONE) == year(timenow, NY_TIMEZONE)
 hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not (inVisibleWindow and (not showOnlyMostRecent or inMostRecentDay))
 
-plotcandle(hideThisBar ? open : na, high, low, close, color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
+showPanePriceCandles = secondaryPaneMode and showPriceCandlesInPane
+paneBodyColor = close >= open ? paneUpBodyColor : paneDownBodyColor
+paneBorderColor = close >= open ? paneUpBorderColor : paneDownBorderColor
+paneWickColor = close >= open ? paneUpWickColor : paneDownWickColor
+hideMainChartCandle = not secondaryPaneMode and hideThisBar
+hidePaneCandle = showPanePriceCandles and hideThisBar
+
+plotcandle(showPanePriceCandles ? open : na, high, low, close, title="Pane Price Candles", color=paneBodyColor, bordercolor=paneBorderColor, wickcolor=paneWickColor, editable=false, display=display.pane)
+plotcandle(hidePaneCandle ? open : na, high, low, close, title="Pane Hidden Candles", color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane)
+plotcandle(hideMainChartCandle ? open : na, high, low, close, title="Hidden Candles", color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
 
 // deviations •
