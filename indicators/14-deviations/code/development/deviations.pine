@@ -274,6 +274,11 @@ TOOLTIP_FOCUS_ANCHOR = "Manual ranks from the Price level."
 IVB_START_MIN = 570
 IVB_END_MIN = 600
 
+// Asia Open uses standard 1-minute OHLC on Range charts so synthetic gap-fill bars do not widen it.
+ASIA_OPEN_START_MIN = 1080
+ASIA_OPEN_END_MIN = 1260
+STANDARD_SESSION_SOURCE_TF = "1"
+
 // IVB breakout extensions - minimum recorded samples before projections draw
 IVB_EXT_MIN_SAMPLES = 5
 IVB_EXT_MIN_VISIBLE_MS = 6 * 60 * 60 * 1000
@@ -606,6 +611,43 @@ dayKey(int t) =>
 // Check if a bar is within a session's time window (handles midnight-crossing sessions)
 isInSessionTime(int minutes, int startMin, int endMin, bool crossesMidnight) =>
     crossesMidnight ? (minutes >= startMin or minutes <= endMin) : (minutes >= startMin and minutes <= endMin)
+
+sessionPriceState(int startMin, int endMin) =>
+    int minutes = hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE)
+    bool crossesMidnight = endMin < startMin
+    bool inSession = isInSessionTime(minutes, startMin, endMin, crossesMidnight)
+    bool sessionStarted = inSession and not inSession[1]
+    var float sessionBodyHigh = na
+    var float sessionBodyLow = na
+    var float sessionWickHigh = na
+    var float sessionWickLow = na
+    var int sessionHighTime = na
+    var int sessionLowTime = na
+    var int sessionDayKey = na
+    var int sessionStartTime = na
+
+    if sessionStarted
+        sessionBodyHigh := math.max(open, close)
+        sessionBodyLow := math.min(open, close)
+        sessionWickHigh := high
+        sessionWickLow := low
+        sessionHighTime := time
+        sessionLowTime := time
+        sessionDayKey := dayKey(time)
+        sessionStartTime := time
+    else if inSession
+        float currentBodyHigh = math.max(open, close)
+        float currentBodyLow = math.min(open, close)
+        if high > sessionWickHigh
+            sessionHighTime := time
+        if low < sessionWickLow
+            sessionLowTime := time
+        sessionBodyHigh := math.max(sessionBodyHigh, currentBodyHigh)
+        sessionBodyLow := math.min(sessionBodyLow, currentBodyLow)
+        sessionWickHigh := math.max(sessionWickHigh, high)
+        sessionWickLow := math.min(sessionWickLow, low)
+
+    [sessionBodyHigh, sessionBodyLow, sessionWickHigh, sessionWickLow, sessionHighTime, sessionLowTime, sessionDayKey, sessionStartTime]
 
 toSansSerif(string inputStr) =>
     result = inputStr
@@ -1633,7 +1675,7 @@ var array<SessionConfig> sessionConfigs = array.from(
     SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, true, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
     SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, 1080, 1260, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, true, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, ASIA_OPEN_START_MIN, ASIA_OPEN_END_MIN, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, true, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0930_1000, opening_0930_1000_offset, opening_0930_1000_showLabels, IVB_START_MIN, IVB_END_MIN, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, SESSION_EXTENDED_0930_1000, CHART_LABEL_0930_1000, opening_0930_1000_labelPosition, opening_0930_1000_mitigation, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
 )
 
@@ -1662,6 +1704,11 @@ if validChartContext and bar_index > 0 and currentDayKey != currentDayKey[1]
 [htf30mClose, htf30mTime] = request.security(ticker.standard(syminfo.tickerid), "30", [close[1], time[1]], lookahead=barmerge.lookahead_on)
 htf30mDayKey = na(htf30mTime) ? 0 : dayKey(htf30mTime)
 
+// Accumulate the complete Asia session in the standard 1-minute context. A stateful lower-timeframe
+// expression preserves intermediate bars that request.security() would otherwise sample away.
+[standardAsiaBodyHigh, standardAsiaBodyLow, standardAsiaWickHigh, standardAsiaWickLow, standardAsiaHighTime, standardAsiaLowTime, standardAsiaDayKey, standardAsiaStartTime] = request.security(ticker.standard(syminfo.tickerid), STANDARD_SESSION_SOURCE_TF, sessionPriceState(ASIA_OPEN_START_MIN, ASIA_OPEN_END_MIN), lookahead=barmerge.lookahead_off)
+standardAsiaReady = standardAsiaDayKey == currentDayKey and not na(standardAsiaBodyHigh) and not na(standardAsiaBodyLow) and not na(standardAsiaWickHigh) and not na(standardAsiaWickLow) and not na(standardAsiaHighTime) and not na(standardAsiaLowTime) and not na(standardAsiaStartTime)
+
 // Time windows used by mitigation logic
 PREMARKET_START_MIN = array.get(sessionConfigs, IDX_PREMARKET).startMin  // 300 = 05:00
 CLOSE_1600_MIN = 960  // 16:00 = 16 * 60
@@ -1678,22 +1725,33 @@ if validChartContext
             currentlyInSession = isInSessionTime(barMinutes, cfg.startMin, cfg.endMin, crossesMidnight)
             previouslyInSession = isInSessionTime(prevBarMinutes, cfg.startMin, cfg.endMin, crossesMidnight)
             sessionStarted = currentlyInSession and not previouslyInSession
+            if chart.is_range and i == IDX_ASIA_OPEN
+                bool hasActiveAsiaSession = false
+                if array.size(activeSessions) > 0
+                    for activeSession in activeSessions
+                        if activeSession.sessionIndex == IDX_ASIA_OPEN
+                            hasActiveAsiaSession := true
+                            break
+                sessionStarted := currentlyInSession and standardAsiaReady and not hasActiveAsiaSession
 
             if sessionStarted
                 if i == IDX_IVB
                     SessionData previousIvb = array.get(latestCompletedSessions, IDX_IVB)
                     if not na(previousIvb)
                         resetSessionIvbExtensionGlow(previousIvb)
-                initBodyHigh = math.max(open, close)
-                initBodyLow = math.min(open, close)
-                initWickHigh = high
-                initWickLow = low
+                bool usesStandardAsia = chart.is_range and i == IDX_ASIA_OPEN
+                initBodyHigh = usesStandardAsia ? standardAsiaBodyHigh : math.max(open, close)
+                initBodyLow = usesStandardAsia ? standardAsiaBodyLow : math.min(open, close)
+                initWickHigh = usesStandardAsia ? standardAsiaWickHigh : high
+                initWickLow = usesStandardAsia ? standardAsiaWickLow : low
+                int initStartTime = usesStandardAsia ? standardAsiaStartTime : time
+                int initDayKey = usesStandardAsia ? standardAsiaDayKey : currentDayKey
 
                 newSession = SessionData.new(
                      sessionIndex=i,
                      startBar=bar_index,
                      endBar=na,
-                     startTime=time,
+                     startTime=initStartTime,
                      endTime=na,
                      actualEndTime=na,
                      bodyHigh=initBodyHigh,
@@ -1719,8 +1777,8 @@ if validChartContext
                      mitigationColor=cfg.mitigationColor,
                      dominantHigh=na,
                      dominantLow=na,
-                     highTime=time,
-                     lowTime=time,
+                     highTime=usesStandardAsia ? standardAsiaHighTime : time,
+                     lowTime=usesStandardAsia ? standardAsiaLowTime : time,
                      highMitigated=false,
                      lowMitigated=false,
                      highMitigationBar=na,
@@ -1767,8 +1825,8 @@ if validChartContext
                      showRetracement=cfg.showRetracement,
                      retracementMode=cfg.retracementMode,
                      crossesMidnight=crossesMidnight,
-                     startDayKey=currentDayKey,
-                     nextDayKey=dayKey(time + 24 * 60 * 60 * 1000),
+                     startDayKey=initDayKey,
+                     nextDayKey=dayKey(initStartTime + 24 * 60 * 60 * 1000),
                      provisionalHighMitigated=false,
                      provisionalLowMitigated=false,
                      provisionalHighTime=na,
@@ -1809,24 +1867,27 @@ if validChartContext and array.size(activeSessions) > 0
 
         if isBarInSession
             // Update session high/low values with current bar
-            currentBodyHigh = math.max(open, close)
-            currentBodyLow = math.min(open, close)
+            bool usesStandardAsia = chart.is_range and idx == IDX_ASIA_OPEN and standardAsiaDayKey == sess.startDayKey
+            currentBodyHigh = usesStandardAsia ? standardAsiaBodyHigh : math.max(open, close)
+            currentBodyLow = usesStandardAsia ? standardAsiaBodyLow : math.min(open, close)
+            currentWickHigh = usesStandardAsia ? standardAsiaWickHigh : high
+            currentWickLow = usesStandardAsia ? standardAsiaWickLow : low
             bool bodyGeometryChanged = currentBodyHigh > sess.bodyHigh or currentBodyLow < sess.bodyLow
-            bool wickGeometryChanged = high > sess.wickHigh or low < sess.wickLow
+            bool wickGeometryChanged = currentWickHigh > sess.wickHigh or currentWickLow < sess.wickLow
             bool offsetGeometryChanged = sess.useOffset and sess.deviationMode == OPT_BOTH and sess.endBar != bar_index
             bool liveGeometryChanged = na(sess.endBar) or bodyGeometryChanged or wickGeometryChanged or offsetGeometryChanged
 
             // Track the bar time when new highs/lows are formed
-            if high > sess.wickHigh
-                sess.highTime := time
-            if low < sess.wickLow
-                sess.lowTime := time
+            if currentWickHigh > sess.wickHigh
+                sess.highTime := usesStandardAsia ? standardAsiaHighTime : time
+            if currentWickLow < sess.wickLow
+                sess.lowTime := usesStandardAsia ? standardAsiaLowTime : time
 
             // Update body/wick levels with current bar
             sess.bodyHigh := math.max(sess.bodyHigh, currentBodyHigh)
             sess.bodyLow := math.min(sess.bodyLow, currentBodyLow)
-            sess.wickHigh := math.max(sess.wickHigh, high)
-            sess.wickLow := math.min(sess.wickLow, low)
+            sess.wickHigh := math.max(sess.wickHigh, currentWickHigh)
+            sess.wickLow := math.min(sess.wickLow, currentWickLow)
 
             if liveGeometryChanged
                 // Calculate projected end time based on session's end minute
