@@ -82,6 +82,8 @@ type SessionData
     line lowMitigationLine
     array<label> highMitigationReminders
     array<label> lowMitigationReminders
+    bool highMitigationFadeApplied
+    bool lowMitigationFadeApplied
     // Unmitigated level lines
     line highUnmitigatedLine
     line lowUnmitigatedLine
@@ -138,7 +140,7 @@ type SessionData
     label lowPendingLabel
     // Deviation extension (extends deviation zones beyond session end)
     int deviationExtendMs
-    // IVB breakout extension projections (avg / avg+1σ lines and labels)
+    // IVB breakout extension projections (avg / avg+1σ lines and optional price labels)
     bool extHighProcessed
     bool extLowProcessed
     int extHighTime
@@ -270,6 +272,7 @@ TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION = "Add the session name to mitigation ma
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_FADE_RETRACE = "Standard retracements fade once BOTH session extremes have been reached, completing the range traversal. NY Early in IVB-Based mode fades only when its qualifying 0.5 / 0.618 return subsequently continues to the opposite NY Early boundary (1.0); an earlier touch of that boundary does not complete the later retracement. Fade % controls how far the completed line and labels move toward invisible.\n\nOff = completed retracements keep their normal colors."
+TOOLTIP_FADE_MITIGATION = "Completed high/low levels from every session fade after current price moves the configured percentage away. Once triggered, the fade stays applied. Fade opacity is the minimum transparency applied to both solid and dashed boundary segments and their labels: 0 is visible, 100 is hidden.\n\nOff = completed mitigation levels keep their normal colors."
 TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nDensity keys off each line's own length and stays sparse (sublinear): most lines get a single tag, and only long extensions earn a second.\n\nOff = one label at each line's midpoint only."
 
 TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
@@ -288,9 +291,6 @@ STANDARD_SESSION_SOURCE_TF = "1"
 // IVB breakout extensions - minimum recorded samples before projections draw
 IVB_EXT_MIN_SAMPLES = 5
 IVB_EXT_MIN_VISIBLE_MS = 6 * 60 * 60 * 1000
-LABEL_EXT_AVG = "ivb avg"
-LABEL_EXT_STD = "ivb +1σ"
-
 TOOLTIP_IVB_EXTENSIONS = "Projects IVB Average and +1σ breakout levels after a confirmed 30-minute close outside the IVB wick range. Lines end at 16:00 or after six hours for late breakouts. Lookback sets the sample count. Requires at least 5 samples and IVB Mitigation."
 
 // Option values
@@ -334,8 +334,11 @@ FILTER_PREP2 = "★ Rafael + 1800 + Early + IVB + Premarket"
 PRICE_MODE_OFF = "Off"
 PRICE_MODE_ACTIVE = "Active"
 PRICE_MODE_CUSTOM = "Custom"
-TOOLTIP_PRICE_MODE = "Prices on right-edge unmitigated Rafael and Asia Open levels, plus IVB Average and +1σ projection labels.\n\n• Off — names only.\n• Active — all three categories.\n• Custom — choices in Quick Filter: Prices."
-TOOLTIP_CUSTOM_PRICES = "Used when Prices is Custom. Choose which categories append numeric prices."
+LABEL_EXT_AVG = "ivb avg"
+LABEL_EXT_STD = "ivb +1σ"
+TOOLTIP_PRICE_MODE = "Numeric prices on right-edge unmitigated Rafael and Asia Open levels and at the right end of IVB projection lines. IVB projection captions sit at the line midpoint without prices and move to the right endpoint when prices are shown.\n\n• Off — no numeric prices.\n• Active — all three categories.\n• Custom — choices in Quick Filter: Prices."
+TOOLTIP_CUSTOM_PRICES = "Used when Prices is Custom. Choose which categories show numeric prices."
+TOOLTIP_LABEL_MASTER = "Show All Labels is the master label switch. Off hides every chart label while preserving the settings below.\n\n———\n\nPrice & Size Quick Boost temporarily shows prices on active Rafael, Asia Open and IVB projections and renders every chart label at Small size. Your Prices mode and selected label size stay unchanged."
 
 FOCUS_DIRECTION_OFF = "Off"
 FOCUS_DIRECTION_BELOW = "↓ Below"
@@ -408,8 +411,7 @@ focusAnchorPrice = focusAnchorMode == FOCUS_ANCHOR_MANUAL and focusManualPricePl
 // INPUTS - Mitigation
 // ═══════════════════════════════════════════════════════════════════════════
 
-mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show lines when levels are touched\nUnmitigated: Show persistent lines for untouched levels")
-showUnmitigatedRafaelAsiaOpenLevels = input.bool(false, "Show Unmitigated Rafael + Asia Open Levels", group=GROUP_MITIGATION, tooltip="Keep unmitigated Rafael and Asia Open highs and lows visible while using Mitigated mode.")
+mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show completed levels; Rafael and Asia Open also keep their untouched boundaries visible\nUnmitigated: Show persistent lines for untouched levels")
 enableProvisionalRetracements = input.bool(true, "Enable Provisional Retracements", group=GROUP_MITIGATION, tooltip="Track Rafael and Asia Open 0.5 / 0.618 returns from the first provisional overnight mitigation.")
 confirmedMitigationReplacementTrigger = input.string(REPLACEMENT_TRIGGER_618, "Confirmed mitigation replacement trigger", options=[REPLACEMENT_TRIGGER_618, REPLACEMENT_TRIGGER_50], group=GROUP_MITIGATION, active=enableProvisionalRetracements, tooltip="After confirmation, 0.618 replaces on the first inward 0.618 crossing. 0.5 waits for the midpoint.")
 
@@ -417,9 +419,10 @@ confirmedMitigationReplacementTrigger = input.string(REPLACEMENT_TRIGGER_618, "C
 // INPUTS - Labels
 // ═══════════════════════════════════════════════════════════════════════════
 
-showAllLabels = input.bool(true, "Show All Labels", inline="labels_master", group=GROUP_LABELS, tooltip="Master label switch. Off hides every chart label while preserving all label settings below, so turning it back on restores the same label configuration.")
-labelTextSize = input.string(LABEL_SIZE_SMALL, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="labels_master", group=GROUP_LABELS)
-globalLabelSize = labelTextSize == LABEL_SIZE_TINY ? size.tiny : labelTextSize == LABEL_SIZE_NORMAL ? size.normal : labelTextSize == LABEL_SIZE_LARGE ? size.large : labelTextSize == LABEL_SIZE_HUGE ? size.huge : size.small
+showAllLabels = input.bool(true, "Show All Labels", inline="labels_master", group=GROUP_LABELS)
+labelTextSize = input.string(LABEL_SIZE_TINY, "", options=[LABEL_SIZE_TINY, LABEL_SIZE_SMALL, LABEL_SIZE_NORMAL, LABEL_SIZE_LARGE, LABEL_SIZE_HUGE], inline="labels_master", group=GROUP_LABELS)
+priceAndSizeQuickBoost = input.bool(false, "Price & Size Quick Boost", inline="labels_master", group=GROUP_LABELS, tooltip=TOOLTIP_LABEL_MASTER)
+globalLabelSize = priceAndSizeQuickBoost ? size.small : labelTextSize == LABEL_SIZE_TINY ? size.tiny : labelTextSize == LABEL_SIZE_NORMAL ? size.normal : labelTextSize == LABEL_SIZE_LARGE ? size.large : labelTextSize == LABEL_SIZE_HUGE ? size.huge : size.small
 showSessionNames = input.bool(false, LABEL_SHOW_SESSION_NAMES, group=GROUP_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAMES)
 showPendingLabels = input.bool(true, "Label Provisional Lines", group=GROUP_LABELS, tooltip="Adds a right-edge session label to provisional (dashed) mitigation lines so you can identify which session each dashed line belongs to on a busy chart.")
 showSessionNameOnMitigation = input.bool(true, "Show Session Name on Key Mitigations", group=GROUP_LABELS, tooltip=TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION)
@@ -428,6 +431,9 @@ labelColor = input.color(color.rgb(120, 123, 134), LABEL_LABEL_COLOR, inline="la
 labelsBgColor = input.color(color.new(color.rgb(255, 255, 255), 50), "Background", inline="label_colors", group=GROUP_LABELS, tooltip="Background color for session and deviation labels. Key-session 0.5 and 0.618 labels use their session-specific controls instead. Set transparency to 100 for no background.")
 fadeCompletedRetracements = input.bool(true, "Fade Completed Retracement Levels", inline="fade", group=GROUP_LABELS, tooltip=TOOLTIP_FADE_RETRACE)
 completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fade", group=GROUP_LABELS, tooltip="How far to fade each completed 0.5 / 0.618 line and label toward invisible once its retracement completes.")
+fadeCompletedMitigationLevels = input.bool(true, "Fade Completed Mitigation Levels", inline="mitigation_fade", group=GROUP_LABELS)
+completedMitigationFadeOpacity = input.int(70, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_LABELS, active=fadeCompletedMitigationLevels)
+completedMitigationDistanceThreshold = input.float(5.0, "Distance Threshold %", minval=0.0, maxval=100.0, step=0.5, inline="mitigation_fade", group=GROUP_LABELS, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Display
@@ -687,7 +693,7 @@ toSansSerif(string inputStr) =>
     result
 
 priceModeShows(bool customChoice) =>
-    quickPriceMode == PRICE_MODE_ACTIVE or (quickPriceMode == PRICE_MODE_CUSTOM and customChoice)
+    priceAndSizeQuickBoost or quickPriceMode == PRICE_MODE_ACTIVE or (quickPriceMode == PRICE_MODE_CUSTOM and customChoice)
 
 openLevelShowsPrice(int sessionIndex) =>
     sessionIndex == IDX_0129 ? priceModeShows(rafaelShowPrice) : sessionIndex == IDX_ASIA_OPEN and priceModeShows(asiaOpenShowPrice)
@@ -947,6 +953,12 @@ tile_line_labels(line target, float level, string txt, bool repeat, color txtCol
             array.push(tags, label.new(tagX, level, txt, style=label.style_label_center, textcolor=txtColor, size=globalLabelSize, color=bgColor, xloc=xloc.bar_time))
     tags
 
+newIvbProjectionLabel(line target, float level, string caption, bool includePrice, color txtColor, color bgColor) =>
+    int labelX = includePrice ? line.get_x2(target) : line.get_x1(target) + int((line.get_x2(target) - line.get_x1(target)) * 0.5)
+    string labelText = includePrice ? caption + " • " + str.tostring(level, format.mintick) : caption
+    string labelStyle = includePrice ? label.style_label_left : label.style_label_center
+    label.new(labelX, level, labelText, style=labelStyle, textcolor=txtColor, size=globalLabelSize, color=bgColor, xloc=xloc.bar_time)
+
 resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, float level, string txt, bool repeat) =>
     if not keep or na(mitLine)
         deleteLabels(reminders)
@@ -976,6 +988,41 @@ fadeRetraceElements(line ln, array<label> lbls, color baseLineColor, color baseT
     for lbl in lbls
         label.set_textcolor(lbl, fadeToward100(baseTextColor, completedRetraceFade))
         label.set_color(lbl, fadeToward100(baseBgColor, completedRetraceFade))
+
+completedMitigationShouldFade(SessionData sess, bool isHigh) =>
+    bool isMitigated = isHigh ? sess.highMitigated : sess.lowMitigated
+    bool fadeApplied = isHigh ? sess.highMitigationFadeApplied : sess.lowMitigationFadeApplied
+    float level = isHigh ? sess.dominantHigh : sess.dominantLow
+    float distancePct = not na(level) ? math.abs(close - level) / math.max(math.abs(level), syminfo.mintick) * 100.0 : 0.0
+    bool thresholdReached = distancePct >= completedMitigationDistanceThreshold
+    if fadeCompletedMitigationLevels and isMitigated and thresholdReached and not fadeApplied
+        if isHigh
+            sess.highMitigationFadeApplied := true
+        else
+            sess.lowMitigationFadeApplied := true
+        fadeApplied := true
+    fadeCompletedMitigationLevels and isMitigated and fadeApplied
+
+completedMitigationFadePending(SessionData sess) =>
+    bool highPending = sess.highMitigated and not sess.highMitigationFadeApplied
+    bool lowPending = sess.lowMitigated and not sess.lowMitigationFadeApplied
+    mitigationMode == SESSION_MITIGATED and fadeCompletedMitigationLevels and (highPending or lowPending)
+
+styleCompletedMitigationBoundary(SessionData sess, bool isHigh) =>
+    bool faded = completedMitigationShouldFade(sess, isHigh)
+    color renderedLineColor = faded ? color.new(sess.mitigationColor, math.max(color.t(sess.mitigationColor), completedMitigationFadeOpacity)) : sess.mitigationColor
+    color renderedTextColor = faded ? color.new(labelColor, math.max(color.t(labelColor), completedMitigationFadeOpacity)) : labelColor
+    color renderedBgColor = faded ? color.new(labelsBgColor, math.max(color.t(labelsBgColor), completedMitigationFadeOpacity)) : labelsBgColor
+    line solidLine = isHigh ? sess.highMitigationLine : sess.lowMitigationLine
+    line pendingLine = isHigh ? sess.highPendingLine : sess.lowPendingLine
+    array<label> reminders = isHigh ? sess.highMitigationReminders : sess.lowMitigationReminders
+    if not na(solidLine)
+        line.set_color(solidLine, renderedLineColor)
+    if not na(pendingLine)
+        line.set_color(pendingLine, renderedLineColor)
+    for lbl in reminders
+        label.set_textcolor(lbl, renderedTextColor)
+        label.set_color(lbl, renderedBgColor)
 
 shouldShowMitigationName(SessionData sess, bool isHigh) =>
     if sess.sessionIndex == IDX_IVB
@@ -1827,6 +1874,8 @@ if validChartContext
                      lowMitigationLine=na,
                      highMitigationReminders=array.new<label>(),
                      lowMitigationReminders=array.new<label>(),
+                     highMitigationFadeApplied=false,
+                     lowMitigationFadeApplied=false,
                      highUnmitigatedLine=na,
                      lowUnmitigatedLine=na,
                      highUnmitigatedLabel=na,
@@ -2107,10 +2156,9 @@ drawIvbExtensions(SessionData sess, bool brokeHigh) =>
         array.push(sess.extLines, avgLine)
         array.push(sess.extLines, stdLine)
         if showAllLabels
-            for lbl in tile_line_labels(avgLine, avgLevel, levelLabelText(LABEL_EXT_AVG, avgLevel, priceModeShows(ivbProjectionShowPrice)), false, opening_0930_1000_extColor, labelsBgColor)
-                array.push(sess.extLabels, lbl)
-            for lbl in tile_line_labels(stdLine, stdLevel, levelLabelText(LABEL_EXT_STD, stdLevel, priceModeShows(ivbProjectionShowPrice)), false, opening_0930_1000_extColor, labelsBgColor)
-                array.push(sess.extLabels, lbl)
+            bool includePrice = priceModeShows(ivbProjectionShowPrice)
+            array.push(sess.extLabels, newIvbProjectionLabel(avgLine, avgLevel, LABEL_EXT_AVG, includePrice, opening_0930_1000_extColor, labelsBgColor))
+            array.push(sess.extLabels, newIvbProjectionLabel(stdLine, stdLevel, LABEL_EXT_STD, includePrice, opening_0930_1000_extColor, labelsBgColor))
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3.5: ASIA + RAFAEL FOCUS ANCHOR - Manual anchor line and margin label
@@ -2165,13 +2213,20 @@ if validChartContext and array.size(lifecycleSessions) > 0
             // For delayed mitigation sessions, overnight window extends to next day's early morning (before 05:00)
             isInNextDayOvernightWindow = sess.delayedMitigation and sess.nextDayKey == currentDayKey and barMinutes < PREMARKET_START_MIN
             isOnActualSessionDay = isOnSessionStartDay or isOnSessionEndDay or isInNextDayOvernightWindow
+            bool lifecycleExpired = not alwaysTrackMitigation(sess.sessionIndex) and not isOnActualSessionDay and currentDayKey != sess.startDayKey
+            if lifecycleExpired
+                completedMitigationShouldFade(sess, true)
+                completedMitigationShouldFade(sess, false)
+                if not completedMitigationFadePending(sess)
+                    array.push(completedLifecycleIndices, lifecycleIndex)
+                continue
             shouldTrackMitigation = alwaysTrackMitigation(sess.sessionIndex) or isOnActualSessionDay
             // For delayed mitigation (Asia Open), only evaluate from 05:00 to 16:00 (excludes overnight evening hours)
             canEvaluateMitigation = shouldTrackMitigation and canConfirmDelayedMitigation(sess, barMinutes, PREMARKET_START_MIN, CLOSE_1600_MIN)
             // Provisional window = genuine overnight only (formation evening + next day pre-05:00). Excludes the next day's post-RTH hours so a holiday-delayed revisit confirms (caps the dash) instead of staying pending past 05:00 — see crossesMidnight sessions (Rafael) where an empty holiday RTH window left the dash running.
             isInOvernightWindow = isDelayedProvisionalWindow(sess, barMinutes, PREMARKET_START_MIN, CLOSE_1600_MIN, currentDayKey)
             canEvaluateRetraceMitigation = not sess.retraceCapAt1600 or (shouldTrackMitigation and barMinutes < CLOSE_1600_MIN)
-            bool showOpenKeyOverlay = mitigationMode == SESSION_MITIGATED and showUnmitigatedRafaelAsiaOpenLevels and alwaysTrackMitigation(sess.sessionIndex)
+            bool showOpenKeyOverlay = mitigationMode == SESSION_MITIGATED and alwaysTrackMitigation(sess.sessionIndex)
             bool showPersistentLevels = mitigationMode == SESSION_UNMITIGATED or showOpenKeyOverlay
 
             // Record the first strict wick break per side for NY Early's IVB-based direction.
@@ -2233,7 +2288,7 @@ if validChartContext and array.size(lifecycleSessions) > 0
                             sess.highMitigationLine := solid
                             sess.highPendingLine := pending
 
-                else if high >= sess.dominantHigh
+                else if alwaysTrackMitigation(sess.sessionIndex) and high >= sess.dominantHigh
                     // Level taken outside same-day window (or outside market hours for always-track sessions)
                     sess.highMitigated := true
                     sess.highMitigationBar := bar_index
@@ -2288,7 +2343,7 @@ if validChartContext and array.size(lifecycleSessions) > 0
                             sess.lowMitigationLine := solid
                             sess.lowPendingLine := pending
 
-                else if low <= sess.dominantLow
+                else if alwaysTrackMitigation(sess.sessionIndex) and low <= sess.dominantLow
                     // Level taken outside same-day window (or outside market hours for always-track sessions)
                     sess.lowMitigated := true
                     sess.lowMitigationBar := bar_index
@@ -2546,8 +2601,10 @@ if validChartContext and array.size(lifecycleSessions) > 0
                 fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                 sess.retraceFadeApplied := true
 
-            bool lifecycleExpired = not alwaysTrackMitigation(sess.sessionIndex) and not isOnActualSessionDay and currentDayKey != sess.startDayKey
-            if sessionLifecycleComplete(sess) or lifecycleExpired
+            completedMitigationShouldFade(sess, true)
+            completedMitigationShouldFade(sess, false)
+            bool mitigationFadePending = completedMitigationFadePending(sess)
+            if sessionLifecycleComplete(sess) and not mitigationFadePending
                 array.push(completedLifecycleIndices, lifecycleIndex)
 
     if array.size(completedLifecycleIndices) > 0
@@ -2642,6 +2699,12 @@ if validChartContext and focusActive and barstate.islast and array.size(sessions
             reservedFocusLabelCount += requiredLabelCount
     refreshFocusGlowSession(IDX_0129)
     refreshFocusGlowSession(IDX_ASIA_OPEN)
+
+// Apply the latched style after Focus reconstructs deferred drawings.
+if validChartContext and barstate.islast and array.size(sessions) > 0
+    for sess in sessions
+        styleCompletedMitigationBoundary(sess, true)
+        styleCompletedMitigationBoundary(sess, false)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 5: DEVIATION GLOW - Darken deviation zones when price touches them
