@@ -45,7 +45,7 @@ type SessionData
     int endBar
     int startTime
     int endTime
-    int actualEndTime  // True session end time (for mitigation lines - not extended like endTime)
+    int actualEndTime  // Unextended endpoint used by completed drawings and mitigation lines
     float bodyHigh
     float bodyLow
     float wickHigh
@@ -637,9 +637,9 @@ parseTimeToMinutes(string timeStr) =>
 dayKey(int t) =>
     year(t, NY_TIMEZONE) * 10000 + month(t, NY_TIMEZONE) * 100 + dayofmonth(t, NY_TIMEZONE)
 
-// Check if a bar is within a session's time window (handles midnight-crossing sessions)
+// Session windows include their start minute and exclude their end minute.
 isInSessionTime(int minutes, int startMin, int endMin, bool crossesMidnight) =>
-    crossesMidnight ? (minutes >= startMin or minutes <= endMin) : (minutes >= startMin and minutes <= endMin)
+    crossesMidnight ? (minutes >= startMin or minutes < endMin) : (minutes >= startMin and minutes < endMin)
 
 sessionPriceState(int startMin, int endMin) =>
     int minutes = hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE)
@@ -1757,7 +1757,7 @@ if na(cachedDeviations_0129)
 // ═══════════════════════════════════════════════════════════════════════════
 
 var array<SessionConfig> sessionConfigs = array.from(
-    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 89, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, true, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
+    SessionConfig.new(opening_2130_0129, opening_2130_0129_offset, opening_2130_0129_showLabels, 1290, 90, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, SESSION_INTRADAY_0129, CHART_LABEL_0129, opening_2130_0129_labelPosition, opening_2130_0129_mitigation, opening_2130_0129_mitigationColor, true, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0600_0900, opening_0600_0900_offset, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, SESSION_EXTENDED_0600_0900, CHART_LABEL_0600_0900, opening_0600_0900_labelPosition, opening_0600_0900_mitigation, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
     SessionConfig.new(opening_0500_0915, opening_0500_0915_offset, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, SESSION_EXTENDED_0500_0915, CHART_LABEL_0500_0915, opening_0500_0915_labelPosition, opening_0500_0915_mitigation, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, false, labelColor, labelsBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_1800_2100, opening_1800_2100_offset, opening_1800_2100_showLabels, ASIA_OPEN_START_MIN, ASIA_OPEN_END_MIN, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, SESSION_EXTENDED_1800_2100, CHART_LABEL_1800_2100, opening_1800_2100_labelPosition, opening_1800_2100_mitigation, opening_1800_2100_mitigationColor, true, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
@@ -2007,8 +2007,8 @@ if validChartContext and array.size(activeSessions) > 0
         if hasSessionEnded
             // Finalize session - calculate heights and draw visualizations
             sess.endBar := bar_index - 1
-            // Store actual session end time (for mitigation lines)
-            sess.actualEndTime := not na(time[1]) ? time[1] : time
+            // Time charts end at the scheduled boundary; Range charts stop at the last eligible bar timestamp.
+            sess.actualEndTime := chart.is_range and not na(time[1]) ? time[1] : sess.endTime
             sess.endTime := sess.actualEndTime
 
             // Clear live drawings before final draw
@@ -2128,18 +2128,18 @@ if validChartContext and ivbExtFeatureOn
     bool crossed1600 = barMinutes >= CLOSE_1600_MIN and prevBarMinutes < CLOSE_1600_MIN
     if crossed1600 or (not na(ivbExtState.dayStart) and currentDayStart != ivbExtState.dayStart)
         finalizeIvbExtDay(ivbExtState)
-    if barMinutes >= IVB_START_MIN and barMinutes <= IVB_END_MIN
+    if barMinutes >= IVB_START_MIN and barMinutes < IVB_END_MIN
         ivbExtState.dayHigh := na(ivbExtState.dayHigh) ? high : math.max(ivbExtState.dayHigh, high)
         ivbExtState.dayLow := na(ivbExtState.dayLow) ? low : math.min(ivbExtState.dayLow, low)
         ivbExtState.dayStart := currentDayStart
-    else if barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(ivbExtState.dayHigh)
+    else if barMinutes >= IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(ivbExtState.dayHigh)
         ivbExtState.maxAbove := math.max(ivbExtState.maxAbove, high - ivbExtState.dayHigh)
         ivbExtState.maxBelow := math.max(ivbExtState.maxBelow, ivbExtState.dayLow - low)
 
 // Reveal the average / avg+1σ projection after confirmation, anchored at the original IVB break.
 drawIvbExtensions(SessionData sess, bool brokeHigh) =>
     int projectionStartTime = brokeHigh ? sess.extHighTime : sess.extLowTime
-    if ivbExtFeatureOn and showAllLines and barMinutes > IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(projectionStartTime) and array.size(ivbExtState.ratios) >= IVB_EXT_MIN_SAMPLES
+    if ivbExtFeatureOn and showAllLines and barMinutes >= IVB_END_MIN and barMinutes < CLOSE_1600_MIN and not na(projectionStartTime) and array.size(ivbExtState.ratios) >= IVB_EXT_MIN_SAMPLES
         // Statistics are trained on wick ranges, so projections must use the same basis even
         // when the IVB display/mitigation mode is configured to use body levels.
         float rangeHeight = sess.wickHigh - sess.wickLow
