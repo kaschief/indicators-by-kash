@@ -376,7 +376,7 @@ Do not include unrelated files, and do not push unless the user separately reque
 
 **Every final or merge commit must include a useful commit body. Never create a subject-only final commit.**
 
-- Keep the subject in the repository's required `type(scope): summary` format
+- Keep the subject in the repository's required `type(scope): summary` format; allowed types are `feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, and `chore`
 - Add a blank line between the subject and body
 - Separate body paragraphs with real blank lines. When using `git commit`, pass the subject and each paragraph with separate `-m` arguments; never put literal `\n` sequences in a `-m` argument.
 - Summarize the user-facing changes and the important implementation or refactoring work
