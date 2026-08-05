@@ -266,6 +266,7 @@ const color DEFAULT_PANE_WICK_COLOR = #9c9c9c
 
 
 // Tooltips
+TOOLTIP_KEEP_PAST_GLOW = "Earlier sessions keep the glow they earned while live instead of clearing it. They never register new touches.\n\nOff = only the most recent session of each type shows glow."
 TOOLTIP_MAX_SESSIONS = "Max sessions shown per opening type."
 TOOLTIP_SHOW_SESSION_NAMES = "Show session name labels"
 TOOLTIP_SHOW_SESSION_NAME_ON_MITIGATION = "Add the session name to mitigation markers for the key sessions (Rafael, Asia Open, IVB).\n\n• 0.5 / 0.618 labels stay bare and use the session's retracement label colors.\n• The mitigated high/low line gets a session-name label (at its midpoint, or tiled along it when Add Mitigation Reminder Labels is on, e.g. asia open).\n\nOff = high/low lines stay unlabelled."
@@ -329,6 +330,7 @@ FILTER_NY_EARLY_IVB_PREMARKET = "NY Early + IVB + Premarket"
 FILTER_1800 = "1800 Range"
 FILTER_1800_EARLY = "1800 + Early"
 FILTER_IVB = "IVB"
+FILTER_PREMARKET = "Premarket"
 FILTER_PREP2 = "★ Rafael + 1800 + Early + IVB + Premarket"
 
 PRICE_MODE_OFF = "Off"
@@ -373,7 +375,7 @@ DEV_J_IVB = "0.25:0.5, 1:1.5"                                    // IVB (09:30-1
 // INPUTS - Quick Filter
 // ═══════════════════════════════════════════════════════════════════════════
 
-quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_1800, FILTER_1800_EARLY, FILTER_IVB, FILTER_NY_EARLY_IVB, FILTER_NY_EARLY_IVB_PREMARKET], group=GROUP_QUICK_FILTER, tooltip="Quick filter presets for session visibility.")
+quickFilter = input.string(FILTER_PREP2, "Quick Filter", options=[FILTER_ALL, FILTER_RAFAEL_1800, FILTER_RAFAEL_1800_EARLY, FILTER_RAFAEL_1800_EARLY_IVB, FILTER_PREP2, FILTER_1800, FILTER_1800_EARLY, FILTER_IVB, FILTER_PREMARKET, FILTER_NY_EARLY_IVB, FILTER_NY_EARLY_IVB_PREMARKET], group=GROUP_QUICK_FILTER, tooltip="Quick filter presets for session visibility.")
 maxSessions = input.int(3, LABEL_SESSIONS, group=GROUP_QUICK_FILTER, tooltip=TOOLTIP_MAX_SESSIONS, minval=1, maxval=100)
 quickPriceMode = input.string(PRICE_MODE_OFF, "Prices", options=[PRICE_MODE_OFF, PRICE_MODE_ACTIVE, PRICE_MODE_CUSTOM], group=GROUP_QUICK_FILTER, tooltip=TOOLTIP_PRICE_MODE)
 showOnlyEnabled = input.bool(true, LABEL_SHOW_ONLY, inline="show_only", group=GROUP_QUICK_FILTER, tooltip=TOOLTIP_SHOW_ONLY)
@@ -441,8 +443,9 @@ completedMitigationDistanceThreshold = input.float(0.2, "Distance Threshold %", 
 
 showAllLines = input.bool(true, "Show All Lines", group=GROUP_DISPLAY, tooltip="Master line switch. Off hides deviation levels, mitigation lines, provisional lines, unmitigated extensions and retracement lines while leaving boxes visible. Calculations continue normally.")
 enableDeviationGlow = input.bool(true, "Deviation Glow", group=GROUP_DISPLAY, tooltip="Darken a deviation zone after its first touch during the glow window.")
-glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1)
-glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, tooltip="Deviation glow window.")
+glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_DISPLAY, minval=0.1, maxval=99.9, step=0.1, active=enableDeviationGlow)
+glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, active=enableDeviationGlow, tooltip="Deviation glow window.")
+keepPastSessionGlow = input.bool(false, "Keep Past Glows", inline="glow_past", group=GROUP_DISPLAY, active=enableDeviationGlow, tooltip=TOOLTIP_KEEP_PAST_GLOW)
 enableIvbExtensionGlow = input.bool(true, "IVB Extension Glow", inline="ivb_ext_glow", group=GROUP_DISPLAY)
 glowIvbExtensionWidth = input.int(4, "Width", inline="ivb_ext_glow", group=GROUP_DISPLAY, options=[1, 2, 3, 4, 5], active=enableIvbExtensionGlow)
 ivbExtensionGlowWindowHours = input.float(20.0, "Duration", inline="ivb_ext_glow", group=GROUP_DISPLAY, minval=0.5, maxval=24.0, step=0.5, active=enableIvbExtensionGlow, tooltip="Latest-IVB projections can register hits until the next IVB begins. After its first hit, each line stays widened for this duration or until the next IVB, whichever comes first.")
@@ -748,7 +751,7 @@ setLatestGlowSession(int sessionIndex, SessionData candidate) =>
     SessionData previous = array.get(latestGlowSessions, sessionIndex)
     bool changed = na(previous) != na(candidate) or (not na(previous) and not na(candidate) and previous.startTime != candidate.startTime)
     if changed
-        if not na(previous)
+        if not na(previous) and not keepPastSessionGlow
             resetSessionDeviationGlow(previous)
         array.set(latestGlowSessions, sessionIndex, candidate)
 
@@ -1186,6 +1189,8 @@ isInFilter(int idx) =>
         idx == IDX_ASIA_OPEN or idx == IDX_NY_EARLY
     else if quickFilter == FILTER_IVB
         idx == IDX_IVB
+    else if quickFilter == FILTER_PREMARKET
+        idx == IDX_PREMARKET
     else if quickFilter == FILTER_NY_EARLY_IVB
         idx == IDX_NY_EARLY or idx == IDX_IVB
     else if quickFilter == FILTER_NY_EARLY_IVB_PREMARKET
@@ -2709,14 +2714,6 @@ if validChartContext and barstate.islast and array.size(sessions) > 0
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 5: DEVIATION GLOW - Darken deviation zones when price touches them
 // ═══════════════════════════════════════════════════════════════════════════
-//
-// Architecture: Uses global maps keyed by session and box index.
-//
-// Logic:
-// 1. Only process the most recent session of each type
-// 2. The fixed window begins when the session ends
-// 3. A first touch darkens the box for the rest of that window
-// 4. Window expiry restores the box and permanently ends its glow eligibility
 
 if validChartContext and enableDeviationGlow
     glowWindowMs = int(glowWindowHours * 60 * 60 * 1000)
@@ -2735,7 +2732,6 @@ if validChartContext and enableDeviationGlow
 
         withinWindow = time <= sessionEndTime + glowWindowMs
 
-        // Process each deviation box
         for i = 0 to boxCount - 1
             devBox = array.get(sess.deviationBoxes, i)
             boxKey = getGlowBoxKey(sess.sessionIndex, sess.startTime, i)
@@ -2751,7 +2747,7 @@ if validChartContext and enableDeviationGlow
                 if touched and not map.contains(glowTouchTimes, boxKey)
                     map.put(glowTouchTimes, boxKey, time)
                     box.set_bgcolor(devBox, darkenColor(originalColor, glowDarkenPercent))
-            else
+            else if not keepPastSessionGlow
                 resetGlowBox(devBox, boxKey)
 
 // ═══════════════════════════════════════════════════════════════════════════
