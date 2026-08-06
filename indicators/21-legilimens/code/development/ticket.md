@@ -1111,5 +1111,3 @@ Right-positioned dots share one exact left edge.
 Different dot sizes do not create a zigzag column.
 Changing tier size does not shift the intended anchor edge or center.
 The dots remain vertically aligned with their corresponding price levels.
-
-

@@ -7,9 +7,10 @@ INDICATOR_MAX_LINES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_POLYLINES = 100
+INDICATOR_MAX_BARS_BACK = 5000
 INDICATOR_TITLE = "legilimens •"
 
-indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS, max_boxes_count=INDICATOR_MAX_BOXES, max_polylines_count=INDICATOR_MAX_POLYLINES)
+indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS, max_boxes_count=INDICATOR_MAX_BOXES, max_polylines_count=INDICATOR_MAX_POLYLINES, max_bars_back=INDICATOR_MAX_BARS_BACK)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -459,7 +460,7 @@ lowVolumeTier1MarkerSize = input.int(5, "Tier 1 Dot Size", minval=0, maxval=100,
 // INPUTS — PRICE LABELS
 // ═══════════════════════════════════════════════════════════════════════════════
 levelLabelOffset = input.int(150, "Offset", minval=0, maxval=500, inline="label_layout", group=GROUP_LABELS)
-markerOffsetBars = input.int(3, "Dot Offset", minval=0, maxval=50, step=1, inline="label_layout", group=GROUP_LABELS, tooltip="Bars between the outer frame and centered level markers.")
+markerOffsetBars = input.int(3, "Dot Offset", minval=1, maxval=50, step=1, inline="label_layout", group=GROUP_LABELS, tooltip="Bars between the outer frame and centered level markers.")
 levelLabelBgColor = input.color(color.new(color.rgb(249, 248, 248), 20), "Background", inline="label_layout", group=GROUP_LABELS, tooltip="Offset sets how far beyond the latest chart bar every To Offset profile ends its levels, zones and tags. Background sets the shared tag container color.")
 
 mergeOverlaps = input.bool(true, "Merge Levels", inline="label_merge", group=GROUP_LABELS)
@@ -525,7 +526,6 @@ type PendingOutlierLevel
     int lineStartTime
     int rightTime
     int markerTime
-    int sessionCloseTime
     string sourceName
     int tradingDayKey
     bool historical
@@ -570,8 +570,8 @@ type OutlierAppearance
     color textColor
     color zoneColor
 
-array<int> deltaTierMarkerSizes = array.from(deltaTier5MarkerSize, deltaTier4MarkerSize, deltaTier3MarkerSize, deltaTier2MarkerSize, deltaTier1MarkerSize)
-array<int> lowVolumeTierMarkerSizes = array.from(lowVolumeTier5MarkerSize, lowVolumeTier4MarkerSize, lowVolumeTier3MarkerSize, lowVolumeTier2MarkerSize, lowVolumeTier1MarkerSize)
+var array<int> deltaTierMarkerSizes = array.from(deltaTier5MarkerSize, deltaTier4MarkerSize, deltaTier3MarkerSize, deltaTier2MarkerSize, deltaTier1MarkerSize)
+var array<int> lowVolumeTierMarkerSizes = array.from(lowVolumeTier5MarkerSize, lowVolumeTier4MarkerSize, lowVolumeTier3MarkerSize, lowVolumeTier2MarkerSize, lowVolumeTier1MarkerSize)
 
 var array<OutlierAppearance> outlierAppearances = array.from(
      OutlierAppearance.new(tier5Enabled, true, outlierTier5BuyLineColor, deltaTier5LineWidth, deltaTier5LineStyle, outlierTier5BuyTextColor, outlierTier5BuyZoneColor),
@@ -794,11 +794,8 @@ rollingThroughTime(int referenceTime, string throughMode, bool twentyFourSeven) 
                 cutoffDay := dayofweek(endTime, NY_TIMEZONE)
     endTime
 
-deltaTierMarkerSize(int tier) =>
-    array.get(deltaTierMarkerSizes, math.max(0, math.min(4, 5 - tier)))
-
-lowVolumeTierMarkerSize(int tier) =>
-    array.get(lowVolumeTierMarkerSizes, math.max(0, math.min(4, 5 - tier)))
+tierMarkerSize(array<int> markerSizes, int tier) =>
+    array.get(markerSizes, math.max(0, math.min(4, 5 - tier)))
 
 outlierAppearance(bool buySide, int tier) =>
     int tierIndex = math.max(0, math.min(4, 5 - tier))
@@ -1141,9 +1138,6 @@ queueRightLine(float price, int leftTime, int rightTime, color lineColor, int li
 
 renderZoneFill(int leftTime, int rightTime, float zoneLow, float zoneHigh, color zoneFillColor) =>
     array.push(drawnBoxes, box.new(left=leftTime, top=zoneHigh, right=rightTime, bottom=zoneLow, xloc=xloc.bar_time, border_color=color.new(zoneFillColor, 100), border_width=0, bgcolor=zoneFillColor))
-
-reminderPlacements(int runMs, int spacingMs, int maxCount) =>
-    math.min(maxCount, math.max(1, int(math.floor(math.sqrt(float(runMs) / math.max(1, spacingMs))))))
 
 // Clusters are one array of records rather than parallel arrays, so their fields cannot desynchronize.
 flushPendingRightLines(bool merge) =>
@@ -1511,7 +1505,7 @@ renderLowVolumeStructures(DeltaProfile profile, string sourceName, int sessionCl
                         renderLowVolumeZone(profile, selectedCandidate.zoneLow, selectedCandidate.zoneHigh, levelEndTime)
                     else
                         queueRightLine(selectedCandidate.price, profile.endTime, levelEndTime, lowVolumeColor, 1, STYLE_DOTTED, levelRank, sourceName, sessionTradingDayKey, historical, 0)
-                    queueLevelMarker(labelPrice, markerTime, lowVolumeColor, lowVolumeTierMarkerSize(structureTier))
+                    queueLevelMarker(labelPrice, markerTime, lowVolumeColor, tierMarkerSize(lowVolumeTierMarkerSizes, structureTier))
                     for candidateIndex = 0 to candidateCount - 1
                         if not array.get(discarded, candidateIndex) and lowVolumeCandidatesOverlap(selectedCandidate, array.get(candidates, candidateIndex), rowHeight)
                             array.set(discarded, candidateIndex, true)
@@ -1522,7 +1516,7 @@ queueOutlierPeak(DeltaProfile profile, string sourceName, int sessionCloseTime, 
     float zoneLow = profile.priceLow + firstRow * rowHeight
     float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
     int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime, historical)
-    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.endTime, levelEndTime, markerTime, sessionCloseTime, sourceName, sessionTradingDayKey, historical))
+    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.endTime, levelEndTime, markerTime, sourceName, sessionTradingDayKey, historical))
 
 collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, int sessionCloseTime, int sessionTradingDayKey, bool historical, bool buySide, int markerTime) =>
     int peaksFound = 0
@@ -1584,7 +1578,6 @@ flushPendingOutlierLevels(bool merge) =>
         array<int> clusterLineStartTimes = array.new<int>()
         array<int> clusterRightTimes = array.new<int>()
         array<int> clusterMarkerTimes = array.new<int>()
-        array<int> clusterSessionCloseTimes = array.new<int>()
         array<string> clusterSourceNames = array.new<string>()
         array<int> clusterTradingDayKeys = array.new<int>()
         array<bool> clusterHistoricalFlags = array.new<bool>()
@@ -1624,7 +1617,6 @@ flushPendingOutlierLevels(bool merge) =>
                 array.push(clusterLineStartTimes, pending.lineStartTime)
                 array.push(clusterRightTimes, pending.rightTime)
                 array.push(clusterMarkerTimes, pending.markerTime)
-                array.push(clusterSessionCloseTimes, pending.sessionCloseTime)
                 array.push(clusterSourceNames, pending.sourceName)
                 array.push(clusterTradingDayKeys, pending.tradingDayKey)
                 array.push(clusterHistoricalFlags, pending.historical)
@@ -1659,12 +1651,9 @@ flushPendingOutlierLevels(bool merge) =>
                         float price = array.get(clusterPrices, bestCluster)
                         float zoneLow = array.get(clusterZoneLows, bestCluster)
                         float zoneHigh = array.get(clusterZoneHighs, bestCluster)
-                        float deltaSum = array.get(clusterDeltas, bestCluster)
-                        float strength = array.get(clusterStrengths, bestCluster)
                         int lineStartTime = array.get(clusterLineStartTimes, bestCluster)
                         int rightTime = array.get(clusterRightTimes, bestCluster)
                         int markerTime = array.get(clusterMarkerTimes, bestCluster)
-                        int sessionCloseTime = array.get(clusterSessionCloseTimes, bestCluster)
                         OutlierAppearance appearance = outlierAppearance(buySide, tier)
                         bool zoneVisible = appearance.enabled and outlierZoneSideVisible(buySide)
                         string sourceName = array.get(clusterSourceNames, bestCluster)
@@ -1677,7 +1666,7 @@ flushPendingOutlierLevels(bool merge) =>
                         if appearance.enabled and appearance.hasLine
                             queueRightLine(price, lineStartTime, rightTime, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction)
                         if appearance.enabled
-                            queueLevelMarker(price, markerTime, appearance.textColor, deltaTierMarkerSize(tier))
+                            queueLevelMarker(price, markerTime, appearance.textColor, tierMarkerSize(deltaTierMarkerSizes, tier))
         array.clear(pendingOutlierLevels)
 
 renderProfileBox(DeltaProfile profile, bool drawBorder, string sourceName) =>
