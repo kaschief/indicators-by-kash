@@ -21,6 +21,8 @@ UTC_TIMEZONE = "GMT+0"
 MS_PER_MINUTE = 60 * 1000
 MS_PER_HOUR = 60 * MS_PER_MINUTE
 MS_PER_DAY = 24 * MS_PER_HOUR
+FUTURES_EXTENSION_WEEK_MS = 5 * MS_PER_DAY
+CALENDAR_DAYS_PER_WEEK = 7
 const int SECONDS_PER_MINUTE = 60
 GLOBEX_REOPEN_SHIFT_MS = 6 * MS_PER_HOUR
 SUNDAY_REOPEN_START_HOUR = 18
@@ -655,8 +657,35 @@ labelClearanceMs() =>
 pocLabelOffsetMs() =>
     int(math.round(POC_LABEL_OFFSET_BARS * barSpanMs()))
 
-sessionLevelEndpoint(string sourceName, int sessionCloseTime) =>
-    sessionCloseTime + int(math.round(profileHours(sourceName) * MS_PER_HOUR))
+futuresExtensionEndpoint(int sessionCloseTime, int extensionMs) =>
+    int endpoint = sessionCloseTime
+    int remainingMs = extensionMs
+    if remainingMs > 0
+        int endpointDay = dayofweek(endpoint, NY_TIMEZONE)
+        int endpointMinute = hour(endpoint, NY_TIMEZONE) * 60 + minute(endpoint, NY_TIMEZONE)
+        bool fridayWeekend = endpointDay == dayofweek.friday and endpointMinute >= SUNDAY_REOPEN_START_HOUR * 60
+        bool saturdayWeekend = endpointDay == dayofweek.saturday
+        bool sundayWeekend = endpointDay == dayofweek.sunday and endpointMinute < SUNDAY_REOPEN_START_HOUR * 60
+        if fridayWeekend or saturdayWeekend or sundayWeekend
+            int daysUntilSunday = fridayWeekend ? 2 : saturdayWeekend ? 1 : 0
+            endpoint := timestamp(NY_TIMEZONE, year(endpoint, NY_TIMEZONE), month(endpoint, NY_TIMEZONE), dayofmonth(endpoint, NY_TIMEZONE) + daysUntilSunday, SUNDAY_REOPEN_START_HOUR, 0)
+        endpointDay := dayofweek(endpoint, NY_TIMEZONE)
+        int daysUntilFriday = (dayofweek.friday - endpointDay + CALENDAR_DAYS_PER_WEEK) % CALENDAR_DAYS_PER_WEEK
+        int weekendStart = timestamp(NY_TIMEZONE, year(endpoint, NY_TIMEZONE), month(endpoint, NY_TIMEZONE), dayofmonth(endpoint, NY_TIMEZONE) + daysUntilFriday, SUNDAY_REOPEN_START_HOUR, 0)
+        int availableMs = weekendStart - endpoint
+        if remainingMs < availableMs
+            endpoint += remainingMs
+        else
+            remainingMs -= availableMs
+            int weekendEnd = timestamp(NY_TIMEZONE, year(weekendStart, NY_TIMEZONE), month(weekendStart, NY_TIMEZONE), dayofmonth(weekendStart, NY_TIMEZONE) + 2, SUNDAY_REOPEN_START_HOUR, 0)
+            int fullWeeks = int(math.floor(remainingMs / float(FUTURES_EXTENSION_WEEK_MS)))
+            remainingMs -= fullWeeks * FUTURES_EXTENSION_WEEK_MS
+            endpoint := timestamp(NY_TIMEZONE, year(weekendEnd, NY_TIMEZONE), month(weekendEnd, NY_TIMEZONE), dayofmonth(weekendEnd, NY_TIMEZONE) + fullWeeks * CALENDAR_DAYS_PER_WEEK, SUNDAY_REOPEN_START_HOUR, 0) + remainingMs
+    endpoint
+
+sessionLevelEndpoint(string sourceName, int sessionCloseTime, bool futuresAsset) =>
+    int extensionMs = int(math.round(profileHours(sourceName) * MS_PER_HOUR))
+    futuresAsset ? futuresExtensionEndpoint(sessionCloseTime, extensionMs) : sessionCloseTime + extensionMs
 
 // Bar midpoint ignores time gaps.
 rangeCenterTime(DeltaProfile profile, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
@@ -1395,10 +1424,10 @@ lowVolumeCandidatesOverlap(LowVolumeCandidate first, LowVolumeCandidate second, 
         overlap := cliffPrice >= lvnLow - cliffMargin and cliffPrice <= lvnHigh + cliffMargin
     overlap
 
-renderLowVolumeZone(DeltaProfile profile, string sourceName, float zoneLow, float zoneHigh, int levelEndTime) =>
+renderLowVolumeZone(DeltaProfile profile, float zoneLow, float zoneHigh, int levelEndTime) =>
     renderZoneFill(profile.endTime, levelEndTime, zoneLow, zoneHigh, color.new(color.rgb(74, 74, 74), 95))
 
-renderLowVolumeStructures(DeltaProfile profile, string sourceName, int sessionCloseTime, int sessionTradingDayKey, bool historical) =>
+renderLowVolumeStructures(DeltaProfile profile, string sourceName, int levelEndTime, int sessionTradingDayKey, bool historical) =>
     if showMinimumLvnTiers
         array<LowVolumeCandidate> candidates = collectLowVolumeCandidates(profile)
         int candidateCount = array.size(candidates)
@@ -1419,10 +1448,9 @@ renderLowVolumeStructures(DeltaProfile profile, string sourceName, int sessionCl
                     array.set(discarded, bestCandidateIndex, true)
                     int levelRank = LOW_VOLUME_LEVEL_RANK - structureRank
                     float labelPrice = selectedCandidate.isLvn ? (selectedCandidate.zoneLow + selectedCandidate.zoneHigh) * 0.5 : selectedCandidate.price
-                    int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime)
                     int markerTime = levelMarkerTime(levelEndTime)
                     if selectedCandidate.isLvn
-                        renderLowVolumeZone(profile, sourceName, selectedCandidate.zoneLow, selectedCandidate.zoneHigh, levelEndTime)
+                        renderLowVolumeZone(profile, selectedCandidate.zoneLow, selectedCandidate.zoneHigh, levelEndTime)
                     else
                         queueRightLine(selectedCandidate.price, profile.endTime, levelEndTime, color.new(color.rgb(15, 15, 15), 75), LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, sourceName, sessionTradingDayKey, historical, 0)
                     queueLevelMarker(labelPrice, markerTime, color.new(color.rgb(15, 15, 15), 75), tierMarkerSize(tierMarkerSizes, structureTier))
@@ -1430,15 +1458,14 @@ renderLowVolumeStructures(DeltaProfile profile, string sourceName, int sessionCl
                         if not array.get(discarded, candidateIndex) and lowVolumeCandidatesOverlap(selectedCandidate, array.get(candidates, candidateIndex), rowHeight)
                             array.set(discarded, candidateIndex, true)
 
-queueOutlierPeak(DeltaProfile profile, string sourceName, int sessionCloseTime, int sessionTradingDayKey, bool historical, bool buySide, int firstRow, int lastRow, int anchorRow, float peakDelta, float peakStrength, int markerTime) =>
+queueOutlierPeak(DeltaProfile profile, string sourceName, int levelEndTime, int sessionTradingDayKey, bool historical, bool buySide, int firstRow, int lastRow, int anchorRow, float peakDelta, float peakStrength, int markerTime) =>
     float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
     float peakPrice = profile.priceLow + (anchorRow + 0.5) * rowHeight
     float zoneLow = profile.priceLow + firstRow * rowHeight
     float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
-    int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime)
     array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.endTime, levelEndTime, markerTime, sourceName, sessionTradingDayKey, historical))
 
-collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, int sessionCloseTime, int sessionTradingDayKey, bool historical, bool buySide, int markerTime) =>
+collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, int levelEndTime, int sessionTradingDayKey, bool historical, bool buySide, int markerTime) =>
     int peaksFound = 0
     bool peakActive = false
     float peakDelta = 0.0
@@ -1455,7 +1482,7 @@ collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sou
         if qualifies
             bool startsNewPeak = peakActive and rowIndex - lastQualifiedRow > OUTLIER_PEAK_GAP_ROWS + 1
             if startsNewPeak
-                queueOutlierPeak(profile, sourceName, sessionCloseTime, sessionTradingDayKey, historical, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength, markerTime)
+                queueOutlierPeak(profile, sourceName, levelEndTime, sessionTradingDayKey, historical, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength, markerTime)
                 peaksFound += 1
                 peakActive := false
                 peakDelta := 0.0
@@ -1473,17 +1500,16 @@ collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sou
                 peakAnchorRow := rowIndex
             lastQualifiedRow := rowIndex
     if peakActive
-        queueOutlierPeak(profile, sourceName, sessionCloseTime, sessionTradingDayKey, historical, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength, markerTime)
+        queueOutlierPeak(profile, sourceName, levelEndTime, sessionTradingDayKey, historical, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength, markerTime)
         peaksFound += 1
     peaksFound
 
-collectOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, int sessionCloseTime, int sessionTradingDayKey, bool historical) =>
+collectOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, int levelEndTime, int sessionTradingDayKey, bool historical) =>
     int peaksFound = 0
     if showDeltaTiers
-        int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime)
         int markerTime = levelMarkerTime(levelEndTime)
-        peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, sessionCloseTime, sessionTradingDayKey, historical, true, markerTime)
-        peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, sessionCloseTime, sessionTradingDayKey, historical, false, markerTime)
+        peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, levelEndTime, sessionTradingDayKey, historical, true, markerTime)
+        peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, levelEndTime, sessionTradingDayKey, historical, false, markerTime)
     peaksFound
 
 flushPendingOutlierLevels(bool merge) =>
@@ -1593,14 +1619,12 @@ renderProfileBox(DeltaProfile profile, string sourceName) =>
     color innerColor = profileInnerColor(sourceName)
     array.push(drawnBoxes, box.new(left=profile.startTime, top=profile.rangeHigh, right=profile.endTime, bottom=profile.rangeLow, xloc=xloc.bar_time, border_color=innerColor, border_width=SESSION_OUTLINE_WIDTH, border_style=line.style_solid, bgcolor=color.new(color.white, 100)))
 
-renderOuterSessionFrame(DeltaProfile profile, string sourceName, int sessionCloseTime) =>
-    int frameEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime)
+renderOuterSessionFrame(DeltaProfile profile, string sourceName, int levelEndTime) =>
     [rangeHighTitleY, rangeLowTitleY, titleClearance] = rangeTitleLayout(profile, profileRangeLabelSize(sourceName))
     color outerColor = profileOuterColor(sourceName)
-    array.push(drawnBoxes, box.new(left=profile.startTime, top=rangeHighTitleY + titleClearance, right=frameEndTime, bottom=rangeLowTitleY - titleClearance, xloc=xloc.bar_time, border_color=outerColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(outerColor, 100)))
+    array.push(drawnBoxes, box.new(left=profile.startTime, top=rangeHighTitleY + titleClearance, right=levelEndTime, bottom=rangeLowTitleY - titleClearance, xloc=xloc.bar_time, border_color=outerColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(outerColor, 100)))
 
-renderReferenceLevel(DeltaProfile profile, string sourceName, int sessionCloseTime, bool historical, float price, string levelName, color lineColor) =>
-    int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime)
+renderReferenceLevel(DeltaProfile profile, string sourceName, int levelEndTime, bool historical, float price, string levelName, color lineColor) =>
     string labelText = profileDisplayName(sourceName) + " " + LEVEL_POC
     string lineStyle = levelName == LEVEL_POC ? STYLE_DASHED : STYLE_SOLID
     int effectiveWidth = levelName == LEVEL_POC ? POC_LEVEL_WIDTH : VALUE_AREA_LEVEL_WIDTH
@@ -1608,13 +1632,13 @@ renderReferenceLevel(DeltaProfile profile, string sourceName, int sessionCloseTi
     if levelName == LEVEL_POC
         array.push(drawnLabels, label.new(levelEndTime + pocLabelOffsetMs(), price, labelText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=color.rgb(49, 27, 146), size=POC_LABEL_SIZE, color=color.new(color.white, 100)))
 
-renderProfileLevels(DeltaProfile profile, string sourceName, int sessionCloseTime, bool historical, float pocPrice, float valueAreaLowPrice, float valueAreaHighPrice) =>
+renderProfileLevels(DeltaProfile profile, string sourceName, int levelEndTime, bool historical, float pocPrice, float valueAreaLowPrice, float valueAreaHighPrice) =>
     if showValueAreaLevels
         color levelColor = profileValueAreaLevelColor(sourceName)
-        renderReferenceLevel(profile, sourceName, sessionCloseTime, historical, valueAreaHighPrice, LEVEL_VAH, levelColor)
-        renderReferenceLevel(profile, sourceName, sessionCloseTime, historical, valueAreaLowPrice, LEVEL_VAL, levelColor)
+        renderReferenceLevel(profile, sourceName, levelEndTime, historical, valueAreaHighPrice, LEVEL_VAH, levelColor)
+        renderReferenceLevel(profile, sourceName, levelEndTime, historical, valueAreaLowPrice, LEVEL_VAL, levelColor)
     if showPocLevel
-        renderReferenceLevel(profile, sourceName, sessionCloseTime, historical, pocPrice, LEVEL_POC, color.rgb(49, 27, 146))
+        renderReferenceLevel(profile, sourceName, levelEndTime, historical, pocPrice, LEVEL_POC, color.rgb(49, 27, 146))
 
 renderRangeLabels(DeltaProfile profile, string sourceName, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
     string labelSize = profileRangeLabelSize(sourceName)
@@ -1658,9 +1682,10 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, bool historical, 
     int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
     int endScaleIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
     int sessionCloseTime = sessionOccurrenceClose(sourceName, profile, twentyFourSeven, developing)
+    int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime, syminfo.type == "futures")
     int sessionTradingDayKey = tradingDayKey(sessionCloseTime)
 
-    renderOuterSessionFrame(profile, sourceName, sessionCloseTime)
+    renderOuterSessionFrame(profile, sourceName, levelEndTime)
     renderRangeLabels(profile, sourceName, chartTimes, startScaleIndex, endScaleIndex)
     renderProfileBox(profile, sourceName)
 
@@ -1671,9 +1696,9 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, bool historical, 
 
     array<float> strengths = computeRowStrengths(profile)
     renderDeltaPolylines(profile, sourceName, strengths, chartTimes, startScaleIndex, endScaleIndex)
-    renderProfileLevels(profile, sourceName, sessionCloseTime, historical, pocPrice, valueAreaLowPrice, valueAreaHighPrice)
-    renderLowVolumeStructures(profile, sourceName, sessionCloseTime, sessionTradingDayKey, historical)
-    collectOutlierPeaks(profile, strengths, sourceName, sessionCloseTime, sessionTradingDayKey, historical)
+    renderProfileLevels(profile, sourceName, levelEndTime, historical, pocPrice, valueAreaLowPrice, valueAreaHighPrice)
+    renderLowVolumeStructures(profile, sourceName, levelEndTime, sessionTradingDayKey, historical)
+    collectOutlierPeaks(profile, strengths, sourceName, levelEndTime, sessionTradingDayKey, historical)
     flushPendingOutlierLevels(mergeOverlaps)
 
 renderProfileSelection(ProfileSelection selection, string sourceName, bool twentyFourSeven, array<int> chartTimes, int deltaProfilesRemaining, int deltaLayersPerProfile) =>
