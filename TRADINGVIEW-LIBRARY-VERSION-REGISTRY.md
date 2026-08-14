@@ -21,14 +21,14 @@ This is the repository's single source of truth for TradingView library versions
 | Library | Source | Highest published | Pending version | Development import | Production import | Pending SHA-256 | Status |
 |---|---|---:|---:|---:|---:|---|---|
 | RevelioCoreLibrary | `indicators/20-revelio/code/development/libraries/revelio-core-library.pine` | 10 | — | 10 | 10 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
-| RevelioGapsLibrary | `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` | 10 | — | 10 | 10 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
+| RevelioGapsLibrary | `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` | 10 | 11 | 11 | 10 | `0f8344c9837dea494c4fa4f83773a376760e3920ce59b3b24394dbcc07c4e524` | `PENDING_PERFORMANCE_REMEDIATION` |
 | RevelioInteractionsLibrary | `indicators/20-revelio/code/development/libraries/revelio-interactions-library.pine` | 16 | — | 16 | 16 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` | 1 | — | 1 | 1 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` | 1 | 2 | 2 | 1 | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` | `PENDING_PERFORMANCE_REMEDIATION` |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development host: `indicators/20-revelio/code/development/indicator/revelio.pine`
 
-Current truthful status: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are published, and the reduced Revelio host compiles and loads against that chain. Runtime testing reports a first-load performance regression versus the previous committed Revelio baseline. Composite defaults Off; Quick Filter remains the sole authority over whether a composite source can consolidate or render, while Touch Markers can intentionally inspect hidden ordinary anchors through Include All Anchors.
+Current truthful status: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are published, and the checkpoint host compiles and loads against that chain. Runtime testing reports a first-load performance regression versus commit `72e5ba2`. Gaps `/11` and Profile Orchestration `/2` are reserved for behavior-preserving performance remediation; the development host also removes redundant Composite-Off and Touch Marker work and explicitly uses Pine v6 dynamic requests to skip the complete Quarterly request when that anchor is not required. Composite defaults Off; Quick Filter remains the sole authority over whether a composite source can consolidate or render, while Touch Markers can intentionally inspect hidden ordinary anchors through Include All Anchors.
 
 ## External pinned dependencies
 
@@ -137,6 +137,8 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-14-11 | 2026-08-14 | RevelioInteractionsLibrary | 16 | Publish the shared-presentation-helper Interactions source privately as `/16`, then compile the development host against Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
 | PUB-2026-08-14-12 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 1 | After Core `/10` is published, publish the final domain-deduplicated profile-orchestration source privately as `/1` | `LIBRARY_COMPILE_FAILED_CE10125` |
 | PUB-2026-08-14-13 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 1 | After Core `/10` is published, publish the CE10125-corrected literal-enum-title profile-orchestration source privately as `/1` | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
+| PUB-2026-08-14-14 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 2 | After Gaps `/11` is published, publish the maturity and Quarterly-transport performance remediation privately as `/2`, then compile the development host against Core `/10`, Gaps `/11`, Interactions `/16`, and Profile Orchestration `/2` | `CURRENT_PENDING` |
+| PUB-2026-08-14-15 | 2026-08-14 | RevelioGapsLibrary | 11 | Publish the open-only Value Gap lifecycle performance remediation privately as `/11` before compiling the development host | `CURRENT_PENDING` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current production status
@@ -147,7 +149,7 @@ Highest published private libraries: `midnightpaws87/RevelioCoreLibrary/10`, `mi
 
 Production Revelio host imports: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1`.
 
-Development Revelio host imports: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1`.
+Development Revelio host imports: Core `/10`, pending Gaps `/11`, Interactions `/16`, and pending Profile Orchestration `/2`.
 
 Validation: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are user-confirmed published; the host compiles and loads against that chain. Runtime testing reports slower first load than the previous committed Revelio baseline. Replay, visual regression, and TradingView Profiler comparisons remain pending.
 
@@ -387,9 +389,25 @@ Gaps `/9` is published and imports Core `/9`. The dependent host did not compile
 Aligns Value Gaps with Revelio Core /9 while preserving the existing RTH and Globex Value Gap calculations and presentation.
 ```
 
-## Published Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` handoff
+## Pending Gaps `/11` performance handoff
 
-Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are published. The Revelio host compiles and loads against this chain; the reported first-load regression is the baseline for the next performance remediation.
+Publish `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` privately as `midnightpaws87/RevelioGapsLibrary/11` before Profile Orchestration `/2` and the host.
+
+### Gaps Copy-ready `/11` version notes
+
+```text
+Tracks open Value Gaps separately from retained historical records so filled gaps leave the per-bar fill scan immediately. Detection, traversal erosion, fill timestamps, recovery copies, historical rendering, floating selection, and the 100-record retention limit remain unchanged.
+```
+
+## Pending Profile Orchestration `/2` performance handoff
+
+After Gaps `/11` is published, publish `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` privately as `midnightpaws87/RevelioProfileOrchestrationLibrary/2`. Then compile the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/16`, and Profile Orchestration `/2`.
+
+### Profile Orchestration Copy-ready `/2` version notes
+
+```text
+Event-gates automatic Weekly, Monthly, and Quarterly maturity work and stops rebuilding structural profile snapshots after the standard session threshold makes the developing profile permanently visible for the current period. Removes two unused Quarterly composite-status fields from remote transport. Period resets, early maturity, completed profiles, developing levels, Manual Composite behavior, and all visible output remain unchanged.
+```
 
 ### Core Copy-ready `/10` version notes
 
@@ -417,4 +435,4 @@ Extracts Revelio's Manual Composite and related profile orchestration from the i
 
 ## Next version rule
 
-Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are the highest published chain. Any later source edit requires Core `/11`, Gaps `/11`, Interactions `/17`, or Profile Orchestration `/2` as applicable. Never move an import backward to an earlier published version.
+Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are the highest published chain. Gaps `/11` and Profile Orchestration `/2` are pending. Any later source edit requires Core `/11`, Gaps `/12`, Interactions `/17`, or Profile Orchestration `/3` as applicable. Never move an import backward to an earlier published version.

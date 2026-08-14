@@ -466,7 +466,7 @@ export emptyRemoteProfileResult(int unsetTime) =>
     float unavailablePrice = na
     revelioCore.Profile histogramSnapshot = na
     revelioCore.Profile developingSnapshot = na
-    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0, false, false]
+    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0]
 
 maturityHistory(string source) =>
     source == ANCHOR_WEEKLY ? WEEKLY_MATURITY_HISTORY : source == ANCHOR_MONTHLY ? MONTHLY_MATURITY_HISTORY : QUARTERLY_MATURITY_HISTORY
@@ -477,15 +477,17 @@ maturitySessions(string source, bool useUtcCalendar) =>
 earlyMaturitySessions(string source, bool useUtcCalendar) =>
     source == ANCHOR_WEEKLY ? WEEKLY_EARLY_MATURITY_SESSIONS : source == ANCHOR_MONTHLY ? (useUtcCalendar ? MONTHLY_UTC_EARLY_MATURITY_SESSIONS : MONTHLY_MARKET_EARLY_MATURITY_SESSIONS) : useUtcCalendar ? QUARTERLY_UTC_EARLY_MATURITY_SESSIONS : QUARTERLY_MARKET_EARLY_MATURITY_SESSIONS
 
-export updateMaturity(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool periodStart, bool sessionComplete, int rowCount, float valueAreaPercent) =>
-    if enabled and currentMode == DevelopingMode.automatic
+export updateMaturity(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool useUtcCalendar, bool periodStart, bool sessionComplete, int rowCount, float valueAreaPercent) =>
+    int fallbackSessions = maturitySessions(source, useUtcCalendar)
+    bool structuralUpdateNeeded = periodStart or (sessionComplete and maturityState.sessionsCompleted < fallbackSessions)
+    if enabled and currentMode == DevelopingMode.automatic and structuralUpdateNeeded
         revelioCore.advanceMaturityState(maturityState, state, periodStart, sessionComplete, maturityHistory(source), rowCount, valueAreaPercent, syminfo.mintick, MATURITY_STABILITY_FRACTION)
     true
 
 export showsDeveloping(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool useUtcCalendar, bool lastBar) =>
     enabled and revelioCore.maturityShowsDeveloping(maturityState, state, currentMode == DevelopingMode.on, currentMode == DevelopingMode.automatic, maturitySessions(source, useUtcCalendar), earlyMaturitySessions(source, useUtcCalendar), MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT, lastBar)
 
-export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<float> fixedVolumes, bool developingEnabled, bool useUtcCalendar, bool prepareHistogram, bool compositeEnabled, bool compositeValid, int compositeStartKey, int compositeEndKey, int profilesToShow, DevelopingMode currentMode, int unsetTime, int rowCount, float valueAreaPercent) =>
+export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<float> fixedVolumes, bool developingEnabled, bool useUtcCalendar, bool prepareHistogram, bool compositeValid, int compositeStartKey, int compositeEndKey, int profilesToShow, DevelopingMode currentMode, int unsetTime, int rowCount, float valueAreaPercent) =>
     bool utcQuarterBoundary = calendarQuarterStart(UTC_TIMEZONE)
     bool marketQuarterBoundary = calendarQuarterStart(NY_TIMEZONE)
     bool quarterBoundary = useUtcCalendar ? utcQuarterBoundary : marketQuarterBoundary
@@ -496,12 +498,13 @@ export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<f
     var revelioCore.AnchorState state = revelioCore.newAnchorState(unsetTime)
     var revelioCore.MergeState mergeState = revelioCore.newMergeState(unsetTime)
     var revelioCore.ManualCompositeState compositeState = revelioCore.newManualCompositeState(unsetTime)
-    revelioCore.ManualCompositeRange compositeRange = revelioCore.newManualCompositeRange(compositeEnabled, compositeValid, compositeStartKey, compositeEndKey)
+    var revelioCore.ManualCompositeRange disabledCompositeRange = revelioCore.newManualCompositeRange(false, false, unsetTime, unsetTime)
+    revelioCore.ManualCompositeRange compositeRange = compositeValid ? revelioCore.newManualCompositeRange(true, true, compositeStartKey, compositeEndKey) : disabledCompositeRange
     if compositeState.recoveryActive and not compositeRange.valid
         revelioCore.restoreManualCompositeRecovery(state, mergeState, compositeState, unsetTime)
     var revelioCore.MaturityState maturityState = revelioCore.newMaturityState()
     var revelioCore.AnchorProcessPolicy policy = newCalendarAnchorProcessPolicy(profilesToShow, prepareHistogram, true)
-    updateMaturity(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, quarterBoundary, maturitySessionComplete, rowCount, valueAreaPercent)
+    updateMaturity(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, useUtcCalendar, quarterBoundary, maturitySessionComplete, rowCount, valueAreaPercent)
     [preparedHighs, preparedLows, preparedVolumes] = revelioCore.prepareBarVolumeSamples(fixedHighs, fixedLows, fixedVolumes, high, low, volume, true)
     int compositePeriodKey = compositeRange.valid ? resolveEndKey(state.startTime != unsetTime ? state.startTime : time, ANCHOR_QUARTERLY, useUtcCalendar, useUtcCalendar) : unsetTime
     revelioCore.processAnchor(state, mergeState, compositeState, compositeRange, compositePeriodKey, policy, true, true, quarterBoundary, false, preparedHighs, preparedLows, preparedVolumes, true, time, time[1], unsetTime, rowCount, valueAreaPercent)
@@ -514,7 +517,7 @@ export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<f
     revelioCore.Profile developingCompositeSnapshot = barstate.islast ? buildConfirmedManualCompositeProfile(state, compositeState, compositeRange, developingCompositePeriodKey, time, prepareHistogram, rowCount, valueAreaPercent) : na
     revelioCore.Profile developingSnapshot = not na(developingCompositeSnapshot) ? developingCompositeSnapshot : developingEnabled and state.startTime != unsetTime and array.size(state.barVolumes) > 0 and barstate.islast ? revelioCore.buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, state.startTime, time, prepareHistogram) : na
     bool showDeveloping = showsDeveloping(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, useUtcCalendar, barstate.islast)
-    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0, compositeState.incomplete, compositeState.active]
+    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0]
 
 focusDirectionMatches(float levelPrice, float focusPrice, FocusDirection focusDirection) =>
     focusDirection == FocusDirection.below ? levelPrice <= focusPrice : focusDirection == FocusDirection.above ? levelPrice >= focusPrice : focusDirection == FocusDirection.around

@@ -35,6 +35,24 @@ export type ValueGap
     float coreTop
     float coreBottom
 
+//@type Profile queue and retained/open Value Gap lifecycle state.
+//@field sourceProfiles Two-profile synchronization queue.
+//@field records Retained chronological Value Gap history.
+//@field openRecords References to the unfilled objects also stored in records.
+export type ValueGapState
+    array<revelioCore.Profile> sourceProfiles
+    array<ValueGap> records
+    array<ValueGap> openRecords
+
+export newState() =>
+    ValueGapState.new(array.new<revelioCore.Profile>(), array.new<ValueGap>(), array.new<ValueGap>())
+
+export clearState(ValueGapState state) =>
+    array.clear(state.sourceProfiles)
+    array.clear(state.records)
+    array.clear(state.openRecords)
+    true
+
 erodeCoreFromAbove(ValueGap gap, float returnLow) =>
     gap.coreTop := math.max(gap.coreBottom, math.min(gap.coreTop, returnLow))
 
@@ -89,74 +107,91 @@ export fromProfiles(revelioCore.Profile previousProfile, revelioCore.Profile cur
         gap := ValueGap.new(leftTime, creationTime, bearishTop, bearishBottom, false, na, ValueGapEntryDirection.fromBelow, bearishTop, bearishBottom)
     gap
 
-appendGap(revelioCore.Profile previousProfile, revelioCore.Profile completedProfile, array<ValueGap> valueGaps, float minimumTick, float minimumPercent) =>
+sameIdentity(ValueGap candidate, ValueGap target) =>
+    candidate.leftTime == target.leftTime and candidate.creationTime == target.creationTime
+
+removeOpenRecord(ValueGapState state, ValueGap target) =>
+    if array.size(state.openRecords) > 0
+        for openIndex = array.size(state.openRecords) - 1 to 0
+            if sameIdentity(array.get(state.openRecords, openIndex), target)
+                array.remove(state.openRecords, openIndex)
+                break
+    true
+
+appendGap(revelioCore.Profile previousProfile, revelioCore.Profile completedProfile, ValueGapState state, float minimumTick, float minimumPercent) =>
     ValueGap gap = fromProfiles(previousProfile, completedProfile, completedProfile.startTime, completedProfile.endTime, minimumTick)
     if not na(gap)
         float previousRange = math.max(previousProfile.priceHigh - previousProfile.priceLow, minimumTick)
         float confirmedPercent = (gap.top - gap.bottom) / previousRange * 100
         if confirmedPercent >= minimumPercent
-            array.push(valueGaps, gap)
+            array.push(state.records, gap)
+            array.push(state.openRecords, gap)
 
 //@function Synchronizes completed source profiles and confirmed Value Gaps.
 //@param profiles Completed profiles from the selected source anchor.
-//@param sourceProfiles Two-profile synchronization queue.
-//@param valueGaps Retained confirmed Value Gaps.
+//@param state Profile queue and Value Gap lifecycle state.
 //@param minimumTick Symbol minimum tick.
 //@param minimumPercent Minimum confirmed gap size versus the previous profile range.
-export syncProfile(array<revelioCore.Profile> profiles, array<revelioCore.Profile> sourceProfiles, array<ValueGap> valueGaps, float minimumTick, float minimumPercent) =>
+export syncProfile(array<revelioCore.Profile> profiles, ValueGapState state, float minimumTick, float minimumPercent) =>
     if array.size(profiles) > 0
         revelioCore.Profile completedProfile = array.last(profiles)
-        int sourceCount = array.size(sourceProfiles)
+        int sourceCount = array.size(state.sourceProfiles)
         bool sourceChanged = sourceCount == 0
         if sourceCount > 0
-            revelioCore.Profile latestSource = array.last(sourceProfiles)
+            revelioCore.Profile latestSource = array.last(state.sourceProfiles)
             sourceChanged := completedProfile.startTime != latestSource.startTime or completedProfile.endTime != latestSource.endTime
         if sourceChanged
-            if array.size(valueGaps) > 0
-                for gapIndex = array.size(valueGaps) - 1 to 0
-                    ValueGap candidate = array.get(valueGaps, gapIndex)
+            if array.size(state.records) > 0
+                for gapIndex = array.size(state.records) - 1 to 0
+                    ValueGap candidate = array.get(state.records, gapIndex)
                     if candidate.leftTime == completedProfile.startTime
-                        array.remove(valueGaps, gapIndex)
+                        removeOpenRecord(state, candidate)
+                        array.remove(state.records, gapIndex)
 
             bool replacesLatest = false
             if sourceCount > 0
-                revelioCore.Profile currentSource = array.last(sourceProfiles)
+                revelioCore.Profile currentSource = array.last(state.sourceProfiles)
                 replacesLatest := currentSource.startTime == completedProfile.startTime
             if replacesLatest
-                array.set(sourceProfiles, sourceCount - 1, completedProfile)
+                array.set(state.sourceProfiles, sourceCount - 1, completedProfile)
             else
-                array.push(sourceProfiles, completedProfile)
-                if array.size(sourceProfiles) > 2
-                    array.shift(sourceProfiles)
+                array.push(state.sourceProfiles, completedProfile)
+                if array.size(state.sourceProfiles) > 2
+                    array.shift(state.sourceProfiles)
 
-            if array.size(sourceProfiles) == 2
-                appendGap(array.first(sourceProfiles), array.last(sourceProfiles), valueGaps, minimumTick, minimumPercent)
+            if array.size(state.sourceProfiles) == 2
+                appendGap(array.first(state.sourceProfiles), array.last(state.sourceProfiles), state, minimumTick, minimumPercent)
 
-            while array.size(valueGaps) > MAX_STORED_VALUE_GAPS
-                array.shift(valueGaps)
+            while array.size(state.records) > MAX_STORED_VALUE_GAPS
+                ValueGap removed = array.shift(state.records)
+                removeOpenRecord(state, removed)
 
 //@function Copies profile-sync and Value Gap lifecycle state.
-export copyState(array<revelioCore.Profile> sourceProfiles, array<ValueGap> sourceGaps, array<revelioCore.Profile> targetProfiles, array<ValueGap> targetGaps) =>
-    array.clear(targetProfiles)
-    array.concat(targetProfiles, sourceProfiles)
-    array.clear(targetGaps)
-    if array.size(sourceGaps) > 0
-        for gapIndex = 0 to array.size(sourceGaps) - 1
-            ValueGap source = array.get(sourceGaps, gapIndex)
-            array.push(targetGaps, ValueGap.new(source.leftTime, source.creationTime, source.top, source.bottom, source.bullish, source.fillTime, source.entryDirection, source.coreTop, source.coreBottom))
+export copyState(ValueGapState source, ValueGapState target) =>
+    clearState(target)
+    array.concat(target.sourceProfiles, source.sourceProfiles)
+    if array.size(source.records) > 0
+        for gapIndex = 0 to array.size(source.records) - 1
+            ValueGap sourceRecord = array.get(source.records, gapIndex)
+            ValueGap targetRecord = ValueGap.new(sourceRecord.leftTime, sourceRecord.creationTime, sourceRecord.top, sourceRecord.bottom, sourceRecord.bullish, sourceRecord.fillTime, sourceRecord.entryDirection, sourceRecord.coreTop, sourceRecord.coreBottom)
+            array.push(target.records, targetRecord)
+            if na(targetRecord.fillTime)
+                array.push(target.openRecords, targetRecord)
 
 //@function Applies eligible price returns to retained Value Gaps.
-//@param valueGaps Retained confirmed Value Gaps.
+//@param state Value Gap lifecycle state.
 //@param breachHigh Highest eligible traded price.
 //@param breachLow Lowest eligible traded price.
 //@param currentTime Current bar timestamp.
 //@param traversalFill Whether fills erode only traded portions.
-export updatePriceFills(array<ValueGap> valueGaps, float breachHigh, float breachLow, int currentTime, bool traversalFill) =>
-    if array.size(valueGaps) > 0 and not na(breachHigh) and not na(breachLow)
-        for gapIndex = 0 to array.size(valueGaps) - 1
-            ValueGap gap = array.get(valueGaps, gapIndex)
+export updatePriceFills(ValueGapState state, float breachHigh, float breachLow, int currentTime, bool traversalFill) =>
+    if array.size(state.openRecords) > 0 and not na(breachHigh) and not na(breachLow)
+        for gapIndex = array.size(state.openRecords) - 1 to 0
+            ValueGap gap = array.get(state.openRecords, gapIndex)
             if na(gap.fillTime) and currentTime > gap.creationTime
                 advance(gap, breachHigh, breachLow, currentTime, traversalFill)
+            if not na(gap.fillTime)
+                array.remove(state.openRecords, gapIndex)
 
 //@function Tests whether a Value Gap has never been entered.
 //@param gap Value Gap to inspect.
