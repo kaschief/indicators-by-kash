@@ -1,0 +1,573 @@
+//@version=6
+
+//@description Private Revelio profile orchestration library.
+library("RevelioProfileOrchestrationLibrary", overlay=true)
+
+import midnightpaws87/RevelioCoreLibrary/10 as revelioCore
+
+export const string NY_TIMEZONE = "America/New_York"
+export const string UTC_TIMEZONE = "GMT+0"
+export const string ANCHOR_RTH = "RTH"
+export const string ANCHOR_GLOBEX = "Globex"
+export const string ANCHOR_WEEKLY = "Weekly"
+export const string ANCHOR_MONTHLY = "Monthly"
+export const string ANCHOR_QUARTERLY = "Quarterly"
+export const int MS_PER_MINUTE = 60000
+export const int MS_PER_HOUR = 60 * MS_PER_MINUTE
+export const int MS_PER_DAY = 24 * MS_PER_HOUR
+export const int MS_PER_WEEK = 7 * MS_PER_DAY
+export const int MS_PER_MONTH = 30 * MS_PER_DAY
+export const int MS_PER_QUARTER = 3 * MS_PER_MONTH
+export const int MINUTES_PER_HOUR = 60
+export const int MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
+export const int SECONDS_PER_WEEK = 604800
+export const int RTH_START_MINUTE = 570
+export const int RTH_END_MINUTE = 960
+export const int GLOBEX_CLOSE_MINUTE = 1020
+export const int GLOBEX_REOPEN_MINUTE = 1080
+export const int GLOBEX_REOPEN_SHIFT_MS = 21600000
+const int CHRONOLOGY_PROFILE_LIMIT = 250
+export const string RTH_SESSION = "0930-1600:23456"
+export const string RTH_SESSION_ALL_DAYS = "0930-1600:1234567"
+export const string WEEKLY_REOPEN_SESSION = "1800-0930"
+export const string SESSION_WINDOW_OVERNIGHT = "1600-0500:1234567"
+export const string SESSION_WINDOW_FROM_0500 = "0500-1600:1234567"
+export const string SESSION_WINDOW_FROM_0830 = "0830-1600:1234567"
+export const string SESSION_WINDOW_RTH = RTH_SESSION_ALL_DAYS
+export const int FROM_0500_START_MINUTE = 300
+export const int FROM_0830_START_MINUTE = 510
+export const int SUNDAY_REOPEN_START_HOUR = 18
+export const string PERIOD_LABEL_DAY = "Day"
+export const string PERIOD_LABEL_MONTH = "Month"
+export const string PERIOD_LABEL_QUARTER = "Quarter"
+export const string OPTION_OFF = "Off"
+export const string OPTION_ON = "On"
+const int WEEKLY_MATURITY_HISTORY = 5
+const int MONTHLY_MATURITY_HISTORY = 2
+const int QUARTERLY_MATURITY_HISTORY = 2
+const float MATURITY_STABILITY_FRACTION = 0.20
+const int MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT = 45
+const int WEEKLY_UTC_MATURITY_SESSIONS = 4
+const int WEEKLY_MARKET_MATURITY_SESSIONS = 3
+const int WEEKLY_EARLY_MATURITY_SESSIONS = 2
+const int MONTHLY_UTC_MATURITY_SESSIONS = 15
+const int MONTHLY_MARKET_MATURITY_SESSIONS = 10
+const int MONTHLY_UTC_EARLY_MATURITY_SESSIONS = 7
+const int MONTHLY_MARKET_EARLY_MATURITY_SESSIONS = 5
+const int QUARTERLY_UTC_MATURITY_SESSIONS = 45
+const int QUARTERLY_MARKET_MATURITY_SESSIONS = 30
+const int QUARTERLY_UTC_EARLY_MATURITY_SESSIONS = 22
+const int QUARTERLY_MARKET_EARLY_MATURITY_SESSIONS = 15
+const int QUARTERLY_SNAPSHOT_MINUTE = 45
+const int QUARTERLY_UTC_WEEKLY_SNAPSHOT_HOUR = 0
+const int QUARTERLY_MARKET_WEEKLY_SNAPSHOT_HOUR = 9
+
+export enum FocusDirection
+    off = "Off"
+    above = "↑ Above"
+    around = "↕ Around"
+    below = "↓ Below"
+
+export enum MergeMode
+    off = "Off"
+    earliest = "Earliest Into Previous Full Session"
+    allIntoPrevious = "All Into Previous Full Session"
+    combineShorts = "Combine Shorts"
+
+export enum DevelopingMode
+    automatic = "Auto"
+    on = "On"
+    off = "Off"
+
+type FocusCandidate
+    float distance
+    int profileIndex
+    int endTime
+
+export type ProfileChronologyState
+    array<int> startKeys
+    array<int> endKeys
+    array<int> memberKeys
+    array<int> memberOwners
+    int normalSpan
+    int pendingStartKey
+    int foldCount
+
+mergeCombine(MergeMode mode) =>
+    mode == MergeMode.combineShorts
+
+mergeAll(MergeMode mode) =>
+    mode == MergeMode.allIntoPrevious
+
+mergeDepth(MergeMode mode) =>
+    mode == MergeMode.earliest ? 1 : mode == MergeMode.combineShorts ? 2 : 0
+
+export newMergedAnchorProcessPolicy(int keepProfiles, MergeMode mergeMode, float shortSpanFraction, bool continuousBoundary, bool prepareHistogram) =>
+    revelioCore.newAnchorProcessPolicy(keepProfiles, mergeDepth(mergeMode), mergeAll(mergeMode), mergeCombine(mergeMode), shortSpanFraction, continuousBoundary, prepareHistogram, false)
+
+export newCalendarAnchorProcessPolicy(int keepProfiles, bool prepareHistogram, bool requireObservedBoundary) =>
+    revelioCore.newAnchorProcessPolicy(keepProfiles, 0, false, false, 1.0, true, prepareHistogram, requireObservedBoundary)
+
+export buildDevelopingProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
+    int originalSize = array.size(barVolumes)
+    if not na(fallbackVolume)
+        array.push(barHighs, fallbackHigh)
+        array.push(barLows, fallbackLow)
+        array.push(barVolumes, fallbackVolume)
+    if not confirmed
+        revelioCore.appendBarVolume(barHighs, barLows, barVolumes, intrabarHighs, intrabarLows, intrabarVolumes, currentHigh, currentLow, currentVolume, false)
+    revelioCore.Profile profile = revelioCore.buildProfile(barHighs, barLows, barVolumes, rowCount, valueAreaPercent, startTime, currentTime, prepareHistogram)
+    while array.size(barVolumes) > originalSize
+        array.pop(barHighs)
+        array.pop(barLows)
+        array.pop(barVolumes)
+    profile
+
+export buildDevelopingAnchorProfile(revelioCore.AnchorState state, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
+    buildDevelopingProfile(state.barHighs, state.barLows, state.barVolumes, state.startTime, intrabarHighs, intrabarLows, intrabarVolumes, fallbackHigh, fallbackLow, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume, prepareHistogram, rowCount, valueAreaPercent, currentTime)
+
+export manualCompositeDevelopingReady(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, int periodKey) =>
+    bool currentPeriodIncluded = compositeRange.enabled and compositeRange.valid and periodKey >= compositeRange.startKey and periodKey <= compositeRange.endKey
+    bool historyAvailable = compositeState.active and compositeState.seen or periodKey == compositeRange.startKey
+    int sampleCount = (compositeState.active ? array.size(compositeState.volumes) : 0) + array.size(state.barVolumes)
+    currentPeriodIncluded and historyAvailable and not compositeState.incomplete and state.observedStartBoundary and sampleCount > 0
+
+manualCompositeSampleCopies(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState) =>
+    array<float> compositeHighs = compositeState.active ? array.copy(compositeState.highs) : array.new<float>()
+    array<float> compositeLows = compositeState.active ? array.copy(compositeState.lows) : array.new<float>()
+    array<float> compositeVolumes = compositeState.active ? array.copy(compositeState.volumes) : array.new<float>()
+    array.concat(compositeHighs, state.barHighs)
+    array.concat(compositeLows, state.barLows)
+    array.concat(compositeVolumes, state.barVolumes)
+    int compositeStartTime = compositeState.active ? compositeState.startTime : state.startTime
+    [compositeHighs, compositeLows, compositeVolumes, compositeStartTime]
+
+export buildConfirmedManualCompositeProfile(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, int periodKey, int endTime, bool prepareHistogram, int rowCount, float valueAreaPercent) =>
+    revelioCore.Profile profile = na
+    if manualCompositeDevelopingReady(state, compositeState, compositeRange, periodKey)
+        [compositeHighs, compositeLows, compositeVolumes, compositeStartTime] = manualCompositeSampleCopies(state, compositeState)
+        profile := revelioCore.buildProfile(compositeHighs, compositeLows, compositeVolumes, rowCount, valueAreaPercent, compositeStartTime, endTime, prepareHistogram)
+        if profile.isValid
+            profile.manualComposite := true
+            profile.manualCompositeStartKey := compositeRange.startKey
+            profile.manualCompositeEndKey := compositeRange.endKey
+    profile
+
+export buildDevelopingManualCompositeProfile(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, int periodKey, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
+    revelioCore.Profile profile = na
+    if manualCompositeDevelopingReady(state, compositeState, compositeRange, periodKey)
+        [compositeHighs, compositeLows, compositeVolumes, compositeStartTime] = manualCompositeSampleCopies(state, compositeState)
+        profile := buildDevelopingProfile(compositeHighs, compositeLows, compositeVolumes, compositeStartTime, intrabarHighs, intrabarLows, intrabarVolumes, fallbackHigh, fallbackLow, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume, prepareHistogram, rowCount, valueAreaPercent, currentTime)
+        if profile.isValid
+            profile.manualComposite := true
+            profile.manualCompositeStartKey := compositeRange.startKey
+            profile.manualCompositeEndKey := compositeRange.endKey
+    profile
+
+export calendarDateSerial(int eventTime, string timezone) =>
+    int dateTimestamp = timestamp(UTC_TIMEZONE, year(eventTime, timezone), month(eventTime, timezone), dayofmonth(eventTime, timezone), 0, 0)
+    int(dateTimestamp / MS_PER_DAY)
+
+export autoSweptCycleSerial(int eventTime, bool useUtcCalendar) =>
+    useUtcCalendar ? calendarDateSerial(eventTime, UTC_TIMEZONE) : calendarDateSerial(eventTime + GLOBEX_REOPEN_SHIFT_MS, NY_TIMEZONE)
+
+weekdayOnOrAfter(int dateSerial) =>
+    int weekday = dayofweek(dateSerial * MS_PER_DAY, UTC_TIMEZONE)
+    weekday == dayofweek.saturday ? dateSerial + 2 : weekday == dayofweek.sunday ? dateSerial + 1 : dateSerial
+
+weekdayOnOrBefore(int dateSerial) =>
+    int weekday = dayofweek(dateSerial * MS_PER_DAY, UTC_TIMEZONE)
+    weekday == dayofweek.saturday ? dateSerial - 1 : weekday == dayofweek.sunday ? dateSerial - 2 : dateSerial
+
+calendarCompositeSelectionKey(int selectionTime, string source, bool useUtcCalendar, bool startBoundary) =>
+    string calendarTimezone = useUtcCalendar ? UTC_TIMEZONE : NY_TIMEZONE
+    int selectionDateKey = calendarDateSerial(selectionTime, calendarTimezone)
+    int calendarPeriodDateKey = selectionDateKey
+    if not useUtcCalendar and (source == ANCHOR_MONTHLY or source == ANCHOR_QUARTERLY)
+        int selectionWeekday = dayofweek(selectionTime, calendarTimezone)
+        int selectionMinute = hour(selectionTime, calendarTimezone) * 60 + minute(selectionTime, calendarTimezone)
+        calendarPeriodDateKey := startBoundary ? selectionWeekday == dayofweek.friday and selectionMinute >= GLOBEX_CLOSE_MINUTE ? selectionDateKey + 2 : selectionWeekday == dayofweek.saturday ? selectionDateKey + 1 : selectionDateKey : selectionWeekday == dayofweek.saturday ? selectionDateKey - 1 : selectionWeekday == dayofweek.sunday and selectionMinute < GLOBEX_REOPEN_MINUTE ? selectionDateKey - 2 : selectionDateKey
+    int calendarPeriodDate = calendarPeriodDateKey * MS_PER_DAY
+    source == ANCHOR_MONTHLY ? int(timestamp(UTC_TIMEZONE, year(calendarPeriodDate, UTC_TIMEZONE), month(calendarPeriodDate, UTC_TIMEZONE), 1, 0, 0) / MS_PER_DAY) : source == ANCHOR_QUARTERLY ? int(timestamp(UTC_TIMEZONE, year(calendarPeriodDate, UTC_TIMEZONE), int(math.floor((month(calendarPeriodDate, UTC_TIMEZONE) - 1) / 3)) * 3 + 1, 1, 0, 0) / MS_PER_DAY) : selectionDateKey
+
+export resolveStartKey(int selectionTime, string source, bool useUtcCalendar, bool twentyFourSeven) =>
+    string calendarTimezone = source == ANCHOR_RTH ? NY_TIMEZONE : useUtcCalendar ? UTC_TIMEZONE : NY_TIMEZONE
+    int selectionDateKey = calendarDateSerial(selectionTime, calendarTimezone)
+    int selectionWeekday = dayofweek(selectionTime, calendarTimezone)
+    int selectionMinute = hour(selectionTime, calendarTimezone) * 60 + minute(selectionTime, calendarTimezone)
+    int selectionKey = source == ANCHOR_GLOBEX ? autoSweptCycleSerial(selectionTime, useUtcCalendar) : source == ANCHOR_RTH ? selectionDateKey : calendarCompositeSelectionKey(selectionTime, source, useUtcCalendar, true)
+    if source == ANCHOR_WEEKLY
+        if useUtcCalendar
+            selectionDateKey - (selectionWeekday - dayofweek.monday + 7) % 7
+        else
+            int weekSunday = selectionDateKey - (selectionWeekday - dayofweek.sunday)
+            bool afterFridayClose = selectionWeekday == dayofweek.friday and selectionMinute >= GLOBEX_CLOSE_MINUTE
+            bool beforeSundayReopen = selectionWeekday == dayofweek.sunday and selectionMinute < GLOBEX_REOPEN_MINUTE
+            bool weekendGap = afterFridayClose or selectionWeekday == dayofweek.saturday or beforeSundayReopen
+            weekendGap ? (beforeSundayReopen ? weekSunday : weekSunday + 7) : weekSunday
+    else if source == ANCHOR_GLOBEX
+        if twentyFourSeven
+            selectionKey
+        else
+            int eligibleDate = weekdayOnOrAfter(selectionKey)
+            bool maintenanceGap = selectionMinute >= GLOBEX_CLOSE_MINUTE and selectionMinute < GLOBEX_REOPEN_MINUTE
+            eligibleDate == selectionKey and maintenanceGap ? weekdayOnOrAfter(selectionKey + 1) : eligibleDate
+    else if source == ANCHOR_MONTHLY or source == ANCHOR_QUARTERLY
+        selectionKey
+    else
+        if twentyFourSeven
+            selectionMinute >= RTH_END_MINUTE ? selectionKey + 1 : selectionKey
+        else
+            int eligibleDate = weekdayOnOrAfter(selectionKey)
+            eligibleDate == selectionKey and selectionMinute >= RTH_END_MINUTE ? weekdayOnOrAfter(selectionKey + 1) : eligibleDate
+
+export resolveEndKey(int selectionTime, string source, bool useUtcCalendar, bool twentyFourSeven) =>
+    string calendarTimezone = source == ANCHOR_RTH ? NY_TIMEZONE : useUtcCalendar ? UTC_TIMEZONE : NY_TIMEZONE
+    int selectionDateKey = calendarDateSerial(selectionTime, calendarTimezone)
+    int selectionWeekday = dayofweek(selectionTime, calendarTimezone)
+    int selectionMinute = hour(selectionTime, calendarTimezone) * 60 + minute(selectionTime, calendarTimezone)
+    int selectionKey = source == ANCHOR_GLOBEX ? autoSweptCycleSerial(selectionTime, useUtcCalendar) : source == ANCHOR_RTH ? selectionDateKey : calendarCompositeSelectionKey(selectionTime, source, useUtcCalendar, false)
+    if source == ANCHOR_WEEKLY
+        if useUtcCalendar
+            selectionDateKey - (selectionWeekday - dayofweek.monday + 7) % 7
+        else
+            int weekSunday = selectionDateKey - (selectionWeekday - dayofweek.sunday)
+            bool beforeSundayReopen = selectionWeekday == dayofweek.sunday and selectionMinute < GLOBEX_REOPEN_MINUTE
+            beforeSundayReopen ? weekSunday - 7 : weekSunday
+    else if source == ANCHOR_GLOBEX
+        twentyFourSeven ? selectionKey : weekdayOnOrBefore(selectionKey)
+    else if source == ANCHOR_MONTHLY or source == ANCHOR_QUARTERLY
+        selectionKey
+    else
+        if twentyFourSeven
+            selectionMinute < RTH_START_MINUTE ? selectionKey - 1 : selectionKey
+        else
+            int eligibleDate = weekdayOnOrBefore(selectionKey)
+            eligibleDate == selectionKey and selectionMinute < RTH_START_MINUTE ? weekdayOnOrBefore(selectionKey - 1) : eligibleDate
+
+dateKeyTimestamp(int dateKey, string timezone, int hourValue, int minuteValue) =>
+    int utcDate = dateKey * MS_PER_DAY
+    timestamp(timezone, year(utcDate, UTC_TIMEZONE), month(utcDate, UTC_TIMEZONE), dayofmonth(utcDate, UTC_TIMEZONE), hourValue, minuteValue)
+
+nextCalendarPeriodKey(int periodKey, string source) =>
+    int utcDate = periodKey * MS_PER_DAY
+    source == ANCHOR_WEEKLY ? periodKey + 7 : source == ANCHOR_MONTHLY ? int(timestamp(UTC_TIMEZONE, year(utcDate, UTC_TIMEZONE), month(utcDate, UTC_TIMEZONE) + 1, 1, 0, 0) / MS_PER_DAY) : int(timestamp(UTC_TIMEZONE, year(utcDate, UTC_TIMEZONE), month(utcDate, UTC_TIMEZONE) + 3, 1, 0, 0) / MS_PER_DAY)
+
+calendarBoundaryTime(int periodKey, string source, bool useUtcCalendar) =>
+    if source == ANCHOR_WEEKLY
+        dateKeyTimestamp(periodKey, useUtcCalendar ? UTC_TIMEZONE : NY_TIMEZONE, useUtcCalendar ? 0 : int(GLOBEX_REOPEN_MINUTE / 60), useUtcCalendar ? 0 : GLOBEX_REOPEN_MINUTE % 60)
+    else if useUtcCalendar
+        dateKeyTimestamp(periodKey, UTC_TIMEZONE, 0, 0)
+    else
+        int utcDate = periodKey * MS_PER_DAY
+        int boundaryWeekday = dayofweek(utcDate, UTC_TIMEZONE)
+        int eligibleDateKey = boundaryWeekday == dayofweek.saturday ? periodKey + 1 : periodKey
+        int boundaryHour = boundaryWeekday == dayofweek.saturday or boundaryWeekday == dayofweek.sunday ? int(GLOBEX_REOPEN_MINUTE / 60) : 0
+        dateKeyTimestamp(eligibleDateKey, NY_TIMEZONE, boundaryHour, 0)
+
+export resolvedStartTime(int startKey, string source, bool twentyFourSeven) =>
+    source == ANCHOR_RTH ? dateKeyTimestamp(startKey, NY_TIMEZONE, int(RTH_START_MINUTE / 60), RTH_START_MINUTE % 60) : source == ANCHOR_GLOBEX ? (twentyFourSeven ? dateKeyTimestamp(startKey, UTC_TIMEZONE, 0, 0) : dateKeyTimestamp(startKey - 1, NY_TIMEZONE, int(GLOBEX_REOPEN_MINUTE / 60), GLOBEX_REOPEN_MINUTE % 60)) : calendarBoundaryTime(startKey, source, twentyFourSeven)
+
+export resolvedEndTime(int endKey, string source, bool twentyFourSeven) =>
+    source == ANCHOR_RTH ? dateKeyTimestamp(endKey, NY_TIMEZONE, int(RTH_END_MINUTE / 60), RTH_END_MINUTE % 60) : source == ANCHOR_GLOBEX ? (twentyFourSeven ? dateKeyTimestamp(endKey + 1, UTC_TIMEZONE, 0, 0) : dateKeyTimestamp(endKey, NY_TIMEZONE, int(GLOBEX_CLOSE_MINUTE / 60), GLOBEX_CLOSE_MINUTE % 60)) : calendarBoundaryTime(nextCalendarPeriodKey(endKey, source), source, twentyFourSeven)
+
+export newProfileChronologyState(int unsetTime) =>
+    ProfileChronologyState.new(array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), 0, unsetTime, 0)
+
+export appendChronologyKey(ProfileChronologyState state, int periodKey) =>
+    array.push(state.startKeys, periodKey)
+    array.push(state.endKeys, periodKey)
+    if array.size(state.startKeys) > CHRONOLOGY_PROFILE_LIMIT
+        int removedOwner = array.shift(state.startKeys)
+        array.shift(state.endKeys)
+        while array.size(state.memberOwners) > 0 and array.first(state.memberOwners) == removedOwner
+            array.shift(state.memberKeys)
+            array.shift(state.memberOwners)
+    true
+
+export updateProfileChronology(ProfileChronologyState state, int periodKey, int startTime, int lastBarTime, MergeMode mergeMode, float shortSpanFraction, int unsetTime) =>
+    int periodSpan = lastBarTime - startTime
+    bool mergeAllShorts = mergeAll(mergeMode)
+    bool combineShorts = mergeCombine(mergeMode)
+    int maximumFoldCount = mergeDepth(mergeMode)
+    bool mergeEnabled = mergeAllShorts or maximumFoldCount > 0
+    bool isShortPeriod = mergeEnabled and state.normalSpan > 0 and periodSpan < int(state.normalSpan * shortSpanFraction)
+    bool canMerge = isShortPeriod and (mergeAllShorts or state.foldCount < maximumFoldCount) and state.pendingStartKey != unsetTime and array.size(state.startKeys) > 0
+    if canMerge
+        array.set(state.endKeys, array.size(state.endKeys) - 1, periodKey)
+        state.foldCount += 1
+    else
+        appendChronologyKey(state, periodKey)
+        if periodSpan > state.normalSpan
+            state.normalSpan := periodSpan
+        if mergeEnabled
+            bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
+            if becomesBase
+                state.pendingStartKey := periodKey
+                state.foldCount := combineShorts ? 1 : 0
+            else if combineShorts and not isShortPeriod
+                state.pendingStartKey := unsetTime
+                state.foldCount := 0
+    array.push(state.memberKeys, periodKey)
+    array.push(state.memberOwners, canMerge ? array.last(state.startKeys) : periodKey)
+    true
+
+export startDisplayed(ProfileChronologyState chronology, int startKey, int currentKey, bool currentPeriodDisplayed, int profilesToShow) =>
+    bool displayed = currentPeriodDisplayed and startKey == currentKey
+    int profileCount = array.size(chronology.startKeys)
+    if not displayed and profileCount > 0
+        int oldestIndex = math.max(0, profileCount - math.max(1, profilesToShow))
+        int oldestOwner = array.get(chronology.startKeys, oldestIndex)
+        if array.size(chronology.memberKeys) > 0
+            for memberIndex = array.size(chronology.memberKeys) - 1 to 0
+                if array.get(chronology.memberOwners, memberIndex) < oldestOwner
+                    break
+                if array.get(chronology.memberKeys, memberIndex) == startKey
+                    displayed := true
+                    break
+    displayed
+
+export matchesRange(bool manualComposite, int startKey, int endKey, revelioCore.ManualCompositeRange compositeRange) =>
+    manualComposite and compositeRange.enabled and compositeRange.valid and startKey == compositeRange.startKey and endKey == compositeRange.endKey
+
+export purgeInactive(revelioCore.AnchorState anchorState, revelioCore.AutoSweptState autoSweptState, revelioCore.ManualCompositeRange compositeRange) =>
+    bool removed = false
+    if array.size(anchorState.profiles) > 0
+        for profileIndex = array.size(anchorState.profiles) - 1 to 0
+            revelioCore.Profile profile = array.get(anchorState.profiles, profileIndex)
+            if profile.manualComposite and not matchesRange(profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, compositeRange)
+                array.remove(anchorState.profiles, profileIndex)
+                removed := true
+    if array.size(autoSweptState.profiles) > 0
+        for profileIndex = array.size(autoSweptState.profiles) - 1 to 0
+            revelioCore.AutoSweptProfile profile = array.get(autoSweptState.profiles, profileIndex)
+            if profile.manualComposite and not matchesRange(profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, compositeRange)
+                string selectionKey = str.tostring(profile.startTime) + "|" + str.tostring(profile.endTime)
+                map.remove(autoSweptState.currentSelectedMasks, selectionKey)
+                map.remove(autoSweptState.currentProtectedMasks, selectionKey)
+                if array.size(autoSweptState.historyPicks) > 0
+                    for pickIndex = array.size(autoSweptState.historyPicks) - 1 to 0
+                        revelioCore.AutoSweptPick pick = array.get(autoSweptState.historyPicks, pickIndex)
+                        if pick.profileStartTime == profile.startTime and pick.profileEndTime == profile.endTime
+                            array.remove(autoSweptState.historyPicks, pickIndex)
+                array.remove(autoSweptState.profiles, profileIndex)
+                removed := true
+    if removed
+        map.clear(autoSweptState.eligibleSourceStarts)
+        array.clear(autoSweptState.eligibleProfileIndices)
+        autoSweptState.revision += 1
+    removed
+
+export monthName(int monthNumber) =>
+    switch monthNumber
+        1 => "Jan"
+        2 => "Feb"
+        3 => "Mar"
+        4 => "Apr"
+        5 => "May"
+        6 => "Jun"
+        7 => "Jul"
+        8 => "Aug"
+        9 => "Sep"
+        10 => "Oct"
+        11 => "Nov"
+        => "Dec"
+
+export periodDateText(int startTime, string labelMode, bool useUtcTimezone) =>
+    int startMonth = useUtcTimezone ? month(startTime, UTC_TIMEZONE) : month(startTime, NY_TIMEZONE)
+    int startYear = useUtcTimezone ? year(startTime, UTC_TIMEZONE) : year(startTime, NY_TIMEZONE)
+    if labelMode == PERIOD_LABEL_QUARTER
+        int quarterNumber = int(math.floor((startMonth - 1) / 3)) + 1
+        "Q" + str.tostring(quarterNumber) + " " + str.tostring(startYear)
+    else if labelMode == PERIOD_LABEL_MONTH
+        monthName(startMonth) + " " + str.tostring(startYear)
+    else
+        int startDay = useUtcTimezone ? dayofmonth(startTime, UTC_TIMEZONE) : dayofmonth(startTime, NY_TIMEZONE)
+        monthName(startMonth) + " " + str.tostring(startDay)
+
+export periodContextText(int startTime, string labelMode, bool useUtcTimezone) =>
+    int startMonth = useUtcTimezone ? month(startTime, UTC_TIMEZONE) : month(startTime, NY_TIMEZONE)
+    int startYear = useUtcTimezone ? year(startTime, UTC_TIMEZONE) : year(startTime, NY_TIMEZONE)
+    labelMode == PERIOD_LABEL_DAY ? monthName(startMonth) : str.tostring(startYear)
+
+export periodMemberText(int startTime, string labelMode, bool useUtcTimezone) =>
+    int startMonth = useUtcTimezone ? month(startTime, UTC_TIMEZONE) : month(startTime, NY_TIMEZONE)
+    if labelMode == PERIOD_LABEL_QUARTER
+        "Q" + str.tostring(int(math.floor((startMonth - 1) / 3)) + 1)
+    else if labelMode == PERIOD_LABEL_MONTH
+        monthName(startMonth)
+    else
+        int startDay = useUtcTimezone ? dayofmonth(startTime, UTC_TIMEZONE) : dayofmonth(startTime, NY_TIMEZONE)
+        str.tostring(startDay)
+
+export calendarDateText(int eventTime, bool useUtcTimezone) =>
+    int eventMonth = useUtcTimezone ? month(eventTime, UTC_TIMEZONE) : month(eventTime, NY_TIMEZONE)
+    int eventDay = useUtcTimezone ? dayofmonth(eventTime, UTC_TIMEZONE) : dayofmonth(eventTime, NY_TIMEZONE)
+    int eventYear = useUtcTimezone ? year(eventTime, UTC_TIMEZONE) : year(eventTime, NY_TIMEZONE)
+    monthName(eventMonth) + " " + str.tostring(eventDay) + ", " + str.tostring(eventYear)
+
+export calendarDayStart(string timezone) =>
+    ta.change(dayofmonth(time, timezone)) != 0
+
+export shiftedCalendarDayStart(string timezone, int timeShiftMilliseconds) =>
+    ta.change(dayofmonth(time + timeShiftMilliseconds, timezone)) != 0
+
+export calendarWeekStart(string timezone) =>
+    ta.change(weekofyear(time, timezone)) != 0
+
+export calendarMonthStart(string timezone) =>
+    ta.change(month(time, timezone)) != 0
+
+export calendarQuarterStart(string timezone) =>
+    ta.change(month(time, timezone)) != 0 and (month(time, timezone) - 1) % 3 == 0
+
+export sameCalendarDate(int firstTime, int secondTime, string timezone) =>
+    year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
+
+export isBeforeNyCutoff(int cutoffHour, int cutoffMinute) =>
+    int currentMinutes = hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE)
+    currentMinutes < cutoffHour * 60 + cutoffMinute
+
+export priceWindowTimestampEligible(int timestamp, int startMinute, bool allDays) =>
+    int day = dayofweek(timestamp, NY_TIMEZONE)
+    bool dayEligible = allDays or day >= dayofweek.monday and day <= dayofweek.friday
+    int minuteOfDay = hour(timestamp, NY_TIMEZONE) * 60 + minute(timestamp, NY_TIMEZONE)
+    dayEligible and minuteOfDay >= startMinute and minuteOfDay < RTH_END_MINUTE
+
+export priceWindowMayContainEligiblePrice(int startMinute, array<int> intrabarTimes, bool allDays, bool fallbackWindow) =>
+    bool possible = false
+    int intrabarCount = array.size(intrabarTimes)
+    if intrabarCount > 0
+        int firstTime = array.first(intrabarTimes)
+        int lastTime = array.last(intrabarTimes)
+        int windowSpanMs = (RTH_END_MINUTE - startMinute) * 60 * 1000
+        possible := priceWindowTimestampEligible(firstTime, startMinute, allDays) or priceWindowTimestampEligible(lastTime, startMinute, allDays) or lastTime - firstTime >= windowSpanMs
+    else
+        possible := fallbackWindow
+    possible
+
+export priceWindowRange(int startMinute, array<float> intrabarHighs, array<float> intrabarLows, array<int> intrabarTimes, bool allDays, bool fallbackWindow, float fallbackHigh, float fallbackLow) =>
+    float eligibleHigh = na
+    float eligibleLow = na
+    int intrabarCount = array.size(intrabarTimes)
+    if intrabarCount > 0
+        for intrabarIndex = 0 to intrabarCount - 1
+            if priceWindowTimestampEligible(array.get(intrabarTimes, intrabarIndex), startMinute, allDays)
+                float subHigh = array.get(intrabarHighs, intrabarIndex)
+                float subLow = array.get(intrabarLows, intrabarIndex)
+                eligibleHigh := na(eligibleHigh) ? subHigh : math.max(eligibleHigh, subHigh)
+                eligibleLow := na(eligibleLow) ? subLow : math.min(eligibleLow, subLow)
+    else if fallbackWindow
+        eligibleHigh := fallbackHigh
+        eligibleLow := fallbackLow
+    [eligibleHigh, eligibleLow]
+
+export emptyRemoteProfileResult(int unsetTime) =>
+    float unavailablePrice = na
+    revelioCore.Profile histogramSnapshot = na
+    revelioCore.Profile developingSnapshot = na
+    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0, false, false]
+
+maturityHistory(string source) =>
+    source == ANCHOR_WEEKLY ? WEEKLY_MATURITY_HISTORY : source == ANCHOR_MONTHLY ? MONTHLY_MATURITY_HISTORY : QUARTERLY_MATURITY_HISTORY
+
+maturitySessions(string source, bool useUtcCalendar) =>
+    source == ANCHOR_WEEKLY ? (useUtcCalendar ? WEEKLY_UTC_MATURITY_SESSIONS : WEEKLY_MARKET_MATURITY_SESSIONS) : source == ANCHOR_MONTHLY ? (useUtcCalendar ? MONTHLY_UTC_MATURITY_SESSIONS : MONTHLY_MARKET_MATURITY_SESSIONS) : useUtcCalendar ? QUARTERLY_UTC_MATURITY_SESSIONS : QUARTERLY_MARKET_MATURITY_SESSIONS
+
+earlyMaturitySessions(string source, bool useUtcCalendar) =>
+    source == ANCHOR_WEEKLY ? WEEKLY_EARLY_MATURITY_SESSIONS : source == ANCHOR_MONTHLY ? (useUtcCalendar ? MONTHLY_UTC_EARLY_MATURITY_SESSIONS : MONTHLY_MARKET_EARLY_MATURITY_SESSIONS) : useUtcCalendar ? QUARTERLY_UTC_EARLY_MATURITY_SESSIONS : QUARTERLY_MARKET_EARLY_MATURITY_SESSIONS
+
+export updateMaturity(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool periodStart, bool sessionComplete, int rowCount, float valueAreaPercent) =>
+    if enabled and currentMode == DevelopingMode.automatic
+        revelioCore.advanceMaturityState(maturityState, state, periodStart, sessionComplete, maturityHistory(source), rowCount, valueAreaPercent, syminfo.mintick, MATURITY_STABILITY_FRACTION)
+    true
+
+export showsDeveloping(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool useUtcCalendar, bool lastBar) =>
+    enabled and revelioCore.maturityShowsDeveloping(maturityState, state, currentMode == DevelopingMode.on, currentMode == DevelopingMode.automatic, maturitySessions(source, useUtcCalendar), earlyMaturitySessions(source, useUtcCalendar), MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT, lastBar)
+
+export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<float> fixedVolumes, bool developingEnabled, bool useUtcCalendar, bool prepareHistogram, bool compositeEnabled, bool compositeValid, int compositeStartKey, int compositeEndKey, int profilesToShow, DevelopingMode currentMode, int unsetTime, int rowCount, float valueAreaPercent) =>
+    bool utcQuarterBoundary = calendarQuarterStart(UTC_TIMEZONE)
+    bool marketQuarterBoundary = calendarQuarterStart(NY_TIMEZONE)
+    bool quarterBoundary = useUtcCalendar ? utcQuarterBoundary : marketQuarterBoundary
+    bool utcDayBoundary = calendarDayStart(UTC_TIMEZONE)
+    bool marketRthInSession = not na(time(timeframe.period, RTH_SESSION, NY_TIMEZONE))
+    bool marketSessionComplete = not marketRthInSession and marketRthInSession[1]
+    bool maturitySessionComplete = useUtcCalendar ? utcDayBoundary : marketSessionComplete
+    var revelioCore.AnchorState state = revelioCore.newAnchorState(unsetTime)
+    var revelioCore.MergeState mergeState = revelioCore.newMergeState(unsetTime)
+    var revelioCore.ManualCompositeState compositeState = revelioCore.newManualCompositeState(unsetTime)
+    revelioCore.ManualCompositeRange compositeRange = revelioCore.newManualCompositeRange(compositeEnabled, compositeValid, compositeStartKey, compositeEndKey)
+    if compositeState.recoveryActive and not compositeRange.valid
+        revelioCore.restoreManualCompositeRecovery(state, mergeState, compositeState, unsetTime)
+    var revelioCore.MaturityState maturityState = revelioCore.newMaturityState()
+    var revelioCore.AnchorProcessPolicy policy = newCalendarAnchorProcessPolicy(profilesToShow, prepareHistogram, true)
+    updateMaturity(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, quarterBoundary, maturitySessionComplete, rowCount, valueAreaPercent)
+    [preparedHighs, preparedLows, preparedVolumes] = revelioCore.prepareBarVolumeSamples(fixedHighs, fixedLows, fixedVolumes, high, low, volume, true)
+    int compositePeriodKey = compositeRange.valid ? resolveEndKey(state.startTime != unsetTime ? state.startTime : time, ANCHOR_QUARTERLY, useUtcCalendar, useUtcCalendar) : unsetTime
+    revelioCore.processAnchor(state, mergeState, compositeState, compositeRange, compositePeriodKey, policy, true, true, quarterBoundary, false, preparedHighs, preparedLows, preparedVolumes, true, time, time[1], unsetTime, rowCount, valueAreaPercent)
+    int developingCompositePeriodKey = compositeRange.valid ? resolveEndKey(state.startTime != unsetTime ? state.startTime : time, ANCHOR_QUARTERLY, useUtcCalendar, useUtcCalendar) : unsetTime
+    revelioCore.Profile latestProfile = array.size(state.profiles) > 0 ? array.last(state.profiles) : na
+    bool latestAvailable = not na(latestProfile) and latestProfile.isValid
+    bool sameCompletionDay = latestAvailable and (useUtcCalendar ? sameCalendarDate(time, latestProfile.endTime, UTC_TIMEZONE) : sameCalendarDate(time, latestProfile.endTime, NY_TIMEZONE))
+    bool weeklyHistogramSnapshot = useUtcCalendar ? dayofweek(time, UTC_TIMEZONE) == dayofweek.monday and hour(time, UTC_TIMEZONE) == QUARTERLY_UTC_WEEKLY_SNAPSHOT_HOUR and minute(time, UTC_TIMEZONE) == QUARTERLY_SNAPSHOT_MINUTE : dayofweek(time, NY_TIMEZONE) == dayofweek.monday and hour(time, NY_TIMEZONE) == QUARTERLY_MARKET_WEEKLY_SNAPSHOT_HOUR and minute(time, NY_TIMEZONE) == QUARTERLY_SNAPSHOT_MINUTE
+    revelioCore.Profile histogramSnapshot = prepareHistogram and latestAvailable and (sameCompletionDay or weeklyHistogramSnapshot or barstate.islast) ? latestProfile : na
+    revelioCore.Profile developingCompositeSnapshot = barstate.islast ? buildConfirmedManualCompositeProfile(state, compositeState, compositeRange, developingCompositePeriodKey, time, prepareHistogram, rowCount, valueAreaPercent) : na
+    revelioCore.Profile developingSnapshot = not na(developingCompositeSnapshot) ? developingCompositeSnapshot : developingEnabled and state.startTime != unsetTime and array.size(state.barVolumes) > 0 and barstate.islast ? revelioCore.buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, state.startTime, time, prepareHistogram) : na
+    bool showDeveloping = showsDeveloping(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, useUtcCalendar, barstate.islast)
+    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0, compositeState.incomplete, compositeState.active]
+
+focusDirectionMatches(float levelPrice, float focusPrice, FocusDirection focusDirection) =>
+    focusDirection == FocusDirection.below ? levelPrice <= focusPrice : focusDirection == FocusDirection.above ? levelPrice >= focusPrice : focusDirection == FocusDirection.around
+
+nearerFocusDistance(float current, float levelPrice, float focusPrice, FocusDirection focusDirection) =>
+    float candidate = not na(levelPrice) and focusDirectionMatches(levelPrice, focusPrice, focusDirection) ? math.abs(focusPrice - levelPrice) : na
+    na(candidate) ? current : na(current) ? candidate : math.min(current, candidate)
+
+export profileFocusDistance(revelioCore.Profile profile, bool showPoc, bool showAlternatePoc, bool showValueArea, float focusPrice, FocusDirection focusDirection) =>
+    float nearest = na
+    if profile.isValid
+        if showPoc
+            nearest := nearerFocusDistance(nearest, profile.pocPrice, focusPrice, focusDirection)
+        if showAlternatePoc and profile.hasAlternatePoc
+            nearest := nearerFocusDistance(nearest, profile.alternatePocPrice, focusPrice, focusDirection)
+        if showValueArea
+            nearest := nearerFocusDistance(nearest, profile.valueAreaHighPrice, focusPrice, focusDirection)
+            nearest := nearerFocusDistance(nearest, profile.valueAreaLowPrice, focusPrice, focusDirection)
+    nearest
+
+focusCandidateOutranks(FocusCandidate candidate, FocusCandidate other) =>
+    candidate.distance != other.distance ? candidate.distance < other.distance : candidate.endTime > other.endTime
+
+retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int focusCount) =>
+    int rankedCount = array.size(ranked)
+    bool admitted = rankedCount < focusCount
+    if not admitted and rankedCount > 0
+        admitted := focusCandidateOutranks(candidate, array.last(ranked))
+    if admitted
+        int insertAt = rankedCount
+        if rankedCount > 0
+            for scanIndex = 0 to rankedCount - 1
+                if focusCandidateOutranks(candidate, array.get(ranked, scanIndex))
+                    insertAt := scanIndex
+                    break
+        if insertAt >= rankedCount
+            array.push(ranked, candidate)
+        else
+            array.insert(ranked, insertAt, candidate)
+        if array.size(ranked) > focusCount
+            array.pop(ranked)
+    admitted
+
+export focusedSelections(array<revelioCore.Profile> profiles, bool showPoc, bool showAlternatePoc, bool showValueArea, float focusPrice, FocusDirection focusDirection, int focusCount) =>
+    array<bool> selections = array.new<bool>(array.size(profiles), false)
+    if focusCount > 0 and not na(focusPrice) and array.size(profiles) > 0
+        array<FocusCandidate> ranked = array.new<FocusCandidate>()
+        for profileIndex = 0 to array.size(profiles) - 1
+            revelioCore.Profile profile = array.get(profiles, profileIndex)
+            float distance = profileFocusDistance(profile, showPoc, showAlternatePoc, showValueArea, focusPrice, focusDirection)
+            if not na(distance)
+                retainFocusCandidate(ranked, FocusCandidate.new(distance, profileIndex, profile.endTime), focusCount)
+        if array.size(ranked) > 0
+            for rankedIndex = 0 to array.size(ranked) - 1
+                array.set(selections, array.get(ranked, rankedIndex).profileIndex, true)
+    selections

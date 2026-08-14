@@ -3,7 +3,7 @@
 //@description Private Revelio Core Library for the shared profile engine.
 library("RevelioCoreLibrary", overlay=true)
 
-const int PROFILE_ROW_COUNT = 250
+export const int PROFILE_ROW_COUNT = 250
 const int HISTOGRAM_SMOOTHING = 7
 const int SAMPLE_COMPACT_THRESHOLD = 60000
 const int SAMPLE_COMPACT_ROWS = 6000
@@ -53,6 +53,10 @@ export type Profile
     bool valueAreaLowSweptBelow
     bool alternatePocSweptAbove
     bool alternatePocSweptBelow
+    bool manualComposite
+    int manualCompositeStartKey
+    int manualCompositeEndKey
+    int histogramSpanMs
 
 //@type Mutable sample and completed-profile storage for one Revelio anchor.
 //@field barHighs Confirmed sample highs in the developing period.
@@ -68,6 +72,7 @@ export type AnchorState
     array<Profile> profiles
     int startTime
     int lastBarTime
+    bool observedStartBoundary
 
 //@type Short-period folding state for one Revelio anchor.
 //@field pendingHighs Sample highs retained as a possible merge base.
@@ -83,6 +88,30 @@ export type MergeState
     int pendingStartTime
     int normalSpan
     int foldCount
+
+//@type One configured manual composite range for an anchor.
+//@field enabled Whether the range targets this anchor.
+//@field valid Whether the range can build a composite.
+//@field startKey Inclusive first trading-session key.
+//@field endKey Inclusive final trading-session key.
+export type ManualCompositeRange
+    bool enabled
+    bool valid
+    int startKey
+    int endKey
+
+//@type Raw-session accumulator and status for one manual composite.
+export type ManualCompositeState
+    array<float> highs
+    array<float> lows
+    array<float> volumes
+    array<Profile> recoveryProfiles
+    MergeState recoveryMergeState
+    bool recoveryActive
+    bool active
+    int startTime
+    bool seen
+    bool incomplete
 
 //@type Immutable processing policy for one Revelio anchor.
 //@field keepProfiles Completed-profile retention limit.
@@ -176,6 +205,9 @@ export type AutoSweptProfile
     varip bool alternatePocDailyTouchConsumed
     varip bool valueAreaHighDailyTouchConsumed
     varip bool valueAreaLowDailyTouchConsumed
+    bool manualComposite
+    int manualCompositeStartKey
+    int manualCompositeEndKey
 
 //@type Bounded Auto Swept archive and selection state for one anchor.
 //@field revision Incremented after each atomic daily selection.
@@ -257,19 +289,27 @@ type AutoSweptCandidate
 //@param rowCount Number of histogram rows.
 //@returns A new Profile instance with the stable Revelio defaults.
 export newProfile(int startTime, int endTime, int rowCount) =>
-    Profile.new(startTime, endTime, na, na, na, rowCount, array.new<float>(rowCount, 0.0), 0.0, 0, 0, 0, na, na, na, na, na, na, false, na, na, na, na, na, na, false, false, false, false, false, false, false, false, false, false, false, false, false)
+    Profile.new(startTime, endTime, na, na, na, rowCount, array.new<float>(rowCount, 0.0), 0.0, 0, 0, 0, na, na, na, na, na, na, false, na, na, na, na, na, na, false, false, false, false, false, false, false, false, false, false, false, false, false, false, 0, 0, 0)
 
 //@function Creates empty sample and completed-profile storage for one anchor.
 //@param unsetTime Sentinel used for timestamps that have not been observed.
 //@returns A new AnchorState instance.
 export newAnchorState(int unsetTime) =>
-    AnchorState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), unsetTime, unsetTime)
+    AnchorState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), unsetTime, unsetTime, false)
 
 //@function Creates empty short-period folding state for one anchor.
 //@param unsetTime Sentinel used for timestamps that have not been observed.
 //@returns A new MergeState instance.
 export newMergeState(int unsetTime) =>
     MergeState.new(array.new<float>(), array.new<float>(), array.new<float>(), unsetTime, 0, 0)
+
+//@function Creates one configured manual-composite range.
+export newManualCompositeRange(bool enabled, bool valid, int startKey, int endKey) =>
+    ManualCompositeRange.new(enabled, valid, startKey, endKey)
+
+//@function Creates empty manual-composite accumulation state.
+export newManualCompositeState(int unsetTime) =>
+    ManualCompositeState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), newMergeState(unsetTime), false, false, unsetTime, false, false)
 
 //@function Creates an immutable anchor-processing policy.
 //@param keepProfiles Completed-profile retention limit.
@@ -632,9 +672,127 @@ export maturityShowsDeveloping(MaturityState state, AnchorState anchor, bool alw
         earlyMature := state.sessionsCompleted >= earlyMinimumSessions and state.stable and not na(averageVolume) and currentVolume >= averageVolume * earlyVolumeThresholdPercent * 0.01
     alwaysOn or (automaticMode and (sessionMature or earlyMature))
 
+clearMergePending(MergeState state, int unsetTime) =>
+    array.clear(state.pendingHighs)
+    array.clear(state.pendingLows)
+    array.clear(state.pendingVolumes)
+    state.pendingStartTime := unsetTime
+    state.foldCount := 0
+    true
+
+clearManualCompositeAccumulator(ManualCompositeState state, int unsetTime) =>
+    array.clear(state.highs)
+    array.clear(state.lows)
+    array.clear(state.volumes)
+    state.active := false
+    state.startTime := unsetTime
+    true
+
+copyMergeState(MergeState source, MergeState target, int unsetTime) =>
+    clearMergePending(target, unsetTime)
+    array.concat(target.pendingHighs, source.pendingHighs)
+    array.concat(target.pendingLows, source.pendingLows)
+    array.concat(target.pendingVolumes, source.pendingVolumes)
+    target.pendingStartTime := source.pendingStartTime
+    target.normalSpan := source.normalSpan
+    target.foldCount := source.foldCount
+    true
+
+beginManualCompositeRecovery(AnchorState anchorState, MergeState mergeState, ManualCompositeState compositeState, int unsetTime) =>
+    array.clear(compositeState.recoveryProfiles)
+    array.concat(compositeState.recoveryProfiles, anchorState.profiles)
+    copyMergeState(mergeState, compositeState.recoveryMergeState, unsetTime)
+    compositeState.recoveryActive := true
+    true
+
+export restoreManualCompositeRecovery(AnchorState anchorState, MergeState mergeState, ManualCompositeState compositeState, int unsetTime) =>
+    if compositeState.recoveryActive
+        array.clear(anchorState.profiles)
+        array.concat(anchorState.profiles, compositeState.recoveryProfiles)
+        copyMergeState(compositeState.recoveryMergeState, mergeState, unsetTime)
+        array.clear(compositeState.recoveryProfiles)
+        clearMergePending(compositeState.recoveryMergeState, unsetTime)
+        compositeState.recoveryMergeState.normalSpan := 0
+        compositeState.recoveryActive := false
+    true
+
+manualCompositeContainsKey(ManualCompositeRange compositeRange, int periodKey) =>
+    compositeRange.enabled and compositeRange.valid and periodKey >= compositeRange.startKey and periodKey <= compositeRange.endKey
+
+trimCompletedProfiles(array<Profile> profiles, int keepProfiles) =>
+    int keepCount = math.max(1, keepProfiles)
+    while array.size(profiles) > keepCount
+        int removalIndex = -1
+        int protectedFromIndex = array.size(profiles) - keepCount
+        if protectedFromIndex > 0
+            for profileIndex = 0 to protectedFromIndex - 1
+                if not array.get(profiles, profileIndex).manualComposite
+                    removalIndex := profileIndex
+                    break
+        if removalIndex >= 0
+            array.remove(profiles, removalIndex)
+        else
+            break
+    true
+
+appendCompletedProfile(array<Profile> profiles, Profile profile, int keepProfiles) =>
+    array.push(profiles, profile)
+    trimCompletedProfiles(profiles, keepProfiles)
+    true
+
+markExpiredManualCompositeRange(ManualCompositeState state, ManualCompositeRange compositeRange, int periodKey, int unsetTime) =>
+    if state.active and (not compositeRange.enabled or not compositeRange.valid or periodKey > compositeRange.endKey)
+        state.incomplete := true
+        clearManualCompositeAccumulator(state, unsetTime)
+    bool unresolved = not state.seen and not state.incomplete
+    if compositeRange.enabled and compositeRange.valid and unresolved and periodKey > compositeRange.endKey
+        state.incomplete := true
+    true
+
+finalizeOrdinaryPeriod(array<Profile> profiles, MergeState mergeState, array<float> periodHighs, array<float> periodLows, array<float> periodVolumes, int startTime, int endTime, int lastBarTime, int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool prepareHistogram, int rowCount, float valueAreaPercent, int finalizedTime, int unsetTime) =>
+    int periodSpan = lastBarTime - startTime
+    int normalSpan = mergeState.normalSpan
+    bool mergeEnabled = mergeAllShorts or mergeDepth > 0
+    bool isShortPeriod = mergeEnabled and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
+    bool canMerge = isShortPeriod and (mergeAllShorts or mergeState.foldCount < mergeDepth) and array.size(mergeState.pendingVolumes) > 0 and array.size(profiles) > 0 and not array.last(profiles).manualComposite
+    if canMerge
+        int baseFinalizedTime = array.last(profiles).finalizedTime
+        array.concat(mergeState.pendingHighs, periodHighs)
+        array.concat(mergeState.pendingLows, periodLows)
+        array.concat(mergeState.pendingVolumes, periodVolumes)
+        compactIfNeeded(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes)
+        Profile merged = buildProfile(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes, rowCount, valueAreaPercent, mergeState.pendingStartTime, endTime, prepareHistogram)
+        if merged.isValid
+            merged.finalizedTime := baseFinalizedTime
+            array.pop(profiles)
+            appendCompletedProfile(profiles, merged, keepProfiles)
+        mergeState.foldCount += 1
+    else
+        Profile profile = buildProfile(periodHighs, periodLows, periodVolumes, rowCount, valueAreaPercent, startTime, endTime, prepareHistogram)
+        if profile.isValid
+            profile.finalizedTime := finalizedTime
+            appendCompletedProfile(profiles, profile, keepProfiles)
+            if periodSpan > normalSpan
+                mergeState.normalSpan := periodSpan
+            if mergeEnabled
+                bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
+                if becomesBase
+                    clearMergePending(mergeState, unsetTime)
+                    array.concat(mergeState.pendingHighs, periodHighs)
+                    array.concat(mergeState.pendingLows, periodLows)
+                    array.concat(mergeState.pendingVolumes, periodVolumes)
+                    mergeState.pendingStartTime := startTime
+                    mergeState.foldCount := combineShorts ? 1 : 0
+                else if combineShorts and not isShortPeriod
+                    clearMergePending(mergeState, unsetTime)
+    true
+
 //@function Finalizes one anchor period and applies its short-period merge policy.
 //@param state Anchor state to finalize.
 //@param mergeState Short-period folding state to mutate.
+//@param compositeState Manual-composite state to mutate.
+//@param compositeRange Configured range for this anchor.
+//@param periodKey Trading-session key for the period being processed.
 //@param startTime Finalized period start timestamp.
 //@param endTime Finalized period end timestamp.
 //@param lastBarTime Last confirmed sample timestamp.
@@ -648,52 +806,45 @@ export maturityShowsDeveloping(MaturityState state, AnchorState anchor, bool alw
 //@param valueAreaPercent Percentage of volume included in value.
 //@param finalizedTime Timestamp when finalization was observed.
 //@returns True after applying finalization.
-export finalizePeriod(AnchorState state, MergeState mergeState, int startTime, int endTime, int lastBarTime, int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool prepareHistogram, int rowCount, float valueAreaPercent, int finalizedTime) =>
+export finalizePeriod(AnchorState state, MergeState mergeState, ManualCompositeState compositeState, ManualCompositeRange compositeRange, int periodKey, int startTime, int endTime, int lastBarTime, bool observedStartBoundary, int unsetTime, int keepProfiles, int mergeDepth, bool mergeAllShorts, bool combineShorts, float shortSpanFraction, bool prepareHistogram, int rowCount, float valueAreaPercent, int finalizedTime) =>
     if array.size(state.barVolumes) > 0
-        int periodSpan = lastBarTime - startTime
-        int normalSpan = mergeState.normalSpan
-        bool mergeEnabled = mergeAllShorts or mergeDepth > 0
-        bool isShortPeriod = mergeEnabled and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
-        bool canMerge = isShortPeriod and (mergeAllShorts or mergeState.foldCount < mergeDepth) and array.size(mergeState.pendingVolumes) > 0 and array.size(state.profiles) > 0
-        if canMerge
-            int baseFinalizedTime = array.get(state.profiles, array.size(state.profiles) - 1).finalizedTime
-            array.concat(mergeState.pendingHighs, state.barHighs)
-            array.concat(mergeState.pendingLows, state.barLows)
-            array.concat(mergeState.pendingVolumes, state.barVolumes)
-            compactIfNeeded(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes)
-            Profile merged = buildProfile(mergeState.pendingHighs, mergeState.pendingLows, mergeState.pendingVolumes, rowCount, valueAreaPercent, mergeState.pendingStartTime, endTime, prepareHistogram)
-            if merged.isValid
-                merged.finalizedTime := baseFinalizedTime
-                array.pop(state.profiles)
-                array.push(state.profiles, merged)
-                while array.size(state.profiles) > keepProfiles
-                    array.shift(state.profiles)
-            mergeState.foldCount += 1
+        if compositeState.recoveryActive and (not compositeRange.enabled or not compositeRange.valid)
+            restoreManualCompositeRecovery(state, mergeState, compositeState, unsetTime)
+            clearManualCompositeAccumulator(compositeState, unsetTime)
+        markExpiredManualCompositeRange(compositeState, compositeRange, periodKey, unsetTime)
+        bool compositePeriod = manualCompositeContainsKey(compositeRange, periodKey)
+        if compositePeriod and not compositeState.recoveryActive
+            beginManualCompositeRecovery(state, mergeState, compositeState, unsetTime)
+        if compositeState.recoveryActive
+            finalizeOrdinaryPeriod(compositeState.recoveryProfiles, compositeState.recoveryMergeState, state.barHighs, state.barLows, state.barVolumes, startTime, endTime, lastBarTime, keepProfiles, mergeDepth, mergeAllShorts, combineShorts, shortSpanFraction, prepareHistogram, rowCount, valueAreaPercent, finalizedTime, unsetTime)
+        if compositePeriod
+            clearMergePending(mergeState, unsetTime)
+            if not compositeState.active
+                clearManualCompositeAccumulator(compositeState, unsetTime)
+                compositeState.active := true
+                compositeState.startTime := startTime
+                if periodKey > compositeRange.startKey
+                    compositeState.incomplete := true
+            compositeState.seen := true
+            if not observedStartBoundary
+                compositeState.incomplete := true
+            array.concat(compositeState.highs, state.barHighs)
+            array.concat(compositeState.lows, state.barLows)
+            array.concat(compositeState.volumes, state.barVolumes)
+            compactIfNeeded(compositeState.highs, compositeState.lows, compositeState.volumes)
+            if periodKey >= compositeRange.endKey
+                bool completeHistory = not compositeState.incomplete
+                if completeHistory
+                    Profile composite = buildProfile(compositeState.highs, compositeState.lows, compositeState.volumes, rowCount, valueAreaPercent, compositeState.startTime, endTime, prepareHistogram)
+                    if composite.isValid
+                        composite.finalizedTime := finalizedTime
+                        composite.manualComposite := true
+                        composite.manualCompositeStartKey := compositeRange.startKey
+                        composite.manualCompositeEndKey := compositeRange.endKey
+                        appendCompletedProfile(state.profiles, composite, keepProfiles)
+                clearManualCompositeAccumulator(compositeState, unsetTime)
         else
-            Profile profile = buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, startTime, endTime, prepareHistogram)
-            if profile.isValid
-                profile.finalizedTime := finalizedTime
-                array.push(state.profiles, profile)
-                while array.size(state.profiles) > keepProfiles
-                    array.shift(state.profiles)
-                if periodSpan > normalSpan
-                    mergeState.normalSpan := periodSpan
-                if mergeEnabled
-                    bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
-                    if becomesBase
-                        array.clear(mergeState.pendingHighs)
-                        array.clear(mergeState.pendingLows)
-                        array.clear(mergeState.pendingVolumes)
-                        array.concat(mergeState.pendingHighs, state.barHighs)
-                        array.concat(mergeState.pendingLows, state.barLows)
-                        array.concat(mergeState.pendingVolumes, state.barVolumes)
-                        mergeState.pendingStartTime := startTime
-                        mergeState.foldCount := combineShorts ? 1 : 0
-                    else if combineShorts and not isShortPeriod
-                        array.clear(mergeState.pendingHighs)
-                        array.clear(mergeState.pendingLows)
-                        array.clear(mergeState.pendingVolumes)
-                        mergeState.foldCount := 0
+            finalizeOrdinaryPeriod(state.profiles, mergeState, state.barHighs, state.barLows, state.barVolumes, startTime, endTime, lastBarTime, keepProfiles, mergeDepth, mergeAllShorts, combineShorts, shortSpanFraction, prepareHistogram, rowCount, valueAreaPercent, finalizedTime, unsetTime)
         array.clear(state.barHighs)
         array.clear(state.barLows)
         array.clear(state.barVolumes)
@@ -717,18 +868,19 @@ export finalizePeriod(AnchorState state, MergeState mergeState, int startTime, i
 //@param rowCount Profile row count.
 //@param valueAreaPercent Percentage of volume included in value.
 //@returns True after processing the bar.
-export processAnchor(AnchorState state, MergeState mergeState, AnchorProcessPolicy policy, bool enabled, bool inWindow, bool periodStart, bool periodEnd, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, bool barConfirmed, int currentTime, int previousTime, int unsetTime, int rowCount, float valueAreaPercent) =>
+export processAnchor(AnchorState state, MergeState mergeState, ManualCompositeState compositeState, ManualCompositeRange compositeRange, int periodKey, AnchorProcessPolicy policy, bool enabled, bool inWindow, bool periodStart, bool periodEnd, array<float> preparedHighs, array<float> preparedLows, array<float> preparedVolumes, bool barConfirmed, int currentTime, int previousTime, int unsetTime, int rowCount, float valueAreaPercent) =>
     if enabled
         bool shouldStart = periodStart or (not policy.requireObservedBoundary and state.startTime == unsetTime and inWindow)
 
         if periodEnd and array.size(state.barVolumes) > 0
-            finalizePeriod(state, mergeState, state.startTime, state.lastBarTime, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
+            finalizePeriod(state, mergeState, compositeState, compositeRange, periodKey, state.startTime, state.lastBarTime, state.lastBarTime, state.observedStartBoundary, unsetTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
 
         if shouldStart
             if array.size(state.barVolumes) > 0
                 int boundaryEnd = policy.continuousBoundary ? currentTime : previousTime
-                finalizePeriod(state, mergeState, state.startTime, boundaryEnd, state.lastBarTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
+                finalizePeriod(state, mergeState, compositeState, compositeRange, periodKey, state.startTime, boundaryEnd, state.lastBarTime, state.observedStartBoundary, unsetTime, policy.keepProfiles, policy.mergeDepth, policy.mergeAllShorts, policy.combineShorts, policy.shortSpanFraction, policy.prepareHistogram, rowCount, valueAreaPercent, currentTime)
             state.startTime := currentTime
+            state.observedStartBoundary := periodStart
 
         if inWindow and barConfirmed
             appendPreparedBarVolume(state.barHighs, state.barLows, state.barVolumes, preparedHighs, preparedLows, preparedVolumes, true)
@@ -788,9 +940,7 @@ export profileIndexByIdentity(array<Profile> profiles, int startTime, int endTim
 //@returns The stored profile index.
 export storeProfile(AnchorState state, Profile profile, int keepProfiles, int finalizedTime) =>
     profile.finalizedTime := finalizedTime
-    array.push(state.profiles, profile)
-    while array.size(state.profiles) > keepProfiles
-        array.shift(state.profiles)
+    appendCompletedProfile(state.profiles, profile, keepProfiles)
     array.size(state.profiles) - 1
 
 updateMitigation(array<Profile> profiles, bool active, bool sameSessionOnly, bool inWindowNow, float breachHigh, float breachLow, int currentTime) =>
@@ -860,8 +1010,14 @@ export updateAnchorLevels(AnchorState state, bool mitigationActive, bool sameSes
     updateMitigation(state.profiles, mitigationActive, sameSessionOnly, inWindowNow, breachHigh, breachLow, currentTime)
     updateSweep(state.profiles, sweepActive, sweepMarginFraction, currentClose, currentTime)
 
+//@function Keeps recoverable ordinary profiles aligned while a composite is active.
+export updateManualCompositeRecoveryLevels(ManualCompositeState state, bool mitigationActive, bool sameSessionOnly, bool inWindowNow, bool sweepActive, float breachHigh, float breachLow, float sweepMarginFraction, float currentClose, int currentTime) =>
+    if state.recoveryActive
+        updateMitigation(state.recoveryProfiles, mitigationActive, sameSessionOnly, inWindowNow, breachHigh, breachLow, currentTime)
+        updateSweep(state.recoveryProfiles, sweepActive, sweepMarginFraction, currentClose, currentTime)
+
 autoSweptProfileFromProfile(Profile profile) =>
-    AutoSweptProfile.new(profile.startTime, profile.endTime, profile.finalizedTime, profile.priceLow, profile.priceHigh, profile.pocPrice, profile.alternatePocPrice, profile.valueAreaHighPrice, profile.valueAreaLowPrice, profile.hasAlternatePoc, false, profile.pocBreachTime, profile.alternatePocBreachTime, profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime, profile.pocSweptAbove, profile.pocSweptBelow, profile.alternatePocSweptAbove, profile.alternatePocSweptBelow, profile.valueAreaHighSweptAbove, profile.valueAreaHighSweptBelow, profile.valueAreaLowSweptAbove, profile.valueAreaLowSweptBelow, profile.pocHitTime, profile.alternatePocHitTime, profile.valueAreaHighHitTime, profile.valueAreaLowHitTime, profile.pocDailyTouchConsumed, profile.alternatePocDailyTouchConsumed, profile.valueAreaHighDailyTouchConsumed, profile.valueAreaLowDailyTouchConsumed)
+    AutoSweptProfile.new(profile.startTime, profile.endTime, profile.finalizedTime, profile.priceLow, profile.priceHigh, profile.pocPrice, profile.alternatePocPrice, profile.valueAreaHighPrice, profile.valueAreaLowPrice, profile.hasAlternatePoc, false, profile.pocBreachTime, profile.alternatePocBreachTime, profile.valueAreaHighBreachTime, profile.valueAreaLowBreachTime, profile.pocSweptAbove, profile.pocSweptBelow, profile.alternatePocSweptAbove, profile.alternatePocSweptBelow, profile.valueAreaHighSweptAbove, profile.valueAreaHighSweptBelow, profile.valueAreaLowSweptAbove, profile.valueAreaLowSweptBelow, profile.pocHitTime, profile.alternatePocHitTime, profile.valueAreaHighHitTime, profile.valueAreaLowHitTime, profile.pocDailyTouchConsumed, profile.alternatePocDailyTouchConsumed, profile.valueAreaHighDailyTouchConsumed, profile.valueAreaLowDailyTouchConsumed, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey)
 
 autoSweptArchiveIndexByIdentity(array<AutoSweptProfile> profiles, int startTime, int endTime) =>
     int profileIndex = -1
@@ -909,6 +1065,9 @@ syncAutoSweptProfile(AutoSweptProfile target, Profile source) =>
     target.valueAreaHighSweptBelow := source.valueAreaHighSweptBelow
     target.valueAreaLowSweptAbove := source.valueAreaLowSweptAbove
     target.valueAreaLowSweptBelow := source.valueAreaLowSweptBelow
+    target.manualComposite := source.manualComposite
+    target.manualCompositeStartKey := source.manualCompositeStartKey
+    target.manualCompositeEndKey := source.manualCompositeEndKey
     syncAutoSweptHitState(target, source)
     true
 
