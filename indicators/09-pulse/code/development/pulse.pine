@@ -109,7 +109,6 @@ GROUP_INTRADAY_CLOSE_1600 = "Intraday Close: 16:00"
 GROUP_LABELS = "Labels"
 GROUP_COLOR_TABLE = "Color Reference"
 GROUP_ALERTS = "Alerts"
-GROUP_ADVANCED = "⚙️ Advanced"
 GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
 GROUP_SECONDARY_PANE = "Secondary Pane"
 
@@ -125,6 +124,20 @@ WINDOW_LABEL_FROM_0830 = "● RTH"
 WINDOW_LABEL_RTH = "RTH"
 SHOW_ONLY_MAX_TIMEFRAME_SECONDS = 60 * 60
 PANE_VISIBLE_PRICE_PADDING_RATIO = 0.10
+LIQUIDITY_REMINDER_SPACING_BARS = 120
+LIQUIDITY_REMINDER_MAX_PER_LINE = 3
+LIQUIDITY_LABEL_EVENT_BUDGET = 350
+LABEL_MERGE_STRICT = "Strict"
+LABEL_MERGE_BALANCED = "Balanced"
+LABEL_MERGE_WIDE = "Wide"
+LABEL_MERGE_EXTRA_WIDE = "Extra Wide"
+LABEL_MERGE_CUSTOM = "Custom"
+LABEL_MERGE_STRICT_PERCENT = 0.005
+LABEL_MERGE_BALANCED_PERCENT = 0.010
+LABEL_MERGE_WIDE_PERCENT = 0.025
+LABEL_MERGE_EXTRA_WIDE_PERCENT = 0.050
+LABEL_NAME_SEPARATOR = " • "
+DEPTH_LABEL_INDEX_TOLERANCE = 6
 
 // Alert messages
 const string ALERT_DAILY_HIGH_BREACH = "Daily High Breached"
@@ -189,7 +202,7 @@ const color DEFAULT_930_OPEN_COLOR = color.new(color.rgb(255, 112, 67), 30)
 const color DEFAULT_DAILY_OPEN_COLOR = color.new(color.rgb(156, 39, 176), 30)
 const color DEFAULT_WEEKLY_OPEN_COLOR = color.new(color.rgb(236, 64, 122), 30)
 const color DEFAULT_MONTHLY_OPEN_COLOR = color.new(color.rgb(255, 152, 0), 30)
-const color DEFAULT_LABEL_TEXT_COLOR = color.new(color.rgb(184, 184, 184), 0)
+const color DEFAULT_LABEL_TEXT_COLOR = color.new(color.rgb(156, 156, 156), 0)
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
 const color DEFAULT_PANE_UP_BODY_COLOR = #fafafa
 const color DEFAULT_PANE_DOWN_BODY_COLOR = color.new(#5b9cf6, 25)
@@ -240,8 +253,6 @@ INTRADAY_CLOSING_PRICE_MIN_TIMEFRAME = 60    // 1 minute (prevents duplicate cap
 INTRADAY_CLOSING_PRICE_MAX_TIMEFRAME = 3600  // 1 hour
 
 BAR_INDEX_DRAWING_LOOKBACK = 9999
-LINE_WIDTH_MIN = 1
-LINE_WIDTH_MAX = 5
 LINE_STYLE_SOLID = "Solid"
 LINE_STYLE_DASHED = "Dashed"
 LINE_STYLE_DOTTED = "Dotted"
@@ -249,11 +260,7 @@ LINE_WIDTH_1 = 1
 LINE_WIDTH_2 = 2
 LINE_WIDTH_3 = 3
 LINE_WIDTH_4 = 4
-
-// Label offset constants (as percentage of price)
-LABEL_OFFSET_MIN = 0.01     // Minimum offset for lowest priority pool
-LABEL_OFFSET_MAX = 0.15     // Maximum offset for highest priority pool
-LABEL_OFFSET_SINGLE = 0.02  // Offset when only one pool is enabled
+LINE_WIDTH_5 = 5
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPE DEFINITIONS
@@ -281,7 +288,7 @@ type AssetFamily
 type LiquidityDepthLevels
     array<bool> breached      // Index 0 = L1, 1 = L2, 2 = L3, etc.
     array<int> breach_times   // Corresponding breach timestamps
-    array<int> breach_indices // Corresponding chart bar indices for non-time-based charts
+    array<int> breach_indices // Corresponding chart bars for drawings and reminder placement
 
 type LiquidityPool
     array<float> highs
@@ -341,6 +348,14 @@ type TimeframeOpenTracker
     float current_open
     int current_time
     int current_hour
+
+type PendingLabelEvent
+    int label_index
+    float price
+    string identity
+    bool is_high
+    int rank
+    bool endpoint
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET CONFIGURATION REGISTRY (PERFORMANCE: Cached lookup, runs once)
@@ -454,52 +469,52 @@ includeSundayEvening = input.bool(false, "Include Sunday Evening", group=GROUP_T
 showDaily = input.bool(true, GROUP_DAILY, group=GROUP_DAILY)
 dailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_DAILY, group=GROUP_DAILY, inline='daily')
 dailyColor = input.color(DEFAULT_DAILY_COLOR, UI_COLOR, group=GROUP_DAILY, inline='daily')
-dailyLineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_DAILY, inline='daily')
+dailyLineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_DAILY, inline='daily')
 enableDailyLiquidityDepth = input.bool(false, "Liquidity Depth", group=GROUP_DAILY, inline='daily_liq', tooltip="Projects liquidity depth levels (L1, L2, L3) above highs and below lows.\nValid on 15min-1hr charts.")
 dailyLiqDepthColorPreset = input.string(LIQUIDITY_DEPTH_PRESET_DEFAULT, "", options=[LIQUIDITY_DEPTH_PRESET_DEFAULT, LIQUIDITY_DEPTH_PRESET_POOL_COLORS], group=GROUP_DAILY, inline='daily_liq')
 dailyLiqDepthL1Color = input.color(DEFAULT_DAILY_COLOR, "  L1", group=GROUP_DAILY, inline="daily_l1")
 dailyLiqDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_DAILY, inline="daily_l1")
-dailyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_DAILY, inline="daily_l1")
+dailyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_DAILY, inline="daily_l1")
 dailyLiqDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L2", group=GROUP_DAILY, inline="daily_l2")
 dailyLiqDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_DAILY, inline="daily_l2")
-dailyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_DAILY, inline="daily_l2")
+dailyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_DAILY, inline="daily_l2")
 dailyLiqDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L3", group=GROUP_DAILY, inline="daily_l3")
 dailyLiqDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_DAILY, inline="daily_l3")
-dailyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_DAILY, inline="daily_l3")
+dailyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_DAILY, inline="daily_l3")
 
 // ─── Weekly ───
 showWeekly = input.bool(true, GROUP_WEEKLY, group=GROUP_WEEKLY)
 weeklyShowLast = input.int(1, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_WEEKLY, group=GROUP_WEEKLY, inline='weekly')
 weeklyColor = input.color(DEFAULT_WEEKLY_COLOR, UI_COLOR, group=GROUP_WEEKLY, inline='weekly')
-weeklyLineWidth = input.int(LINE_WIDTH_3, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY, inline='weekly')
+weeklyLineWidth = input.int(LINE_WIDTH_3, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_WEEKLY, inline='weekly')
 enableWeeklyLiquidityDepth = input.bool(false, "Liquidity Depth", group=GROUP_WEEKLY, inline='weekly_liq', tooltip="Projects liquidity depth levels (L1, L2, L3) above highs and below lows.\nValid on 4hr-12hr charts.")
 weeklyLiqDepthColorPreset = input.string(LIQUIDITY_DEPTH_PRESET_DEFAULT, "", options=[LIQUIDITY_DEPTH_PRESET_DEFAULT, LIQUIDITY_DEPTH_PRESET_POOL_COLORS], group=GROUP_WEEKLY, inline='weekly_liq')
 weeklyLiqDepthL1Color = input.color(DEFAULT_WEEKLY_COLOR, "  L1", group=GROUP_WEEKLY, inline="weekly_l1")
 weeklyLiqDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_WEEKLY, inline="weekly_l1")
-weeklyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY, inline="weekly_l1")
+weeklyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_WEEKLY, inline="weekly_l1")
 weeklyLiqDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L2", group=GROUP_WEEKLY, inline="weekly_l2")
 weeklyLiqDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_WEEKLY, inline="weekly_l2")
-weeklyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY, inline="weekly_l2")
+weeklyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_WEEKLY, inline="weekly_l2")
 weeklyLiqDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L3", group=GROUP_WEEKLY, inline="weekly_l3")
 weeklyLiqDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_WEEKLY, inline="weekly_l3")
-weeklyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_WEEKLY, inline="weekly_l3")
+weeklyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_WEEKLY, inline="weekly_l3")
 
 // ─── Monthly ───
 showMonthly = input.bool(true, GROUP_MONTHLY, group=GROUP_MONTHLY)
 monthlyShowLast = input.int(1, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_MONTHLY, group=GROUP_MONTHLY, inline='monthly')
 monthlyColor = input.color(DEFAULT_MONTHLY_COLOR, UI_COLOR, group=GROUP_MONTHLY, inline='monthly')
-monthlyLineWidth = input.int(LINE_WIDTH_4, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY, inline='monthly')
+monthlyLineWidth = input.int(LINE_WIDTH_4, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_MONTHLY, inline='monthly')
 enableMonthlyLiquidityDepth = input.bool(false, "Liquidity Depth", group=GROUP_MONTHLY, inline='monthly_liq', tooltip="Projects liquidity depth levels (L1, L2, L3) above highs and below lows.\nValid on 12hr-1W charts.")
 monthlyLiqDepthColorPreset = input.string(LIQUIDITY_DEPTH_PRESET_DEFAULT, "", options=[LIQUIDITY_DEPTH_PRESET_DEFAULT, LIQUIDITY_DEPTH_PRESET_POOL_COLORS], group=GROUP_MONTHLY, inline='monthly_liq')
 monthlyLiqDepthL1Color = input.color(DEFAULT_MONTHLY_COLOR, "  L1", group=GROUP_MONTHLY, inline="monthly_l1")
 monthlyLiqDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_MONTHLY, inline="monthly_l1")
-monthlyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY, inline="monthly_l1")
+monthlyLiqDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_MONTHLY, inline="monthly_l1")
 monthlyLiqDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L2", group=GROUP_MONTHLY, inline="monthly_l2")
 monthlyLiqDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_MONTHLY, inline="monthly_l2")
-monthlyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY, inline="monthly_l2")
+monthlyLiqDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_MONTHLY, inline="monthly_l2")
 monthlyLiqDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L3", group=GROUP_MONTHLY, inline="monthly_l3")
 monthlyLiqDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_MONTHLY, inline="monthly_l3")
-monthlyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_MONTHLY, inline="monthly_l3")
+monthlyLiqDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_MONTHLY, inline="monthly_l3")
 
 // Asset detection and liquidity depth distances (automatic, cached for performance)
 detectedAsset = get_detected_asset_name()
@@ -518,7 +533,7 @@ isMonthlyLiquidityDepthTimeframeValid = currentTimeframeMinutes >= 720 and curre
 showIntraday = input.bool(true, GROUP_INTRADAY, group=GROUP_INTRADAY, tooltip='Asia: 2000-0000\nLondon: 0200-0500\nNY AM: 0930-1200\nLunch: 1200-1330\nNY PM: 1330-1600')
 intradayShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_INTRADAY, group=GROUP_INTRADAY, inline='intraday')
 intradayColor = input.color(DEFAULT_INTRADAY_COLOR, UI_COLOR, group=GROUP_INTRADAY, inline='intraday')
-intradayLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY, inline='intraday')
+intradayLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY, inline='intraday')
 showIntradayBackground = input.bool(false, UI_BACKGROUND, group=GROUP_INTRADAY, inline='intraday_bg')
 intradayBackgroundColor = input.color(DEFAULT_INTRADAY_BG_COLOR, "", group=GROUP_INTRADAY, inline='intraday_bg')
 enableIntradayLiquidityDepth = input.bool(false, "Liquidity Depth", group=GROUP_INTRADAY, inline='intraday_liq', tooltip="Projects percentage-based liquidity depth levels (L1, L2, L3) for Asia, London, NY AM, Lunch, NY PM sessions.")
@@ -529,13 +544,13 @@ intradayLiquidityDepthPercent2Input = input.float(DEFAULT_INTRADAY_LIQUIDITY_DEP
 intradayLiquidityDepthPercent3Input = input.float(DEFAULT_INTRADAY_LIQUIDITY_DEPTH_PERCENT_3, "L3 %", minval=0.01, maxval=5.0, step=0.01, group=GROUP_INTRADAY, inline="intraday_pct")
 intradayLiquidityDepthL1Color = input.color(DEFAULT_INTRADAY_COLOR, "  L1", group=GROUP_INTRADAY, inline="intraday_l1_style")
 intradayLiquidityDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_INTRADAY, inline="intraday_l1_style")
-intradayLiquidityDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY, inline="intraday_l1_style")
+intradayLiquidityDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY, inline="intraday_l1_style")
 intradayLiquidityDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L2", group=GROUP_INTRADAY, inline="intraday_l2_style")
 intradayLiquidityDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_INTRADAY, inline="intraday_l2_style")
-intradayLiquidityDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY, inline="intraday_l2_style")
+intradayLiquidityDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY, inline="intraday_l2_style")
 intradayLiquidityDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "  L3", group=GROUP_INTRADAY, inline="intraday_l3_style")
 intradayLiquidityDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_INTRADAY, inline="intraday_l3_style")
-intradayLiquidityDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY, inline="intraday_l3_style")
+intradayLiquidityDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY, inline="intraday_l3_style")
 
 // Apply detected asset percentages (override inputs if asset supported and manual override not enabled)
 useAutoPercentages = isAssetSupported and not useManualIntradayPercentages
@@ -552,13 +567,13 @@ enableOvernightLiquidityDepth = input.bool(false, "  └ Liquidity Depth", group
 overnightLiqDepthColorPreset = input.string(LIQUIDITY_DEPTH_PRESET_DEFAULT, "", options=[LIQUIDITY_DEPTH_PRESET_DEFAULT, LIQUIDITY_DEPTH_PRESET_POOL_COLORS], group=GROUP_POISZN, inline='overnight_liq')
 overnightLiqDepthL1Color = input.color(DEFAULT_OVERNIGHT_COLOR, "    L1", group=GROUP_POISZN, inline="overnight_l1")
 overnightLiqDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="overnight_l1")
-overnightLiqDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="overnight_l1")
+overnightLiqDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="overnight_l1")
 overnightLiqDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "    L2", group=GROUP_POISZN, inline="overnight_l2")
 overnightLiqDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="overnight_l2")
-overnightLiqDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="overnight_l2")
+overnightLiqDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="overnight_l2")
 overnightLiqDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "    L3", group=GROUP_POISZN, inline="overnight_l3")
 overnightLiqDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="overnight_l3")
-overnightLiqDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="overnight_l3")
+overnightLiqDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="overnight_l3")
 
 showPremarket = input.bool(true, UI_PREMARKET_SESSION, group=GROUP_POISZN, inline='premarket')
 premarketColor = input.color(DEFAULT_PREMARKET_COLOR, UI_COLOR, group=GROUP_POISZN, inline='premarket')
@@ -568,16 +583,16 @@ enablePremarketLiquidityDepth = input.bool(false, "  └ Liquidity Depth", group
 premarketLiqDepthColorPreset = input.string(LIQUIDITY_DEPTH_PRESET_DEFAULT, "", options=[LIQUIDITY_DEPTH_PRESET_DEFAULT, LIQUIDITY_DEPTH_PRESET_POOL_COLORS], group=GROUP_POISZN, inline='premarket_liq')
 premarketLiqDepthL1Color = input.color(DEFAULT_PREMARKET_COLOR, "    L1", group=GROUP_POISZN, inline="premarket_l1")
 premarketLiqDepthL1Style = input.string(LINE_STYLE_DASHED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="premarket_l1")
-premarketLiqDepthL1Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="premarket_l1")
+premarketLiqDepthL1Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="premarket_l1")
 premarketLiqDepthL2Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "    L2", group=GROUP_POISZN, inline="premarket_l2")
 premarketLiqDepthL2Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="premarket_l2")
-premarketLiqDepthL2Width = input.int(LINE_WIDTH_1, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="premarket_l2")
+premarketLiqDepthL2Width = input.int(LINE_WIDTH_1, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="premarket_l2")
 premarketLiqDepthL3Color = input.color(DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR, "    L3", group=GROUP_POISZN, inline="premarket_l3")
 premarketLiqDepthL3Style = input.string(LINE_STYLE_DOTTED, "", options=[LINE_STYLE_SOLID, LINE_STYLE_DASHED, LINE_STYLE_DOTTED], group=GROUP_POISZN, inline="premarket_l3")
-premarketLiqDepthL3Width = input.int(LINE_WIDTH_2, "", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline="premarket_l3")
+premarketLiqDepthL3Width = input.int(LINE_WIDTH_2, "", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline="premarket_l3")
 
 poisznShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_POISZN, group=GROUP_POISZN, inline='poiszn')
-poisznLineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_POISZN, inline='poiszn')
+poisznLineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_POISZN, inline='poiszn')
 
 // ─── Session Boxes (Killzones) ───
 showSessionBoxes = input.bool(false, "Show Session Boxes", group=GROUP_SESSION_BOXES, inline='sbtop', tooltip="Draw a high-to-low box for each killzone session (Asia, London, NY AM, NY PM, Premarket). Select the 'Just Sessions' Pulse Mode to show only these boxes.")
@@ -594,71 +609,76 @@ rangeBoxColor = input.color(DEFAULT_RANGE_BOX_COLOR, UI_COLOR, group=GROUP_RANGE
 rangeMiddleColor = input.color(DEFAULT_RANGE_MIDDLE_COLOR, UI_MIDDLE_LINE, group=GROUP_RANGE_BOX, inline='range_style')
 showRangeMiddleLine = input.bool(true, UI_MIDDLE_LINE, group=GROUP_RANGE_BOX, inline='range_options')
 rangeBoxShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_RANGE, group=GROUP_RANGE_BOX, inline='range_options')
-rangeBoxWidth = input.int(LINE_WIDTH_2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_RANGE_BOX, inline='range_options')
+rangeBoxWidth = input.int(LINE_WIDTH_2, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_RANGE_BOX, inline='range_options')
 
 // ─── Higher Timeframe Opens (MWD) ───
 showMonthlyOpen = input.bool(false, "Monthly Open", group=GROUP_HTF_OPEN_MONTHLY, tooltip="Track monthly candle open prices. Available on 1m to 2W timeframes.")
 openMonthlyShowLast = input.int(3, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_HTF_OPEN_MONTHLY, inline='monthly_open_options')
 openMonthlyColor = input.color(DEFAULT_MONTHLY_OPEN_COLOR, UI_COLOR, group=GROUP_HTF_OPEN_MONTHLY, inline='monthly_open_options')
-openMonthlyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_HTF_OPEN_MONTHLY, inline='monthly_open_options')
+openMonthlyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_HTF_OPEN_MONTHLY, inline='monthly_open_options')
 
 showWeeklyOpen = input.bool(false, "Weekly Open", group=GROUP_HTF_OPEN_WEEKLY, tooltip="Track weekly candle open prices. Available on 1m to 4D timeframes.")
 openWeeklyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_HTF_OPEN_WEEKLY, inline='weekly_open_options')
 openWeeklyColor = input.color(DEFAULT_WEEKLY_OPEN_COLOR, UI_COLOR, group=GROUP_HTF_OPEN_WEEKLY, inline='weekly_open_options')
-openWeeklyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_HTF_OPEN_WEEKLY, inline='weekly_open_options')
+openWeeklyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_HTF_OPEN_WEEKLY, inline='weekly_open_options')
 
 showDailyOpen = input.bool(false, "Daily Open", group=GROUP_HTF_OPEN_DAILY, inline='daily_1', tooltip="Track daily candle open prices. Available on 1m to 12H timeframes.")
 useDailyDigitalOpen = input.bool(false, "Use 18:00 as Open", group=GROUP_HTF_OPEN_DAILY,  inline='daily_1', tooltip="Use 18:00 NY time (futures session start) instead of midnight.")
 openDailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_HTF_OPEN_DAILY, inline='daily_open_options')
 openDailyColor = input.color(DEFAULT_DAILY_OPEN_COLOR, UI_COLOR, group=GROUP_HTF_OPEN_DAILY, inline='daily_open_options')
-openDailyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_HTF_OPEN_DAILY, inline='daily_open_options')
+openDailyLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_HTF_OPEN_DAILY, inline='daily_open_options')
 
 // ─── Intermediate Timeframe Opens (4H, 1H) ───
 show4HOpen = input.bool(false, "4H Open", group=GROUP_ITF_OPEN_4H, tooltip="Track 4-hour candle open prices. Labels show the opening hour (e.g., 4H 0600, 4H 1000). Available on 1m to 4H timeframes.")
 open4HShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_ITF_OPEN_4H, inline='4h_options')
 open4HColor = input.color(DEFAULT_4H_OPEN_COLOR, UI_COLOR, group=GROUP_ITF_OPEN_4H, inline='4h_options')
-open4HLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_ITF_OPEN_4H, inline='4h_options')
+open4HLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_ITF_OPEN_4H, inline='4h_options')
 
 show1HOpen = input.bool(false, "1H Open", group=GROUP_ITF_OPEN_1H, tooltip="Track 1-hour candle open prices. Labels show the opening hour (e.g., 1H 0900, 1H 1400). Available on 1m to 1H timeframes.")
 open1HShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_ITF_OPEN_1H, inline='1h_options')
 open1HColor = input.color(DEFAULT_1H_OPEN_COLOR, UI_COLOR, group=GROUP_ITF_OPEN_1H, inline='1h_options')
-open1HLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_ITF_OPEN_1H, inline='1h_options')
+open1HLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_ITF_OPEN_1H, inline='1h_options')
 
 // ─── Intraday Opens ───
 showMnoOpen = input.bool(false, "Midnight Open", group=GROUP_INTRADAY_OPEN_MNO, tooltip="Track midnight NY time open price. Available on 1m to 1H timeframes.")
 openMnoShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_INTRADAY_OPEN_MNO, inline='mno_options')
 openMnoColor = input.color(DEFAULT_MNO_OPEN_COLOR, UI_COLOR, group=GROUP_INTRADAY_OPEN_MNO, inline='mno_options')
-openMnoLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_OPEN_MNO, inline='mno_options')
+openMnoLineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_OPEN_MNO, inline='mno_options')
 
 show830Open = input.bool(false, "8:30 Open", group=GROUP_INTRADAY_OPEN_830, tooltip="Track 8:30 AM NY time open price. Available on 1m to 1H timeframes.")
 open830ShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_INTRADAY_OPEN_830, inline='830_options')
 open830Color = input.color(DEFAULT_830_OPEN_COLOR, UI_COLOR, group=GROUP_INTRADAY_OPEN_830, inline='830_options')
-open830LineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_OPEN_830, inline='830_options')
+open830LineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_OPEN_830, inline='830_options')
 
 show930Open = input.bool(false, "9:30 Open", group=GROUP_INTRADAY_OPEN_930, tooltip="Track 9:30 AM NY time open price (US market open). Available on 1m to 1H timeframes.")
 open930ShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_OPENS, group=GROUP_INTRADAY_OPEN_930, inline='930_options')
 open930Color = input.color(DEFAULT_930_OPEN_COLOR, UI_COLOR, group=GROUP_INTRADAY_OPEN_930, inline='930_options')
-open930LineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_OPEN_930, inline='930_options')
+open930LineWidth = input.int(LINE_WIDTH_2, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_OPEN_930, inline='930_options')
 
 // ─── Intraday Closes ───
 show1400Close = input.bool(false, "14:00 Close", group=GROUP_INTRADAY_CLOSE_1400, tooltip="Track and project the 14:00 1-minute candle close price until mitigated. Only available on 1m to 1H timeframes.")
 close1400ShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_CLOSES, group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
 close1400Color = input.color(DEFAULT_1400_CLOSE_COLOR, UI_COLOR, group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
-close1400LineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
+close1400LineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
 close1400MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
-close1400UntappedWidth = input.int(LINE_WIDTH_2, "Untapped Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
+close1400UntappedWidth = input.int(LINE_WIDTH_2, "Untapped Width", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_CLOSE_1400, inline='1400_options')
 
 show1600Close = input.bool(false, "16:00 Close", group=GROUP_INTRADAY_CLOSE_1600, tooltip="Track and project the 16:00 1-minute candle close price until mitigated. Automatically captures 18:00 reopen on early-close days (e.g., holidays when market closes at 13:00). Only available on 1m to 1H timeframes.")
 close1600ShowLast = input.int(15, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_CLOSES, group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
 close1600Color = input.color(DEFAULT_1600_CLOSE_COLOR, UI_COLOR, group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
-close1600LineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
+close1600LineWidth = input.int(LINE_WIDTH_1, UI_WIDTH, options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
 close1600MitigationWindow = input.string(MITIGATION_WINDOW_ANYTIME, "Mitigation Window", group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options', options=[MITIGATION_WINDOW_ANYTIME, MITIGATION_WINDOW_MARKET_HOURS], tooltip="Anytime: Level can be mitigated any time after 05:00 (includes overnight/Asian session). Levels mitigated more frequently.\nMarket-Hours: Level can ONLY be mitigated during 05:00-16:00 (filters overnight manipulation). Results in MORE levels visible on screen as they persist longer, better for identifying institutional levels.")
-close1600UntappedWidth = input.int(LINE_WIDTH_2, "Untapped Width", minval=LINE_WIDTH_MIN, maxval=LINE_WIDTH_MAX, group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
+close1600UntappedWidth = input.int(LINE_WIDTH_2, "Untapped Width", options=[LINE_WIDTH_1, LINE_WIDTH_2, LINE_WIDTH_3, LINE_WIDTH_4, LINE_WIDTH_5], group=GROUP_INTRADAY_CLOSE_1600, inline='1600_options')
 
 showLabels = input.bool(true, GROUP_LABELS, group=GROUP_LABELS, inline='labels')
 labelTextColor = input.color(DEFAULT_LABEL_TEXT_COLOR, UI_TEXT_COLOR, group=GROUP_LABELS, inline='labels')
-labelOffsetEnabled = input.bool(false, "Smart Label Separation", group=GROUP_LABELS, inline='labels', tooltip="Enable vertical offset stacking to prevent label collisions. Automatically adapts spacing based on asset volatility. Turn ON only if you see overlapping labels.")
 showSessionOnSweepLabels = input.bool(true, "Show Session Sweep Tags", group=GROUP_LABELS, tooltip="Show session name alongside L1/L2/L3 sweep labels (e.g. 'L1 asia').")
+showDepthReminders = input.bool(true, "Depth Reminders", group=GROUP_LABELS, inline="label_reminders", active=showLabels)
+showPoolReminders = input.bool(true, "Pool Reminders", group=GROUP_LABELS, inline="label_reminders", active=showLabels, tooltip="Depth Reminders — Repeat L1/L2/L3 tags on long liquidity-depth lines.\n\nPool Reminders — Repeat Daily, Weekly, Monthly, Overnight, Premarket, and intraday high/low names on long pool lines.\n\nBoth stay sparse: short lines keep one label; multi-day lines can earn a second or third.")
+mergeOverlappingLabels = input.bool(true, "Merge Overlapping Labels", group=GROUP_LABELS, inline="label_merge", active=showLabels)
+labelMergePreset = input.string(LABEL_MERGE_EXTRA_WIDE, "", options=[LABEL_MERGE_STRICT, LABEL_MERGE_BALANCED, LABEL_MERGE_WIDE, LABEL_MERGE_EXTRA_WIDE, LABEL_MERGE_CUSTOM], group=GROUP_LABELS, inline="label_merge", active=showLabels and mergeOverlappingLabels)
+customLabelMergeDistancePercent = input.float(LABEL_MERGE_BALANCED_PERCENT, "%", minval=0.0, maxval=0.5, step=0.001, group=GROUP_LABELS, inline="label_merge", active=showLabels and mergeOverlappingLabels and labelMergePreset == LABEL_MERGE_CUSTOM, tooltip="Merge Overlapping Labels\nCombines nearby pool reminders and L1/L2/L3 tags in one label, including different L tiers. Every L identity remains explicit; mixed sides add high/low. Lines keep their own origin, endpoint, color, width, and style.\n\nDistance\n• Strict — 0.005%.\n• Balanced — 0.010%.\n• Wide — 0.025%.\n• Extra Wide — 0.050%.\n• Custom — use %.\n\nMinimum distance is one tick. Off keeps labels separate.")
+labelMergeDistancePercent = labelMergePreset == LABEL_MERGE_STRICT ? LABEL_MERGE_STRICT_PERCENT : labelMergePreset == LABEL_MERGE_WIDE ? LABEL_MERGE_WIDE_PERCENT : labelMergePreset == LABEL_MERGE_EXTRA_WIDE ? LABEL_MERGE_EXTRA_WIDE_PERCENT : labelMergePreset == LABEL_MERGE_CUSTOM ? customLabelMergeDistancePercent : LABEL_MERGE_BALANCED_PERCENT
 
 // ─── Asset Levels Table ───
 showAssetLevelsTable = input.bool(false, "Show Asset Levels", group=GROUP_LABELS, tooltip="Display a table showing detected asset and its liquidity depth levels")
@@ -671,9 +691,6 @@ alertIntraday = input.bool(false, "Intraday", group=GROUP_ALERTS, inline="alert_
 alertOvernight = input.bool(true, "Overnight", group=GROUP_ALERTS, inline="alert_sessions")
 alertPremarket = input.bool(true, "Premarket", group=GROUP_ALERTS, inline="alert_sessions")
 alert1600Close = input.bool(true, "16:00 Mitigation", group=GROUP_ALERTS, tooltip="Alert when 16:00 close level is mitigated")
-
-// ─── Advanced ───
-pool_debug_mode = input.string("Off", "Pool Debug", options=["Off", "Daily", "Weekly", "Monthly"], group=GROUP_ADVANCED, tooltip="Display a debug table showing the last 10 sessions for the selected pool type")
 
 // ─── Secondary Pane ───
 placementMode = input.string(PLACEMENT_MAIN_CHART, "Placement", options=[PLACEMENT_MAIN_CHART, PLACEMENT_SECONDARY_PANE], group=GROUP_SECONDARY_PANE, tooltip="Main Chart: keep Pulse on price.\n\nSecondary Pane: keep candle effects local to the indicator pane and disable main-chart candle effects.")
@@ -982,7 +999,7 @@ draw_timeframe_opens(TimeframeOpenTracker tracker, int showLast, color lineColor
         current_line = line.new(tracker.current_time, tracker.current_open, current_end, tracker.current_open, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid)
         array.push(all_lines, current_line)
 
-        if showLabels
+        if showLabels and array.size(all_labels) < INDICATOR_MAX_LABELS
             label_text = use_hour_format ? prefix + " " + (tracker.current_hour < 10 ? "0" : "") + str.tostring(tracker.current_hour) + "00" : prefix + " Open"
             array.push(all_labels, label.new(current_end, tracker.current_open, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
 
@@ -1006,7 +1023,7 @@ draw_timeframe_opens(TimeframeOpenTracker tracker, int showLast, color lineColor
 
             array.push(all_lines, line.new(open_time, open_price, end_time, open_price, xloc=xloc.bar_time, color=lineColor, width=lineWidth, style=line.style_solid))
 
-            if showLabels
+            if showLabels and array.size(all_labels) < INDICATOR_MAX_LABELS
                 label_text = use_hour_format ? prefix + " " + (open_hour < 10 ? "0" : "") + str.tostring(open_hour) + "00" : prefix + " Open"
                 array.push(all_labels, label.new(end_time, open_price, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
 
@@ -1031,7 +1048,7 @@ draw_intraday_closes(IntradayClosingPriceTracker tracker, int showLast, int maxU
                     untapped_width_assigned := true
                     unmitigated_drawn += 1
                 array.push(all_lines, line.new(tracker.current_time, tracker.current_close, current_end_time, tracker.current_close, xloc=xloc.bar_time, color=lineColor, width=current_line_width, style=line.style_solid))
-                if showLabels
+                if showLabels and array.size(all_labels) < INDICATOR_MAX_LABELS
                     label_time = (current_is_mitigated and not na(current_mitigation_time_val)) ? int((tracker.current_time + current_mitigation_time_val) / 2) : current_end_time
                     array.push(all_labels, label.new(label_time, tracker.current_close, str.tostring(tracker.current_capture_hour) + ":00", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
                 levels_drawn += 1
@@ -1060,7 +1077,7 @@ draw_intraday_closes(IntradayClosingPriceTracker tracker, int showLast, int maxU
             if not is_mitigated
                 unmitigated_drawn += 1
             array.push(all_lines, line.new(close_time, close_price, end_time, close_price, xloc=xloc.bar_time, color=lineColor, width=lw, style=line.style_solid))
-            if showLabels
+            if showLabels and array.size(all_labels) < INDICATOR_MAX_LABELS
                 label_time = (is_mitigated and not na(mitigation_time)) ? int((close_time + mitigation_time) / 2) : end_time
                 capture_hour = (i < array.size(tracker.capture_hours)) ? array.get(tracker.capture_hours, i) : fallbackHour
                 array.push(all_labels, label.new(label_time, close_price, str.tostring(capture_hour) + ":00", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)))
@@ -1317,25 +1334,134 @@ get_premarket_liq_depth_style(level_idx) =>
     style_str = level_idx == 0 ? premarketLiqDepthL1Style : (level_idx == 1 ? premarketLiqDepthL2Style : premarketLiqDepthL3Style)
     convert_line_style(style_str)
 
-// Helper: Create liquidity depth label (L1, L2, L3)
-create_liq_depth_label(label_time, label_index, price_val, level_idx, is_high, pool_type = "") =>
+depth_label_text(level_idx, pool_type = "") =>
     level_str = "L" + str.tostring(level_idx + 1)
-    label_text = showSessionOnSweepLabels and pool_type != "" ? level_str + " " + pool_type : level_str
+    showSessionOnSweepLabels and pool_type != "" ? level_str + " " + pool_type : level_str
+
+pool_label_rank(pool_type) =>
+    pool_type == POOL_TYPE_MONTHLY ? 9 :
+     pool_type == POOL_TYPE_WEEKLY ? 8 :
+     pool_type == POOL_TYPE_DAILY ? 7 :
+     pool_type == POOL_TYPE_OVERNIGHT ? 6 :
+     pool_type == POOL_TYPE_PREMARKET ? 5 :
+     pool_type == POOL_TYPE_NYPM ? 4 :
+     pool_type == POOL_TYPE_LUNCH ? 3 :
+     pool_type == POOL_TYPE_NYAM ? 2 :
+     pool_type == POOL_TYPE_LONDON ? 1 : 0
+
+reminder_placements(int run_bars, bool repeat) =>
+    // Density follows visual candle span: lower timeframes earn more reminders for
+    // the same elapsed duration, while short higher-timeframe lines stay uncluttered.
+    int duration_count = math.min(LIQUIDITY_REMINDER_MAX_PER_LINE, math.max(1, int(math.floor(float(run_bars) / LIQUIDITY_REMINDER_SPACING_BARS))))
+    int spacing_count = math.max(1, int(math.floor(float(math.max(0, run_bars)) / (DEPTH_LABEL_INDEX_TOLERANCE + 1))))
+    repeat ? math.min(duration_count, spacing_count) : 1
+
+// Bar spacing prevents closed futures gaps from collapsing reminders onto the 18:00 reopen.
+reminder_indices(start_index, end_index, bool repeat, bool include_end) =>
+    array<int> indices = array.new<int>()
+    int minimum_index = math.max(0, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
+    if not na(start_index) and not na(end_index) and end_index >= minimum_index
+        int range_start_index = math.max(start_index, minimum_index)
+        int range_run = math.max(0, end_index - range_start_index)
+        int count = reminder_placements(range_run, repeat)
+        for placement = 1 to count
+            float position = include_end ? float(placement) / count : (placement - 0.5) / count
+            array.push(indices, range_start_index + int(range_run * position))
+    indices
+
+label_event_bucket(PendingLabelEvent event) =>
+    (event.endpoint ? 10 : 0) + math.max(0, math.min(9, event.rank))
+
+label_event_bucket_quota(int bucket) =>
+    int rank = bucket >= 10 ? bucket - 10 : bucket
+    bool endpoint = bucket >= 10
+    endpoint ? (rank == 9 ? 30 : rank == 8 ? 30 : rank == 7 ? 50 : rank == 6 ? 25 : rank == 5 ? 25 : rank == 4 ? 15 : rank == 3 ? 15 : 10) :
+     rank == 9 ? 20 : rank == 8 ? 20 : rank == 7 ? 30 : rank == 6 ? 15 : rank == 5 ? 15 : rank == 4 ? 10 : rank == 3 ? 10 : rank == 2 ? 5 : rank == 1 ? 3 : 2
+
+queue_label_event(array<PendingLabelEvent> pending, array<int> bucket_counts, PendingLabelEvent candidate) =>
+    int bucket = label_event_bucket(candidate)
+    int count = array.get(bucket_counts, bucket)
+    if count < label_event_bucket_quota(bucket) and array.size(pending) < LIQUIDITY_LABEL_EVENT_BUDGET
+        array.push(pending, candidate)
+        array.set(bucket_counts, bucket, count + 1)
+    true
+
+buffer_liq_depth_labels(array<PendingLabelEvent> pending, array<int> bucket_counts, start_index, end_index, price_val, level_idx, is_high, pool_type = "") =>
+    array<int> label_indices = reminder_indices(start_index, end_index, showLabels and showDepthReminders, false)
+    if showLabels and array.size(label_indices) > 0
+        string identity = depth_label_text(level_idx, pool_type)
+        int rank = pool_label_rank(pool_type)
+        for placement = 0 to array.size(label_indices) - 1
+            queue_label_event(pending, bucket_counts, PendingLabelEvent.new(array.get(label_indices, placement), price_val, identity, is_high, rank, false))
+    true
+
+buffer_pool_label(array<PendingLabelEvent> pending, array<int> bucket_counts, float price, int start_index, int end_index, string label_text, bool is_high, bool breached, string pool_type) =>
+    array<int> label_indices = reminder_indices(start_index, end_index, showLabels and showPoolReminders, not breached)
+    if showLabels and array.size(label_indices) > 0
+        int rank = pool_label_rank(pool_type)
+        int last_placement = array.size(label_indices) - 1
+        for placement = 0 to last_placement
+            bool endpoint = not breached and placement == last_placement
+            queue_label_event(pending, bucket_counts, PendingLabelEvent.new(array.get(label_indices, placement), price, label_text, is_high, rank, endpoint))
+    true
+
+create_pool_label(label_index, price_val, label_str, is_high) =>
     label_style = is_high ? label.style_label_down : label.style_label_up
-    range_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
+    safe_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
     label result = na
     if pane_price_visible(price_val)
-        result := chart.is_range ? label.new(range_label_index, price_val, label_text, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_text, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+        result := label.new(safe_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
     result
 
-// Helper: Create pool label (high/low)
-create_pool_label(label_time, label_index, price_val, label_str, is_high) =>
-    label_style = is_high ? label.style_label_down : label.style_label_up
-    range_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    label result = na
-    if pane_price_visible(price_val)
-        result := chart.is_range ? label.new(range_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100)) : label.new(label_time, price_val, label_str, xloc=xloc.bar_time, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
-    result
+pool_label_merge_tolerance(float price) =>
+    math.max(syminfo.mintick, math.abs(price) * labelMergeDistancePercent / 100.0)
+
+label_events_overlap(PendingLabelEvent left, PendingLabelEvent right) =>
+    float tolerance = math.max(pool_label_merge_tolerance(left.price), pool_label_merge_tolerance(right.price))
+    math.abs(left.label_index - right.label_index) <= DEPTH_LABEL_INDEX_TOLERANCE and math.abs(left.price - right.price) <= tolerance
+
+label_event_root(array<int> parents, int event_index) =>
+    int root = event_index
+    while array.get(parents, root) != root
+        root := array.get(parents, root)
+    root
+
+label_event_precedes(PendingLabelEvent candidate, int candidate_order, PendingLabelEvent current, int current_order) =>
+    candidate.endpoint != current.endpoint ? candidate.endpoint : candidate.rank > current.rank or (candidate.rank == current.rank and candidate_order < current_order)
+
+compose_label_event_cluster(int cluster_index, int fallback_order, array<int> identity_clusters, array<string> identity_texts, array<bool> identity_sides, array<int> identity_ranks, array<int> identity_orders) =>
+    string body = ""
+    int identity_count = 0
+    bool has_high = false
+    bool has_low = false
+    for identity_index = 0 to array.size(identity_clusters) - 1
+        if array.get(identity_clusters, identity_index) == cluster_index
+            identity_count += 1
+            if array.get(identity_sides, identity_index)
+                has_high := true
+            else
+                has_low := true
+    bool mixed_sides = has_high and has_low
+    array<bool> identity_used = array.new<bool>(array.size(identity_clusters), false)
+    for identity_position = 1 to identity_count
+        int best_index = -1
+        int best_rank = -1
+        int best_order = fallback_order
+        for identity_index = 0 to array.size(identity_clusters) - 1
+            if array.get(identity_clusters, identity_index) == cluster_index and not array.get(identity_used, identity_index)
+                int candidate_rank = array.get(identity_ranks, identity_index)
+                int candidate_order = array.get(identity_orders, identity_index)
+                if candidate_rank > best_rank or (candidate_rank == best_rank and candidate_order < best_order)
+                    best_index := identity_index
+                    best_rank := candidate_rank
+                    best_order := candidate_order
+        if best_index >= 0
+            string next_text = array.get(identity_texts, best_index)
+            if mixed_sides
+                next_text := next_text + (array.get(identity_sides, best_index) ? " high" : " low")
+            body := body == "" ? next_text : body + LABEL_NAME_SEPARATOR + next_text
+            array.set(identity_used, best_index, true)
+    body
 
 // Range charts are spaced by bar order rather than elapsed time. Keep both coordinates
 // so a breach endpoint lands on the actual range candle instead of a later candle that
@@ -1347,6 +1473,67 @@ create_pool_line(start_time, start_index, price_val, end_time, end_index, line_c
     if pane_price_visible(price_val)
         result := chart.is_range ? line.new(range_start_index, price_val, range_end_index, price_val, xloc=xloc.bar_index, color=line_color, width=line_width, style=line_style) : line.new(start_time, price_val, end_time, price_val, xloc=xloc.bar_time, color=line_color, width=line_width, style=line_style)
     result
+
+flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
+    int pending_count = array.size(pending)
+    if pending_count > 0
+        array<int> parents = array.new<int>()
+        for pending_index = 0 to pending_count - 1
+            array.push(parents, pending_index)
+        if mergeOverlappingLabels and pending_count > 1
+            for left_index = 0 to pending_count - 2
+                PendingLabelEvent left = array.get(pending, left_index)
+                for right_index = left_index + 1 to pending_count - 1
+                    PendingLabelEvent right = array.get(pending, right_index)
+                    if label_events_overlap(left, right)
+                        int left_root = label_event_root(parents, left_index)
+                        int right_root = label_event_root(parents, right_index)
+                        if left_root != right_root
+                            int root = math.min(left_root, right_root)
+                            int child = math.max(left_root, right_root)
+                            array.set(parents, child, root)
+        array<int> component_roots = array.new<int>()
+        array<int> component_carriers = array.new<int>()
+        array<int> identity_clusters = array.new<int>()
+        array<string> identity_texts = array.new<string>()
+        array<bool> identity_sides = array.new<bool>()
+        array<int> identity_ranks = array.new<int>()
+        array<int> identity_orders = array.new<int>()
+        for pending_index = 0 to pending_count - 1
+            PendingLabelEvent candidate = array.get(pending, pending_index)
+            int root = label_event_root(parents, pending_index)
+            int cluster_index = array.indexof(component_roots, root)
+            if cluster_index < 0
+                array.push(component_roots, root)
+                array.push(component_carriers, pending_index)
+                cluster_index := array.size(component_roots) - 1
+            else
+                int current_carrier_index = array.get(component_carriers, cluster_index)
+                PendingLabelEvent current_carrier = array.get(pending, current_carrier_index)
+                if label_event_precedes(candidate, pending_index, current_carrier, current_carrier_index)
+                    array.set(component_carriers, cluster_index, pending_index)
+            bool identity_exists = false
+            if array.size(identity_clusters) > 0
+                for identity_index = 0 to array.size(identity_clusters) - 1
+                    if array.get(identity_clusters, identity_index) == cluster_index and array.get(identity_texts, identity_index) == candidate.identity and array.get(identity_sides, identity_index) == candidate.is_high
+                        identity_exists := true
+                        break
+            if not identity_exists
+                array.push(identity_clusters, cluster_index)
+                array.push(identity_texts, candidate.identity)
+                array.push(identity_sides, candidate.is_high)
+                array.push(identity_ranks, candidate.rank)
+                array.push(identity_orders, pending_index)
+        for cluster_index = 0 to array.size(component_roots) - 1
+            int carrier_index = array.get(component_carriers, cluster_index)
+            PendingLabelEvent carrier = array.get(pending, carrier_index)
+            string merged_text = compose_label_event_cluster(cluster_index, pending_count, identity_clusters, identity_texts, identity_sides, identity_ranks, identity_orders)
+            if array.size(drawn) < LIQUIDITY_LABEL_EVENT_BUDGET
+                label created_label = create_pool_label(carrier.label_index, carrier.price, merged_text, carrier.is_high)
+                if not na(created_label)
+                    array.push(drawn, created_label)
+        array.clear(pending)
+    true
 
 // Fixed thin width so the connector never obscures wicks, regardless of depth-line width.
 create_liq_depth_connector(x_time, x_index, start_price, end_price, connector_color) =>
@@ -1540,6 +1727,8 @@ var TimeframeOpenTracker weekly_open = create_tf_open()
 var TimeframeOpenTracker monthly_open = create_tf_open()
 var array<line> all_lines = array.new<line>()
 var array<label> all_labels = array.new<label>()
+var array<PendingLabelEvent> pending_label_events = array.new<PendingLabelEvent>()
+var array<int> pending_label_event_bucket_counts = array.new_int(20, 0)
 var array<box> all_boxes = array.new<box>()
 var table asset_levels_table = table.new(position.top_right, 3, 6, border_width=LINE_WIDTH_1)
 
@@ -2128,15 +2317,6 @@ if show1600CloseFiltered and (not skip_sunday_liquidity or close1600MitigationWi
                             alert(ALERT_1600_MITIGATED, alert.freq_once_per_bar)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AUTO-ADAPTIVE LABEL SPACING CALCULATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Calculate auto-adaptive spacing multiplier based on ATR (volatility) and price structure
-// ATR as percentage of price gives volatility-normalized measure
-// Recalculate every bar to ensure accurate ATR measurement
-labelSpacing = math.max(0.5, math.min(4.0, (ta.atr(14) / close) * 50.0))
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ARRAY PRUNING - Keep arrays bounded to prevent memory growth
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2170,71 +2350,6 @@ prune_tf_tracker(nine_thirty_open, open930ShowLast * 2)
 prune_tf_tracker(daily_open, openDailyShowLast * 2)
 prune_tf_tracker(weekly_open, openWeeklyShowLast * 2)
 prune_tf_tracker(monthly_open, openMonthlyShowLast * 2)
-
-// DYNAMIC PRIORITY-BASED OFFSET CALCULATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Build a list of enabled pools - priority determined by index position
-// Lower index = lower priority, higher index = higher priority
-// This allows dynamic stacking - only enabled pools get offset, with spacing relative to each other
-
-var array<string> enabled_pools = array.new<string>()
-
-if barstate.islast
-    array.clear(enabled_pools)
-
-    // Add HTF pools (priority 7-9) - order matters: first = lowest priority in this group
-    if showDailyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
-        array.push(enabled_pools, POOL_TYPE_DAILY)
-    if showWeeklyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
-        array.push(enabled_pools, POOL_TYPE_WEEKLY)
-    if showMonthlyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
-        array.push(enabled_pools, POOL_TYPE_MONTHLY)
-
-    // Add intraday pools (priority 0-6) - order matters: first = lowest priority
-    if timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
-        if showAsiaFiltered
-            array.push(enabled_pools, POOL_TYPE_ASIA)
-        if showLondonFiltered
-            array.push(enabled_pools, POOL_TYPE_LONDON)
-        if showNyamFiltered
-            array.push(enabled_pools, POOL_TYPE_NYAM)
-        if showLunchFiltered
-            array.push(enabled_pools, POOL_TYPE_LUNCH)
-        if showNypmFiltered
-            array.push(enabled_pools, POOL_TYPE_NYPM)
-        if showPremarketFiltered
-            array.push(enabled_pools, POOL_TYPE_PREMARKET)
-        if showOvernightFiltered
-            array.push(enabled_pools, POOL_TYPE_OVERNIGHT)
-
-// Function to get dynamic offset based on enabled pools
-get_dynamic_offset_pct(pool_type) =>
-    var float offset = 0.0
-
-    // If offset system is disabled, return 0 (labels sit directly on lines)
-    if not labelOffsetEnabled
-        offset := 0.0
-    else
-        // Find this pool's index in enabled list
-        pool_index = -1
-        total_enabled = array.size(enabled_pools)
-
-        if total_enabled > 0
-            for i = 0 to total_enabled - 1
-                if array.get(enabled_pools, i) == pool_type
-                    pool_index := i
-                    break
-
-        // Calculate offset: distribute from min to max based on relative position
-        if pool_index >= 0 and total_enabled > 1
-            // Spread offsets from LABEL_OFFSET_MIN (lowest priority) to LABEL_OFFSET_MAX (highest priority)
-            offset := LABEL_OFFSET_MIN + ((LABEL_OFFSET_MAX - LABEL_OFFSET_MIN) * pool_index / (total_enabled - 1))
-        else if pool_index >= 0 and total_enabled == 1
-            // Only one pool enabled - minimal offset
-            offset := LABEL_OFFSET_SINGLE
-
-    offset
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VISUALIZATION HELPERS
@@ -2322,14 +2437,10 @@ draw_intraday_pool(pool, poolType, showLast, lineColor, lineWidth, enableLiqDept
                         level_breach_index = array.get(intraday_high_liquidity_depth.breach_indices, level_idx)
                         level_end_index = level_breached and not na(level_breach_index) ? level_breach_index : bar_index
 
-                        // Draw horizontal liquidity depth line
                         high_liquidity_depth_line = create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, level_color, level_width, level_style)
                         array.push(all_lines, high_liquidity_depth_line)
 
-                        // Draw L1/L2/L3 label (centered on line)
-                        liq_depth_label_time = int((high_time + level_end_time) / 2)
-                        liq_depth_label_index = int((high_index + level_end_index) / 2)
-                        array.push(all_labels, create_liq_depth_label(liq_depth_label_time, liq_depth_label_index, liquidity_depth_high_val, level_idx, true, poolType))
+                        buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, high_index, level_end_index, liquidity_depth_high_val, level_idx, true, poolType)
 
                         // Draw vertical connector
                         connector_color = get_pool_liq_depth_preset(poolType) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? lineColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
@@ -2352,14 +2463,10 @@ draw_intraday_pool(pool, poolType, showLast, lineColor, lineWidth, enableLiqDept
                         level_breach_index_low = array.get(intraday_low_liquidity_depth.breach_indices, level_idx_low)
                         level_end_index_low = level_breached_low and not na(level_breach_index_low) ? level_breach_index_low : bar_index
 
-                        // Draw horizontal liquidity depth line
                         low_liquidity_depth_line = create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, level_color_low, level_width_low, level_style_low)
                         array.push(all_lines, low_liquidity_depth_line)
 
-                        // Draw L1/L2/L3 label (centered on line)
-                        liq_depth_label_time_low = int((low_time + level_end_time_low) / 2)
-                        liq_depth_label_index_low = int((low_index + level_end_index_low) / 2)
-                        array.push(all_labels, create_liq_depth_label(liq_depth_label_time_low, liq_depth_label_index_low, liquidity_depth_low_val, level_idx_low, false, poolType))
+                        buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, low_index, level_end_index_low, liquidity_depth_low_val, level_idx_low, false, poolType)
 
                         // Draw vertical connector
                         connector_color_low = get_pool_liq_depth_preset(poolType) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? lineColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
@@ -2367,23 +2474,12 @@ draw_intraday_pool(pool, poolType, showLast, lineColor, lineWidth, enableLiqDept
 
             if showLabels
                 label_text = build_label(poolType)
-                offset_pct = get_dynamic_offset_pct(poolType)
 
-                // High label: offset upward for visual separation (skip if breached and unmitigated only mode)
                 if not (showUnmitigatedOnly and high_breached)
-                    high_label_time = high_breached ? int((high_time + high_end_time) / 2) : high_end_time
-                    high_label_index = high_breached ? int((high_index + high_end_index) / 2) : high_end_index
-                    high_offset = high_val * (offset_pct / 100.0) * labelSpacing
-                    high_label_price = high_val + high_offset
-                    array.push(all_labels, create_pool_label(high_label_time, high_label_index, high_label_price, label_text, true))
+                    buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, high_val, high_index, high_end_index, label_text, true, high_breached, poolType)
 
-                // Low label: offset downward for visual separation (skip if breached and unmitigated only mode)
                 if not (showUnmitigatedOnly and low_breached)
-                    low_label_time = low_breached ? int((low_time + low_end_time) / 2) : low_end_time
-                    low_label_index = low_breached ? int((low_index + low_end_index) / 2) : low_end_index
-                    low_offset = low_val * (offset_pct / 100.0) * labelSpacing
-                    low_label_price = low_val - low_offset
-                    array.push(all_labels, create_pool_label(low_label_time, low_label_index, low_label_price, label_text, false))
+                    buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, low_val, low_index, low_end_index, label_text, false, low_breached, poolType)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VISUALIZATION
@@ -2398,13 +2494,12 @@ if barstate.islast
     for label_obj in all_labels
         label.delete(label_obj)
     array.clear(all_labels)
+    array.clear(pending_label_events)
+    array.fill(pending_label_event_bucket_counts, 0)
 
     for box_obj in all_boxes
         box.delete(box_obj)
     array.clear(all_boxes)
-
-    // Note: Vertical offset stacking is now used instead of collision suppression
-    // All labels are drawn with position offsets based on priority to prevent overlap
 
     // Draw Daily
     if showDailyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
@@ -2434,15 +2529,12 @@ if barstate.islast
                 high_end_index = pool_get_high_end_index(daily_pool, idx, bar_index)
                 low_end_index = pool_get_low_end_index(daily_pool, idx, bar_index)
 
-                // Draw high line (skip if breached and unmitigated only mode)
+                // Draw regular levels with their native geometry and styling
                 if not (showUnmitigatedOnly and high_breached)
-                    high_line = create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, dailyColor, dailyLineWidth, line.style_solid)
-                    array.push(all_lines, high_line)
+                    array.push(all_lines, create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, dailyColor, dailyLineWidth, line.style_solid))
 
-                // Draw low line (skip if breached and unmitigated only mode)
                 if not (showUnmitigatedOnly and low_breached)
-                    low_line = create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, dailyColor, dailyLineWidth, line.style_solid)
-                    array.push(all_lines, low_line)
+                    array.push(all_lines, create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, dailyColor, dailyLineWidth, line.style_solid))
 
                 // Draw liquidity depth lines (HTF only: Daily)
                 if effectiveEnableDailyLiquidityDepth and isAssetSupported and effectiveIsDailyLiquidityDepthTimeframeValid and dailyLiquidityDepthDistance > 0
@@ -2466,9 +2558,9 @@ if barstate.islast
                             level_breach_index = array.get(high_liquidity_depth.breach_indices, level_idx)
                             level_end_index = level_breached and not na(level_breach_index) ? level_breach_index : bar_index
 
-                            // Draw horizontal liquidity depth line
-                            high_liquidity_depth_line = create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style)
-                            array.push(all_lines, high_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, high_index, level_end_index, liquidity_depth_high_val, level_idx, true, POOL_TYPE_DAILY)
 
                             // Draw vertical connector
                             daily_connector_color = get_pool_liq_depth_preset(POOL_TYPE_DAILY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? dailyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
@@ -2490,53 +2582,20 @@ if barstate.islast
                             level_breach_index_low = array.get(low_liquidity_depth.breach_indices, level_idx)
                             level_end_index_low = level_breached_low and not na(level_breach_index_low) ? level_breach_index_low : bar_index
 
-                            // Draw horizontal liquidity depth line
-                            low_liquidity_depth_line = create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low)
-                            array.push(all_lines, low_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, low_index, level_end_index_low, liquidity_depth_low_val, level_idx, false, POOL_TYPE_DAILY)
 
                             // Draw vertical connector
                             daily_connector_color_low = get_pool_liq_depth_preset(POOL_TYPE_DAILY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? dailyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
                             array.push(all_lines, create_liq_depth_connector(low_time, low_index, low_val, liquidity_depth_low_val, daily_connector_color_low))
 
-                // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
                 if showLabels
                     label_text = build_label(POOL_TYPE_DAILY)
-                    offset_pct = get_dynamic_offset_pct(POOL_TYPE_DAILY)
-
-                    // Calculate label times (needed for both regular and liquidity depth labels)
-                    high_label_time = high_breached ? int((high_time + high_end_time) / 2) : high_end_time
-                    low_label_time = low_breached ? int((low_time + low_end_time) / 2) : low_end_time
-                    high_label_index = high_breached ? int((high_index + high_end_index) / 2) : high_end_index
-                    low_label_index = low_breached ? int((low_index + low_end_index) / 2) : low_end_index
-
-                    // High label: offset upward for visual separation (skip if breached and unmitigated only mode)
                     if not (showUnmitigatedOnly and high_breached)
-                        high_offset = high_val * (offset_pct / 100.0) * labelSpacing
-                        high_label_price = high_val + high_offset
-                        array.push(all_labels, create_pool_label(high_label_time, high_label_index, high_label_price, label_text, true))
-
-                    // Low label: offset downward for visual separation (skip if breached and unmitigated only mode)
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, high_val, high_index, high_end_index, label_text, true, high_breached, POOL_TYPE_DAILY)
                     if not (showUnmitigatedOnly and low_breached)
-                        low_offset = low_val * (offset_pct / 100.0) * labelSpacing
-                        low_label_price = low_val - low_offset
-                        array.push(all_labels, create_pool_label(low_label_time, low_label_index, low_label_price, label_text, false))
-
-                    // Liquidity Depth labels if enabled
-                    if effectiveEnableDailyLiquidityDepth and isAssetSupported and effectiveIsDailyLiquidityDepthTimeframeValid and dailyLiquidityDepthDistance > 0
-                        high_breached_labels = array.get(daily_pool.high_breached, idx)
-                        low_breached_labels = array.get(daily_pool.low_breached, idx)
-
-                        if high_breached_labels
-                            high_liquidity_depth_labels = array.get(daily_pool.high_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_high_val_label = high_val + ((level_idx + 1) * dailyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(high_label_time, high_label_index, liquidity_depth_high_val_label, level_idx, true, POOL_TYPE_DAILY))
-
-                        if low_breached_labels
-                            low_liquidity_depth_labels = array.get(daily_pool.low_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_low_val_label = low_val - ((level_idx + 1) * dailyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(low_label_time, low_label_index, liquidity_depth_low_val_label, level_idx, false, POOL_TYPE_DAILY))
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, low_val, low_index, low_end_index, label_text, false, low_breached, POOL_TYPE_DAILY)
 
     // Draw Weekly
     if showWeeklyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
@@ -2566,15 +2625,12 @@ if barstate.islast
                 high_end_index = pool_get_high_end_index(weekly_pool, idx, bar_index)
                 low_end_index = pool_get_low_end_index(weekly_pool, idx, bar_index)
 
-                // Draw high line (skip if breached and unmitigated only mode)
+                // Draw regular levels with their native geometry and styling
                 if not (showUnmitigatedOnly and high_breached)
-                    high_line = create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, weeklyColor, weeklyLineWidth, line.style_solid)
-                    array.push(all_lines, high_line)
+                    array.push(all_lines, create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, weeklyColor, weeklyLineWidth, line.style_solid))
 
-                // Draw low line (skip if breached and unmitigated only mode)
                 if not (showUnmitigatedOnly and low_breached)
-                    low_line = create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, weeklyColor, weeklyLineWidth, line.style_solid)
-                    array.push(all_lines, low_line)
+                    array.push(all_lines, create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, weeklyColor, weeklyLineWidth, line.style_solid))
 
                 // Draw liquidity depth lines (HTF only: Weekly)
                 if effectiveEnableWeeklyLiquidityDepth and isAssetSupported and effectiveIsWeeklyLiquidityDepthTimeframeValid and weeklyLiquidityDepthDistance > 0
@@ -2594,8 +2650,9 @@ if barstate.islast
                             level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
                             level_breach_index = array.get(high_liquidity_depth.breach_indices, level_idx)
                             level_end_index = level_breached and not na(level_breach_index) ? level_breach_index : bar_index
-                            high_liquidity_depth_line = create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style)
-                            array.push(all_lines, high_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, high_index, level_end_index, liquidity_depth_high_val, level_idx, true, POOL_TYPE_WEEKLY)
                             // Draw vertical connector
                             weekly_connector_color = get_pool_liq_depth_preset(POOL_TYPE_WEEKLY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? weeklyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
                             array.push(all_lines, create_liq_depth_connector(high_time, high_index, high_val, liquidity_depth_high_val, weekly_connector_color))
@@ -2613,51 +2670,19 @@ if barstate.islast
                             level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
                             level_breach_index_low = array.get(low_liquidity_depth.breach_indices, level_idx)
                             level_end_index_low = level_breached_low and not na(level_breach_index_low) ? level_breach_index_low : bar_index
-                            low_liquidity_depth_line = create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low)
-                            array.push(all_lines, low_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, low_index, level_end_index_low, liquidity_depth_low_val, level_idx, false, POOL_TYPE_WEEKLY)
                             // Draw vertical connector
                             weekly_connector_color_low = get_pool_liq_depth_preset(POOL_TYPE_WEEKLY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? weeklyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
                             array.push(all_lines, create_liq_depth_connector(low_time, low_index, low_val, liquidity_depth_low_val, weekly_connector_color_low))
 
-                // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
                 if showLabels
                     label_text = build_label(POOL_TYPE_WEEKLY)
-                    offset_pct = get_dynamic_offset_pct(POOL_TYPE_WEEKLY)
-
-                    // Calculate label times (needed for both regular and liquidity depth labels)
-                    high_label_time = high_breached ? int((high_time + high_end_time) / 2) : high_end_time
-                    low_label_time = low_breached ? int((low_time + low_end_time) / 2) : low_end_time
-                    high_label_index = high_breached ? int((high_index + high_end_index) / 2) : high_end_index
-                    low_label_index = low_breached ? int((low_index + low_end_index) / 2) : low_end_index
-
-                    // High label: offset upward for visual separation (skip if breached and unmitigated only mode)
                     if not (showUnmitigatedOnly and high_breached)
-                        high_offset = high_val * (offset_pct / 100.0) * labelSpacing
-                        high_label_price = high_val + high_offset
-                        array.push(all_labels, create_pool_label(high_label_time, high_label_index, high_label_price, label_text, true))
-
-                    // Low label: offset downward for visual separation (skip if breached and unmitigated only mode)
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, high_val, high_index, high_end_index, label_text, true, high_breached, POOL_TYPE_WEEKLY)
                     if not (showUnmitigatedOnly and low_breached)
-                        low_offset = low_val * (offset_pct / 100.0) * labelSpacing
-                        low_label_price = low_val - low_offset
-                        array.push(all_labels, create_pool_label(low_label_time, low_label_index, low_label_price, label_text, false))
-
-                    // Liquidity Depth labels if enabled
-                    if effectiveEnableWeeklyLiquidityDepth and isAssetSupported and effectiveIsWeeklyLiquidityDepthTimeframeValid and weeklyLiquidityDepthDistance > 0
-                        high_breached_labels = array.get(weekly_pool.high_breached, idx)
-                        low_breached_labels = array.get(weekly_pool.low_breached, idx)
-
-                        if high_breached_labels
-                            high_liquidity_depth_labels = array.get(weekly_pool.high_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_high_val_label = high_val + ((level_idx + 1) * weeklyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(high_label_time, high_label_index, liquidity_depth_high_val_label, level_idx, true, POOL_TYPE_WEEKLY))
-
-                        if low_breached_labels
-                            low_liquidity_depth_labels = array.get(weekly_pool.low_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_low_val_label = low_val - ((level_idx + 1) * weeklyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(low_label_time, low_label_index, liquidity_depth_low_val_label, level_idx, false, POOL_TYPE_WEEKLY))
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, low_val, low_index, low_end_index, label_text, false, low_breached, POOL_TYPE_WEEKLY)
 
     // Draw Monthly
     if showMonthlyFiltered and timeframe.in_seconds() >= HTF_MIN_TIMEFRAME
@@ -2687,15 +2712,12 @@ if barstate.islast
                 high_end_index = pool_get_high_end_index(monthly_pool, idx, bar_index)
                 low_end_index = pool_get_low_end_index(monthly_pool, idx, bar_index)
 
-                // Draw high line (skip if breached and unmitigated only mode)
+                // Draw regular levels with their native geometry and styling
                 if not (showUnmitigatedOnly and high_breached)
-                    high_line = create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, monthlyColor, monthlyLineWidth, line.style_solid)
-                    array.push(all_lines, high_line)
+                    array.push(all_lines, create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, monthlyColor, monthlyLineWidth, line.style_solid))
 
-                // Draw low line (skip if breached and unmitigated only mode)
                 if not (showUnmitigatedOnly and low_breached)
-                    low_line = create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, monthlyColor, monthlyLineWidth, line.style_solid)
-                    array.push(all_lines, low_line)
+                    array.push(all_lines, create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, monthlyColor, monthlyLineWidth, line.style_solid))
 
                 // Draw liquidity depth lines (HTF only: Monthly)
                 if effectiveEnableMonthlyLiquidityDepth and isAssetSupported and effectiveIsMonthlyLiquidityDepthTimeframeValid and monthlyLiquidityDepthDistance > 0
@@ -2715,8 +2737,9 @@ if barstate.islast
                             level_end_time = level_breached and not na(level_breach_time) ? level_breach_time : time
                             level_breach_index = array.get(high_liquidity_depth.breach_indices, level_idx)
                             level_end_index = level_breached and not na(level_breach_index) ? level_breach_index : bar_index
-                            high_liquidity_depth_line = create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style)
-                            array.push(all_lines, high_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(high_time, high_index, liquidity_depth_high_val, level_end_time, level_end_index, lvl_color, lvl_width, lvl_style))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, high_index, level_end_index, liquidity_depth_high_val, level_idx, true, POOL_TYPE_MONTHLY)
                             // Draw vertical connector
                             monthly_connector_color = get_pool_liq_depth_preset(POOL_TYPE_MONTHLY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? monthlyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
                             array.push(all_lines, create_liq_depth_connector(high_time, high_index, high_val, liquidity_depth_high_val, monthly_connector_color))
@@ -2734,51 +2757,19 @@ if barstate.islast
                             level_end_time_low = level_breached_low and not na(level_breach_time_low) ? level_breach_time_low : time
                             level_breach_index_low = array.get(low_liquidity_depth.breach_indices, level_idx)
                             level_end_index_low = level_breached_low and not na(level_breach_index_low) ? level_breach_index_low : bar_index
-                            low_liquidity_depth_line = create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low)
-                            array.push(all_lines, low_liquidity_depth_line)
+                            array.push(all_lines, create_pool_line(low_time, low_index, liquidity_depth_low_val, level_end_time_low, level_end_index_low, lvl_color_low, lvl_width_low, lvl_style_low))
+                            if showLabels
+                                buffer_liq_depth_labels(pending_label_events, pending_label_event_bucket_counts, low_index, level_end_index_low, liquidity_depth_low_val, level_idx, false, POOL_TYPE_MONTHLY)
                             // Draw vertical connector
                             monthly_connector_color_low = get_pool_liq_depth_preset(POOL_TYPE_MONTHLY) == LIQUIDITY_DEPTH_PRESET_POOL_COLORS ? monthlyColor : DEFAULT_LIQUIDITY_DEPTH_BLUE
                             array.push(all_lines, create_liq_depth_connector(low_time, low_index, low_val, liquidity_depth_low_val, monthly_connector_color_low))
 
-                // Draw labels with vertical offset for stacking (percentage-based with user multiplier)
                 if showLabels
                     label_text = build_label(POOL_TYPE_MONTHLY)
-                    offset_pct = get_dynamic_offset_pct(POOL_TYPE_MONTHLY)
-
-                    // Calculate label times (needed for both regular and liquidity depth labels)
-                    high_label_time = high_breached ? int((high_time + high_end_time) / 2) : high_end_time
-                    low_label_time = low_breached ? int((low_time + low_end_time) / 2) : low_end_time
-                    high_label_index = high_breached ? int((high_index + high_end_index) / 2) : high_end_index
-                    low_label_index = low_breached ? int((low_index + low_end_index) / 2) : low_end_index
-
-                    // High label: offset upward for visual separation (skip if breached and unmitigated only mode)
                     if not (showUnmitigatedOnly and high_breached)
-                        high_offset = high_val * (offset_pct / 100.0) * labelSpacing
-                        high_label_price = high_val + high_offset
-                        array.push(all_labels, create_pool_label(high_label_time, high_label_index, high_label_price, label_text, true))
-
-                    // Low label: offset downward for visual separation (skip if breached and unmitigated only mode)
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, high_val, high_index, high_end_index, label_text, true, high_breached, POOL_TYPE_MONTHLY)
                     if not (showUnmitigatedOnly and low_breached)
-                        low_offset = low_val * (offset_pct / 100.0) * labelSpacing
-                        low_label_price = low_val - low_offset
-                        array.push(all_labels, create_pool_label(low_label_time, low_label_index, low_label_price, label_text, false))
-
-                    // Liquidity Depth labels if enabled
-                    if effectiveEnableMonthlyLiquidityDepth and isAssetSupported and effectiveIsMonthlyLiquidityDepthTimeframeValid and monthlyLiquidityDepthDistance > 0
-                        high_breached_labels = array.get(monthly_pool.high_breached, idx)
-                        low_breached_labels = array.get(monthly_pool.low_breached, idx)
-
-                        if high_breached_labels
-                            high_liquidity_depth_labels = array.get(monthly_pool.high_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_high_val_label = high_val + ((level_idx + 1) * monthlyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(high_label_time, high_label_index, liquidity_depth_high_val_label, level_idx, true, POOL_TYPE_MONTHLY))
-
-                        if low_breached_labels
-                            low_liquidity_depth_labels = array.get(monthly_pool.low_liquidity_depths, idx)
-                            for level_idx = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
-                                liquidity_depth_low_val_label = low_val - ((level_idx + 1) * monthlyLiquidityDepthDistance)
-                                array.push(all_labels, create_liq_depth_label(low_label_time, low_label_index, liquidity_depth_low_val_label, level_idx, false, POOL_TYPE_MONTHLY))
+                        buffer_pool_label(pending_label_events, pending_label_event_bucket_counts, low_val, low_index, low_end_index, label_text, false, low_breached, POOL_TYPE_MONTHLY)
 
     // Draw Intraday Session Backgrounds (Completed + Live Sessions)
     if showIntradayBackground and timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
@@ -2825,7 +2816,7 @@ if barstate.islast
             draw_session_backgrounds(overnight_pool, effectivePoisznShowLast, overnightBackgroundColor)
             draw_live_session_background(overnight_pool, actualOvernightSession, overnightBackgroundColor)
 
-    // Draw Intraday Sessions with vertical offset stacking (completed sessions only).
+    // Draw completed Intraday Sessions.
     // A live (in-progress) session has no final high/low yet, so it is never drawn as a
     // breakable level — it appears only once the session closes and is stored.
     if timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
@@ -2850,6 +2841,8 @@ if barstate.islast
 
         if showOvernightFiltered
             draw_intraday_pool(overnight_pool, POOL_TYPE_OVERNIGHT, effectivePoisznShowLast, overnightColor, poisznLineWidth, effectiveEnableOvernightLiquidityDepth)
+
+    flush_label_events(pending_label_events, all_labels)
 
     // Draw Range Boxes
     if showRangeBoxFiltered and timeframe.in_seconds() >= RANGE_BOX_MIN_TIMEFRAME and timeframe.in_seconds() <= RANGE_BOX_MAX_TIMEFRAME and array.size(range_box.highs) > 0
@@ -3149,59 +3142,6 @@ if showColorTable and barstate.islast
     if showOnlyEnabled and showOnlyTimeframeAllowed
         addColorRow(color_table, currentRow, "Hidden Candles", hiddenCandleColor)
         currentRow += 1
-
-// ─── Pool Debug Table ───
-if pool_debug_mode != "Off" and barstate.islast
-    LiquidityPool debug_pool = pool_debug_mode == "Daily" ? daily_pool : pool_debug_mode == "Weekly" ? weekly_pool : monthly_pool
-    string debug_label = "Pulse " + pool_debug_mode
-    int pool_count = array.size(debug_pool.highs)
-    int show_n = math.min(pool_count, 10)
-    int ht_count = array.size(debug_pool.high_times)
-    int lt_count = array.size(debug_pool.low_times)
-    int start_count = array.size(debug_pool.session_start_times)
-    int end_count = array.size(debug_pool.session_end_times)
-
-    var table pd_tbl = table.new(position.bottom_right, 10, 12, bgcolor=color.white, border_width=LINE_WIDTH_1, border_color=color.gray)
-    table.cell(pd_tbl, 0, 0, "#",       text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 1, 0, "Sess",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 2, 0, "High",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 3, 0, "H date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 4, 0, "Low",     text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 5, 0, "L date",  text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 6, 0, "End",     text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 7, 0, "H br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 8, 0, "L br",    text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    table.cell(pd_tbl, 9, 0, "Count",   text_color=color.black, text_size=size.small, bgcolor=color.new(color.gray, 70))
-    if show_n > 0
-        for i = 0 to show_n - 1
-            int idx = pool_count - 1 - i
-            float h = array.get(debug_pool.highs, idx)
-            float l = array.get(debug_pool.lows, idx)
-            bool hb = array.get(debug_pool.high_breached, idx)
-            bool lb = array.get(debug_pool.low_breached, idx)
-            int ss = start_count > idx ? array.get(debug_pool.session_start_times, idx) : na
-            string sess_str = na(ss) ? "?" : str.tostring(month(ss, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(ss, NY_TIMEZONE))
-            int ht = ht_count > idx ? array.get(debug_pool.high_times, idx) : na
-            string h_date = na(ht) ? "?" : str.tostring(month(ht, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(ht, NY_TIMEZONE)) + " " + str.tostring(hour(ht, NY_TIMEZONE)) + ":" + (minute(ht, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(ht, NY_TIMEZONE))
-            int lt_time = lt_count > idx ? array.get(debug_pool.low_times, idx) : na
-            string l_date = na(lt_time) ? "?" : str.tostring(month(lt_time, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(lt_time, NY_TIMEZONE)) + " " + str.tostring(hour(lt_time, NY_TIMEZONE)) + ":" + (minute(lt_time, NY_TIMEZONE) < 10 ? "0" : "") + str.tostring(minute(lt_time, NY_TIMEZONE))
-            int se = end_count > idx ? array.get(debug_pool.session_end_times, idx) : na
-            string end_str = na(se) ? "?" : str.tostring(month(se, NY_TIMEZONE)) + "/" + str.tostring(dayofmonth(se, NY_TIMEZONE))
-            table.cell(pd_tbl, 0, i + 1, str.tostring(i + 1), text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 1, i + 1, sess_str, text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 2, i + 1, str.tostring(h, "#.##"), text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 3, i + 1, h_date, text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 4, i + 1, str.tostring(l, "#.##"), text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 5, i + 1, l_date, text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 6, i + 1, end_str, text_color=color.black, text_size=size.small)
-            table.cell(pd_tbl, 7, i + 1, hb ? "Y" : "N", text_color=hb ? color.red : color.green, text_size=size.small)
-            table.cell(pd_tbl, 8, i + 1, lb ? "Y" : "N", text_color=lb ? color.red : color.green, text_size=size.small)
-            table.cell(pd_tbl, 9, i + 1, str.tostring(pool_count), text_color=color.gray, text_size=size.small)
-    else
-        table.cell(pd_tbl, 0, 1, "No sessions", text_color=color.gray, text_size=size.small)
-    table.cell(pd_tbl, 0, show_n + 1, debug_label, text_color=color.blue, text_size=size.small)
-    table.cell(pd_tbl, 1, show_n + 1, "1=newest", text_color=color.gray, text_size=size.small)
-    table.cell(pd_tbl, 2, show_n + 1, effective_daily_boundary, text_color=color.gray, text_size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // pulse •
