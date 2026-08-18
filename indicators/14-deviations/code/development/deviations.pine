@@ -46,6 +46,7 @@ type SessionData
     int startTime
     int endTime
     int actualEndTime  // Unextended endpoint used by completed drawings and mitigation lines
+    int actualEndBar
     float bodyHigh
     float bodyLow
     float wickHigh
@@ -72,6 +73,8 @@ type SessionData
     float dominantLow
     int highTime
     int lowTime
+    int highBar
+    int lowBar
     bool highMitigated
     bool lowMitigated
     int highMitigationBar
@@ -95,6 +98,7 @@ type SessionData
     float midLevel
     bool midMitigated
     int midMitigationTime
+    int midMitigationBar
     line midMitigationLine
     array<label> midMitigationLabels
     bool midArmed
@@ -102,6 +106,7 @@ type SessionData
     float retraceLevel618
     bool retrace618Mitigated
     int retrace618Time
+    int retrace618Bar
     line retrace618Line
     array<label> retrace618Labels
     bool retrace618Armed
@@ -253,11 +258,10 @@ PENDING_LABEL_TRANSPARENCY_REDUCTION = 55.0
 PENDING_LABEL_TRANSPARENCY_MAX = 12.0
 COLOR_TABLE_MAX_ROWS = 66
 
-// Reminder density keys off a line's absolute length, not the session period, so physical chart distance
-// drives spacing uniformly (matches Revelio). Floored sqrt over an 8h base: a line earns a 2nd tag past
-// ~1.3 days, a 3rd past ~3 days. Cap holds the ceiling at 3 tags per line.
-MITIGATION_REMINDER_BASE_MS = 8 * 60 * 60 * 1000
+// Reminder density follows actual chart-bar distance so closed sessions cannot create or stack tags.
+MITIGATION_REMINDER_SPACING_BARS = 120
 MITIGATION_REMINDER_MAX_PER_LINE = 3
+BAR_INDEX_DRAWING_LOOKBACK = 9999
 
 // Show Only — color the hidden (greyed) candles take
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
@@ -277,7 +281,7 @@ TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retrac
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_FADE_RETRACE = "Standard retracements fade once BOTH session extremes have been reached, completing the range traversal. NY Early in IVB-Based mode fades only when its qualifying 0.5 / 0.618 return subsequently continues to the opposite NY Early boundary (1.0); an earlier touch of that boundary does not complete the later retracement. Fade % controls how far the completed line and labels move toward invisible.\n\nOff = completed retracements keep their normal colors."
 TOOLTIP_FADE_MITIGATION = "Completed high/low levels from every session fade after current price moves the configured percentage away. Once triggered, the fade stays applied. Fade opacity is the minimum transparency applied to both solid and dashed boundary segments and their labels: 0 is visible, 100 is hidden.\n\nOff = completed mitigation levels keep their normal colors."
-TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nDensity keys off each line's own length and stays sparse (sublinear): most lines get a single tag, and only long extensions earn a second.\n\nOff = one label at each line's midpoint only."
+TOOLTIP_MITIGATION_REMINDER = "Repeat a key session's markers sparsely along the line they belong to, so a faded line stays identifiable when you scroll away from its midpoint.\n\n• Mitigated high/low lines repeat the session name.\n• 0.5 / 0.618 lines repeat their own label.\n\nDensity follows actual chart candles: short higher-timeframe lines stay sparse, while the same elapsed span can earn more reminders on lower timeframes.\n\nOff = one label at each line's midpoint only."
 
 TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
 TOOLTIP_FOCUS_COUNT = "Per session type."
@@ -848,10 +852,12 @@ clearRetracementLeg(SessionData sess) =>
     deleteLabels(sess.retrace618Labels)
     sess.midMitigated := false
     sess.midMitigationTime := na
+    sess.midMitigationBar := na
     sess.midArmed := false
     sess.retraceLevel618 := na
     sess.retrace618Mitigated := false
     sess.retrace618Time := na
+    sess.retrace618Bar := na
     sess.retrace618Armed := false
     sess.retraceTraversalCompleted := false
     sess.retraceFadeApplied := false
@@ -934,22 +940,21 @@ resolve_pending_label(bool keep, label lbl, line pending, float level, string tx
         result := na
     result
 
-// Floored sqrt density: reminder count grows sublinearly with a run's length, capped. Shared by every
-// reminder system so spacing stays consistent.
-reminderPlacements(int runMs, int spacingMs, int maxCount) =>
-    math.min(maxCount, math.max(1, int(math.floor(math.sqrt(float(runMs) / math.max(1, spacingMs))))))
+reminderPlacements(int runBars, int spacingBars, int maxCount) =>
+    math.min(maxCount, math.max(1, int(math.floor(float(runBars) / math.max(1, spacingBars)))))
 
-// Repeat off = one tag at the line midpoint; repeat on = sqrt-sparse tiling keyed off the line's own
-// absolute length, so physical chart distance drives density uniformly and long lines don't crowd.
-tile_line_labels(line target, float level, string txt, bool repeat, color txtColor, color bgColor) =>
+// Labels use actual chart bars while their underlying lines retain native time coordinates.
+tile_line_labels(int startIndex, int endIndex, float level, string txt, bool repeat, color txtColor, color bgColor) =>
     array<label> tags = array.new<label>()
-    int x1 = line.get_x1(target)
-    int run = line.get_x2(target) - x1
-    if run > 0
-        int count = repeat ? reminderPlacements(run, MITIGATION_REMINDER_BASE_MS, MITIGATION_REMINDER_MAX_PER_LINE) : 1
-        for placement = 1 to count
-            int tagX = x1 + int(run * (placement - 0.5) / count)
-            array.push(tags, label.new(tagX, level, txt, style=label.style_label_center, textcolor=txtColor, size=globalLabelSize, color=bgColor, xloc=xloc.bar_time))
+    int minimumIndex = math.max(0, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
+    if not na(startIndex) and not na(endIndex) and endIndex >= minimumIndex
+        int rangeStartIndex = math.max(startIndex, minimumIndex)
+        int runBars = math.max(0, endIndex - rangeStartIndex)
+        if runBars > 0
+            int count = repeat ? reminderPlacements(runBars, MITIGATION_REMINDER_SPACING_BARS, MITIGATION_REMINDER_MAX_PER_LINE) : 1
+            for placement = 1 to count
+                int tagIndex = rangeStartIndex + int(runBars * (placement - 0.5) / count)
+                array.push(tags, label.new(tagIndex, level, txt, style=label.style_label_center, textcolor=txtColor, size=globalLabelSize, color=bgColor, xloc=xloc.bar_index))
     tags
 
 newIvbProjectionLabel(line target, float level, string caption, bool includePrice, color txtColor, color bgColor) =>
@@ -958,21 +963,21 @@ newIvbProjectionLabel(line target, float level, string caption, bool includePric
     string labelStyle = includePrice ? label.style_label_left : label.style_label_center
     label.new(labelX, level, labelText, style=labelStyle, textcolor=txtColor, size=globalLabelSize, color=bgColor, xloc=xloc.bar_time)
 
-resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, float level, string txt, bool repeat) =>
+resolve_mitigation_reminders(bool keep, array<label> reminders, line mitLine, int startIndex, int endIndex, float level, string txt, bool repeat) =>
     if not keep or na(mitLine)
         deleteLabels(reminders)
     else if array.size(reminders) == 0
         // Confirmed mitigation lines never move, so build the tags once instead of rebuilding every bar.
-        for lbl in tile_line_labels(mitLine, level, txt, repeat, labelColor, labelsBgColor)
+        for lbl in tile_line_labels(startIndex, endIndex, level, txt, repeat, labelColor, labelsBgColor)
             array.push(reminders, lbl)
 
 // Unmitigated lines extend every bar, so their tags rebuild once per bar on the last bar only.
-resolve_open_level_reminders(bool keep, array<label> reminders, line levelLine, float level, string txt) =>
+resolve_open_level_reminders(bool keep, array<label> reminders, line levelLine, int startIndex, int endIndex, float level, string txt) =>
     if not keep or na(levelLine)
         deleteLabels(reminders)
     else if barstate.islast and (barstate.isnew or array.size(reminders) == 0)
         deleteLabels(reminders)
-        for lbl in tile_line_labels(levelLine, level, txt, true, labelColor, labelsBgColor)
+        for lbl in tile_line_labels(startIndex, endIndex, level, txt, true, labelColor, labelsBgColor)
             array.push(reminders, lbl)
 
 // Push a color's transparency toward fully invisible by pct (0 = unchanged, 100 = invisible).
@@ -1463,8 +1468,11 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
     bool mitigated = isHigh ? sess.highMitigated : sess.lowMitigated
     bool provisional = isHigh ? sess.provisionalHighMitigated : sess.provisionalLowMitigated
     int originTime = isHigh ? sess.highTime : sess.lowTime
+    int originBar = isHigh ? sess.highBar : sess.lowBar
     int provisionalTime = isHigh ? sess.provisionalHighTime : sess.provisionalLowTime
+    int provisionalBar = isHigh ? sess.provisionalHighBar : sess.provisionalLowBar
     int mitigationTime = isHigh ? sess.highMitigationTime : sess.lowMitigationTime
+    int mitigationBar = isHigh ? sess.highMitigationBar : sess.lowMitigationBar
     float level = isHigh ? sess.dominantHigh : sess.dominantLow
     line renderedSolid = isHigh ? sess.highMitigationLine : sess.lowMitigationLine
     line renderedPending = isHigh ? sess.highPendingLine : sess.lowPendingLine
@@ -1475,6 +1483,7 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
     // Unmitigated mode deletes a level once it mitigates, matching Phase 4's persistent-level rules.
     if showAllLines and not (mitigationMode == SESSION_UNMITIGATED and mitigated)
         int solidEndTime = provisional ? provisionalTime : mitigated ? mitigationTime : time
+        int solidEndBar = provisional ? provisionalBar : mitigated ? mitigationBar : bar_index
         if na(renderedSolid)
             renderedSolid := line.new(originTime, level, solidEndTime, level, color=sess.mitigationColor, style=line.style_solid, width=MITIGATION_LINE_WIDTH, xloc=xloc.bar_time)
         else if line.get_x2(renderedSolid) != solidEndTime
@@ -1505,8 +1514,8 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
         renderedProvisionalLabel := resolve_pending_label(mitigationMode == SESSION_MITIGATED and showAllLabels and showPendingLabels and provisional and not mitigated, renderedProvisionalLabel, renderedPending, level, sess.chartLabel, sess.sessionIndex, sess.mitigationColor)
 
         bool wantMitigationName = mitigationMode == SESSION_MITIGATED and showAllLabels and showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex) and shouldShowMitigationName(sess, isHigh)
-        resolve_mitigation_reminders(wantMitigationName, mitigationReminders, renderedSolid, level, str.lower(sess.chartLabel), showMitigationReminders)
-        resolve_open_level_reminders(showAllLabels and showMitigationReminders and openLevel, openReminders, renderedSolid, level, str.lower(sess.chartLabel))
+        resolve_mitigation_reminders(wantMitigationName, mitigationReminders, renderedSolid, originBar, solidEndBar, level, str.lower(sess.chartLabel), showMitigationReminders)
+        resolve_open_level_reminders(showAllLabels and showMitigationReminders and openLevel, openReminders, renderedSolid, originBar, solidEndBar, level, str.lower(sess.chartLabel))
     else
         if not na(renderedSolid)
             line.delete(renderedSolid)
@@ -1518,11 +1527,11 @@ renderFocusBoundary(SessionData sess, bool isHigh) =>
             label.delete(renderedOpenLabel)
             renderedOpenLabel := na
         renderedProvisionalLabel := resolve_pending_label(false, renderedProvisionalLabel, renderedPending, level, sess.chartLabel, sess.sessionIndex, sess.mitigationColor)
-        resolve_mitigation_reminders(false, mitigationReminders, renderedSolid, level, str.lower(sess.chartLabel), showMitigationReminders)
-        resolve_open_level_reminders(false, openReminders, renderedSolid, level, str.lower(sess.chartLabel))
+        resolve_mitigation_reminders(false, mitigationReminders, renderedSolid, originBar, na, level, str.lower(sess.chartLabel), showMitigationReminders)
+        resolve_open_level_reminders(false, openReminders, renderedSolid, originBar, na, level, str.lower(sess.chartLabel))
     [renderedSolid, renderedPending, renderedOpenLabel, renderedProvisionalLabel]
 
-renderFocusRetracement(bool reached, int originTime, int reachedTime, float level, string tagText, color lineColor, color textColor, color bgColor, bool faded, bool refreshStyle, line target, array<label> labels) =>
+renderFocusRetracement(bool reached, int originTime, int reachedTime, int originBar, int reachedBar, float level, string tagText, color lineColor, color textColor, color bgColor, bool faded, bool refreshStyle, line target, array<label> labels) =>
     line rendered = target
     if reached and showAllLines
         color renderedLineColor = faded ? fadeToward100(lineColor, completedRetraceFade) : lineColor
@@ -1534,7 +1543,7 @@ renderFocusRetracement(bool reached, int originTime, int reachedTime, float leve
             line.set_color(rendered, renderedLineColor)
         if showAllLabels
             if array.size(labels) == 0
-                for lbl in tile_line_labels(rendered, level, tagText, showMitigationReminders, renderedTextColor, renderedBgColor)
+                for lbl in tile_line_labels(originBar, reachedBar, level, tagText, showMitigationReminders, renderedTextColor, renderedBgColor)
                     array.push(labels, lbl)
             else if refreshStyle
                 for lbl in labels
@@ -1579,8 +1588,8 @@ renderFocusSession(SessionData sess, bool selected) =>
 
             bool retracementsFaded = fadeCompletedRetracements and isRetraceTraversalComplete(sess)
             bool refreshRetracementStyle = retracementsFaded != sess.retraceFadeApplied
-            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
-            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.retrace618Line, sess.retrace618Labels)
+            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.actualEndBar, sess.midMitigationBar, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
+            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.actualEndBar, sess.retrace618Bar, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.retrace618Line, sess.retrace618Labels)
             sess.retraceFadeApplied := retracementsFaded
 
 // Clear live drawings from active session (keeps session data, just removes visuals for redraw)
@@ -1838,6 +1847,7 @@ if validChartContext
                      startTime=initStartTime,
                      endTime=na,
                      actualEndTime=na,
+                     actualEndBar=na,
                      bodyHigh=initBodyHigh,
                      bodyLow=initBodyLow,
                      wickHigh=initWickHigh,
@@ -1863,6 +1873,8 @@ if validChartContext
                      dominantLow=na,
                      highTime=usesStandardAsia ? standardAsiaHighTime : time,
                      lowTime=usesStandardAsia ? standardAsiaLowTime : time,
+                     highBar=bar_index,
+                     lowBar=bar_index,
                      highMitigated=false,
                      lowMitigated=false,
                      highMitigationBar=na,
@@ -1884,12 +1896,14 @@ if validChartContext
                      midLevel=na,
                      midMitigated=false,
                      midMitigationTime=na,
+                     midMitigationBar=na,
                      midMitigationLine=na,
                      midMitigationLabels=array.new<label>(),
                      midArmed=false,
                      retraceLevel618=na,
                      retrace618Mitigated=false,
                      retrace618Time=na,
+                     retrace618Bar=na,
                      retrace618Line=na,
                      retrace618Labels=array.new<label>(),
                      retrace618Armed=false,
@@ -1968,8 +1982,10 @@ if validChartContext and array.size(activeSessions) > 0
             // Track the bar time when new highs/lows are formed
             if currentWickHigh > sess.wickHigh
                 sess.highTime := usesStandardAsia ? standardAsiaHighTime : time
+                sess.highBar := bar_index
             if currentWickLow < sess.wickLow
                 sess.lowTime := usesStandardAsia ? standardAsiaLowTime : time
+                sess.lowBar := bar_index
 
             // Update body/wick levels with current bar
             sess.bodyHigh := math.max(sess.bodyHigh, currentBodyHigh)
@@ -2010,6 +2026,7 @@ if validChartContext and array.size(activeSessions) > 0
             sess.endBar := bar_index - 1
             // Time charts end at the scheduled boundary; Range charts stop at the last eligible bar timestamp.
             sess.actualEndTime := chart.is_range and not na(time[1]) ? time[1] : sess.endTime
+            sess.actualEndBar := chart.is_range ? sess.endBar : bar_index
             sess.endTime := sess.actualEndTime
 
             // Clear live drawings before final draw
@@ -2386,8 +2403,10 @@ if validChartContext and array.size(lifecycleSessions) > 0
                 sess.lowPendingLabel := resolve_pending_label(showAllLines and showAllLabels and showPendingLabels and not sess.lowMitigated, sess.lowPendingLabel, sess.lowPendingLine, sess.dominantLow, sess.chartLabel, sess.sessionIndex, sess.mitigationColor)
                 bool wantMitigationName = showAllLines and showAllLabels and showSessionNameOnMitigation and sess.isKeySession and not skipsMitigationName(sess.sessionIndex)
                 string mitigationTxt = str.lower(sess.chartLabel)
-                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.dominantHigh, mitigationTxt, showMitigationReminders)
-                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.dominantLow, mitigationTxt, showMitigationReminders)
+                int highMitigationReminderEndBar = sess.provisionalHighMitigated ? sess.provisionalHighBar : sess.highMitigationBar
+                int lowMitigationReminderEndBar = sess.provisionalLowMitigated ? sess.provisionalLowBar : sess.lowMitigationBar
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, true), sess.highMitigationReminders, sess.highMitigationLine, sess.highBar, highMitigationReminderEndBar, sess.dominantHigh, mitigationTxt, showMitigationReminders)
+                resolve_mitigation_reminders(wantMitigationName and shouldShowMitigationName(sess, false), sess.lowMitigationReminders, sess.lowMitigationLine, sess.lowBar, lowMitigationReminderEndBar, sess.dominantLow, mitigationTxt, showMitigationReminders)
 
             // === CONSOLIDATED POST-MITIGATION CLEANUP (single check replaces duplicates) ===
             // Hand provisional overlay lines to the standard Mitigated presentation.
@@ -2508,8 +2527,10 @@ if validChartContext and array.size(lifecycleSessions) > 0
 
             if eagerDraw and alwaysTrackMitigation(sess.sessionIndex)
                 bool keepOpenReminders = showAllLines and showAllLabels and showMitigationReminders
-                resolve_open_level_reminders(keepOpenReminders, sess.highUnmitigatedReminders, sess.highUnmitigatedLine, sess.dominantHigh, str.lower(sess.chartLabel))
-                resolve_open_level_reminders(keepOpenReminders, sess.lowUnmitigatedReminders, sess.lowUnmitigatedLine, sess.dominantLow, str.lower(sess.chartLabel))
+                int highOpenReminderEndBar = sess.provisionalHighMitigated ? sess.provisionalHighBar : bar_index
+                int lowOpenReminderEndBar = sess.provisionalLowMitigated ? sess.provisionalLowBar : bar_index
+                resolve_open_level_reminders(keepOpenReminders, sess.highUnmitigatedReminders, sess.highUnmitigatedLine, sess.highBar, highOpenReminderEndBar, sess.dominantHigh, str.lower(sess.chartLabel))
+                resolve_open_level_reminders(keepOpenReminders, sess.lowUnmitigatedReminders, sess.lowUnmitigatedLine, sess.lowBar, lowOpenReminderEndBar, sess.dominantLow, str.lower(sess.chartLabel))
             // Standard mode anchors from the first session extreme taken. IVB mode replaces that anchor
             // and direction with the first strict IVB wick break.
             bool usesIvbRetracement = sess.sessionIndex == IDX_NY_EARLY and sess.retracementMode == RETRACE_MODE_IVB
@@ -2557,10 +2578,11 @@ if validChartContext and array.size(lifecycleSessions) > 0
                     if retraceCondition
                         sess.midMitigated := true
                         sess.midMitigationTime := time
+                        sess.midMitigationBar := bar_index
                         if drawMitigationLines
                             sess.midMitigationLine := line.new(sess.actualEndTime, sess.midLevel, time, sess.midLevel, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_50_LINE_WIDTH, xloc=xloc.bar_time)
                             if showAllLabels and sess.isKeySession
-                                sess.midMitigationLabels := tile_line_labels(sess.midMitigationLine, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                                sess.midMitigationLabels := tile_line_labels(sess.actualEndBar, sess.midMitigationBar, sess.midLevel, LABEL_RETRACE_50, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
 
             // Use high/low to detect touches (including wicks), but only after the origin bar.
             if mitigationMode == SESSION_MITIGATED and canEvaluateRetraceMitigation and canDrawRetrace and requiredOriginTaken and not sess.retrace618Mitigated and not na(sess.retraceLevel618) and not na(sess.midLevel)
@@ -2576,10 +2598,11 @@ if validChartContext and array.size(lifecycleSessions) > 0
                     if retraceCondition618
                         sess.retrace618Mitigated := true
                         sess.retrace618Time := time
+                        sess.retrace618Bar := bar_index
                         if drawMitigationLines
                             sess.retrace618Line := line.new(sess.actualEndTime, sess.retraceLevel618, time, sess.retraceLevel618, color=sess.mitigationColor, style=line.style_dotted, width=MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time)
                             if showAllLabels
-                                sess.retrace618Labels := tile_line_labels(sess.retrace618Line, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                                sess.retrace618Labels := tile_line_labels(sess.actualEndBar, sess.retrace618Bar, sess.retraceLevel618, LABEL_RETRACE_618, showMitigationReminders, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
 
             // An IVB-based NY Early retracement completes only when the denoted return continues to
             // the opposite NY Early boundary (1.0). Earlier touches of that boundary do not count.
