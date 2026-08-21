@@ -1,34 +1,34 @@
 # TradingView Library Version Registry
 
-Updated: 2026-08-14
+Updated: 2026-08-21
 
-This is the repository's single source of truth for TradingView library versions, publication status, publication instructions, source fingerprints, and required host imports. Pine imports are executable references, but version decisions and publication history are authoritative only here. Historical trackers must link here instead of maintaining a second current-version ledger.
+This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
 ## Required workflow
 
 1. Read this file before changing a library, changing an import, or telling the user to publish.
-2. When a published library source changes, reserve `highest published + 1` here before changing the host import.
+2. When a published library source changes, reserve `Published + 1` here before changing the host import.
 3. Record every publication instruction as a new row before giving it to the user, including errors or superseded instructions.
-4. Record the pending source SHA-256 and run `node scripts/check-library-version-registry.mjs`.
+4. Record the pending source SHA-256 in Publication history and run `node scripts/check-library-version-registry.mjs`.
 5. Give the user the exact private library name/version, source path, host to compile, test gate, and copy-ready version notes.
 6. When the user confirms publication, mark that version published here immediately. Any later source edit requires another version.
 7. Published versions are forward-only. Never move an import backward; an undo or restoration of older behavior must be released as the next new version.
-8. In this repository, user confirmation that a version is published also confirms that it loads and is approved unless the user explicitly reports a partial or failed state. Do not create a separate awaiting-validation status after that confirmation.
+8. User feedback about a version's runtime or visual behavior confirms that version was published, loaded, and tested. Record whether the feedback approved or rejected it. If the feedback does not identify the tested version clearly enough, ask before changing publication state or reserving the next version.
 
 ## Current canonical state
 
 <!-- VERSION_REGISTRY_CURRENT_START -->
-| Library | Source | Highest published | Pending version | Development import | Production import | Pending SHA-256 | Status |
-|---|---|---:|---:|---:|---:|---|---|
-| RevelioCoreLibrary | `indicators/20-revelio/code/development/libraries/revelio-core-library.pine` | 10 | — | 10 | 10 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
-| RevelioGapsLibrary | `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` | 10 | 11 | 11 | 10 | `0f8344c9837dea494c4fa4f83773a376760e3920ce59b3b24394dbcc07c4e524` | `PENDING_PERFORMANCE_REMEDIATION` |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/development/libraries/revelio-interactions-library.pine` | 16 | — | 16 | 16 | — | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` | 1 | 2 | 2 | 1 | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` | `PENDING_PERFORMANCE_REMEDIATION` |
+| Library | Source | Published | Pending |
+|---|---|---:|---:|
+| RevelioCoreLibrary | `indicators/20-revelio/code/development/libraries/revelio-core-library.pine` | 10 | — |
+| RevelioGapsLibrary | `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` | 11 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/development/libraries/revelio-interactions-library.pine` | 19 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` | 2 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development host: `indicators/20-revelio/code/development/indicator/revelio.pine`
 
-Current truthful status: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are published, and the checkpoint host compiles and loads against that chain. Runtime testing reports a first-load performance regression versus commit `72e5ba2`. Gaps `/11` and Profile Orchestration `/2` are reserved for behavior-preserving performance remediation; the development host also removes redundant Composite-Off and Touch Marker work and explicitly uses Pine v6 dynamic requests to skip the complete Quarterly request when that anchor is not required. Composite defaults Off; Quick Filter remains the sole authority over whether a composite source can consolidate or render, while Touch Markers can intentionally inspect hidden ordinary anchors through Include All Anchors.
+Development import rule: import `Pending` when present; otherwise import `Published`.
 
 ## External pinned dependencies
 
@@ -63,6 +63,7 @@ These libraries are maintained outside this repository. Their versions are pinne
 | RevelioGapsLibrary | 8 | Published · production · testing | Core `/8` dependency alignment with unchanged Value Gap behavior | `c9518dd8d18f13acb9c0b9b20840e512aa35aab91f6f8ebc689214520065cf4b` |
 | RevelioGapsLibrary | 9 | Published · host compile token limit | Core `/9` dependency alignment for recoverable Show Last-bounded composites | `d3c4613534c0e3b91a6804d9858e544582fc2bde96cc6cde50d80397460d9f2f` |
 | RevelioGapsLibrary | 10 | Published · runtime performance regression | Core `/10` dependency alignment with unchanged Value Gap behavior | `373337c6f1a3fd90db2e909bd9dfc3ec55b1bcafa16af4c542037ef5aafb6633` |
+| RevelioGapsLibrary | 11 | Published · host loaded · testing | Removes filled Value Gaps from the per-bar fill scan while preserving retained historical records | `0f8344c9837dea494c4fa4f83773a376760e3920ce59b3b24394dbcc07c4e524` |
 | RevelioInteractionsLibrary | 1 | Published · superseded | Initial interaction compositor production release | Not captured before registry creation |
 | RevelioInteractionsLibrary | 2 | Published · superseded | Mature appearance-input cleanup and obsolete Anchor Label contract removal | Not captured before registry creation |
 | RevelioInteractionsLibrary | 3 | Published · superseded | First-hit context candidate before final principal-remediation library changes | Not captured before registry creation |
@@ -79,8 +80,12 @@ These libraries are maintained outside this repository. Their versions are pinne
 | RevelioInteractionsLibrary | 14 | Published · superseded · not production-approved | Prior external publication; version confirmed occupied before the current handoff | Not captured at confirmation |
 | RevelioInteractionsLibrary | 15 | Published · production · approved | One Shorten Labels contract plus redundant compositor membership-scan removal | `6bf9d3b6445066f184b96e26add7e15e83eb1f31e02a3a63ee09b17b81317a9d` |
 | RevelioInteractionsLibrary | 16 | Published · runtime performance regression | Exports shared label-size, fade, reminder, label-retention, and weekday-distance helpers used by the host | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
+| RevelioInteractionsLibrary | 17 | Published · host loaded · visual density rejected | Scales active-anchor and swept reminder density logarithmically across actual chart bars without viewport-triggered recalculation | `9ac3cc723167ed554e4f6baf9c76601fce987b2a941d1c7351fe7748da38644e` |
+| RevelioInteractionsLibrary | 18 | Published · host loaded · visual density rejected | Staggers reminders within separate adaptive cells to break mechanical columns while preserving bounded chart-bar density and coverage | `7bdb2fa9f1cb8576fcfbe0971d7d5f6cab29070566790b48f1c054d6bef23ba0` |
+| RevelioInteractionsLibrary | 19 | Published · host loaded · testing | Restores the committed timestamp-based reminder density and level-specific placement after the rejected chart-bar redesign | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
+| RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
 
 ## Publication-instruction log
 
@@ -137,302 +142,29 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-14-11 | 2026-08-14 | RevelioInteractionsLibrary | 16 | Publish the shared-presentation-helper Interactions source privately as `/16`, then compile the development host against Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
 | PUB-2026-08-14-12 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 1 | After Core `/10` is published, publish the final domain-deduplicated profile-orchestration source privately as `/1` | `LIBRARY_COMPILE_FAILED_CE10125` |
 | PUB-2026-08-14-13 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 1 | After Core `/10` is published, publish the CE10125-corrected literal-enum-title profile-orchestration source privately as `/1` | `PUBLISHED_RUNTIME_PERFORMANCE_REGRESSION` |
-| PUB-2026-08-14-14 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 2 | After Gaps `/11` is published, publish the maturity and Quarterly-transport performance remediation privately as `/2`, then compile the development host against Core `/10`, Gaps `/11`, Interactions `/16`, and Profile Orchestration `/2` | `CURRENT_PENDING` |
-| PUB-2026-08-14-15 | 2026-08-14 | RevelioGapsLibrary | 11 | Publish the open-only Value Gap lifecycle performance remediation privately as `/11` before compiling the development host | `CURRENT_PENDING` |
+| PUB-2026-08-14-14 | 2026-08-14 | RevelioProfileOrchestrationLibrary | 2 | After Gaps `/11` is published, publish the maturity and Quarterly-transport performance remediation privately as `/2`, then compile the development host against Core `/10`, Gaps `/11`, Interactions `/16`, and Profile Orchestration `/2` | `PUBLISHED_HOST_LOADED_TESTING` |
+| PUB-2026-08-14-15 | 2026-08-14 | RevelioGapsLibrary | 11 | Publish the open-only Value Gap lifecycle performance remediation privately as `/11` before compiling the development host | `PUBLISHED_HOST_LOADED_TESTING` |
+| PUB-2026-08-21-01 | 2026-08-21 | RevelioInteractionsLibrary | 17 | Publish the actual-chart-bar reminder compositor privately as `/17`; after Gaps `/11` and Profile Orchestration `/2` are also published, compile and visually test the development host against Core `/10`, Gaps `/11`, Interactions `/17`, and Profile Orchestration `/2` | `PUBLISHED_TESTED_REJECTED_EXCESSIVE_DENSITY` |
+| PUB-2026-08-21-02 | 2026-08-21 | RevelioInteractionsLibrary | 18 | Publish the staggered adaptive-cell reminder compositor privately as `/18`, then compile and visually compare the development host against Interactions `/17` on NQ 1H, 4H, Daily, and Range charts | `PUBLISHED_TESTED_REJECTED_EXCESSIVE_INTRADAY_DENSITY` |
+| PUB-2026-08-21-03 | 2026-08-21 | RevelioInteractionsLibrary | 19 | Publish the exact committed-reminder restoration privately as `/19`, then compile and visually compare the development host against the last committed Revelio presentation on NQ 5-minute, 1H, 4H, Daily, and Range charts | `PUBLISHED_HOST_LOADED_TESTING` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
-## Current production status
+## Current handoff
 
-Canonical library sources: `indicators/20-revelio/code/development/libraries/revelio-core-library.pine`, `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine`, `indicators/20-revelio/code/development/libraries/revelio-interactions-library.pine`, and `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine`.
+- Published chain: Core `/10`, Gaps `/11`, Interactions `/19`, Profile Orchestration `/2`.
+- Pending: none.
+- Development host: `indicators/20-revelio/code/development/indicator/revelio.pine`, importing Interactions `/19`.
+- Runtime status: `/19` is published and loaded; visual comparison is in progress on NQ 5-minute, 1H, 4H, Daily, and Range charts.
+- Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
 
-Highest published private libraries: `midnightpaws87/RevelioCoreLibrary/10`, `midnightpaws87/RevelioGapsLibrary/10`, `midnightpaws87/RevelioInteractionsLibrary/16`, and `midnightpaws87/RevelioProfileOrchestrationLibrary/1`.
+## Pending release notes
 
-Production Revelio host imports: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1`.
+No pending releases.
 
-Development Revelio host imports: Core `/10`, pending Gaps `/11`, Interactions `/16`, and pending Profile Orchestration `/2`.
+## Invariants
 
-Validation: Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are user-confirmed published; the host compiles and loads against that chain. Runtime testing reports slower first load than the previous committed Revelio baseline. Replay, visual regression, and TradingView Profiler comparisons remain pending.
-
-## Published `/5` validation status
-
-Published private library: `midnightpaws87/RevelioInteractionsLibrary/5`
-
-Interactions `/5` provides the initial one-line right-edge label compression. TradingView validation confirmed that same-profile and same-level grouping works through the new compositor, but dated members whose levels and dates both differ do not remove their repeated anchor. `/6` corrects that incomplete case without moving backward.
-
-### Copy-ready `/5` version notes
-
-```text
-Compresses merged right-edge profile labels onto one line without replacing identities with counts. Independent profile groups retain the pipe separator, repeated levels or periods share one heading, and swept, Auto, archived and unselected symbols remain attached to their own members. Existing merge distance, identity priority, carrier color, label size, Touch Marker prefix and optional price behavior are preserved.
-```
-
-## Published `/6` status
-
-Interactions `/6` extends the one-line grammar to dated right-edge members that share an anchor while carrying different levels and dates. Its `Condense Merged Labels` toggle does not reach active-anchor or swept reminder compositors, so those labels still show the original repeated identities.
-
-### Copy-ready `/6` version notes
-
-```text
-Extends merged right-edge profile labels so a repeated dated anchor is shown once even when its members use different levels and dates. Mixed RTH and Globex groups remain separated by a pipe, while entries such as Globex POC Jul 27 and Globex VAL Jul 26 become Globex: POC Jul 27, VAL Jul 26. Condense Merged Labels controls this right-edge grammar; active-anchor and swept reminder labels remain uncondensed in this version.
-```
-
-## Published `/7` testing status
-
-Interactions `/7` gives right-edge labels, active-anchor reminders, and swept reminders the same structured identity composer. `Condense Merged Labels` controls all three paths; turning it off restores the full identities on all three. The merge dropdown adds `Extra Wide` at `0.050%`, while Custom accepts values through `0.5%`. Publication is complete and visual testing is in progress.
-
-### Copy-ready `/7` version notes
-
-```text
-Completes compact merged-label formatting across right-edge labels, active-anchor reminders and swept reminders. Condense Merged Labels now controls the same structured one-line grammar everywhere; turning it off restores every full identity separated by a pipe. Adds an Extra Wide merge-distance preset at 0.050% and raises the Custom maximum to 0.5%. Existing brackets, capitalization, per-member symbols, carrier styling, label size, optional price and merge-off behavior are preserved.
-```
-
-## Published `/8` status
-
-Interactions `/8` replaces adaptive shortest-string grouping with one fixed level-first hierarchy across right-edge labels, active-anchor reminders and swept reminders. Dated contributors are regrouped across the complete cluster only when both level and anchor match. Pipes start new groups, commas continue periods, and live or bracketed previous identities remain complete single contributors. `Condense Merged Labels` gates the feature. The published host compiled and the user approved the visible result.
-
-### Copy-ready `/8` version notes
-
-```text
-Replaces adaptive merged-label formatting with a consistent level-first hierarchy across right-edge labels and reminders. POC, aPOC, VAH or VAL always leads each group; pipes separate different level/profile groups, while commas join periods only when both level and profile match. Touch Marker and First Hit prefixes, brackets, per-member status symbols, shared price, carrier styling, merge distances and condensation-off behavior are preserved.
-```
-
-## Published `/9` status
-
-Interactions `/9` introduced the first progressive condensation-scope test control. It was published and compiled, and the user's test exposed that its control name and combined modes did not clearly describe the actual profile-label scope. Those revisions were carried forward and approved in `/10`.
-
-### Copy-ready `/9` version notes
-
-```text
-Adds progressive merged-label condensation scopes while retaining the approved Standard format as the default. Dated shortens completed profiles with R, G and W tokens plus natural Monthly and Quarterly periods; Dated + Previous also shortens previous identities; All Profiles also shortens live identities. Compact modes retain swept and Auto status on-chart while keeping Touch Marker source provenance in hover. Off, First Hit, shared price, carrier styling, merge distances and all reminder paths remain supported.
-```
-
-## Published `/10` status
-
-Interactions `/10` separates profile-label order from shortening scope. `Profile Label Order` offers `Profile First` and `Level First`; `Shorten` offers `None`, `Dated Profiles`, `Dated + Previous`, and `All Profiles`. The approved `/8` output remains the default through `Level First` plus `None`. Shortened identities consistently use `R`, `G`, `W`, `M`, and `Q`, while the order choice independently controls whether the profile or level leads. The same settings are used by right-edge labels, active-anchor reminders, and swept reminders. Touch Marker provenance stays at the rear of affected shortened identities and remains explained in hover; Value Gap labels are outside the profile-label controls. The companion host exposes completed Quarterly histogram rows throughout the bounded completion day so intraday higher-timeframe bars can receive them without an additional request or repeated host copy. Final principal source review found no P0–P3 issue, and the user approved the published build after TradingView testing.
-
-### Copy-ready `/10` version notes
-
-```text
-Separates Profile Label Order from profile-name shortening while retaining the approved Level First plus None combination as the default. Profile First and Level First can be tested independently with None, Dated Profiles, Dated + Previous, or All Profiles. Shortened identities consistently use R, G, W, M and Q; swept and Auto status remain attached, while Touch Marker source provenance stays at the rear of affected identities and in hover. First Hit, shared price, carrier styling, merge distances and all reminder paths remain supported.
-```
-
-## Published `/11` rejected status
-
-Interactions `/11` gave each temporarily touched right-edge label the same dot color and glyph size as its corresponding Touch Marker group. TradingView compilation succeeded, but visual testing showed that the label text became much larger than the anchor's native level label and used the dot palette rather than the native label palette. The user rejected this presentation. The screenshot also confirmed `⁺` off-filter identities from the companion host's enabled Include All Anchors default; those are temporary Touch Marker labels rather than native level-line mutations.
-
-### Copy-ready `/11` version notes
-
-```text
-Synchronizes temporary Touch Marker labels in the right column with their corresponding marker dots by applying the dominant marker's dot color and glyph size to the merged label. This published version was rejected after visual testing because those properties do not match the anchor's native level-label styling.
-```
-
-## Published `/12` rejected status
-
-Interactions `/12` keeps the dominant Touch Marker anchor selection and gives the temporary right-edge label that anchor's native `labelColor` and `labelSize`. It also introduced a touched-versus-ordinary cluster boundary. TradingView comparison showed that this boundary prevented labels from merging under the same configured percentage, so the user rejected `/12`.
-
-The principal review found no P0–P3 issue only because it was given the incorrect isolation criterion. It did not establish merge parity and is superseded by the `/13` review requirement.
-
-### Copy-ready `/12` version notes
-
-```text
-Corrects temporary Touch Marker labels so the dominant anchor supplies its native level-label color and text size rather than the marker dot's color and glyph size. Quarterly, Monthly, Weekly, then RTH or Globex still determines the winning anchor, but the right-column text now looks exactly as that anchor's native level label would. Touched groups are isolated from unrelated nearby labels and line-carrier fading, while ordinary labels retain their existing merge behavior. The override remains limited to the active detection window; marker dots, history, reminders and native level-line properties are unchanged. The companion host defaults Include All Anchors on, Profile Label Order to Profile First, and Shorten to All Profiles.
-```
-
-## Published `/13` approved status
-
-Interactions `/13` removes the new touched-versus-ordinary cluster boundary and restores the approved `/10` merger's control flow. Every label again uses the pre-existing Touch Marker group mapping and then the same `nearestLabelCluster()` fallback driven by Merge Off or the selected preset/Custom percentage. This deliberately retains `/10` behavior, including its same-marker-group colocation when Merge Off is selected; `/13` introduces no new cluster-membership rule. Existing carrier selection and secondary-line fading operate on that unchanged cluster. Only after the merged text and carrier are determined does an active Touch Marker winner replace the final label's text color and text size with its native `labelColor` and `labelSize`. Marker dots continue to use `lineColor` and `circleSize`. The publication-time host defaulted Include All Anchors on, Profile Label Order to Profile First, and Shorten to All Profiles; the current host-only follow-up replaces the two format dropdowns with one enabled `Shorten Labels` toggle while fixing Profile First ordering.
-
-Final principal review compared `/13` directly with approved commit `980f0c64` and found no P0–P3 issue: cluster membership, composition, carrier selection, carrier price and line fading are unchanged, while the new native text style assignment occurs only after composition.
-
-### Copy-ready `/13` version notes
-
-```text
-Restores the approved `/10` profile-label merger before applying Touch Marker presentation. The pre-existing Touch Marker group mapping, Merge Off behavior, every merge preset and every Custom percentage determine clusters exactly as they did before the style feature; no touched-versus-ordinary boundary is added. Existing carrier selection and secondary-line fading are preserved. After composition, an active touched cluster uses the highest anchor's native level-label color and text size. Marker dots, history, prices, reminders and native line properties are unchanged. The publication-time companion host defaulted Include All Anchors on, Profile Label Order to Profile First, and Shorten to All Profiles; a later host-only follow-up collapses the two format controls into one enabled `Shorten Labels` toggle with fixed Profile First ordering.
-```
-
-### Copy-ready `/4` version notes
-
-```text
-Adds optional Touch Marker first-hit context for the selected session window. The first right-edge cluster can show ① with its above/below direction, while the marker tooltip identifies FIRST, approach direction and NY hit time. Existing Touch Marker labels and tooltip behavior remain unchanged when First Hit is disabled. Includes the final reviewed timing and live-Focus retention corrections required by revelio • development importing RevelioInteractionsLibrary/4.
-```
-
-## Published Core `/2` status
-
-Core `/2` preserves the existing maturity result while skipping early-volume calculations unless Current is `Auto`, normal session maturity has not yet been reached, and the caller is evaluating the last bar. The host separately advances Weekly, Monthly, and Quarterly maturity state only while that visible anchor uses `Auto`. Current `On` and `Off`, all maturity thresholds, stability rules, completed profiles, and developing-profile values remain unchanged.
-
-### Copy-ready `/2` version notes
-
-```text
-Reduces developing-profile maturity work without changing when Weekly, Monthly, or Quarterly current profiles appear. Early-volume maturity is evaluated only while Auto still needs it; Current On, Current Off, maturity thresholds, profile values, completed history, and drawings remain unchanged.
-```
-
-## Published Gaps `/2` status
-
-Gaps `/2` advances only its private Core dependency to `/2` so the development host uses one compatible `Profile` type throughout the Core and Value Gap chain. Detection, retention, traversal fill, selection, geometry, labels, and every Value Gap input remain unchanged.
-
-### Copy-ready `/2` version notes
-
-```text
-Aligns the Value Gap library with Revelio Core `/2`. Value Gap detection, fills, history, floating selection, geometry, labels, settings, and visible behavior are unchanged.
-```
-
-The initial host-only Shorten Labels toggle candidate was superseded before runtime validation because it still carried removed formatting modes through the library API. The `/14` version slot is already occupied; `/15` carries the complete library refactor and the behavior-preserving compositor scan removal.
-
-## Published `/15` status
-
-Interactions `/15` removes the obsolete Level First renderer, per-profile shortening scope selector, legacy formatting branches, and four-boolean compositor signatures. `composedClusterIdentities()` now accepts only `shortenLabels`: Off returns ordered full Profile First identities, while On uses the single shortened Profile First grammar. The companion host keeps dated and live profile shortening while supplying explicit previous prefixes: `[PREV RTH]`, `[PREV GLOBEX]`, `[LAST WEEK]`, `[LAST MONTH]`, and `[LAST QUARTER]`. Right-edge labels, active-anchor reminders and swept reminders each pass the same structured identity through their simplified exported APIs. The right-edge compositor also removes its redundant `drawnLines` argument and linear membership lookup: every non-`na` active carrier line is already retained by the host constructor contract. Merge membership, carrier selection, line fading, Touch Marker presentation, prices, reminders and drawing budgets are unchanged.
-
-The library source passes local static and call-arity checks. Final principal implementation review confirmed the retained-line constructor invariant and found no P0–P3 source issue before the latest host-only revisions. The revised host passes static, title, exact-prefix, and shared-compositor-path checks and is user-confirmed loaded and approved in TradingView.
-
-### Copy-ready `/15` version notes
-
-```text
-Replaces the separate Profile Label Order and Shorten dropdowns with one enabled-by-default Shorten Labels toggle. Profile First is now the sole label order. On keeps dated and live names compact while previous profiles remain explicit as PREV RTH, PREV GLOBEX, LAST WEEK, LAST MONTH and LAST QUARTER; Off keeps the full Profile First identities. The same setting applies to right-edge labels, active-anchor reminders and swept reminders. Removes a redundant carrier-line membership scan while preserving the same carrier fading. Existing merge distances, Touch Marker styling, prices, provenance symbols and drawing behavior are unchanged.
-```
-
-## Published Core `/4` rejected status
-
-Core `/4` replaced the superseded multi-slot `/3` contract with one host-configured manual composite range for completed RTH or Globex sessions. The development host loaded it, but runtime testing rejected the composite presentation because its histogram width remained limited to the longest constituent session.
-
-### Core Copy-ready `/4` version notes
-
-```text
-Adds one manual RTH or Globex composite profile built from the original raw session samples. Inclusive selected sessions, including holiday or shortened sessions, consolidate into one recalculated distribution after the final session closes. Constituents never enter level, Touch Marker, Auto Swept or Value Gap lifecycles. Incomplete history is rejected, and the completed composite retains its identity and drawing priority.
-```
-
-## Published Gaps `/4` rejected status
-
-Gaps `/4` changed only its Core dependency from `/3` to `/4`. Its gap calculations were unchanged, but the dependency chain was superseded with the rejected Core `/4` presentation.
-
-### Gaps Copy-ready `/4` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /4 so confirmed gaps are derived from the consolidated completed-profile sequence after the manual composite dissolves its constituent sessions. Gap detection, minimum-size filtering, traversal fills, retention and presentation are unchanged.
-```
-
-## Published Core `/5` status
-
-Core `/5` preserves the single-composite state machine while allowing a manual composite histogram to use the entire selected start-to-end duration. The host also retains the original click guides, draws separate resolved session boundaries, and removes the constituent session presentation inside the selected range. Sweep tracking begins from the recalculated composite levels and applies the same 5% composite-range margin used by ordinary completed profiles and the Auto Swept archive.
-
-### Core Copy-ready `/5` version notes
-
-```text
-Expands each manual composite histogram across the complete selected session range while preserving one recalculated POC, VAH, VAL and volume distribution. The original From and Through positions remain visible for editing, and separate resolved boundaries identify the exact sessions included. Constituent session profiles stay dissolved inside the composite, while sweep confirmation uses the same 5% recalculated profile-range margin as standard completed profiles.
-```
-
-## Published Gaps `/5` status
-
-Gaps `/5` changes only its Core dependency from `/4` to `/5`. Value Gap detection and presentation remain unchanged.
-
-### Gaps Copy-ready `/5` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /5 so the library shares the full-range Manual Composite profile contract. Gap detection, minimum-size filtering, traversal fills, retention and presentation are unchanged.
-```
-
-## Published Core `/6` status
-
-Core `/6` retains full selected-range histogram geometry and pins remotely transported Quarterly composites under the same retention policy as local anchors. The host expands the one-at-a-time Manual Composite source to RTH, Globex, Weekly, Monthly, or Quarterly. Runtime testing found that selecting a source excluded by Quick Filter can still consolidate that hidden source.
-
-### Core Copy-ready `/6` version notes
-
-```text
-Expands the single Manual Composite to RTH, Globex, Weekly, Monthly and Quarterly with one recalculated histogram, POC, aPOC, VAH and VAL using the selected anchor's boundaries.
-```
-
-## Published Gaps `/6` status
-
-Gaps `/6` changes only its Core dependency from `/5` to `/6`; Value Gap sources remain RTH and Globex, and their calculations are unchanged.
-
-### Gaps Copy-ready `/6` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /6 while preserving the existing RTH and Globex Value Gap sources. Gap detection, minimum-size filtering, traversal fills, retention and presentation are unchanged.
-```
-
-## Published Core `/8` testing status
-
-Core `/8` is published. Its profile contract remains equivalent to `/7`; the host correction makes Quick Filter authoritative over whether a Manual Composite source can consolidate or render. Runtime testing is in progress.
-
-### Core Copy-ready `/8` version notes
-
-```text
-Maintains the all-anchor Manual Composite profile contract for the corrected Revelio host. The host now prevents a source excluded by Quick Filter from being consolidated or rendered, while Touch Markers can still inspect hidden ordinary anchors through Include All Anchors.
-```
-
-## Published Gaps `/8` testing status
-
-Gaps `/8` is published and imports Core `/8`. This advances only the Core dependency; Value Gap behavior remains unchanged. Runtime testing is in progress.
-
-### Gaps Copy-ready `/8` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /8 while preserving the existing RTH and Globex Value Gap behavior.
-```
-
-## Published Core `/9` status
-
-Core `/9` is published. The dependent host did not compile because it exceeded TradingView's compiled-token limit, so runtime validation of this chain remains blocked until Composite `/1` is published and the reduced host is compiled.
-
-### Core Copy-ready `/9` version notes
-
-```text
-Constrains Manual Composite activation to the selected anchor's actual Show Last profile chronology, including holidays and configured short-session folding. Keeps a bounded ordinary-profile recovery sequence while a composite is active so an unfinished or completed composite that leaves Show Last restores the same ordinary profiles instead of leaving holes. Preserves composite histogram, value-area, sweep-margin, developing-profile and all-anchor behavior while adding recovery-level lifecycle synchronization.
-```
-
-## Published Gaps `/9` status
-
-Gaps `/9` is published and imports Core `/9`. The dependent host did not compile because it exceeded TradingView's compiled-token limit, so runtime validation remains blocked until Composite `/1` is published and the reduced host is compiled.
-
-### Gaps Copy-ready `/9` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /9 while preserving the existing RTH and Globex Value Gap calculations and presentation.
-```
-
-## Pending Gaps `/11` performance handoff
-
-Publish `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` privately as `midnightpaws87/RevelioGapsLibrary/11` before Profile Orchestration `/2` and the host.
-
-### Gaps Copy-ready `/11` version notes
-
-```text
-Tracks open Value Gaps separately from retained historical records so filled gaps leave the per-bar fill scan immediately. Detection, traversal erosion, fill timestamps, recovery copies, historical rendering, floating selection, and the 100-record retention limit remain unchanged.
-```
-
-## Pending Profile Orchestration `/2` performance handoff
-
-After Gaps `/11` is published, publish `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` privately as `midnightpaws87/RevelioProfileOrchestrationLibrary/2`. Then compile the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/16`, and Profile Orchestration `/2`.
-
-### Profile Orchestration Copy-ready `/2` version notes
-
-```text
-Event-gates automatic Weekly, Monthly, and Quarterly maturity work and stops rebuilding structural profile snapshots after the standard session threshold makes the developing profile permanently visible for the current period. Removes two unused Quarterly composite-status fields from remote transport. Period resets, early maturity, completed profiles, developing levels, Manual Composite behavior, and all visible output remain unchanged.
-```
-
-### Core Copy-ready `/10` version notes
-
-```text
-Exports Revelio's canonical profile row-count invariant so the host and every dependent library use one definition without changing profile calculations.
-```
-
-### Gaps Copy-ready `/10` version notes
-
-```text
-Aligns Value Gaps with Revelio Core /10 while preserving existing RTH and Globex Value Gap calculations and presentation.
-```
-
-### Interactions Copy-ready `/16` version notes
-
-```text
-Exports Revelio's shared presentation primitives for label sizing, fading, reminder placement, bounded label retention, and weekday-distance calculation so the host and interaction compositor use one implementation without changing visual behavior.
-```
-
-### Profile Orchestration Copy-ready `/1` version notes
-
-```text
-Extracts Revelio's Manual Composite and related profile orchestration from the indicator host to restore compiled-token headroom. Centralizes session, timezone, anchor, period and option vocabulary, and exposes typed Focus Direction, short-session merge and developing-profile modes. Session-boundary resolution, exact Show Last chronology, developing and confirmed composites, maturity, Quarterly remote processing, Focus ranking, calendar labels and price-window sampling retain their existing behavior.
-```
-
-## Next version rule
-
-Core `/10`, Gaps `/10`, Interactions `/16`, and Profile Orchestration `/1` are the highest published chain. Gaps `/11` and Profile Orchestration `/2` are pending. Any later source edit requires Core `/11`, Gaps `/12`, Interactions `/17`, or Profile Orchestration `/3` as applicable. Never move an import backward to an earlier published version.
+- After a version is published, the next library version is `Published + 1`; a published version is never reused. An unpublished pending version may still be corrected in place.
+- Runtime or visual feedback confirms publication and testing of the referenced version. If the referenced version is unclear, ask before advancing it.
+- The development host imports `Pending` when present; otherwise it imports `Published`.
+- Every pending version has exactly one pending history row, one `CURRENT_PENDING` instruction, one SHA-256 fingerprint, and copy-ready notes.
+- Any source edit after a publication requires another forward version. Host-only configuration changes do not.

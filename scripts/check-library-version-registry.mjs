@@ -10,6 +10,10 @@ const hostPath = resolve(repoRoot, "indicators/20-revelio/code/development/indic
 const titleCheckerPath = resolve(repoRoot, "scripts/check-pine-indicator-titles.mjs");
 const registry = readFileSync(registryPath, "utf8");
 const host = readFileSync(hostPath, "utf8");
+const activeHost = host
+    .split(/\r?\n/)
+    .map(line => line.replace(/\/\/.*$/, ""))
+    .join("\n");
 
 function section(startMarker, endMarker) {
     const start = registry.indexOf(startMarker);
@@ -38,9 +42,16 @@ function versionNumber(value) {
     return value === "—" ? null : Number(value);
 }
 
+function isPositiveInteger(value) {
+    return Number.isInteger(value) && value > 0;
+}
+
 const currentRows = tableRows(section("<!-- VERSION_REGISTRY_CURRENT_START -->", "<!-- VERSION_REGISTRY_CURRENT_END -->"));
+const historyRows = tableRows(section("## Publication history", "## Publication-instruction log"));
 const instructionRows = tableRows(section("<!-- VERSION_REGISTRY_INSTRUCTIONS_START -->", "<!-- VERSION_REGISTRY_INSTRUCTIONS_END -->"));
+const pendingNotes = section("## Pending release notes", "## Invariants");
 const failures = [];
+const currentLibraries = new Set();
 
 try {
     execFileSync(process.execPath, [titleCheckerPath, hostPath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
@@ -51,14 +62,36 @@ try {
 
 for (const row of currentRows) {
     const library = row.Library;
-    const highestPublished = versionNumber(row["Highest published"]);
-    const pendingVersion = versionNumber(row["Pending version"]);
-    const developmentImport = versionNumber(row["Development import"]);
-    const productionImport = versionNumber(row["Production import"]);
-    const importMatch = host.match(new RegExp(`import\\s+midnightpaws87/${library}/(\\d+)\\s+as\\s+`));
-    const actualImport = importMatch ? Number(importMatch[1]) : null;
+    const highestPublished = versionNumber(row.Published);
+    const pendingVersion = versionNumber(row.Pending);
+    const developmentImport = pendingVersion ?? highestPublished;
+    const importMatches = [...activeHost.matchAll(new RegExp(`^\\s*import\\s+midnightpaws87/${library}/(\\d+)\\s+as\\s+\\w+\\s*$`, "gm"))];
+    const actualImport = importMatches.length === 1 ? Number(importMatches[0][1]) : null;
 
-    if (actualImport !== developmentImport) {
+    if (currentLibraries.has(library)) {
+        failures.push(`${library}: duplicate current-state row`);
+    }
+    currentLibraries.add(library);
+
+    if (!isPositiveInteger(highestPublished)) {
+        failures.push(`${library}: Published must be a positive integer`);
+    }
+    if (pendingVersion !== null && !isPositiveInteger(pendingVersion)) {
+        failures.push(`${library}: Pending must be a positive integer or —`);
+    }
+
+    const publishedHistoryVersions = historyRows
+        .filter(history => history.Library === library && history.Status.startsWith("Published"))
+        .map(history => Number(history.Version))
+        .filter(isPositiveInteger);
+    const historyHighestPublished = publishedHistoryVersions.length > 0 ? Math.max(...publishedHistoryVersions) : null;
+    if (historyHighestPublished !== highestPublished) {
+        failures.push(`${library}: Published /${highestPublished} does not match history maximum /${historyHighestPublished ?? "missing"}`);
+    }
+
+    if (importMatches.length !== 1) {
+        failures.push(`${library}: expected exactly one active host import, found ${importMatches.length}`);
+    } else if (actualImport !== developmentImport) {
         failures.push(`${library}: host imports /${actualImport ?? "missing"}, registry requires /${developmentImport}`);
     }
 
@@ -69,32 +102,46 @@ for (const row of currentRows) {
         if (developmentImport !== pendingVersion) {
             failures.push(`${library}: development import /${developmentImport} does not match pending /${pendingVersion}`);
         }
+        const pendingHistory = historyRows.filter(history => history.Library === library && Number(history.Version) === pendingVersion && history.Status === "Pending publication");
+        if (pendingHistory.length !== 1) {
+            failures.push(`${library}: expected exactly one pending history row for /${pendingVersion}, found ${pendingHistory.length}`);
+        }
+        const pendingFingerprint = pendingHistory[0]?.["Source fingerprint"];
         const sourcePath = resolve(repoRoot, row.Source);
         const actualHash = sha256(sourcePath);
-        if (actualHash !== row["Pending SHA-256"]) {
-            failures.push(`${library}: source fingerprint changed; registry=${row["Pending SHA-256"]}, actual=${actualHash}`);
+        if (actualHash !== pendingFingerprint) {
+            failures.push(`${library}: source fingerprint changed; registry=${pendingFingerprint ?? "missing"}, actual=${actualHash}`);
         }
-        const pendingInstructions = instructionRows.filter(instruction => instruction.Library === library && Number(instruction.Version) === pendingVersion && instruction.Result === "CURRENT_PENDING");
-        if (pendingInstructions.length !== 1) {
-            failures.push(`${library}: expected exactly one CURRENT_PENDING instruction for /${pendingVersion}, found ${pendingInstructions.length}`);
+        const pendingInstructions = instructionRows.filter(instruction => instruction.Library === library && instruction.Result === "CURRENT_PENDING");
+        const pendingInstructionVersion = pendingInstructions.length === 1 ? Number(pendingInstructions[0].Version) : null;
+        if (pendingInstructions.length !== 1 || pendingInstructionVersion !== pendingVersion) {
+            failures.push(`${library}: expected one CURRENT_PENDING instruction for /${pendingVersion}; found ${pendingInstructions.length} with version /${pendingInstructionVersion ?? "missing"}`);
         }
-        if (!registry.includes(`Copy-ready \`/${pendingVersion}\` version notes`)) {
+        const notesHeading = `### ${library} \`/${pendingVersion}\``;
+        const headingCount = pendingNotes.split(notesHeading).length - 1;
+        const notesAfterHeading = headingCount === 1 ? pendingNotes.slice(pendingNotes.indexOf(notesHeading) + notesHeading.length) : "";
+        const noteBlock = notesAfterHeading.match(/^\s*```text\r?\n([\s\S]*?)\r?\n```/);
+        if (headingCount !== 1 || !noteBlock || noteBlock[1].trim().length === 0) {
             failures.push(`${library}: pending /${pendingVersion} is missing copy-ready version notes`);
         }
     } else {
-        if (row["Pending SHA-256"] !== "—") {
-            failures.push(`${library}: stable row must not carry a pending fingerprint`);
-        }
         if (developmentImport !== highestPublished) {
             failures.push(`${library}: stable development import /${developmentImport} must match highest published /${highestPublished}`);
-        }
-        if (productionImport !== highestPublished) {
-            failures.push(`${library}: stable production import /${productionImport} must match highest published /${highestPublished}`);
         }
         const stalePendingInstructions = instructionRows.filter(instruction => instruction.Library === library && instruction.Result === "CURRENT_PENDING");
         if (stalePendingInstructions.length !== 0) {
             failures.push(`${library}: stable row has ${stalePendingInstructions.length} stale CURRENT_PENDING instruction(s)`);
         }
+    }
+}
+
+const requiredLibraries = new Set([
+    ...historyRows.filter(history => history.Status.startsWith("Published")).map(history => history.Library),
+    ...instructionRows.filter(instruction => instruction.Result === "CURRENT_PENDING").map(instruction => instruction.Library),
+]);
+for (const library of requiredLibraries) {
+    if (!currentLibraries.has(library)) {
+        failures.push(`${library}: missing current-state row`);
     }
 }
 
@@ -105,6 +152,7 @@ if (failures.length > 0) {
 }
 
 for (const row of currentRows) {
-    const pending = row["Pending version"] === "—" ? "none" : `/${row["Pending version"]}`;
-    console.log(`PASS ${row.Library}: highest published /${row["Highest published"]}, pending ${pending}, development import /${row["Development import"]}, production import /${row["Production import"]}`);
+    const pending = row.Pending === "—" ? "none" : `/${row.Pending}`;
+    const developmentImport = row.Pending === "—" ? row.Published : row.Pending;
+    console.log(`PASS ${row.Library}: published /${row.Published}, pending ${pending}, host import /${developmentImport}`);
 }
