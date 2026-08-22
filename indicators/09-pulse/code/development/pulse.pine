@@ -198,6 +198,7 @@ const color DEFAULT_DAILY_OPEN_COLOR = color.new(color.rgb(156, 39, 176), 30)
 const color DEFAULT_WEEKLY_OPEN_COLOR = color.new(color.rgb(236, 64, 122), 30)
 const color DEFAULT_MONTHLY_OPEN_COLOR = color.new(color.rgb(255, 152, 0), 30)
 const color DEFAULT_LABEL_TEXT_COLOR = color.new(color.rgb(156, 156, 156), 0)
+const color DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND = color.new(color.rgb(255, 255, 255), 50)
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 10)
 
 // Input limits (declared first — scan caps derive from these)
@@ -347,6 +348,7 @@ type PendingLabelEvent
     int rank
     bool endpoint
     bool core
+    bool inline_label
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET CONFIGURATION REGISTRY (PERFORMANCE: Cached lookup, runs once)
@@ -663,6 +665,7 @@ close1600UntappedWidth = input.int(LINE_WIDTH_2, "Untapped Width", options=[LINE
 
 showLabels = input.bool(true, GROUP_LABELS, group=GROUP_LABELS, inline='labels')
 labelTextColor = input.color(DEFAULT_LABEL_TEXT_COLOR, UI_TEXT_COLOR, group=GROUP_LABELS, inline='labels')
+liquidityDepthLabelBackgroundColor = input.color(DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND, "L-Depth BG", group=GROUP_LABELS, inline='labels', active=showLabels)
 showSessionOnSweepLabels = input.bool(true, "Show Session Sweep Tags", group=GROUP_LABELS, tooltip="Show session name alongside L1/L2/L3 sweep labels (e.g. 'L1 asia').")
 showDepthReminders = input.bool(true, "Depth Reminders", group=GROUP_LABELS, inline="label_reminders", active=showLabels)
 showPoolReminders = input.bool(true, "Pool Reminders", group=GROUP_LABELS, inline="label_reminders", active=showLabels, tooltip="Depth Reminders — Repeat L1/L2/L3 tags on long liquidity-depth lines.\n\nPool Reminders — Repeat Daily, Weekly, Monthly, Overnight, Premarket, and intraday high/low names on long pool lines.\n\nBoth stay sparse: short lines keep one label; multi-day lines can earn a second or third.")
@@ -1333,7 +1336,7 @@ buffer_liq_depth_labels(array<PendingLabelEvent> pending, start_index, end_index
         string identity = depth_label_text(level_idx, pool_type)
         int rank = pool_label_rank(pool_type)
         for placement = 0 to array.size(label_indices) - 1
-            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price_val, identity, is_high, rank, false, false))
+            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price_val, identity, is_high, rank, false, false, true))
     true
 
 buffer_pool_label(array<PendingLabelEvent> pending, float price, int start_index, int end_index, string label_text, bool is_high, bool breached, string pool_type) =>
@@ -1343,13 +1346,14 @@ buffer_pool_label(array<PendingLabelEvent> pending, float price, int start_index
         int last_placement = array.size(label_indices) - 1
         for placement = 0 to last_placement
             bool endpoint = not breached and placement == last_placement
-            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price, label_text, is_high, rank, endpoint, true))
+            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price, label_text, is_high, rank, endpoint, true, false))
     true
 
-create_pool_label(label_index, price_val, label_str, is_high) =>
-    label_style = is_high ? label.style_label_down : label.style_label_up
+create_pool_label(label_index, price_val, label_str, is_high, inline_label) =>
+    label_style = inline_label ? label.style_label_center : is_high ? label.style_label_down : label.style_label_up
+    label_background = inline_label ? liquidityDepthLabelBackgroundColor : color.new(color.white, 100)
     safe_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    label.new(safe_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=color.new(color.white, 100))
+    label.new(safe_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=labelTextColor, size=size.tiny, color=label_background)
 
 pool_label_merge_tolerance(float price) =>
     math.max(syminfo.mintick, math.abs(price) * labelMergeDistancePercent / 100.0)
@@ -1415,8 +1419,13 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
     int pending_count = array.size(pending)
     if pending_count > 0
         array<int> parents = array.new<int>()
+        array<bool> root_has_inline_label = array.new<bool>()
+        array<float> root_inline_prices = array.new<float>()
         for pending_index = 0 to pending_count - 1
+            PendingLabelEvent candidate = array.get(pending, pending_index)
             array.push(parents, pending_index)
+            array.push(root_has_inline_label, candidate.inline_label)
+            array.push(root_inline_prices, candidate.inline_label ? candidate.price : na)
         if mergeOverlappingLabels and pending_count > 1
             for left_index = 0 to pending_count - 2
                 PendingLabelEvent left = array.get(pending, left_index)
@@ -1426,11 +1435,23 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                         int left_root = label_event_root(parents, left_index)
                         int right_root = label_event_root(parents, right_index)
                         if left_root != right_root
-                            int root = math.min(left_root, right_root)
-                            int child = math.max(left_root, right_root)
-                            array.set(parents, child, root)
+                            bool left_has_inline_label = array.get(root_has_inline_label, left_root)
+                            bool right_has_inline_label = array.get(root_has_inline_label, right_root)
+                            float left_inline_price = array.get(root_inline_prices, left_root)
+                            float right_inline_price = array.get(root_inline_prices, right_root)
+                            bool inline_prices_compatible = not left_has_inline_label or not right_has_inline_label or left_inline_price == right_inline_price
+                            if inline_prices_compatible
+                                int root = math.min(left_root, right_root)
+                                int child = math.max(left_root, right_root)
+                                bool merged_has_inline_label = left_has_inline_label or right_has_inline_label
+                                float merged_inline_price = left_has_inline_label ? left_inline_price : right_inline_price
+                                array.set(parents, child, root)
+                                array.set(root_has_inline_label, root, merged_has_inline_label)
+                                array.set(root_inline_prices, root, merged_inline_price)
         array<int> component_roots = array.new<int>()
         array<int> component_carriers = array.new<int>()
+        array<bool> component_inline_labels = array.new<bool>()
+        array<int> component_inline_carriers = array.new<int>()
         array<int> identity_clusters = array.new<int>()
         array<string> identity_texts = array.new<string>()
         array<bool> identity_sides = array.new<bool>()
@@ -1443,8 +1464,13 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
             if cluster_index < 0
                 array.push(component_roots, root)
                 array.push(component_carriers, pending_index)
+                array.push(component_inline_labels, candidate.inline_label)
+                array.push(component_inline_carriers, candidate.inline_label ? pending_index : -1)
                 cluster_index := array.size(component_roots) - 1
             else
+                array.set(component_inline_labels, cluster_index, array.get(component_inline_labels, cluster_index) or candidate.inline_label)
+                if candidate.inline_label and array.get(component_inline_carriers, cluster_index) < 0
+                    array.set(component_inline_carriers, cluster_index, pending_index)
                 int current_carrier_index = array.get(component_carriers, cluster_index)
                 PendingLabelEvent current_carrier = array.get(pending, current_carrier_index)
                 if label_event_precedes(candidate, pending_index, current_carrier, current_carrier_index)
@@ -1494,7 +1520,10 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                 int carrier_index = array.get(component_carriers, cluster_index)
                 PendingLabelEvent carrier = array.get(pending, carrier_index)
                 string merged_text = compose_label_event_cluster(cluster_index, pending_count, identity_clusters, identity_texts, identity_sides, identity_ranks, identity_orders)
-                label created_label = create_pool_label(carrier.label_index, carrier.price, merged_text, carrier.is_high)
+                bool inline_label = array.get(component_inline_labels, cluster_index)
+                int anchor_index = inline_label ? array.get(component_inline_carriers, cluster_index) : carrier_index
+                PendingLabelEvent anchor = array.get(pending, anchor_index)
+                label created_label = create_pool_label(anchor.label_index, anchor.price, merged_text, anchor.is_high, inline_label)
                 if not na(created_label)
                     array.push(drawn, created_label)
         array.clear(pending)
@@ -2944,7 +2973,7 @@ addColorRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 if showColorTable and barstate.islast
-    var table color_table = table.new(position.top_right, 3, 47, bgcolor=color.white, border_width=LINE_WIDTH_1, border_color=color.gray, frame_width=LINE_WIDTH_1, frame_color=color.gray)
+    var table color_table = table.new(position.top_right, 3, 48, bgcolor=color.white, border_width=LINE_WIDTH_1, border_color=color.gray, frame_width=LINE_WIDTH_1, frame_color=color.gray)
 
     // Header row
     table.cell(color_table, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -3085,6 +3114,8 @@ if showColorTable and barstate.islast
     // Label Text (always show if labels enabled)
     if showLabels
         addColorRow(color_table, currentRow, "Label Text", labelTextColor)
+        currentRow += 1
+        addColorRow(color_table, currentRow, "L-Depth Label BG", liquidityDepthLabelBackgroundColor)
         currentRow += 1
 
     if showOnlyEnabled and showOnlyTimeframeAllowed
