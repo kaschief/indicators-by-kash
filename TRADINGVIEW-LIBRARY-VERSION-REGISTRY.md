@@ -1,13 +1,13 @@
 # TradingView Library Version Registry
 
-Updated: 2026-08-21
+Updated: 2026-08-23
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
 ## Required workflow
 
 1. Read this file before changing a library, changing an import, or telling the user to publish.
-2. When a published library source changes, reserve `Published + 1` here before changing the host import.
+2. When a published library source changes, reserve the highest recorded version plus one here before changing the host import. Published, pending, and discarded versions are never reused.
 3. Record every publication instruction as a new row before giving it to the user, including errors or superseded instructions.
 4. Record the pending source SHA-256 in Publication history and run `node scripts/check-library-version-registry.mjs`.
 5. Give the user the exact private library name/version, source path, host to compile, test gate, and copy-ready version notes.
@@ -74,6 +74,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioInteractionsLibrary | 17 | Published · host loaded · visual density rejected | Scales active-anchor and swept reminder density logarithmically across actual chart bars without viewport-triggered recalculation | `9ac3cc723167ed554e4f6baf9c76601fce987b2a941d1c7351fe7748da38644e` |
 | RevelioInteractionsLibrary | 18 | Published · host loaded · visual density rejected | Staggers reminders within separate adaptive cells to break mechanical columns while preserving bounded chart-bar density and coverage | `7bdb2fa9f1cb8576fcfbe0971d7d5f6cab29070566790b48f1c054d6bef23ba0` |
 | RevelioInteractionsLibrary | 19 | Published · host loaded · testing | Restores the committed timestamp-based reminder density and level-specific placement after the rejected chart-bar redesign | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
+| RevelioInteractionsLibrary | 20 | Discarded before publication | Carrier-interval-safe merged-reminder correction reverted; version permanently retired | `a4e7b662cce29b703496457e0e4f986bea607092b2f9641bdcf88e52ba8c74fa` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
 | RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
@@ -138,12 +139,14 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-21-01 | 2026-08-21 | RevelioInteractionsLibrary | 17 | Publish the actual-chart-bar reminder compositor privately as `/17`; after Gaps `/11` and Profile Orchestration `/2` are also published, compile and visually test the development host against Core `/10`, Gaps `/11`, Interactions `/17`, and Profile Orchestration `/2` | `PUBLISHED_TESTED_REJECTED_EXCESSIVE_DENSITY` |
 | PUB-2026-08-21-02 | 2026-08-21 | RevelioInteractionsLibrary | 18 | Publish the staggered adaptive-cell reminder compositor privately as `/18`, then compile and visually compare the development host against Interactions `/17` on NQ 1H, 4H, Daily, and Range charts | `PUBLISHED_TESTED_REJECTED_EXCESSIVE_INTRADAY_DENSITY` |
 | PUB-2026-08-21-03 | 2026-08-21 | RevelioInteractionsLibrary | 19 | Publish the exact committed-reminder restoration privately as `/19`, then compile and visually compare the development host against the last committed Revelio presentation on NQ 5-minute, 1H, 4H, Daily, and Range charts | `PUBLISHED_HOST_LOADED_TESTING` |
+| PUB-2026-08-23-01 | 2026-08-23 | RevelioInteractionsLibrary | 20 | Publish the carrier-interval-safe reminder compositor privately as `/20`, then compile and visually test the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/20`, and Profile Orchestration `/2` with Merge Off, Strict, Balanced, and Extra Wide | `DISCARDED_BEFORE_PUBLICATION` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
 - Published chain: Core `/10`, Gaps `/11`, Interactions `/19`, Profile Orchestration `/2`.
 - Pending: none.
+- Discarded: Interactions `/20`; the next Interactions version is `/21`.
 - Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/19`.
 - Runtime status: `/19` is published and loaded; visual comparison is in progress on NQ 5-minute, 1H, 4H, Daily, and Range charts.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
@@ -154,7 +157,7 @@ No pending releases.
 
 ## Invariants
 
-- After a version is published, the next library version is `Published + 1`; a published version is never reused. An unpublished pending version may still be corrected in place.
+- Version numbers are forward-only across published, pending, and discarded rows. The next version is the highest recorded version plus one. A discarded version is never reused; an active unpublished pending version may still be corrected in place.
 - Runtime or visual feedback confirms publication and testing of the referenced version. If the referenced version is unclear, ask before advancing it.
 - The development host imports `Pending` when present; otherwise it imports `Published`.
 - Every pending version has exactly one pending history row, one `CURRENT_PENDING` instruction, one SHA-256 fingerprint, and copy-ready notes.

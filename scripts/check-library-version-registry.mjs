@@ -96,8 +96,13 @@ for (const row of currentRows) {
     }
 
     if (pendingVersion !== null) {
-        if (pendingVersion !== highestPublished + 1) {
-            failures.push(`${library}: pending /${pendingVersion} is not highest published /${highestPublished} + 1`);
+        const occupiedHistoryVersions = historyRows
+            .filter(history => history.Library === library && history.Status !== "Pending publication")
+            .map(history => Number(history.Version))
+            .filter(isPositiveInteger);
+        const highestOccupiedVersion = occupiedHistoryVersions.length > 0 ? Math.max(...occupiedHistoryVersions) : highestPublished;
+        if (pendingVersion !== highestOccupiedVersion + 1) {
+            failures.push(`${library}: pending /${pendingVersion} is not highest recorded /${highestOccupiedVersion} + 1`);
         }
         if (developmentImport !== pendingVersion) {
             failures.push(`${library}: development import /${developmentImport} does not match pending /${pendingVersion}`);
