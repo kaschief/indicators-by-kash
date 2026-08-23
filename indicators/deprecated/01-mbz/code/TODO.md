@@ -46,8 +46,8 @@ Product decision: DTT dropped from MBZ indicators. Executed as single atomic com
 **Post-removal fix**: removing `liquidity_dtt_count` from `SourceTypeStats` type required dropping one positional zero from `SourceTypeStats.new(0, 0, ..., 0)` at line 2139 (17 args → 16). Missed on first pass, surfaced during user testing as "Undeclared identifier stats.liquidity_15m_count" because Pine's type inference collapsed at the bad constructor site. Reinforces the deletion-checklist rule: count args in EVERY `<Type>.new(` against current field count — no shortcuts for "obvious" shared types.
 
 **Not touched in this commit** (out of scope):
-- `indicators/01-mbz/code/mbz-prime/prime-repair-plan.md` — historical planning doc, contains DTT refs
-- `indicators/01-mbz/code/mbz-prime/session-handoff.md` — session snapshot, contains DTT refs
+- `indicators/deprecated/01-mbz/code/mbz-prime/prime-repair-plan.md` — historical planning doc, contains DTT refs
+- `indicators/deprecated/01-mbz/code/mbz-prime/session-handoff.md` — session snapshot, contains DTT refs
 These are historical records, not active reference material. Leave as archaeology or clean up in a separate docs pass.
 
 ---
@@ -164,8 +164,8 @@ Partially resolved this session (MAX_TF_DTT → MAX_TF_DTT_LIQUIDITY). All three
 **Why**: Positional constructor args hide field-variable bindings and cause silent shifts on field deletion. We hit this today with `is_extended` (field name) vs `was_extended` (writer variable) — grep for the field name missed the write entirely, and deleting the field silently corrupted positional arg order in two constructor call sites.
 
 **Files**:
-- `indicators/01-mbz/code/mbz-prime/production/mbz-prime.pine` — `MBZRecord.new(` sites (`cache_mbz_data`, base constructor in liquidity path)
-- `indicators/01-mbz/code/mbz-core/production/mbz-core.pine` — `MBZRecord.new(` sites (`cache_mbz_data`, gap detection loop)
+- `indicators/deprecated/01-mbz/code/mbz-prime/production/mbz-prime.pine` — `MBZRecord.new(` sites (`cache_mbz_data`, base constructor in liquidity path)
+- `indicators/deprecated/01-mbz/code/mbz-core/production/mbz-core.pine` — `MBZRecord.new(` sites (`cache_mbz_data`, gap detection loop)
 
 **Scope**: all UDT constructors, not just `MBZRecord` — apply to `LiquidityPoolCollection`, `ConsolidatedMBZ`, etc.
 

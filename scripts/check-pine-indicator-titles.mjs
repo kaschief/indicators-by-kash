@@ -4,6 +4,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const deprecatedIndicatorPrefix = "indicators/deprecated/";
 const indicatorDeclarationPattern = /^\s*indicator\s*\(/mu;
 const indicatorArgumentPattern = /^\s*indicator\s*\(\s*(?:title\s*=\s*)?(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([A-Za-z_]\w*))/mu;
 const validTitlePattern = /^[^\s•](?:[^•]*[^\s•])? •(?: development)?$/u;
@@ -25,12 +26,29 @@ function resolveIndicatorTitle(source) {
 }
 
 function stagedSources() {
+    const renameOutput = execFileSync(
+        "git",
+        ["diff", "--cached", "--name-status", "-z", "--find-renames=100%", "--diff-filter=R", "--", ":(glob)**/*.pine"],
+        { cwd: repoRoot, encoding: "utf8" },
+    );
+    const renameFields = renameOutput.split("\0").filter(Boolean);
+    const archivedPureRenames = new Set();
+    for (let index = 0; index < renameFields.length; index += 3) {
+        const status = renameFields[index];
+        const source = renameFields[index + 1];
+        const target = renameFields[index + 2];
+        if (status === "R100" && !source.startsWith(deprecatedIndicatorPrefix) && target.startsWith(deprecatedIndicatorPrefix)) {
+            archivedPureRenames.add(target);
+        }
+    }
+
     const output = execFileSync(
         "git",
         ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z", "--", ":(glob)**/*.pine"],
         { cwd: repoRoot, encoding: "utf8" },
     );
-    const paths = output.split("\0").filter(Boolean);
+    // Pure archive moves retain historical titles; later additions or edits remain enforced.
+    const paths = output.split("\0").filter(Boolean).filter(path => !archivedPureRenames.has(path));
     return paths.map(path => ({
         label: path,
         source: execFileSync("git", ["show", ":" + path], { cwd: repoRoot, encoding: "utf8" }),

@@ -36,8 +36,8 @@ These libraries are maintained outside this repository. Their versions are pinne
 
 | Host | External library | Pinned version | TradingView release page | Last verified |
 |---|---|---:|---|---|
-| `indicators/23-news/code/development/news.pine` | `toodegrees/forex_factory_utility` | 17 | [forex factory utility](https://www.tradingview.com/script/DHRsmWy1-forex-factory-utility/) | 2026-08-02 |
-| `indicators/23-news/code/development/news.pine` | `toodegrees/forex_factory_decoding` | 44 | [forex factory decoding](https://www.tradingview.com/script/Q78LeoTL-forex-factory-decoding/) | 2026-08-02 |
+| `indicators/deprecated/23-news/code/development/news.pine` | `toodegrees/forex_factory_utility` | 17 | [forex factory utility](https://www.tradingview.com/script/DHRsmWy1-forex-factory-utility/) | 2026-08-02 |
+| `indicators/deprecated/23-news/code/development/news.pine` | `toodegrees/forex_factory_decoding` | 44 | [forex factory decoding](https://www.tradingview.com/script/Q78LeoTL-forex-factory-decoding/) | 2026-08-02 |
 
 ## Publication history
 

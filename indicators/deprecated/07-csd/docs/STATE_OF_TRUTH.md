@@ -5,7 +5,7 @@ This document is the authoritative, up‑to‑date reference for the indicator's
 ## Overview
 - Name: CSD Hunter° [Pro+] [v2.3-lenient-csd-detection]
 - Purpose: Advanced CSD (Change in State of Delivery) detection with lenient mode, source gap validation, and cross-bar contamination prevention. Detects and renders Source Gaps for CSD validation.
-- Script: indicators/07-csd-pro/code/development/csd-pro-dev-v2.3-lenient-csd-detection.pine
+- Script: indicators/deprecated/07-csd/code/development/csd-dev-v2.3-lenient-csd-detection.pine
 
 ## Terminology (canonical)
 - Source Gaps: the only accepted term for gaps used by this script. Types:

@@ -1,53 +1,48 @@
 # indicators • by kash
 
-Fourteen TradingView indicators I designed and wrote from scratch in Pine Script v6, built and refined over roughly a year of using them in live markets and fixing whatever broke.
+Nine active TradingView indicators written in Pine Script v6, plus fourteen deprecated indicators preserved as an archive.
 
 Most of this is an exercise in working inside hard constraints. Pine Script runs your whole script once per price bar, gives you only arrays and user-defined types to work with, and caps how many lines, labels, and boxes you can draw on a chart. Building stateful, multi-timeframe tools on top of that means doing your own memory management, deduplication, and object-budget accounting.
 
 ## What the indicators do
 
-| # | Indicator | One line |
-|---|-----------|----------|
-| 1 | MBZ Core | Classifies five types of price gaps and tracks how much of each has been filled |
-| 2 | MBZ Prime | Tracks unswept session highs/lows across daily, weekly, monthly and six intraday sessions |
-| 3 | MBZ SIF Relay | Pulls higher-timeframe zones onto a lower-timeframe chart automatically |
-| 4 | SIF Core | Detects gaps that get reversed almost immediately after forming |
-| 5 | LTF Algo | Flags failed breakouts at swing highs/lows and projects a target |
-| 6 | HTF Algo | Aggregates reference levels from eight timeframes plus session and time-based levels |
-| 7 | Untagged Opens | Tracks bar-open prices that haven't been revisited yet |
-| 8 | Pulse | Tracks liquidity pools with per-instrument sweep-depth calibration |
-| 9 | DTT Intraday | A 15-session intraday model with statistical range projection |
-| 10 | DTT Weekly | The same model applied to four weekly sessions |
-| 11 | Gaps | Detects five gap types with a "floating" display mode and fill tracking |
-| 12 | Deviations | Plots statistical expansion levels for 13 intraday sessions |
-| 13 | ADR | Average Daily Range subdivisions with early-sweep ("Judas Swing") detection |
-| 14 | FVG Atlas | Scans Fair Value Gaps across up to six higher timeframes |
+| Folder | Indicator | One line |
+|--------|-----------|----------|
+| 06 | Kash OS | Provides chart furniture and time dividers |
+| 09 | Pulse | Tracks liquidity pools with per-instrument sweep-depth calibration |
+| 13 | Gaps | Detects multiple gap types with floating display and fill tracking |
+| 14 | Deviations | Plots statistical expansion levels for intraday sessions |
+| 15 | ADR | Shows daily, weekly, and monthly ranges with early-sweep detection |
+| 18 | Parallax | Projects higher-timeframe expansion zones and Fibonacci levels |
+| 19 | Elder Wand | Draws anchored VWAP structures and statistical bands |
+| 20 | Revelio | Builds session profiles, value gaps, and level interactions |
+| 21 | Legilimens | Builds configurable volume and delta profiles |
+
+The deprecated archive contains MBZ, SIF, LTF Algo, HTF Algo, Untagged Opens, CSD, Implied FVG Nine, Chop, DTT Intraday, DTT Weekly, Ranges, FVG Atlas, Spectra, and News.
 
 ## Repository layout
 
 ```
 indicators-by-kash/
 ├── indicators/
-│   ├── 01-mbz/code/
-│   │   ├── mbz-core/production/mbz-core.pine
-│   │   ├── mbz-prime/production/mbz-prime.pine
-│   │   └── mbz-sif-relay/production/mbz-sif-relay.pine
-│   ├── 02-sif/code/production/sif-core.pine
-│   ├── 03-ltf-algo/code/development/ltf-algo.pine
-│   ├── 04-htf-algo/code/development/htf-algo.pine
-│   ├── 05-untagged-opens/code/development/...
 │   ├── 06-kash-os/code/production/kash-os.pine
-│   ├── 11-dtt-intraday/code/development/dtt-intraday.pine
-│   ├── 12-dtt-weekly/code/development/dtt-weekly.pine
+│   ├── 09-pulse/code/development/pulse.pine
 │   ├── 13-gaps/code/development/gaps.pine
 │   ├── 14-deviations/code/development/deviations.pine
 │   ├── 15-adr/code/development/adr.pine
-│   └── 17-fvg-atlas/code/development/fvg-atlas.pine
+│   ├── 18-parallax/code/development/parallax.pine
+│   ├── 19-elderwand/code/development/elderwand.pine
+│   ├── 20-revelio/code/development/...
+│   ├── 21-legilimens/code/development/legilimens.pine
+│   └── deprecated/
+│       ├── 01-mbz/
+│       ├── 02-sif/
+│       └── ...
 ├── PORTFOLIO.md
 └── README.md
 ```
 
-Folders marked `production` are stable and published; `development` ones are still being iterated on.
+Folders marked `production` are stable and published; `development` ones are still being iterated on. Deprecated sources retain their original numbered folders under `indicators/deprecated` for traceability.
 
 ## Running them
 
@@ -57,7 +52,9 @@ Each file is a standalone Pine Script v6 indicator. To run one:
 2. Paste the contents of a `.pine` file, replacing anything already there.
 3. Save, then Add to chart.
 
-## The indicators in detail
+## Selected indicator details
+
+The notes below include historical indicators that are now preserved under `indicators/deprecated`.
 
 ### 1. MBZ Core — gap classification and fill tracking
 
@@ -213,5 +210,4 @@ A handful of decisions recur because the same problems recur. These are the ones
 **IQR instead of averages.** The range models (DTT Intraday, DTT Weekly, ADR, Deviations) use the interquartile range and range subdivisions rather than means, so one outlier session doesn't distort the expected range.
 
 **Parameterized, not duplicated.** Detection and calculation functions take the data they operate on as parameters rather than being copied per timeframe or session. Only genuinely per-context state (each session's own arrays) is separate, so a fix to shared logic applies everywhere at once.
-
 
