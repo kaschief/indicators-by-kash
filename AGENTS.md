@@ -313,13 +313,13 @@ Product-owner explanation: "On Range charts, a high or low should now stop on th
 
 ## Core Rule
 
-**NEVER execute ANY git command without explicit permission. A direct request to commit a stated scope is permission for the routine repository-local commands required to complete that commit.**
+**Read-only Git commands do not require permission. Any Git command that changes the working tree, index, commits, branches, tags, remotes, or other repository state requires explicit permission. A direct request to commit a stated scope authorizes the routine repository-local write commands required to complete that commit.**
 
 ## What This Means
 
-- Do NOT run git commands proactively
-- Do NOT assume permission from previous commands
-- Do NOT batch unrelated git commands without asking
+- Use read-only Git commands proactively when they help inspect or verify the task
+- Do NOT assume permission for Git write commands from previous commands
+- Do NOT batch unrelated Git write commands without asking
 - A direct `commit` request authorizes `git status`, scoped `git diff` inspection, the necessary scoped `git add`, and the requested `git commit`
 - Commit authorization never includes `git push` or unrelated repository changes
 
@@ -338,10 +338,21 @@ Assistant: *runs git add && git commit*
 User: "the changes look good"
 Assistant: "Would you like me to stage and commit these changes?"
 User: "yes"
-Assistant: *asks* "Should I run 'git add' now?"
+Assistant: *runs the scoped status, diff, add, commit, and final status workflow*
 ```
 
-## Commands Requiring Separate Permission
+## Read-Only Commands
+
+Read-only commands may be run without permission, including but not limited to:
+
+- git status
+- git diff
+- git log
+- git show
+- git blame
+- git branch --show-current
+
+## Commands Requiring Permission
 
 Except for the routine commands authorized by a direct commit request, explicit permission is required for commands including but not limited to:
 
@@ -356,9 +367,9 @@ Except for the routine commands authorized by a direct commit request, explicit 
 - git stash
 - git reset
 - git restore
-- git status (even read-only commands require permission)
-- git diff (even read-only commands require permission)
-- git log (even read-only commands require permission)
+- git fetch
+- git tag when creating, moving, or deleting tags
+- git remote add, remove, rename, or set-url
 
 ## When User Says "commit"
 
