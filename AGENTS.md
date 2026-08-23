@@ -285,7 +285,7 @@ Before changing a library, changing a host import, or telling the user to publis
 
 Every instruction to publish must be logged before it is sent. Once the user confirms publication, mark it published immediately. Any later source edit requires another version. Do not describe the feature as testable or complete until the required library is published and the host compiles against it.
 
-For Revelio, `indicators/20-revelio/code/development` is the sole canonical indicator/library source and the source published to production. Do not create or maintain a parallel production source copy. When there is no pending library release, its development and production imports in the registry must both match the highest published version. During an unpublished change, the development import may point to the reserved next version while the production import continues to record the currently published version.
+For Revelio, `indicators/20-revelio/code` is the sole canonical indicator/library source and the source published to production. Do not create or maintain a parallel production source copy. When there is no pending library release, its development and production imports in the registry must both match the highest published version. During an unpublished change, the development import may point to the reserved next version while the production import continues to record the currently published version.
 
 # Change Handoff Rules
 

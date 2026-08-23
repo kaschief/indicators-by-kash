@@ -1,6 +1,6 @@
 # indicators • by kash
 
-Nine active TradingView indicators written in Pine Script v6, plus fourteen deprecated indicators preserved as an archive.
+Nine active TradingView indicators written in Pine Script v6.
 
 Most of this is an exercise in working inside hard constraints. Pine Script runs your whole script once per price bar, gives you only arrays and user-defined types to work with, and caps how many lines, labels, and boxes you can draw on a chart. Building stateful, multi-timeframe tools on top of that means doing your own memory management, deduplication, and object-budget accounting.
 
@@ -18,31 +18,25 @@ Most of this is an exercise in working inside hard constraints. Pine Script runs
 | 20 | Revelio | Builds session profiles, value gaps, and level interactions |
 | 21 | Legilimens | Builds configurable volume and delta profiles |
 
-The deprecated archive contains MBZ, SIF, LTF Algo, HTF Algo, Untagged Opens, CSD, Implied FVG Nine, Chop, DTT Intraday, DTT Weekly, Ranges, FVG Atlas, Spectra, and News.
-
 ## Repository layout
 
 ```
 indicators-by-kash/
 ├── indicators/
-│   ├── 06-kash-os/code/production/kash-os.pine
-│   ├── 09-pulse/code/development/pulse.pine
-│   ├── 13-gaps/code/development/gaps.pine
-│   ├── 14-deviations/code/development/deviations.pine
-│   ├── 15-adr/code/development/adr.pine
-│   ├── 18-parallax/code/development/parallax.pine
-│   ├── 19-elderwand/code/development/elderwand.pine
-│   ├── 20-revelio/code/development/...
-│   ├── 21-legilimens/code/development/legilimens.pine
-│   └── deprecated/
-│       ├── 01-mbz/
-│       ├── 02-sif/
-│       └── ...
+│   ├── 06-kash-os/code/kash-os.pine
+│   ├── 09-pulse/code/pulse.pine
+│   ├── 13-gaps/code/gaps.pine
+│   ├── 14-deviations/code/deviations.pine
+│   ├── 15-adr/code/adr.pine
+│   ├── 18-parallax/code/parallax.pine
+│   ├── 19-elderwand/code/elderwand.pine
+│   ├── 20-revelio/code/...
+│   └── 21-legilimens/code/legilimens.pine
 ├── PORTFOLIO.md
 └── README.md
 ```
 
-Folders marked `production` are stable and published; `development` ones are still being iterated on. Deprecated sources retain their original numbered folders under `indicators/deprecated` for traceability.
+Active indicator sources live directly under each indicator's `code` folder. Revelio keeps its host and library sources in `code/indicator` and `code/libraries`.
 
 ## Running them
 
@@ -54,7 +48,7 @@ Each file is a standalone Pine Script v6 indicator. To run one:
 
 ## Selected indicator details
 
-The notes below include historical indicators that are now preserved under `indicators/deprecated`.
+The notes below include historical indicators whose source remains available in Git history.
 
 ### 1. MBZ Core — gap classification and fill tracking
 
@@ -210,4 +204,3 @@ A handful of decisions recur because the same problems recur. These are the ones
 **IQR instead of averages.** The range models (DTT Intraday, DTT Weekly, ADR, Deviations) use the interquartile range and range subdivisions rather than means, so one outlier session doesn't distort the expected range.
 
 **Parameterized, not duplicated.** Detection and calculation functions take the data they operate on as parameters rather than being copied per timeframe or session. Only genuinely per-context state (each session's own arrays) is separate, so a fix to shared logic applies everywhere at once.
-

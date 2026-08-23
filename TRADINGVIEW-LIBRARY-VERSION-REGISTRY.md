@@ -20,24 +20,15 @@ This is the repository's single source of truth for TradingView library versions
 <!-- VERSION_REGISTRY_CURRENT_START -->
 | Library | Source | Published | Pending |
 |---|---|---:|---:|
-| RevelioCoreLibrary | `indicators/20-revelio/code/development/libraries/revelio-core-library.pine` | 10 | — |
-| RevelioGapsLibrary | `indicators/20-revelio/code/development/libraries/revelio-gaps-library.pine` | 11 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/development/libraries/revelio-interactions-library.pine` | 19 | — |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/development/libraries/revelio-profile-orchestration-library.pine` | 2 | — |
+| RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | 10 | — |
+| RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | 11 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | 19 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 2 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
-Development host: `indicators/20-revelio/code/development/indicator/revelio.pine`
+Development host: `indicators/20-revelio/code/indicator/revelio.pine`
 
 Development import rule: import `Pending` when present; otherwise import `Published`.
-
-## External pinned dependencies
-
-These libraries are maintained outside this repository. Their versions are pinned in the host source and do not enter the internal publication workflow above. Check the linked TradingView release pages before intentionally advancing either import, then compile and visually test the dependent host.
-
-| Host | External library | Pinned version | TradingView release page | Last verified |
-|---|---|---:|---|---|
-| `indicators/deprecated/23-news/code/development/news.pine` | `toodegrees/forex_factory_utility` | 17 | [forex factory utility](https://www.tradingview.com/script/DHRsmWy1-forex-factory-utility/) | 2026-08-02 |
-| `indicators/deprecated/23-news/code/development/news.pine` | `toodegrees/forex_factory_decoding` | 44 | [forex factory decoding](https://www.tradingview.com/script/Q78LeoTL-forex-factory-decoding/) | 2026-08-02 |
 
 ## Publication history
 
@@ -153,7 +144,7 @@ Entries before this registry was created are reconstructed from the task history
 
 - Published chain: Core `/10`, Gaps `/11`, Interactions `/19`, Profile Orchestration `/2`.
 - Pending: none.
-- Development host: `indicators/20-revelio/code/development/indicator/revelio.pine`, importing Interactions `/19`.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/19`.
 - Runtime status: `/19` is published and loaded; visual comparison is in progress on NQ 5-minute, 1H, 4H, Daily, and Range charts.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
 

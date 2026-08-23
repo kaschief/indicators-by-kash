@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const registryPath = resolve(repoRoot, "TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md");
-const hostPath = resolve(repoRoot, "indicators/20-revelio/code/development/indicator/revelio.pine");
+const hostPath = resolve(repoRoot, "indicators/20-revelio/code/indicator/revelio.pine");
 const titleCheckerPath = resolve(repoRoot, "scripts/check-pine-indicator-titles.mjs");
 const registry = readFileSync(registryPath, "utf8");
 const host = readFileSync(hostPath, "utf8");
