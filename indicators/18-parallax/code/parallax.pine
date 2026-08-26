@@ -19,8 +19,8 @@ const string GROUP_FIB_LABELS = "Fibonacci Labels"
 const string GROUP_TABLE      = "Color Reference Table"
 const string GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
 const string NY_TIMEZONE = "America/New_York"
-const string NY_BLOCK_SOURCE_TIMEFRAME = "30"
-const int NY_BLOCK_REQUEST_BARS = 30000
+const string SESSION_SOURCE_TIMEFRAME = "30"
+const int SESSION_REQUEST_BARS = 30000
 const string SESSION_WINDOW_OVERNIGHT = "1600-0500:1234567"
 const string SESSION_WINDOW_FROM_0500 = "0500-1600:1234567"
 const string SESSION_WINDOW_FROM_0830 = "0830-1600:1234567"
@@ -372,8 +372,13 @@ bool ny4hOnlyEnabled = ny4hOnlyMode == NY_4H_MODE_ON or (ny4hOnlyMode == NY_4H_M
 const string HOLIDAY_OFF    = "Off"
 const string HOLIDAY_EXTEND = "Extend"
 const string HOLIDAY_NATIVE = "Native"
-holidayMode = input.string(HOLIDAY_NATIVE, "Holiday Mode", options=[HOLIDAY_OFF, HOLIDAY_EXTEND, HOLIDAY_NATIVE], group=GROUP_GENERAL,
-     tooltip="Off — TradingView bars.\nExtend — merged Daily to live edge.\nNative — Daily/Weekly roll at 18:00 ET.")
+const string DAILY_START_GLOBEX   = "Globex"
+const string DAILY_START_MIDNIGHT = "NY Midnight"
+const string DAILY_SESSION_TOOLTIP = "Holiday Mode — Off: TradingView; Extend: merged Daily; Native: custom Daily/Weekly.\n1D Start — Globex: 18:00 ET; NY Midnight: 00:00 ET. Weekly stays Sunday 18:00 ET."
+holidayMode = input.string(HOLIDAY_NATIVE, "Holiday Mode", options=[HOLIDAY_OFF, HOLIDAY_EXTEND, HOLIDAY_NATIVE], inline="daily_session", group=GROUP_GENERAL)
+dailyStartMode = input.string(DAILY_START_GLOBEX, "1D Start", options=[DAILY_START_GLOBEX, DAILY_START_MIDNIGHT], inline="daily_session", group=GROUP_GENERAL, active=holidayMode == HOLIDAY_NATIVE,
+     tooltip=DAILY_SESSION_TOOLTIP)
+bool midnightDailyEnabled = holidayMode == HOLIDAY_NATIVE and dailyStartMode == DAILY_START_MIDNIGHT
 
 const string IDENTIFIER_TEXT_OFF    = "Off"
 const string IDENTIFIER_TEXT_PLAIN  = "Show"
@@ -407,6 +412,15 @@ showTable = input.bool(false, "Show", group=GROUP_TABLE,
 
 // HTF RESOLUTION
 
+get_resolved_tf_label(string tf) =>
+    int tfSeconds = timeframe.in_seconds(tf)
+    if tfSeconds == SECS_DAY and midnightDailyEnabled
+        "Mn • 1D"
+    else if tfSeconds == 4 * SECS_HOUR and ny4hOnlyEnabled
+        "NY • 4H"
+    else
+        get_tf_display_label(tf)
+
 string CHART_TF = timeframe.period
 [s1AutoValid, s1AutoTF, s1AutoLabel] = get_tf_pairing(CHART_TF, 1)
 [s2AutoValid, s2AutoTF, s2AutoLabel] = get_tf_pairing(CHART_TF, 2)
@@ -416,25 +430,25 @@ string CHART_TF = timeframe.period
 string s1TF    = (slot1Manual or chart.is_range) ? slot1TFIn : (s1AutoValid ? s1AutoTF : "1D")
 bool   s1Valid = slot1Show and (slot1Manual or chart.is_range or s1AutoValid) and (chart.is_range or timeframe.in_seconds(s1TF) > timeframe.in_seconds())
 string s1Safe  = s1Valid ? s1TF : "1D"
-string s1Label = get_tf_display_label(s1TF)
+string s1Label = get_resolved_tf_label(s1TF)
 string s1IdentifierText = identifierTextMode == IDENTIFIER_TEXT_SOURCE ? s1Label + " ¹" : s1Label
 
 string s2TF    = (slot2Manual or chart.is_range) ? slot2TFIn : (s2AutoValid ? s2AutoTF : "1D")
 bool   s2Valid = slot2Show and (slot2Manual or chart.is_range or s2AutoValid) and (chart.is_range or timeframe.in_seconds(s2TF) > timeframe.in_seconds())
 string s2Safe  = s2Valid ? s2TF : "1D"
-string s2Label = get_tf_display_label(s2TF)
+string s2Label = get_resolved_tf_label(s2TF)
 string s2IdentifierText = identifierTextMode == IDENTIFIER_TEXT_SOURCE ? s2Label + " ²" : s2Label
 
 string s3TF    = (slot3Manual or chart.is_range) ? slot3TFIn : (s3AutoValid ? s3AutoTF : "1D")
 bool   s3Valid = slot3Show and (slot3Manual or chart.is_range or s3AutoValid) and (chart.is_range or timeframe.in_seconds(s3TF) > timeframe.in_seconds())
 string s3Safe  = s3Valid ? s3TF : "1D"
-string s3Label = get_tf_display_label(s3TF)
+string s3Label = get_resolved_tf_label(s3TF)
 string s3IdentifierText = identifierTextMode == IDENTIFIER_TEXT_SOURCE ? s3Label + " ³" : s3Label
 
 string s4TF    = (slot4Manual or chart.is_range) ? slot4TFIn : (s4AutoValid ? s4AutoTF : "1D")
 bool   s4Valid = slot4Show and (slot4Manual or chart.is_range or s4AutoValid) and (chart.is_range or timeframe.in_seconds(s4TF) > timeframe.in_seconds())
 string s4Safe  = s4Valid ? s4TF : "1D"
-string s4Label = get_tf_display_label(s4TF)
+string s4Label = get_resolved_tf_label(s4TF)
 string s4IdentifierText = identifierTextMode == IDENTIFIER_TEXT_SOURCE ? s4Label + " ⁴" : s4Label
 
 bool nyBlockValid = nyBlockShow and (chart.is_range or timeframe.in_seconds(timeframe.period) < 4 * SECS_HOUR)
@@ -455,8 +469,8 @@ key_4h_window_id(bool enabled, int startTime) =>
     int startMinute = minute(startTime, NY_TIMEZONE)
     enabled and not na(startTime) and startMinute == 0 and (startHour == 6 or startHour == 10) ? startTime : na
 
-// HTF DATA — normal running high/low are tracked chart-side; the NY Block path uses a
-// 30-minute context so its wall-clock boundaries remain independent of chart bars.
+// HTF DATA — normal running high/low are tracked chart-side. Wall-clock sessions use
+// a 30-minute context so their boundaries remain independent of chart bars.
 string htfTickerId = chart.is_range ? ticker.standard(syminfo.tickerid) : syminfo.tickerid
 
 fetch_htf_open(string tickerId, string tf) =>
@@ -473,6 +487,77 @@ sample_stats(array<float> samples) =>
     [sampleCount > 0 ? array.median(samples) : na,
      sampleCount > 0 ? array.avg(samples) : na,
      sampleCount > 0 ? array.stdev(samples, true) : na]
+
+record_excursion_sample(array<float> highOpenSamples, array<float> openLowSamples, float sessionOpen, float sessionHigh, float sessionLow, int sampleLimit) =>
+    array.push(highOpenSamples, sessionHigh - sessionOpen)
+    array.push(openLowSamples, sessionOpen - sessionLow)
+    while array.size(highOpenSamples) > sampleLimit
+        array.shift(highOpenSamples)
+    while array.size(openLowSamples) > sampleLimit
+        array.shift(openLowSamples)
+
+next_ny_midnight(int dayStart) =>
+    int nextDayProbe = dayStart + 36 * SECS_HOUR * MS_PER_SEC
+    timestamp(NY_TIMEZONE, year(nextDayProbe, NY_TIMEZONE), month(nextDayProbe, NY_TIMEZONE), dayofmonth(nextDayProbe, NY_TIMEZONE), 0, 0)
+
+fetch_midnight_daily_data(bool enabled, int sampleLimit) =>
+    var array<float> highOpenSamples = array.new<float>()
+    var array<float> openLowSamples = array.new<float>()
+    var int observedDayStart = na
+    var int sessionStartTime = na
+    var int sessionEndTime = na
+    var bool sessionStartedAtBoundary = false
+    var float sessionOpen = na
+    var float sessionHigh = na
+    var float sessionLow = na
+    var float completedSessionHigh = na
+    var float completedSessionLow = na
+    var float projectedMedHO = na
+    var float projectedMeanHO = na
+    var float projectedStdHO = na
+    var float projectedMedOL = na
+    var float projectedMeanOL = na
+    var float projectedStdOL = na
+
+    if enabled
+        int currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
+        bool periodChanged = not na(observedDayStart) and currentDayStart != observedDayStart
+        bool sundayReopen = periodChanged and syminfo.type == "futures" and dayofweek(time, NY_TIMEZONE) == dayofweek.sunday
+        bool periodRolled = periodChanged and not sundayReopen
+
+        if na(sessionStartTime)
+            sessionStartTime := currentDayStart
+            sessionOpen := open
+            sessionHigh := high
+            sessionLow := low
+        else if periodRolled
+            completedSessionHigh := sessionHigh
+            completedSessionLow := sessionLow
+            if sessionStartedAtBoundary
+                record_excursion_sample(highOpenSamples, openLowSamples, sessionOpen, sessionHigh, sessionLow, sampleLimit)
+                [nextMedHO, nextMeanHO, nextStdHO] = sample_stats(highOpenSamples)
+                [nextMedOL, nextMeanOL, nextStdOL] = sample_stats(openLowSamples)
+                projectedMedHO := nextMedHO
+                projectedMeanHO := nextMeanHO
+                projectedStdHO := nextStdHO
+                projectedMedOL := nextMedOL
+                projectedMeanOL := nextMeanOL
+                projectedStdOL := nextStdOL
+            sessionStartTime := currentDayStart
+            sessionOpen := open
+            sessionHigh := high
+            sessionLow := low
+            sessionStartedAtBoundary := true
+        else
+            sessionHigh := math.max(sessionHigh, high)
+            sessionLow := math.min(sessionLow, low)
+
+        observedDayStart := currentDayStart
+        sessionEndTime := next_ny_midnight(currentDayStart)
+
+    [sessionStartTime, sessionEndTime, sessionOpen, sessionHigh, sessionLow, completedSessionHigh, completedSessionLow,
+     projectedMedHO, projectedMeanHO, projectedStdHO,
+     projectedMedOL, projectedMeanOL, projectedStdOL]
 
 fetch_ny_block_data(bool enabled, int sampleLimit, int startHour, int endHour) =>
     var array<float> highOpenSamples = array.new<float>()
@@ -504,12 +589,7 @@ fetch_ny_block_data(bool enabled, int sampleLimit, int startHour, int endHour) =
         if finalizePrevious
             bool sessionComplete = lastSessionBarTime == sessionEndTime - 30 * SECS_MIN * MS_PER_SEC and lastSessionBarCloseTime >= sessionEndTime
             if sessionComplete
-                array.push(highOpenSamples, sessionHigh - sessionOpen)
-                array.push(openLowSamples, sessionOpen - sessionLow)
-                while array.size(highOpenSamples) > sampleLimit
-                    array.shift(highOpenSamples)
-                while array.size(openLowSamples) > sampleLimit
-                    array.shift(openLowSamples)
+                record_excursion_sample(highOpenSamples, openLowSamples, sessionOpen, sessionHigh, sessionLow, sampleLimit)
             collecting := false
 
         bool startsNow = inWindow and currentMinutes == startMinute and not collecting
@@ -546,16 +626,38 @@ s2O = fetch_htf_open(htfTickerId, s2Safe)
 s3O = fetch_htf_open(htfTickerId, s3Safe)
 s4O = fetch_htf_open(htfTickerId, s4Safe)
 
-[s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL] = fetch_htf_stats(htfTickerId, s1Safe)
-[s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL] = fetch_htf_stats(htfTickerId, s2Safe)
-[s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL] = fetch_htf_stats(htfTickerId, s3Safe)
-[s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL] = fetch_htf_stats(htfTickerId, s4Safe)
+[s1NormMedHO, s1NormMeanHO, s1NormStdHO, s1NormMedOL, s1NormMeanOL, s1NormStdOL] = fetch_htf_stats(htfTickerId, s1Safe)
+[s2NormMedHO, s2NormMeanHO, s2NormStdHO, s2NormMedOL, s2NormMeanOL, s2NormStdOL] = fetch_htf_stats(htfTickerId, s2Safe)
+[s3NormMedHO, s3NormMeanHO, s3NormStdHO, s3NormMedOL, s3NormMeanOL, s3NormStdOL] = fetch_htf_stats(htfTickerId, s3Safe)
+[s4NormMedHO, s4NormMeanHO, s4NormStdHO, s4NormMedOL, s4NormMeanOL, s4NormStdOL] = fetch_htf_stats(htfTickerId, s4Safe)
 
-bool nyBlockTrackOnChart = chart.is_range or timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(NY_BLOCK_SOURCE_TIMEFRAME)
+bool midnightDailyTrackOnChart = chart.is_range or timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(SESSION_SOURCE_TIMEFRAME)
+[midnightDayStart, midnightDayEnd, midnightOpen, midnightRunHigh, midnightRunLow, midnightCompletedRunHigh, midnightCompletedRunLow,
+ midnightMedHO, midnightMeanHO, midnightStdHO,
+ midnightMedOL, midnightMeanOL, midnightStdOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_midnight_daily_data(midnightDailyEnabled, lookbackN),
+     lookahead=midnightDailyTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=SESSION_REQUEST_BARS)
+bool midnightChartBarInDay = midnightDailyTrackOnChart and not na(midnightDayStart) and time < midnightDayEnd and (time >= midnightDayStart or (not na(time_close) and time_close > midnightDayStart))
+bool midnightChartNewDay = midnightChartBarInDay and not na(midnightDayStart[1]) and (not midnightChartBarInDay[1] or midnightDayStart != midnightDayStart[1])
+bool midnightRequestedNewDay = not na(midnightDayStart) and ta.change(midnightDayStart) != 0
+bool midnightNewDay = midnightDailyTrackOnChart ? midnightChartNewDay : midnightRequestedNewDay
+int midnightDayStartIndex = nz(ta.valuewhen(midnightNewDay, bar_index, 0), 0)
+var float midnightChartRunHigh = na
+var float midnightChartRunLow = na
+if midnightChartBarInDay
+    if midnightChartNewDay or na(midnightChartRunHigh)
+        midnightChartRunHigh := high
+        midnightChartRunLow := low
+    else
+        midnightChartRunHigh := math.max(midnightChartRunHigh, high)
+        midnightChartRunLow := math.min(midnightChartRunLow, low)
+float midnightEffectiveRunHigh = midnightDailyTrackOnChart ? midnightChartRunHigh : midnightRunHigh
+float midnightEffectiveRunLow = midnightDailyTrackOnChart ? midnightChartRunLow : midnightRunLow
+
+bool nyBlockTrackOnChart = chart.is_range or timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(SESSION_SOURCE_TIMEFRAME)
 [nyBlockStartT, nyBlockEndT, nyBlockO, nyBlockRunHigh, nyBlockRunLow,
  nyBlockMedHO, nyBlockMeanHO, nyBlockStdHO,
- nyBlockMedOL, nyBlockMeanOL, nyBlockStdOL] = request.security(htfTickerId, NY_BLOCK_SOURCE_TIMEFRAME, fetch_ny_block_data(nyBlockValid, nyBlockLookback, 8, 12),
-     lookahead=nyBlockTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=NY_BLOCK_REQUEST_BARS)
+ nyBlockMedOL, nyBlockMeanOL, nyBlockStdOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_ny_block_data(nyBlockValid, nyBlockLookback, 8, 12),
+     lookahead=nyBlockTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=SESSION_REQUEST_BARS)
 
 bool nyBlockRangeBarInWindow = chart.is_range and not na(nyBlockStartT) and time < nyBlockEndT and (time >= nyBlockStartT or (not na(time_close) and time_close > nyBlockStartT))
 bool nyBlockRangeSessionStart = nyBlockRangeBarInWindow and (not nyBlockRangeBarInWindow[1] or nyBlockStartT != nyBlockStartT[1])
@@ -658,8 +760,6 @@ if nativeNewWeek or na(nativeWeekStartT)
 else
     nativeWeekRunHigh := math.max(nativeWeekRunHigh, high)
     nativeWeekRunLow  := math.min(nativeWeekRunLow,  low)
-
-
 
 // SLOT STATE
 
@@ -767,7 +867,7 @@ draw_slot_fib(SlotState s, int leftT, int leftIndex, int rightT, int rightIndex,
 
 // Resolves a slot's rollover, dual-coordinate anchors, and effective open/run-high/low.
 resolve_slot_timing(string safe, float normOpen, float normRunHigh, float normRunLow,
-                    bool nNewDay, int nDayStart, int nDayStartIndex, float nOpen, float nRunHigh, float nRunLow,
+                    bool nNewDay, int nDayStart, int nDayStartIndex, int nDayEnd, float nOpen, float nRunHigh, float nRunLow,
                     bool nNewWeek, int nWeekStart, int nWeekStartIndex, float nwOpen, float nwRunHigh, float nwRunLow) =>
     bool isDaily   = timeframe.in_seconds(safe) == SECS_DAY
     bool isWeekly  = timeframe.in_seconds(safe) == SECS_WEEK
@@ -776,13 +876,26 @@ resolve_slot_timing(string safe, float normOpen, float normRunHigh, float normRu
     bool normTrans = ta.change(time(safe)) != 0
     int  normStartIndex = nz(ta.valuewhen(normTrans, bar_index, 0), 0)
     if isDaily and holidayMode == HOLIDAY_NATIVE
-        [nNewDay, nDayStart, nDayStartIndex, nDayStart + SECS_DAY * MS_PER_SEC, nOpen, nRunHigh, nRunLow]
+        [nNewDay, nDayStart, nDayStartIndex, nDayEnd, nOpen, nRunHigh, nRunLow]
     else if isWeekly and holidayMode == HOLIDAY_NATIVE
         [nNewWeek, nWeekStart, nWeekStartIndex, nWeekStart + SECS_WEEK * MS_PER_SEC, nwOpen, nwRunHigh, nwRunLow]
     else if isDaily and holidayMode == HOLIDAY_EXTEND
         [normTrans, normStart, normStartIndex, (normRight > time ? normRight : time), normOpen, normRunHigh, normRunLow]
     else
         [normTrans, normStart, normStartIndex, normRight, normOpen, normRunHigh, normRunLow]
+
+resolve_slot_stats(string safe,
+                   float normMedHO, float normMeanHO, float normStdHO, float normMedOL, float normMeanOL, float normStdOL,
+                   float dailyMedHO, float dailyMeanHO, float dailyStdHO, float dailyMedOL, float dailyMeanOL, float dailyStdOL) =>
+    bool useMidnightStats = timeframe.in_seconds(safe) == SECS_DAY and midnightDailyEnabled
+    if useMidnightStats
+        [dailyMedHO, dailyMeanHO, dailyStdHO, dailyMedOL, dailyMeanOL, dailyStdOL]
+    else
+        [normMedHO, normMeanHO, normStdHO, normMedOL, normMeanOL, normStdOL]
+
+resolve_archived_extrema(string safe, float runHigh, float runLow, float completedMidnightHigh, float completedMidnightLow) =>
+    bool useCompletedMidnight = timeframe.in_seconds(safe) == SECS_DAY and midnightDailyEnabled and not na(completedMidnightHigh) and not na(completedMidnightLow)
+    [useCompletedMidnight ? completedMidnightHigh : runHigh[1], useCompletedMidnight ? completedMidnightLow : runLow[1]]
 
 current_line_request(bool valid, bool midEnabled, bool distEnabled, bool fibEnabled, int fibLinesPerZone) =>
     valid ? 4 + (midEnabled ? 2 : 0) + (distEnabled ? 2 : 0) + (fibEnabled ? fibLinesPerZone : 0) : 0
@@ -949,7 +1062,7 @@ trim_keyed_slot_history(SlotState s, bool keyed4h, int currentHistoryKey, int bo
 // On HTF transition, [1] reads give us the just-closed bar's open + the stats as of its
 // start (i.e. excluding it) — exactly what was used to project that bar in real time.
 update_slot(SlotState s, bool valid, bool transitionNow, bool archivePrevious, bool keyed4h, int currentHistoryKey, int previousHistoryKey, int zoneStartT, int zoneStartIndex, bool fixedEnd, int zoneEndT, int zoneEndIndex,
-             float htfO, float runHigh, float runLow, color slotColor, string htfLabel,
+             float htfO, float archivedRunHigh, float archivedRunLow, color slotColor, string htfLabel,
              float medHO, float meanHO, float stdHO, float medOL, float meanOL, float stdOL,
              int boxHistZoneCap, string slotLabelSize,
              bool fibEnabled, int fibFade, int fibLinesPerZone, int distHistCap, int fibHistCap,
@@ -1033,10 +1146,8 @@ update_slot(SlotState s, bool valid, bool transitionNow, bool archivePrevious, b
                     while array.size(s.histFibLines) > fibHistCap - fibLinesPerZone
                         line.delete(array.shift(s.histFibLines))
                         array.shift(s.histFibKeys)
-                float prevRunHigh   = runHigh[1]
-                float prevRunLow    = runLow[1]
-                float histAnchorHigh = fibTrailing ? math.max(h_outH, prevRunHigh) : h_outH
-                float histAnchorLow  = fibTrailing ? math.min(h_outL, prevRunLow)  : h_outL
+                float histAnchorHigh = fibTrailing ? math.max(h_outH, archivedRunHigh) : h_outH
+                float histAnchorLow  = fibTrailing ? math.min(h_outL, archivedRunLow)  : h_outL
                 if histLabelsEnabled and histLabelsPerZone > 0 and histLabelCap >= histLabelsPerZone
                     if not keyed4h
                         while array.size(s.histFibLabels) > histLabelCap - histLabelsPerZone
@@ -1154,10 +1265,28 @@ draw_slot_current(SlotState s, bool valid, bool promoteLatestHistory, int curLef
 
 // DISPATCH — every bar maintains state per slot
 
-[s1Trans, s1StartT, s1StartIndex, s1CurRightT, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s2Trans, s2StartT, s2StartIndex, s2CurRightT, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s3Trans, s3StartT, s3StartIndex, s3CurRightT, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s4Trans, s4StartT, s4StartIndex, s4CurRightT, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+bool selectedDailyTransition = midnightDailyEnabled ? midnightNewDay : nativeNewDay
+int selectedDailyStart = midnightDailyEnabled ? midnightDayStart : nativeDayStart
+int selectedDailyStartIndex = midnightDailyEnabled ? midnightDayStartIndex : nativeDayStartIndex
+int selectedDailyEnd = midnightDailyEnabled ? midnightDayEnd : nativeDayStart + SECS_DAY * MS_PER_SEC
+float selectedDailyOpen = midnightDailyEnabled ? midnightOpen : nativeOpen
+float selectedDailyRunHigh = midnightDailyEnabled ? midnightEffectiveRunHigh : nativeRunHigh
+float selectedDailyRunLow = midnightDailyEnabled ? midnightEffectiveRunLow : nativeRunLow
+
+[s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL] = resolve_slot_stats(s1Safe, s1NormMedHO, s1NormMeanHO, s1NormStdHO, s1NormMedOL, s1NormMeanOL, s1NormStdOL, midnightMedHO, midnightMeanHO, midnightStdHO, midnightMedOL, midnightMeanOL, midnightStdOL)
+[s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL] = resolve_slot_stats(s2Safe, s2NormMedHO, s2NormMeanHO, s2NormStdHO, s2NormMedOL, s2NormMeanOL, s2NormStdOL, midnightMedHO, midnightMeanHO, midnightStdHO, midnightMedOL, midnightMeanOL, midnightStdOL)
+[s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL] = resolve_slot_stats(s3Safe, s3NormMedHO, s3NormMeanHO, s3NormStdHO, s3NormMedOL, s3NormMeanOL, s3NormStdOL, midnightMedHO, midnightMeanHO, midnightStdHO, midnightMedOL, midnightMeanOL, midnightStdOL)
+[s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL] = resolve_slot_stats(s4Safe, s4NormMedHO, s4NormMeanHO, s4NormStdHO, s4NormMedOL, s4NormMeanOL, s4NormStdOL, midnightMedHO, midnightMeanHO, midnightStdHO, midnightMedOL, midnightMeanOL, midnightStdOL)
+
+[s1Trans, s1StartT, s1StartIndex, s1CurRightT, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, selectedDailyTransition, selectedDailyStart, selectedDailyStartIndex, selectedDailyEnd, selectedDailyOpen, selectedDailyRunHigh, selectedDailyRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s2Trans, s2StartT, s2StartIndex, s2CurRightT, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, selectedDailyTransition, selectedDailyStart, selectedDailyStartIndex, selectedDailyEnd, selectedDailyOpen, selectedDailyRunHigh, selectedDailyRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s3Trans, s3StartT, s3StartIndex, s3CurRightT, s3OEff, s3RHi, s3RLo] = resolve_slot_timing(s3Safe, s3O, s3RunHigh, s3RunLow, selectedDailyTransition, selectedDailyStart, selectedDailyStartIndex, selectedDailyEnd, selectedDailyOpen, selectedDailyRunHigh, selectedDailyRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s4Trans, s4StartT, s4StartIndex, s4CurRightT, s4OEff, s4RHi, s4RLo] = resolve_slot_timing(s4Safe, s4O, s4RunHigh, s4RunLow, selectedDailyTransition, selectedDailyStart, selectedDailyStartIndex, selectedDailyEnd, selectedDailyOpen, selectedDailyRunHigh, selectedDailyRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+
+[s1ArchivedRunHigh, s1ArchivedRunLow] = resolve_archived_extrema(s1Safe, s1RHi, s1RLo, midnightCompletedRunHigh, midnightCompletedRunLow)
+[s2ArchivedRunHigh, s2ArchivedRunLow] = resolve_archived_extrema(s2Safe, s2RHi, s2RLo, midnightCompletedRunHigh, midnightCompletedRunLow)
+[s3ArchivedRunHigh, s3ArchivedRunLow] = resolve_archived_extrema(s3Safe, s3RHi, s3RLo, midnightCompletedRunHigh, midnightCompletedRunLow)
+[s4ArchivedRunHigh, s4ArchivedRunLow] = resolve_archived_extrema(s4Safe, s4RHi, s4RLo, midnightCompletedRunHigh, midnightCompletedRunLow)
 
 bool s1CurrentVisible = s1Valid and ordinary_period_visible(s1Safe, s1StartT, ny4hOnlyEnabled)
 bool s2CurrentVisible = s2Valid and ordinary_period_visible(s2Safe, s2StartT, ny4hOnlyEnabled)
@@ -1261,11 +1390,11 @@ int s3HistFibLabelCap = array.get(histFibLabelCaps, 2)
 int s4HistFibLabelCap = array.get(histFibLabelCaps, 3)
 int nyBlockHistFibLabelCap = array.get(histFibLabelCaps, 4)
 
-update_slot(slot1, s1Valid, s1Trans, s1ArchivePrevious, s1Keyed4h, s1CurrentHistoryKey, s1PreviousHistoryKey, s1StartT, s1StartIndex, false, s1CurRightT, bar_index, s1OEff, s1RHi, s1RLo, slot1Color, s1Label, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, s1BoxHistZoneCap, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE, fibLinesPerZone, s1DistHistCap, s1FibHistCap, (fibLabelHistory or s1Keyed4h) and fibLabel1On, s1HistFibLabelCap, s1LabelsPerZone, get_label_size(fibLabelSize1), fibLabelPos1, fibLabelOff1 * chartBarMs, fibLabelOff1)
-update_slot(slot2, s2Valid, s2Trans, s2ArchivePrevious, s2Keyed4h, s2CurrentHistoryKey, s2PreviousHistoryKey, s2StartT, s2StartIndex, false, s2CurRightT, bar_index, s2OEff, s2RHi, s2RLo, slot2Color, s2Label, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, s2BoxHistZoneCap, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE, fibLinesPerZone, s2DistHistCap, s2FibHistCap, (fibLabelHistory or s2Keyed4h) and fibLabel2On, s2HistFibLabelCap, s2LabelsPerZone, get_label_size(fibLabelSize2), fibLabelPos2, fibLabelOff2 * chartBarMs, fibLabelOff2)
-update_slot(slot3, s3Valid, s3Trans, s3ArchivePrevious, s3Keyed4h, s3CurrentHistoryKey, s3PreviousHistoryKey, s3StartT, s3StartIndex, false, s3CurRightT, bar_index, s3OEff, s3RHi, s3RLo, slot3Color, s3Label, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, s3BoxHistZoneCap, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLinesPerZone, s3DistHistCap, s3FibHistCap, (fibLabelHistory or s3Keyed4h) and fibLabel3On, s3HistFibLabelCap, s3LabelsPerZone, get_label_size(fibLabelSize3), fibLabelPos3, fibLabelOff3 * chartBarMs, fibLabelOff3)
-update_slot(slot4, s4Valid, s4Trans, s4ArchivePrevious, s4Keyed4h, s4CurrentHistoryKey, s4PreviousHistoryKey, s4StartT, s4StartIndex, false, s4CurRightT, bar_index, s4OEff, s4RHi, s4RLo, slot4Color, s4Label, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, s4BoxHistZoneCap, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLinesPerZone, s4DistHistCap, s4FibHistCap, (fibLabelHistory or s4Keyed4h) and fibLabel4On, s4HistFibLabelCap, s4LabelsPerZone, get_label_size(fibLabelSize4), fibLabelPos4, fibLabelOff4 * chartBarMs, fibLabelOff4)
-update_slot(nyBlockSlot, nyBlockValid, nyBlockTransition, true, false, na, na, nyBlockStartT, nyBlockStartIndex, true, nyBlockEndT, nyBlockEndIndex, nyBlockO, nyBlockEffectiveRunHigh, nyBlockEffectiveRunLow, nyBlockColor, "NY AM", nyBlockMedHO, nyBlockMeanHO, nyBlockStdHO, nyBlockMedOL, nyBlockMeanOL, nyBlockStdOL, nyBlockBoxHistZoneCap, NY_BLOCK_LABEL_SIZE, nyBlockFib, NY_BLOCK_FIB_FADE, fibLinesPerZone, nyBlockDistHistCap, nyBlockFibHistCap, fibLabelHistory and fibLabelNyBlockOn, nyBlockHistFibLabelCap, nyBlockLabelsPerZone, get_label_size(fibLabelSizeNyBlock), fibLabelPosNyBlock, fibLabelOffNyBlock * chartBarMs, fibLabelOffNyBlock)
+update_slot(slot1, s1Valid, s1Trans, s1ArchivePrevious, s1Keyed4h, s1CurrentHistoryKey, s1PreviousHistoryKey, s1StartT, s1StartIndex, false, s1CurRightT, bar_index, s1OEff, s1ArchivedRunHigh, s1ArchivedRunLow, slot1Color, s1Label, s1MedHO, s1MeanHO, s1StdHO, s1MedOL, s1MeanOL, s1StdOL, s1BoxHistZoneCap, SLOT1_LABEL_SIZE, slot1Fib, SLOT1_FIB_FADE, fibLinesPerZone, s1DistHistCap, s1FibHistCap, (fibLabelHistory or s1Keyed4h) and fibLabel1On, s1HistFibLabelCap, s1LabelsPerZone, get_label_size(fibLabelSize1), fibLabelPos1, fibLabelOff1 * chartBarMs, fibLabelOff1)
+update_slot(slot2, s2Valid, s2Trans, s2ArchivePrevious, s2Keyed4h, s2CurrentHistoryKey, s2PreviousHistoryKey, s2StartT, s2StartIndex, false, s2CurRightT, bar_index, s2OEff, s2ArchivedRunHigh, s2ArchivedRunLow, slot2Color, s2Label, s2MedHO, s2MeanHO, s2StdHO, s2MedOL, s2MeanOL, s2StdOL, s2BoxHistZoneCap, SLOT2_LABEL_SIZE, slot2Fib, SLOT2_FIB_FADE, fibLinesPerZone, s2DistHistCap, s2FibHistCap, (fibLabelHistory or s2Keyed4h) and fibLabel2On, s2HistFibLabelCap, s2LabelsPerZone, get_label_size(fibLabelSize2), fibLabelPos2, fibLabelOff2 * chartBarMs, fibLabelOff2)
+update_slot(slot3, s3Valid, s3Trans, s3ArchivePrevious, s3Keyed4h, s3CurrentHistoryKey, s3PreviousHistoryKey, s3StartT, s3StartIndex, false, s3CurRightT, bar_index, s3OEff, s3ArchivedRunHigh, s3ArchivedRunLow, slot3Color, s3Label, s3MedHO, s3MeanHO, s3StdHO, s3MedOL, s3MeanOL, s3StdOL, s3BoxHistZoneCap, SLOT3_LABEL_SIZE, slot3Fib, SLOT3_FIB_FADE, fibLinesPerZone, s3DistHistCap, s3FibHistCap, (fibLabelHistory or s3Keyed4h) and fibLabel3On, s3HistFibLabelCap, s3LabelsPerZone, get_label_size(fibLabelSize3), fibLabelPos3, fibLabelOff3 * chartBarMs, fibLabelOff3)
+update_slot(slot4, s4Valid, s4Trans, s4ArchivePrevious, s4Keyed4h, s4CurrentHistoryKey, s4PreviousHistoryKey, s4StartT, s4StartIndex, false, s4CurRightT, bar_index, s4OEff, s4ArchivedRunHigh, s4ArchivedRunLow, slot4Color, s4Label, s4MedHO, s4MeanHO, s4StdHO, s4MedOL, s4MeanOL, s4StdOL, s4BoxHistZoneCap, SLOT4_LABEL_SIZE, slot4Fib, SLOT4_FIB_FADE, fibLinesPerZone, s4DistHistCap, s4FibHistCap, (fibLabelHistory or s4Keyed4h) and fibLabel4On, s4HistFibLabelCap, s4LabelsPerZone, get_label_size(fibLabelSize4), fibLabelPos4, fibLabelOff4 * chartBarMs, fibLabelOff4)
+update_slot(nyBlockSlot, nyBlockValid, nyBlockTransition, true, false, na, na, nyBlockStartT, nyBlockStartIndex, true, nyBlockEndT, nyBlockEndIndex, nyBlockO, nyBlockEffectiveRunHigh[1], nyBlockEffectiveRunLow[1], nyBlockColor, "NY AM", nyBlockMedHO, nyBlockMeanHO, nyBlockStdHO, nyBlockMedOL, nyBlockMeanOL, nyBlockStdOL, nyBlockBoxHistZoneCap, NY_BLOCK_LABEL_SIZE, nyBlockFib, NY_BLOCK_FIB_FADE, fibLinesPerZone, nyBlockDistHistCap, nyBlockFibHistCap, fibLabelHistory and fibLabelNyBlockOn, nyBlockHistFibLabelCap, nyBlockLabelsPerZone, get_label_size(fibLabelSizeNyBlock), fibLabelPosNyBlock, fibLabelOffNyBlock * chartBarMs, fibLabelOffNyBlock)
 
 int currentRightIndex = chart.is_range ? bar_index + 1 : bar_index
 int nyBlockRightIndex = not na(nyBlockEndIndex) ? nyBlockEndIndex : currentRightIndex
