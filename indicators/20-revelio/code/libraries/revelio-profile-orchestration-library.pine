@@ -47,6 +47,9 @@ const int MONTHLY_MATURITY_HISTORY = 2
 const int QUARTERLY_MATURITY_HISTORY = 2
 const float MATURITY_STABILITY_FRACTION = 0.20
 const int MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT = 45
+const int DAILY_MATURITY_HISTORY = 20
+const int DAILY_MATURITY_RAW_HISTORY = 120
+const int DAILY_MATURITY_MINIMUM_SAMPLES = 5
 const int WEEKLY_UTC_MATURITY_SESSIONS = 4
 const int WEEKLY_MARKET_MATURITY_SESSIONS = 3
 const int WEEKLY_EARLY_MATURITY_SESSIONS = 2
@@ -92,6 +95,14 @@ export type ProfileChronologyState
     int normalSpan
     int pendingStartKey
     int foldCount
+
+export type DailyMaturityState
+    array<float> completedVolumes
+    array<int> completedSpans
+    array<bool> completedWeekends
+    int normalSpan
+    bool boundaryObserved
+    bool ready
 
 mergeCombine(MergeMode mode) =>
     mode == MergeMode.combineShorts
@@ -424,10 +435,6 @@ export calendarQuarterStart(string timezone) =>
 export sameCalendarDate(int firstTime, int secondTime, string timezone) =>
     year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
 
-export isBeforeNyCutoff(int cutoffHour, int cutoffMinute) =>
-    int currentMinutes = hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE)
-    currentMinutes < cutoffHour * 60 + cutoffMinute
-
 export priceWindowTimestampEligible(int timestamp, int startMinute, bool allDays) =>
     int day = dayofweek(timestamp, NY_TIMEZONE)
     bool dayEligible = allDays or day >= dayofweek.monday and day <= dayofweek.friday
@@ -467,6 +474,75 @@ export emptyRemoteProfileResult(int unsetTime) =>
     revelioCore.Profile histogramSnapshot = na
     revelioCore.Profile developingSnapshot = na
     [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0]
+
+export newDailyMaturityState() =>
+    DailyMaturityState.new(array.new<float>(), array.new<int>(), array.new<bool>(), 0, false, false)
+
+isWeekendAt(int timestamp, string timezone) =>
+    int weekday = dayofweek(timestamp, timezone)
+    weekday == dayofweek.saturday or weekday == dayofweek.sunday
+
+clearDailyMaturity(DailyMaturityState state) =>
+    array.clear(state.completedVolumes)
+    array.clear(state.completedSpans)
+    array.clear(state.completedWeekends)
+    state.normalSpan := 0
+    state.boundaryObserved := false
+    state.ready := false
+    true
+
+// Archive the raw session before merge processing, then reset the new session latch.
+export advanceDailyMaturity(DailyMaturityState maturityState, revelioCore.AnchorState anchorState, bool enabled, bool calendarReset, bool archiveBoundary, bool resetBoundary, string timezone) =>
+    if calendarReset
+        clearDailyMaturity(maturityState)
+    if enabled and archiveBoundary and maturityState.boundaryObserved and anchorState.observedStartBoundary and array.size(anchorState.barVolumes) > 0
+        int sessionSpan = anchorState.lastBarTime - anchorState.startTime
+        float completedVolume = array.sum(anchorState.barVolumes)
+        if sessionSpan > 0 and completedVolume > 0
+            array.push(maturityState.completedVolumes, completedVolume)
+            array.push(maturityState.completedSpans, sessionSpan)
+            array.push(maturityState.completedWeekends, isWeekendAt(anchorState.startTime, timezone))
+            maturityState.normalSpan := math.max(maturityState.normalSpan, sessionSpan)
+            while array.size(maturityState.completedVolumes) > DAILY_MATURITY_RAW_HISTORY
+                array.shift(maturityState.completedVolumes)
+                array.shift(maturityState.completedSpans)
+                array.shift(maturityState.completedWeekends)
+    if enabled and resetBoundary
+        maturityState.ready := false
+        maturityState.boundaryObserved := true
+    true
+
+dailyMaturityBaseline(DailyMaturityState state, bool splitWeekends, bool currentWeekend, float shortSpanFraction) =>
+    array<float> eligibleVolumes = array.new<float>()
+    int completedCount = array.size(state.completedVolumes)
+    if state.normalSpan > 0 and completedCount > 0
+        for completedIndex = completedCount - 1 to 0
+            bool matchingCalendar = not splitWeekends or array.get(state.completedWeekends, completedIndex) == currentWeekend
+            bool fullSession = array.get(state.completedSpans, completedIndex) >= int(state.normalSpan * shortSpanFraction)
+            if matchingCalendar and fullSession
+                array.push(eligibleVolumes, array.get(state.completedVolumes, completedIndex))
+                if array.size(eligibleVolumes) >= DAILY_MATURITY_HISTORY
+                    break
+    array.size(eligibleVolumes) >= DAILY_MATURITY_MINIMUM_SAMPLES ? array.median(eligibleVolumes) : na
+
+effectiveDevelopingVolume(revelioCore.AnchorState anchorState, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume) =>
+    float developingVolume = array.size(anchorState.barVolumes) > 0 ? array.sum(anchorState.barVolumes) : 0.0
+    if not na(fallbackVolume) and fallbackVolume > 0
+        developingVolume += fallbackVolume
+    if not confirmed
+        [liveHighs, liveLows, liveVolumes] = revelioCore.prepareBarVolumeSamples(intrabarHighs, intrabarLows, intrabarVolumes, currentHigh, currentLow, currentVolume, true)
+        if array.size(liveVolumes) > 0
+            developingVolume += array.sum(liveVolumes)
+    developingVolume
+
+export showsDailyDeveloping(DailyMaturityState maturityState, revelioCore.AnchorState anchorState, bool enabled, DevelopingMode currentMode, bool splitWeekends, string timezone, float shortSpanFraction, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool lastBar) =>
+    if enabled and currentMode == DevelopingMode.automatic and not maturityState.ready and lastBar
+        bool weekend = splitWeekends and isWeekendAt(anchorState.startTime, timezone)
+        float baselineVolume = dailyMaturityBaseline(maturityState, splitWeekends, weekend, shortSpanFraction)
+        if not na(baselineVolume)
+            float maturityVolume = baselineVolume * 0.65
+            maturityState.ready := effectiveDevelopingVolume(anchorState, intrabarHighs, intrabarLows, intrabarVolumes, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume) >= maturityVolume
+    enabled and (currentMode == DevelopingMode.on or currentMode == DevelopingMode.automatic and maturityState.ready)
 
 maturityHistory(string source) =>
     source == ANCHOR_WEEKLY ? WEEKLY_MATURITY_HISTORY : source == ANCHOR_MONTHLY ? MONTHLY_MATURITY_HISTORY : QUARTERLY_MATURITY_HISTORY

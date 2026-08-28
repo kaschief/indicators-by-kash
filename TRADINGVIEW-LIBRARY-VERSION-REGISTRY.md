@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-08-23
+Updated: 2026-08-27
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -22,8 +22,8 @@ This is the repository's single source of truth for TradingView library versions
 |---|---|---:|---:|
 | RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | 10 | — |
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | 11 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | 19 | — |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 2 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | 21 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 5 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development host: `indicators/20-revelio/code/indicator/revelio.pine`
@@ -73,11 +73,15 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioInteractionsLibrary | 16 | Published · runtime performance regression | Exports shared label-size, fade, reminder, label-retention, and weekday-distance helpers used by the host | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
 | RevelioInteractionsLibrary | 17 | Published · host loaded · visual density rejected | Scales active-anchor and swept reminder density logarithmically across actual chart bars without viewport-triggered recalculation | `9ac3cc723167ed554e4f6baf9c76601fce987b2a941d1c7351fe7748da38644e` |
 | RevelioInteractionsLibrary | 18 | Published · host loaded · visual density rejected | Staggers reminders within separate adaptive cells to break mechanical columns while preserving bounded chart-bar density and coverage | `7bdb2fa9f1cb8576fcfbe0971d7d5f6cab29070566790b48f1c054d6bef23ba0` |
-| RevelioInteractionsLibrary | 19 | Published · host loaded · testing | Restores the committed timestamp-based reminder density and level-specific placement after the rejected chart-bar redesign | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
+| RevelioInteractionsLibrary | 19 | Published · superseded | Restores the committed timestamp-based reminder density and level-specific placement after the rejected chart-bar redesign | `8bb1965dc6626a3bb74ccb7a1ec8fea3e7faf8a4db62c4125b97ba852dc0093d` |
 | RevelioInteractionsLibrary | 20 | Discarded before publication | Carrier-interval-safe merged-reminder correction reverted; version permanently retired | `a4e7b662cce29b703496457e0e4f986bea607092b2f9641bdcf88e52ba8c74fa` |
+| RevelioInteractionsLibrary | 21 | Published · tested · approved | Orders merged label text by semantic rank before visual width while preserving width-based carrier styling and fading | `60651b357d223963bcf23d48c231aa2adf6ef345860f98c0e2093265178a6402` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
 | RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
+| RevelioProfileOrchestrationLibrary | 3 | Published · superseded | Adds latched RTH and Globex volume maturity from eligible full-session history and removes the obsolete RTH cutoff-style helper | `0d35808f51caa4085f105a2a2fc00db1508bd6f8d08fc4a0e133f55c9b6b2a7f` |
+| RevelioProfileOrchestrationLibrary | 4 | Published · superseded | Adds one shared Standard / Conservative / Strict threshold preset for RTH and Globex Auto maturity | `a6154f6284e3514078ca8c0adaffe4d5dae8676fbd141d978f49d515da3aeaec` |
+| RevelioProfileOrchestrationLibrary | 5 | Published · tested · approved | Fixes RTH and Globex Auto maturity at the strict 65% threshold and removes the preset selector contract | `2355df08eae115d857b80ccca0fa0737397ed0a5a2a2a50ba8f96a3ae1aa935a` |
 
 ## Publication-instruction log
 
@@ -140,15 +144,19 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-21-02 | 2026-08-21 | RevelioInteractionsLibrary | 18 | Publish the staggered adaptive-cell reminder compositor privately as `/18`, then compile and visually compare the development host against Interactions `/17` on NQ 1H, 4H, Daily, and Range charts | `PUBLISHED_TESTED_REJECTED_EXCESSIVE_INTRADAY_DENSITY` |
 | PUB-2026-08-21-03 | 2026-08-21 | RevelioInteractionsLibrary | 19 | Publish the exact committed-reminder restoration privately as `/19`, then compile and visually compare the development host against the last committed Revelio presentation on NQ 5-minute, 1H, 4H, Daily, and Range charts | `PUBLISHED_HOST_LOADED_TESTING` |
 | PUB-2026-08-23-01 | 2026-08-23 | RevelioInteractionsLibrary | 20 | Publish the carrier-interval-safe reminder compositor privately as `/20`, then compile and visually test the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/20`, and Profile Orchestration `/2` with Merge Off, Strict, Balanced, and Extra Wide | `DISCARDED_BEFORE_PUBLICATION` |
+| PUB-2026-08-27-01 | 2026-08-27 | RevelioInteractionsLibrary | 21 | Publish the semantic merged-label ordering correction privately as `/21`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/2` with Shorten Labels On and Off across right-edge labels, active-anchor reminders, swept reminders, and Touch Marker hover text | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-08-27-02 | 2026-08-27 | RevelioProfileOrchestrationLibrary | 3 | Publish the daily volume-maturity orchestration privately as `/3`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/3` across RTH, market Globex, and 24/7 UTC cycles; confirm the removed RTH Developing Profile / Until row and native live-RTH styling | `PUBLISHED_SUPERSEDED` |
+| PUB-2026-08-27-03 | 2026-08-27 | RevelioProfileOrchestrationLibrary | 4 | Publish the shared Auto Maturity preset orchestration privately as `/4`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/4` using Standard 45%, Conservative 55%, and Strict 65% across RTH, market Globex, and 24/7 UTC cycles | `PUBLISHED_SUPERSEDED` |
+| PUB-2026-08-28-01 | 2026-08-28 | RevelioProfileOrchestrationLibrary | 5 | Publish the strict-only Auto maturity orchestration privately as `/5`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/5` across RTH, market Globex, and 24/7 UTC cycles | `PUBLISHED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
-- Published chain: Core `/10`, Gaps `/11`, Interactions `/19`, Profile Orchestration `/2`.
+- Published chain: Core `/10`, Gaps `/11`, Interactions `/21`, Profile Orchestration `/5`.
 - Pending: none.
-- Discarded: Interactions `/20`; the next Interactions version is `/21`.
-- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/19`.
-- Runtime status: `/19` is published and loaded; visual comparison is in progress on NQ 5-minute, 1H, 4H, Daily, and Range charts.
+- Discarded: Interactions `/20`; it remains permanently retired.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/21` and Profile Orchestration `/5`.
+- Runtime status: Interactions `/21` and Profile Orchestration `/5` are published, host loaded, tested, and approved.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
 
 ## Pending release notes
