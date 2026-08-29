@@ -121,6 +121,7 @@ const string INPUT_LABEL_HOURS = "Hours"
 const string INPUT_LABEL_HIDE_DEVELOPING = "Hide Developing"
 const string INPUT_LABEL_POSITION = "Position"
 const string TOOLTIP_PROFILE_HOURS = "Position — Delta placement\nHours — extension"
+const string TOOLTIP_EXTEND_MITIGATED_ZONES = "Dominant • Strong • LVN"
 
 ROLLING_THROUGH_LIVE = "Live"
 ROLLING_THROUGH_LIVE_MINUS_2H = "Live −2h"
@@ -139,6 +140,8 @@ ROLLING_DAYS_SHORT = "Days"
 
 const string OPTION_OFF = "Off"
 const string OPTION_ALL = "All"
+const string OPTION_ACTIVE = "Active"
+const string OPTION_CUSTOM = "Custom"
 const string DELTA_ROWS_BUY = "Delta+"
 const string DELTA_ROWS_SELL = "Delta-"
 
@@ -235,6 +238,7 @@ GROUP_WEEKLY = "📅 Weekly"
 GROUP_MONTHLY = "🗓️ Monthly"
 GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
 GROUP_QUICK_FILTER_SETTINGS = "⚡ Quick Filter: Settings"
+GROUP_QUICK_FILTER_EXTENSIONS = "⚡ Quick Filter: Extensions"
 GROUP_DELTA = "Delta"
 GROUP_APPEARANCE = "🖼️ Profile Appearance"
 GROUP_UTILITY = "🎨 Reference"
@@ -325,6 +329,20 @@ visibleLvnTierCount = visibleTierCount(minimumLvnTierStrength)
 dotDisplay = input.string(DOT_DISPLAY_DOTS, "Dots", options=[DOT_DISPLAY_OFF, DOT_DISPLAY_DOTS, DOT_DISPLAY_DOTS_LABELS], inline="profile_visibility", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
 showDots = not enableQuickCheck and dotDisplay != DOT_DISPLAY_OFF
 showDotLabels = not enableQuickCheck and dotDisplay == DOT_DISPLAY_DOTS_LABELS
+
+mitigatedZoneExtensionMode = input.string(OPTION_OFF, "Extend Unmitigated", options=[OPTION_OFF, OPTION_ACTIVE, OPTION_CUSTOM], inline="profile_visibility", group=GROUP_QUICK_FILTER_SETTINGS, tooltip=TOOLTIP_EXTEND_MITIGATED_ZONES)
+customMitigatedZoneExtensionsActive = mitigatedZoneExtensionMode == OPTION_CUSTOM
+customExtendFixedMitigatedZones = input.bool(false, SOURCE_FIXED, inline="mitigated_extensions_range", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and fixedSelected)
+customExtendRollingMitigatedZones = input.bool(false, SOURCE_ROLLING, inline="mitigated_extensions_range", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and rollingSelected)
+customExtendAsiaPremarketMitigatedZones = input.bool(false, SOURCE_ASIA_PREMARKET, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and asiaPremarketSelected)
+customExtendGlobexMitigatedZones = input.bool(false, SOURCE_GLOBEX, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and globexSelected)
+customExtendMidnightMitigatedZones = input.bool(false, SOURCE_MIDNIGHT, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and midnightSelected)
+customExtendNyEarlyMitigatedZones = input.bool(false, SOURCE_NY_EARLY, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and nyEarlySelected)
+customExtendExtendedNyEarlyMitigatedZones = input.bool(false, SOURCE_EXTENDED_NY_EARLY, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and extendedNyEarlySelected)
+customExtendIvbMitigatedZones = input.bool(false, SOURCE_IVB, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and ivbSelected)
+customExtendRthMitigatedZones = input.bool(false, SOURCE_RTH, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and rthSelected)
+customExtendWeeklyMitigatedZones = input.bool(false, SOURCE_WEEKLY, inline="mitigated_extensions_calendar", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and weeklySelected)
+customExtendMonthlyMitigatedZones = input.bool(false, SOURCE_MONTHLY, inline="mitigated_extensions_calendar", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and monthlySelected, tooltip=TOOLTIP_EXTEND_MITIGATED_ZONES)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — ROLLING RANGE
@@ -439,6 +457,14 @@ type DeltaProfile
     float maxAbsRowDelta
     bool isValid
 
+type FinalizedMitigationProfile
+    DeltaProfile profile
+    string sourceName
+
+type MitigatedProfileKey
+    string sourceName
+    int startTime
+
 type RollingSampleStore
     int headIndex
     array<int> startKeys
@@ -463,6 +489,7 @@ type PendingOutlierLevel
     float delta
     float strength
     bool buySide
+    int profileStartTime
     int lineStartTime
     int rightTime
     int markerTime
@@ -470,6 +497,35 @@ type PendingOutlierLevel
     string displayNameOverride
     int tradingDayKey
     bool historical
+
+type PendingMitigatedZone
+    float price
+    float zoneLow
+    float zoneHigh
+    int profileStartTime
+    int leftTime
+    int eligibilityTime
+    color zoneColor
+    bool hasLine
+    color lineColor
+    int lineWidth
+    string lineStyle
+    int lineRank
+    string sourceName
+    int tradingDayKey
+    bool historical
+    int direction
+    string markerLabel
+    color markerColor
+    int markerSize
+
+type MitigatedZoneState
+    string sourceName
+    int profileStartTime
+    int eligibilityTime
+    float price
+    int mitigatedTime
+    bool available
 
 type LowVolumeCandidate
     float price
@@ -705,6 +761,55 @@ sessionOccurrenceClose(string sourceName, DeltaProfile profile, bool twentyFourS
 
 profileHours(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? nyEarlyHours : sourceName == SOURCE_EXTENDED_NY_EARLY ? extendedNyEarlyHours : sourceName == SOURCE_IVB ? ivbHours : sourceName == SOURCE_ASIA_PREMARKET ? asiaPremarketHours : sourceName == SOURCE_RTH ? rthHours : sourceName == SOURCE_GLOBEX ? globexHours : sourceName == SOURCE_MIDNIGHT ? midnightHours : sourceName == SOURCE_WEEKLY ? weeklyHours : sourceName == SOURCE_MONTHLY ? monthlyHours : sourceName == SOURCE_ROLLING ? rollingHours : fixedHours
+
+profileSourceSelected(string sourceName) =>
+    switch sourceName
+        SOURCE_FIXED => fixedSelected
+        SOURCE_ROLLING => rollingSelected
+        SOURCE_NY_EARLY => nyEarlySelected
+        SOURCE_EXTENDED_NY_EARLY => extendedNyEarlySelected
+        SOURCE_IVB => ivbSelected
+        SOURCE_ASIA_PREMARKET => asiaPremarketSelected
+        SOURCE_RTH => rthSelected
+        SOURCE_GLOBEX => globexSelected
+        SOURCE_MIDNIGHT => midnightSelected
+        SOURCE_WEEKLY => weeklySelected
+        SOURCE_MONTHLY => monthlySelected
+        => false
+
+customMitigatedZoneExtensionEnabled(string sourceName) =>
+    switch sourceName
+        SOURCE_FIXED => customExtendFixedMitigatedZones
+        SOURCE_ROLLING => customExtendRollingMitigatedZones
+        SOURCE_NY_EARLY => customExtendNyEarlyMitigatedZones
+        SOURCE_EXTENDED_NY_EARLY => customExtendExtendedNyEarlyMitigatedZones
+        SOURCE_IVB => customExtendIvbMitigatedZones
+        SOURCE_ASIA_PREMARKET => customExtendAsiaPremarketMitigatedZones
+        SOURCE_RTH => customExtendRthMitigatedZones
+        SOURCE_GLOBEX => customExtendGlobexMitigatedZones
+        SOURCE_MIDNIGHT => customExtendMidnightMitigatedZones
+        SOURCE_WEEKLY => customExtendWeeklyMitigatedZones
+        SOURCE_MONTHLY => customExtendMonthlyMitigatedZones
+        => false
+
+mitigatedZoneExtensionEnabled(string sourceName) =>
+    profileSourceSelected(sourceName) and (mitigatedZoneExtensionMode == OPTION_ACTIVE or mitigatedZoneExtensionMode == OPTION_CUSTOM and customMitigatedZoneExtensionEnabled(sourceName))
+
+var array<string> mitigationProfileSources = array.from(SOURCE_FIXED, SOURCE_ROLLING, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, SOURCE_IVB, SOURCE_ASIA_PREMARKET, SOURCE_RTH, SOURCE_GLOBEX, SOURCE_MIDNIGHT, SOURCE_WEEKLY, SOURCE_MONTHLY)
+
+anyMitigatedZoneExtensionEnabled() =>
+    bool enabled = false
+    for sourceName in mitigationProfileSources
+        if mitigatedZoneExtensionEnabled(sourceName)
+            enabled := true
+            break
+    enabled
+
+extendsPriorityZoneUntilMitigated(string sourceName, int strengthRank) =>
+    strengthRank <= 2 and mitigatedZoneExtensionEnabled(sourceName)
+
+priceTickIndex(float price) =>
+    int(math.round(price / syminfo.mintick))
 
 usesAlternateStyles(string sourceName) =>
     (sourceName == SOURCE_EXTENDED_NY_EARLY and useExtendedNyEarlyAlternateStyles) or (sourceName == SOURCE_ASIA_PREMARKET and useAsiaPremarketAlternateStyles)
@@ -1157,6 +1262,14 @@ buildRollingDeltaProfile(RollingSampleStore store, int requestedRows, int startT
                 array.push(store.selectedIndices, sampleIndex)
     buildDeltaProfileFromSelection(store.highs, store.lows, store.volumes, store.deltas, store.selectedIndices, requestedRows, startTime, endTime)
 
+buildCurrentRollingDeltaProfile(RollingSampleStore store, int requestedRows, int startTime, int endTime, bool includeEnd, bool requireFullContainment, bool currentBarRetained, array<int> sampleStartTimes, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
+    int originalSize = rollingSampleStoreSize(store)
+    if not barstate.isconfirmed and currentBarRetained
+        appendRollingSamples(store, sampleStartTimes, sampleEndTimes, sampleHighs, sampleLows, sampleVolumes, sampleDeltas, false)
+    DeltaProfile profile = buildRollingDeltaProfile(store, requestedRows, startTime, endTime, includeEnd, requireFullContainment)
+    truncateRollingSamples(store, originalSize)
+    profile
+
 buildDevelopingDeltaProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<int> startRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas, int endTime) =>
     int originalSize = array.size(barVolumes)
     if not barstate.isconfirmed
@@ -1202,42 +1315,46 @@ profileValueLevels(DeltaProfile profile) =>
 // ═══════════════════════════════════════════════════════════════════════════════
 // ANCHOR ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
-finalizePeriod(array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, int startTime, int endTime, int keepProfiles, array<DeltaProfile> profiles) =>
+var array<FinalizedMitigationProfile> finalizedMitigationProfiles = array.new<FinalizedMitigationProfile>()
+
+finalizePeriod(string sourceName, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, int startTime, int endTime, int keepProfiles, array<DeltaProfile> profiles) =>
     if array.size(barVolumes) > 0
         DeltaProfile profile = buildDeltaProfile(barHighs, barLows, barVolumes, barDeltas, PROFILE_ROWS, startTime, endTime)
         if profile.isValid
             array.push(profiles, profile)
+            if mitigatedZoneExtensionEnabled(sourceName)
+                array.push(finalizedMitigationProfiles, FinalizedMitigationProfile.new(profile, sourceName))
             while array.size(profiles) > keepProfiles
                 array.shift(profiles)
         clearSamples(barHighs, barLows, barVolumes, barDeltas)
 
-processAnchor(bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas, bool continuousBoundary) =>
+processAnchor(string sourceName, bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas, bool continuousBoundary) =>
     if enabled
         bool shouldStart = periodStart or (array.get(periodStartRef, 0) == START_TIME_UNSET and inWindow)
 
         if periodEnd and array.size(barVolumes) > 0
             // Stop early-close profiles at the last sample.
-            finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
+            finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
 
         if shouldStart
             if array.size(barVolumes) > 0
                 int boundaryEnd = continuousBoundary ? time : time[1]
-                finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), boundaryEnd, keepProfiles, profiles)
+                finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), boundaryEnd, keepProfiles, profiles)
             array.set(periodStartRef, 0, time)
 
         if inWindow and barstate.isconfirmed and array.size(sampleVolumes) > 0
             appendSamples(barHighs, barLows, barVolumes, barDeltas, sampleHighs, sampleLows, sampleVolumes, sampleDeltas, true)
             array.set(periodLastBarRef, 0, time)
 
-processBoundedNyAnchor(bool enabled, int keepProfiles, int startMinute, int endMinute, bool inWindow, bool periodStart, bool periodEnd, int firstSampleTime, int lastSampleEndTime, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
+processBoundedNyAnchor(string sourceName, bool enabled, int keepProfiles, int startMinute, int endMinute, bool inWindow, bool periodStart, bool periodEnd, int firstSampleTime, int lastSampleEndTime, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
     if enabled
         if periodEnd and array.size(barVolumes) > 0
-            finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
+            finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
 
         bool shouldStart = periodStart or (array.get(periodStartRef, 0) == START_TIME_UNSET and inWindow)
         if shouldStart
             if array.size(barVolumes) > 0
-                finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
+                finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
             array.set(periodStartRef, 0, nySessionStartBoundary(firstSampleTime, startMinute, endMinute))
 
         if inWindow and barstate.isconfirmed and array.size(sampleVolumes) > 0
@@ -1246,7 +1363,7 @@ processBoundedNyAnchor(bool enabled, int keepProfiles, int startMinute, int endM
             array.set(periodLastBarRef, 0, math.min(lastSampleEndTime, sessionEndTime))
 
 // Session keys rotate inside one chart bar; realtime mutations roll back before the next update.
-processKeyedBoundedNyAnchor(bool enabled, int keepProfiles, int startMinute, int endMinute, bool currentWindowActive, int currentSessionStart, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<int> sampleSessionStarts, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
+processKeyedBoundedNyAnchor(string sourceName, bool enabled, int keepProfiles, int startMinute, int endMinute, bool currentWindowActive, int currentSessionStart, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<int> sampleSessionStarts, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
     if enabled
         int sampleCount = array.size(sampleVolumes)
         if sampleCount > 0
@@ -1256,17 +1373,17 @@ processKeyedBoundedNyAnchor(bool enabled, int keepProfiles, int startMinute, int
                 if activeSessionStart != sampleSessionStart
                     if array.size(barVolumes) > 0
                         compactIfNeeded(barHighs, barLows, barVolumes, barDeltas)
-                        finalizePeriod(barHighs, barLows, barVolumes, barDeltas, activeSessionStart, array.get(periodLastBarRef, 0), keepProfiles, profiles)
+                        finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, activeSessionStart, array.get(periodLastBarRef, 0), keepProfiles, profiles)
                     array.set(periodStartRef, 0, sampleSessionStart)
                 appendBarSample(barHighs, barLows, barVolumes, barDeltas, array.get(sampleHighs, sampleIndex), array.get(sampleLows, sampleIndex), array.get(sampleVolumes, sampleIndex), array.get(sampleDeltas, sampleIndex))
                 int sessionEndTime = nySessionEndBoundary(sampleSessionStart, startMinute, endMinute)
                 array.set(periodLastBarRef, 0, math.min(array.get(sampleEndTimes, sampleIndex), sessionEndTime))
             compactIfNeeded(barHighs, barLows, barVolumes, barDeltas)
         if not currentWindowActive and array.size(barVolumes) > 0
-            finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
+            finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
         else if currentWindowActive and currentSessionStart != START_TIME_UNSET and array.get(periodStartRef, 0) != currentSessionStart
             if array.size(barVolumes) > 0
-                finalizePeriod(barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
+                finalizePeriod(sourceName, barHighs, barLows, barVolumes, barDeltas, array.get(periodStartRef, 0), array.get(periodLastBarRef, 0), keepProfiles, profiles)
             array.set(periodStartRef, 0, currentSessionStart)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1277,8 +1394,11 @@ var array<line> drawnLines = array.new<line>()
 var array<polyline> drawnPolylines = array.new<polyline>()
 var array<label> drawnLabels = array.new<label>()
 var array<PendingOutlierLevel> pendingOutlierLevels = array.new<PendingOutlierLevel>()
+var array<PendingMitigatedZone> pendingMitigatedZones = array.new<PendingMitigatedZone>()
 var array<PendingRightLabel> pendingRightLabels = array.new<PendingRightLabel>()
 var array<PendingRightLine> pendingRightLines = array.new<PendingRightLine>()
+var array<MitigatedZoneState> mitigatedZoneStates = array.new<MitigatedZoneState>()
+var array<MitigatedProfileKey> mitigatedProfiles = array.new<MitigatedProfileKey>()
 var table colorTable = na
 // Rebuild chart time once per bar.
 var array<int> cachedChartTimes = array.new<int>()
@@ -1314,6 +1434,7 @@ clearDrawings() =>
             label.delete(array.get(drawnLabels, labelIndex))
         array.clear(drawnLabels)
     array.clear(pendingOutlierLevels)
+    array.clear(pendingMitigatedZones)
     array.clear(pendingRightLabels)
     array.clear(pendingRightLines)
 
@@ -1330,6 +1451,75 @@ queueRightLine(float price, int leftTime, int rightTime, color lineColor, int li
 renderZoneFill(int leftTime, int rightTime, float zoneLow, float zoneHigh, color zoneFillColor) =>
     if canDrawBox()
         array.push(drawnBoxes, box.new(left=leftTime, top=zoneHigh, right=rightTime, bottom=zoneLow, xloc=xloc.bar_time, border_color=color.new(zoneFillColor, 100), border_width=0, bgcolor=zoneFillColor))
+
+mitigatedZoneStateIndex(string sourceName, int profileStartTime, int eligibilityTime, float price) =>
+    int foundIndex = -1
+    int stateCount = array.size(mitigatedZoneStates)
+    if stateCount > 0
+        for stateIndex = 0 to stateCount - 1
+            MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+            if state.sourceName == sourceName and state.profileStartTime == profileStartTime and state.eligibilityTime == eligibilityTime and state.price == price
+                foundIndex := stateIndex
+                break
+    foundIndex
+
+removeMitigatedProfile(string sourceName, int profileStartTime) =>
+    int stateIndex = array.size(mitigatedZoneStates) - 1
+    while stateIndex >= 0
+        MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+        if state.sourceName == sourceName and state.profileStartTime == profileStartTime
+            array.remove(mitigatedZoneStates, stateIndex)
+        stateIndex -= 1
+
+removeMitigatedSource(string sourceName) =>
+    int stateIndex = array.size(mitigatedZoneStates) - 1
+    while stateIndex >= 0
+        MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+        if state.sourceName == sourceName
+            array.remove(mitigatedZoneStates, stateIndex)
+        stateIndex -= 1
+    int profileIndex = array.size(mitigatedProfiles) - 1
+    while profileIndex >= 0
+        if array.get(mitigatedProfiles, profileIndex).sourceName == sourceName
+            array.remove(mitigatedProfiles, profileIndex)
+        profileIndex -= 1
+
+registerMitigatedProfile(string sourceName, int profileStartTime) =>
+    bool alreadyRegistered = false
+    int profileCount = array.size(mitigatedProfiles)
+    if profileCount > 0
+        for profileIndex = 0 to profileCount - 1
+            MitigatedProfileKey profileKey = array.get(mitigatedProfiles, profileIndex)
+            if profileKey.sourceName == sourceName and profileKey.startTime == profileStartTime
+                alreadyRegistered := true
+                break
+    if not alreadyRegistered
+        array.push(mitigatedProfiles, MitigatedProfileKey.new(sourceName, profileStartTime))
+        int sourceProfileCount = 0
+        for profileIndex = 0 to array.size(mitigatedProfiles) - 1
+            if array.get(mitigatedProfiles, profileIndex).sourceName == sourceName
+                sourceProfileCount += 1
+        if sourceProfileCount > SESSION_PROFILE_RETENTION
+            int oldestIndex = -1
+            int oldestStartTime = na
+            for profileIndex = 0 to array.size(mitigatedProfiles) - 1
+                MitigatedProfileKey profileKey = array.get(mitigatedProfiles, profileIndex)
+                if profileKey.sourceName == sourceName
+                    int candidateStartTime = profileKey.startTime
+                    if oldestIndex < 0 or candidateStartTime < oldestStartTime
+                        oldestIndex := profileIndex
+                        oldestStartTime := candidateStartTime
+            if oldestIndex >= 0
+                removeMitigatedProfile(sourceName, oldestStartTime)
+                array.remove(mitigatedProfiles, oldestIndex)
+
+registerMitigatedZone(string sourceName, int profileStartTime, int eligibilityTime, float price) =>
+    registerMitigatedProfile(sourceName, profileStartTime)
+    if mitigatedZoneStateIndex(sourceName, profileStartTime, eligibilityTime, price) < 0
+        array.push(mitigatedZoneStates, MitigatedZoneState.new(sourceName, profileStartTime, eligibilityTime, price, na, true))
+
+queueMitigatedZone(float price, float zoneLow, float zoneHigh, int profileStartTime, int leftTime, int eligibilityTime, color zoneColor, bool hasLine, color lineColor, int lineWidth, string lineStyle, int lineRank, string sourceName, int tradingDayKey, bool historical, int direction, string markerLabel, color markerColor, int markerSize) =>
+    array.push(pendingMitigatedZones, PendingMitigatedZone.new(price, zoneLow, zoneHigh, profileStartTime, leftTime, eligibilityTime, zoneColor, hasLine, lineColor, lineWidth, lineStyle, lineRank, sourceName, tradingDayKey, historical, direction, markerLabel, markerColor, markerSize))
 
 // Records keep cluster fields aligned.
 flushPendingRightLines(bool merge) =>
@@ -1681,10 +1871,19 @@ lowVolumeCandidatesOverlap(LowVolumeCandidate first, LowVolumeCandidate second, 
         overlap := cliffPrice >= lvnLow - cliffMargin and cliffPrice <= lvnHigh + cliffMargin
     overlap
 
-renderLowVolumeZone(DeltaProfile profile, float zoneLow, float zoneHigh, int levelEndTime) =>
-    renderZoneFill(profile.endTime, levelEndTime, zoneLow, zoneHigh, color.new(color.rgb(74, 74, 74), 95))
+renderLowVolumeZone(DeltaProfile profile, string sourceName, float price, float zoneLow, float zoneHigh, int levelEndTime, int levelRank, int sessionTradingDayKey, bool historical, string markerLabel, color markerColor, int markerSize, bool registrationOnly) =>
+    color zoneColor = color.new(color.rgb(74, 74, 74), 95)
+    bool markerDeferred = mitigatedZoneExtensionEnabled(sourceName)
+    if registrationOnly
+        if markerDeferred
+            registerMitigatedZone(sourceName, profile.startTime, levelEndTime, price)
+    else if markerDeferred
+        queueMitigatedZone(price, zoneLow, zoneHigh, profile.startTime, profile.endTime, levelEndTime, zoneColor, false, markerColor, LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, sourceName, sessionTradingDayKey, historical, 0, markerLabel, markerColor, markerSize)
+    else
+        renderZoneFill(profile.endTime, levelEndTime, zoneLow, zoneHigh, zoneColor)
+    markerDeferred
 
-renderLowVolumeStructures(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical) =>
+renderLowVolumeStructures(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool registrationOnly) =>
     if showMinimumLvnTiers and not enableQuickCheck
         array<LowVolumeCandidate> candidates = collectLowVolumeCandidates(profile)
         int candidateCount = array.size(candidates)
@@ -1706,12 +1905,16 @@ renderLowVolumeStructures(DeltaProfile profile, string sourceName, string displa
                     int levelRank = LOW_VOLUME_LEVEL_RANK - structureRank
                     float labelPrice = selectedCandidate.isLvn ? (selectedCandidate.zoneLow + selectedCandidate.zoneHigh) * 0.5 : selectedCandidate.price
                     int markerTime = levelMarkerTime(levelEndTime)
-                    if selectedCandidate.isLvn
-                        renderLowVolumeZone(profile, selectedCandidate.zoneLow, selectedCandidate.zoneHigh, levelEndTime)
-                    else
-                        queueRightLine(selectedCandidate.price, profile.endTime, levelEndTime, color.new(color.rgb(15, 15, 15), 75), LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, sourceName, sessionTradingDayKey, historical, 0)
                     string markerLabel = showDotLabels and structureRank == 1 ? profileSourceName(sourceName, displayNameOverride) : ""
-                    queueLevelMarker(labelPrice, markerTime, markerLabel, color.new(color.rgb(15, 15, 15), 75), tierMarkerSize(tierMarkerSizes, structureTier))
+                    color markerColor = color.new(color.rgb(15, 15, 15), 75)
+                    int markerSize = tierMarkerSize(tierMarkerSizes, structureTier)
+                    bool markerDeferred = false
+                    if selectedCandidate.isLvn
+                        markerDeferred := renderLowVolumeZone(profile, sourceName, labelPrice, selectedCandidate.zoneLow, selectedCandidate.zoneHigh, levelEndTime, levelRank, sessionTradingDayKey, historical, markerLabel, markerColor, markerSize, registrationOnly)
+                    else if not registrationOnly
+                        queueRightLine(selectedCandidate.price, profile.endTime, levelEndTime, markerColor, LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, sourceName, sessionTradingDayKey, historical, 0)
+                    if not registrationOnly and not markerDeferred
+                        queueLevelMarker(labelPrice, markerTime, markerLabel, markerColor, markerSize)
                     for candidateIndex = 0 to candidateCount - 1
                         if not array.get(discarded, candidateIndex) and lowVolumeCandidatesOverlap(selectedCandidate, array.get(candidates, candidateIndex), rowHeight)
                             array.set(discarded, candidateIndex, true)
@@ -1721,7 +1924,7 @@ queueOutlierPeak(DeltaProfile profile, string sourceName, string displayNameOver
     float peakPrice = profile.priceLow + (anchorRow + 0.5) * rowHeight
     float zoneLow = profile.priceLow + firstRow * rowHeight
     float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
-    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.endTime, levelEndTime, markerTime, sourceName, displayNameOverride, sessionTradingDayKey, historical))
+    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.startTime, profile.endTime, levelEndTime, markerTime, sourceName, displayNameOverride, sessionTradingDayKey, historical))
 
 collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool buySide, int markerTime) =>
     int peaksFound = 0
@@ -1770,7 +1973,7 @@ collectOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceN
         peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false, markerTime)
     peaksFound
 
-flushPendingOutlierLevels(bool merge) =>
+flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
     int pendingCount = array.size(pendingOutlierLevels)
     if pendingCount > 0
         array<float> clusterPrices = array.new<float>()
@@ -1779,6 +1982,7 @@ flushPendingOutlierLevels(bool merge) =>
         array<float> clusterDeltas = array.new<float>()
         array<float> clusterStrengths = array.new<float>()
         array<bool> clusterBuySides = array.new<bool>()
+        array<int> clusterProfileStartTimes = array.new<int>()
         array<int> clusterLineStartTimes = array.new<int>()
         array<int> clusterRightTimes = array.new<int>()
         array<int> clusterMarkerTimes = array.new<int>()
@@ -1819,6 +2023,7 @@ flushPendingOutlierLevels(bool merge) =>
                 array.push(clusterDeltas, pending.delta)
                 array.push(clusterStrengths, pending.strength)
                 array.push(clusterBuySides, pending.buySide)
+                array.push(clusterProfileStartTimes, pending.profileStartTime)
                 array.push(clusterLineStartTimes, pending.lineStartTime)
                 array.push(clusterRightTimes, pending.rightTime)
                 array.push(clusterMarkerTimes, pending.markerTime)
@@ -1857,6 +2062,7 @@ flushPendingOutlierLevels(bool merge) =>
                         float price = array.get(clusterPrices, bestCluster)
                         float zoneLow = array.get(clusterZoneLows, bestCluster)
                         float zoneHigh = array.get(clusterZoneHighs, bestCluster)
+                        int profileStartTime = array.get(clusterProfileStartTimes, bestCluster)
                         int lineStartTime = array.get(clusterLineStartTimes, bestCluster)
                         int rightTime = array.get(clusterRightTimes, bestCluster)
                         int markerTime = array.get(clusterMarkerTimes, bestCluster)
@@ -1867,14 +2073,21 @@ flushPendingOutlierLevels(bool merge) =>
                         int sessionTradingDayKey = array.get(clusterTradingDayKeys, bestCluster)
                         bool historical = array.get(clusterHistoricalFlags, bestCluster)
                         int levelRank = 2000 - strengthRank
-                        if sideVisible
-                            renderZoneFill(lineStartTime, rightTime, zoneLow, zoneHigh, appearance.zoneColor)
+                        bool extendPriorityZone = extendsPriorityZoneUntilMitigated(sourceName, strengthRank)
                         int direction = buySide ? 1 : -1
-                        if sideVisible and appearance.hasLine
-                            queueRightLine(price, lineStartTime, rightTime, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction)
+                        string markerLabel = showDotLabels and strengthRank == 1 ? profileSourceName(sourceName, displayNameOverride) : ""
+                        int markerSize = tierMarkerSize(tierMarkerSizes, tier)
                         if sideVisible
-                            string markerLabel = showDotLabels and strengthRank == 1 ? profileSourceName(sourceName, displayNameOverride) : ""
-                            queueLevelMarker(price, markerTime, markerLabel, appearance.textColor, tierMarkerSize(tierMarkerSizes, tier))
+                            if registrationOnly
+                                if extendPriorityZone
+                                    registerMitigatedZone(sourceName, profileStartTime, rightTime, price)
+                            else if extendPriorityZone
+                                queueMitigatedZone(price, zoneLow, zoneHigh, profileStartTime, lineStartTime, rightTime, appearance.zoneColor, appearance.hasLine, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction, markerLabel, appearance.textColor, markerSize)
+                            else
+                                renderZoneFill(lineStartTime, rightTime, zoneLow, zoneHigh, appearance.zoneColor)
+                                if appearance.hasLine
+                                    queueRightLine(price, lineStartTime, rightTime, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction)
+                                queueLevelMarker(price, markerTime, markerLabel, appearance.textColor, markerSize)
         array.clear(pendingOutlierLevels)
 
 renderProfileBox(DeltaProfile profile, string sourceName) =>
@@ -1963,9 +2176,6 @@ matchingNyProfile(ProfileSelection selection, DeltaProfile referenceProfile) =>
                 if na(matchedProfile) and nyProfileOccurrenceKey(candidate) == referenceKey
                     matchedProfile := candidate
     matchedProfile
-
-priceTickIndex(float price) =>
-    int(math.round(price / syminfo.mintick))
 
 extendedNyHasPostNySamples(DeltaProfile extendedProfile) =>
     extendedProfile.endTime > nyMinuteBoundary(extendedProfile.startTime, NY_EARLY_END_MINUTE)
@@ -2058,6 +2268,16 @@ trimProfileSelectionsToCapacity(array<ProfileSelection> selections, array<string
         selectedCount := totalRenderableProfileCount(selections, sourceNames)
     selectedCount
 
+registerProfileMitigationLevels(DeltaProfile profile, string sourceName, bool twentyFourSeven) =>
+    if mitigatedZoneExtensionEnabled(sourceName)
+        int sessionCloseTime = sessionOccurrenceClose(sourceName, profile, twentyFourSeven, false)
+        int levelEndTime = sessionLevelEndpoint(sourceName, sessionCloseTime, syminfo.type == "futures")
+        int sessionTradingDayKey = tradingDayKey(sessionCloseTime)
+        renderLowVolumeStructures(profile, sourceName, "", levelEndTime, sessionTradingDayKey, true, true)
+        array<float> strengths = computeRowStrengths(profile)
+        collectOutlierPeaks(profile, strengths, sourceName, "", levelEndTime, sessionTradingDayKey, true)
+        flushPendingOutlierLevels(mergeOverlaps, true)
+
 renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNameOverride, bool pairedNyHeadings, bool historical, bool developing, bool twentyFourSeven, array<int> chartTimes, bool renderBudgetedHistogram, int histogramLayersPerProfile) =>
     [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = profileValueLevels(profile)
     int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
@@ -2076,9 +2296,9 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNam
     array<float> strengths = computeRowStrengths(profile)
     renderDeltaPolylines(profile, sourceName, strengths, chartTimes, startScaleIndex, endScaleIndex)
     renderProfileLevels(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, valueAreaLowPrice, valueAreaHighPrice)
-    renderLowVolumeStructures(profile, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical)
+    renderLowVolumeStructures(profile, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false)
     collectOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical)
-    flushPendingOutlierLevels(mergeOverlaps)
+    flushPendingOutlierLevels(mergeOverlaps, false)
 
 renderProfileSelection(ProfileSelection selection, string sourceName, ProfileSelection comparisonSelection, bool twentyFourSeven, array<int> chartTimes, bool currentPass, bool renderBudgetedHistograms, int histogramLayersPerProfile) =>
     int selectedCount = array.size(selection.profiles)
@@ -2199,6 +2419,8 @@ var bool assetClassificationReady = false
 var int lastTickDirection = 1
 var float previousTapeClose = na
 var int lastAcceptedRangeIntrabarTime = na
+var bool fixedMitigationProfileRegistered = false
+var int registeredRollingMitigationEndTime = na
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA & BOUNDARIES
@@ -2206,6 +2428,108 @@ var int lastAcceptedRangeIntrabarTime = na
 string intrabarTimeframe = autoIntrabarTimeframe()
 string intrabarTickerId = chart.is_range ? ticker.new(syminfo.prefix, syminfo.ticker, syminfo.session) : syminfo.tickerid
 [intrabarTimes, intrabarEndTimes, intrabarOpens, intrabarHighs, intrabarLows, intrabarCloses, intrabarVolumes] = request.security_lower_tf(intrabarTickerId, intrabarTimeframe, [time, time_close, open, high, low, close, volume], ignore_invalid_timeframe=true)
+
+mitigationBoundarySamples(string requestedTimeframe) =>
+    request.security_lower_tf(intrabarTickerId, requestedTimeframe, [time, time_close, high, low], ignore_invalid_timeframe=true)
+
+if barstate.islastconfirmedhistory and anyMitigatedZoneExtensionEnabled()
+    if intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_SECOND and intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_MINUTE
+        [_, _, _, _] = mitigationBoundarySamples(INTRABAR_TIMEFRAME_ONE_MINUTE)
+    if intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_SECOND
+        [_, _, _, _] = mitigationBoundarySamples(INTRABAR_TIMEFRAME_ONE_SECOND)
+
+currentBarEndTime() =>
+    na(time_close) ? timenow : time_close
+
+firstIntrabarTouchEnd(array<int> sampleTimes, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, int eligibilityTime, float price) =>
+    int touchEndTime = na
+    int sampleCount = math.min(math.min(array.size(sampleTimes), array.size(sampleEndTimes)), math.min(array.size(sampleHighs), array.size(sampleLows)))
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            int sampleTime = array.get(sampleTimes, sampleIndex)
+            int sampleEndTime = array.get(sampleEndTimes, sampleIndex)
+            float sampleHigh = array.get(sampleHighs, sampleIndex)
+            float sampleLow = array.get(sampleLows, sampleIndex)
+            bool eligibleSample = sampleTime >= eligibilityTime and sampleEndTime > eligibilityTime
+            if na(touchEndTime) and eligibleSample and not na(sampleHigh) and not na(sampleLow) and sampleLow <= price and sampleHigh >= price
+                touchEndTime := sampleEndTime
+    touchEndTime
+
+boundaryCoverageComplete(array<int> sampleTimes, array<int> sampleEndTimes, int eligibilityTime, int barEndTime) =>
+    int firstEligibleTime = na
+    int lastEligibleEndTime = na
+    int sampleCount = math.min(array.size(sampleTimes), array.size(sampleEndTimes))
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            int sampleTime = array.get(sampleTimes, sampleIndex)
+            int sampleEndTime = array.get(sampleEndTimes, sampleIndex)
+            if sampleTime >= eligibilityTime and sampleEndTime > eligibilityTime
+                firstEligibleTime := na(firstEligibleTime) ? sampleTime : math.min(firstEligibleTime, sampleTime)
+                lastEligibleEndTime := na(lastEligibleEndTime) ? sampleEndTime : math.max(lastEligibleEndTime, sampleEndTime)
+    not na(firstEligibleTime) and firstEligibleTime <= eligibilityTime and lastEligibleEndTime >= barEndTime
+
+profileIntrabarsArePrecise(int eligibilityTime) =>
+    intrabarTimeframe == INTRABAR_TIMEFRAME_ONE_SECOND or (eligibilityTime % MS_PER_MINUTE == 0 and intrabarTimeframe == INTRABAR_TIMEFRAME_ONE_MINUTE)
+
+mitigationBoundaryRequestTimeframe() =>
+    string requestedTimeframe = ""
+    int barEndTime = currentBarEndTime()
+    int stateCount = array.size(mitigatedZoneStates)
+    if stateCount > 0
+        for stateIndex = 0 to stateCount - 1
+            MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+            bool boundaryBar = time < state.eligibilityTime and barEndTime > state.eligibilityTime
+            bool chartBarTouches = not na(high) and not na(low) and low <= state.price and high >= state.price
+            bool minuteAlignedBoundary = state.eligibilityTime % MS_PER_MINUTE == 0
+            if state.available and na(state.mitigatedTime) and boundaryBar and chartBarTouches and not profileIntrabarsArePrecise(state.eligibilityTime)
+                requestedTimeframe := minuteAlignedBoundary and requestedTimeframe != INTRABAR_TIMEFRAME_ONE_SECOND ? INTRABAR_TIMEFRAME_ONE_MINUTE : INTRABAR_TIMEFRAME_ONE_SECOND
+    requestedTimeframe
+
+updateMitigatedZoneStates(array<int> boundaryTimes, array<int> boundaryEndTimes, array<float> boundaryHighs, array<float> boundaryLows) =>
+    int barEndTime = currentBarEndTime()
+    int stateCount = array.size(mitigatedZoneStates)
+    if stateCount > 0
+        for stateIndex = 0 to stateCount - 1
+            MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+            if state.available and na(state.mitigatedTime) and barEndTime > state.eligibilityTime
+                float price = state.price
+                bool chartBarTouches = not na(high) and not na(low) and low <= price and high >= price
+                if chartBarTouches
+                    bool useProfileIntrabars = profileIntrabarsArePrecise(state.eligibilityTime)
+                    int intrabarTouchEnd = useProfileIntrabars ? firstIntrabarTouchEnd(intrabarTimes, intrabarEndTimes, intrabarHighs, intrabarLows, state.eligibilityTime, price) : firstIntrabarTouchEnd(boundaryTimes, boundaryEndTimes, boundaryHighs, boundaryLows, state.eligibilityTime, price)
+                    bool boundaryBar = time < state.eligibilityTime
+                    if not na(intrabarTouchEnd)
+                        state.mitigatedTime := intrabarTouchEnd
+                    else if not boundaryBar
+                        state.mitigatedTime := barEndTime
+                    else if barstate.isconfirmed
+                        bool coverageComplete = useProfileIntrabars ? boundaryCoverageComplete(intrabarTimes, intrabarEndTimes, state.eligibilityTime, barEndTime) : boundaryCoverageComplete(boundaryTimes, boundaryEndTimes, state.eligibilityTime, barEndTime)
+                        if not coverageComplete
+                            state.available := false
+                    array.set(mitigatedZoneStates, stateIndex, state)
+
+mitigatedZoneEndTime(string sourceName, int profileStartTime, float price, int eligibilityTime) =>
+    int zoneEndTime = na
+    int stateIndex = mitigatedZoneStateIndex(sourceName, profileStartTime, eligibilityTime, price)
+    if stateIndex >= 0
+        MitigatedZoneState state = array.get(mitigatedZoneStates, stateIndex)
+        zoneEndTime := state.available ? (na(state.mitigatedTime) ? math.max(eligibilityTime, currentBarEndTime()) : state.mitigatedTime) : eligibilityTime
+    else
+        zoneEndTime := eligibilityTime
+    zoneEndTime
+
+flushPendingMitigatedZones() =>
+    int pendingCount = array.size(pendingMitigatedZones)
+    if pendingCount > 0
+        for pendingIndex = 0 to pendingCount - 1
+            PendingMitigatedZone pending = array.get(pendingMitigatedZones, pendingIndex)
+            int rightTime = mitigatedZoneEndTime(pending.sourceName, pending.profileStartTime, pending.price, pending.eligibilityTime)
+            if not na(rightTime)
+                renderZoneFill(pending.leftTime, rightTime, pending.zoneLow, pending.zoneHigh, pending.zoneColor)
+                if pending.hasLine
+                    queueRightLine(pending.price, pending.leftTime, rightTime, pending.lineColor, pending.lineWidth, pending.lineStyle, pending.lineRank, pending.sourceName, pending.tradingDayKey, pending.historical, pending.direction)
+                queueLevelMarker(pending.price, levelMarkerTime(rightTime), pending.markerLabel, pending.markerColor, pending.markerSize)
+        array.clear(pendingMitigatedZones)
 
 // Resolve known market types immediately; scan weekend bars only for ambiguous types.
 bool isKnown247Asset = syminfo.type == "crypto"
@@ -2435,13 +2759,13 @@ if extendedNyEarlySessionStart
     clearSamples(extendedOpeningPendingHighs, extendedOpeningPendingLows, extendedOpeningPendingVolumes, extendedOpeningPendingDeltas)
     extendedOpeningQualified := false
 
-processAnchor(rthModeActive, SESSION_PROFILE_RETENTION, rthInSession, rthSessionStart, rthSessionEnd, rthBarHighs, rthBarLows, rthBarVolumes, rthBarDeltas, rthProfiles, rthStartRef, rthLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
-processAnchor(globexModeActive, SESSION_PROFILE_RETENTION, true, globexDayStart, false, globexBarHighs, globexBarLows, globexBarVolumes, globexBarDeltas, globexProfiles, globexStartRef, globexLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
-processKeyedBoundedNyAnchor(midnightModeActive, SESSION_PROFILE_RETENTION, NY_MIDNIGHT_MINUTE, NY_MIDNIGHT_MINUTE, true, midnightCurrentSessionStart, midnightBarHighs, midnightBarLows, midnightBarVolumes, midnightBarDeltas, midnightProfiles, midnightStartRef, midnightLastBarRef, midnightSampleSessionStarts, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
-processKeyedBoundedNyAnchor(asiaPremarketModeActive, SESSION_PROFILE_RETENTION, ASIA_PREMARKET_START_MINUTE, ASIA_PREMARKET_END_MINUTE, asiaPremarketInSession, asiaPremarketCurrentSessionStart, asiaPremarketBarHighs, asiaPremarketBarLows, asiaPremarketBarVolumes, asiaPremarketBarDeltas, asiaPremarketProfiles, asiaPremarketStartRef, asiaPremarketLastBarRef, asiaPremarketSampleSessionStarts, asiaPremarketSampleEndTimes, asiaPremarketSampleHighs, asiaPremarketSampleLows, asiaPremarketSampleVolumes, asiaPremarketSampleDeltas)
-processBoundedNyAnchor(nyEarlyModeActive, SESSION_PROFILE_RETENTION, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, nyEarlyInSession, nyEarlySessionStart, nyEarlySessionEnd, nyEarlyFirstSampleTime, nyEarlyLastSampleEndTime, nyEarlyBarHighs, nyEarlyBarLows, nyEarlyBarVolumes, nyEarlyBarDeltas, nyEarlyProfiles, nyEarlyStartRef, nyEarlyLastBarRef, nyEarlySampleHighs, nyEarlySampleLows, nyEarlySampleVolumes, nyEarlySampleDeltas)
-processBoundedNyAnchor(extendedNyEarlyModeActive, SESSION_PROFILE_RETENTION, NY_EARLY_START_MINUTE, extendedOpeningQualifiedThisBar ? EXTENDED_NY_EARLY_OPENING_END_MINUTE : IVB_START_MINUTE, extendedNyEarlyInSession, extendedNyEarlySessionStart, extendedNyEarlySessionEnd, extendedNyEarlyFirstSampleTime, extendedNyEarlyLastSampleEndTime, extendedNyEarlyBarHighs, extendedNyEarlyBarLows, extendedNyEarlyBarVolumes, extendedNyEarlyBarDeltas, extendedNyEarlyProfiles, extendedNyEarlyStartRef, extendedNyEarlyLastBarRef, extendedNyEarlySampleHighs, extendedNyEarlySampleLows, extendedNyEarlySampleVolumes, extendedNyEarlySampleDeltas)
-processBoundedNyAnchor(ivbModeActive, SESSION_PROFILE_RETENTION, IVB_START_MINUTE, IVB_END_MINUTE, ivbInSession, ivbSessionStart, ivbSessionEnd, ivbFirstSampleTime, ivbLastSampleEndTime, ivbBarHighs, ivbBarLows, ivbBarVolumes, ivbBarDeltas, ivbProfiles, ivbStartRef, ivbLastBarRef, ivbSampleHighs, ivbSampleLows, ivbSampleVolumes, ivbSampleDeltas)
+processAnchor(SOURCE_RTH, rthModeActive, SESSION_PROFILE_RETENTION, rthInSession, rthSessionStart, rthSessionEnd, rthBarHighs, rthBarLows, rthBarVolumes, rthBarDeltas, rthProfiles, rthStartRef, rthLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+processAnchor(SOURCE_GLOBEX, globexModeActive, SESSION_PROFILE_RETENTION, true, globexDayStart, false, globexBarHighs, globexBarLows, globexBarVolumes, globexBarDeltas, globexProfiles, globexStartRef, globexLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+processKeyedBoundedNyAnchor(SOURCE_MIDNIGHT, midnightModeActive, SESSION_PROFILE_RETENTION, NY_MIDNIGHT_MINUTE, NY_MIDNIGHT_MINUTE, true, midnightCurrentSessionStart, midnightBarHighs, midnightBarLows, midnightBarVolumes, midnightBarDeltas, midnightProfiles, midnightStartRef, midnightLastBarRef, midnightSampleSessionStarts, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
+processKeyedBoundedNyAnchor(SOURCE_ASIA_PREMARKET, asiaPremarketModeActive, SESSION_PROFILE_RETENTION, ASIA_PREMARKET_START_MINUTE, ASIA_PREMARKET_END_MINUTE, asiaPremarketInSession, asiaPremarketCurrentSessionStart, asiaPremarketBarHighs, asiaPremarketBarLows, asiaPremarketBarVolumes, asiaPremarketBarDeltas, asiaPremarketProfiles, asiaPremarketStartRef, asiaPremarketLastBarRef, asiaPremarketSampleSessionStarts, asiaPremarketSampleEndTimes, asiaPremarketSampleHighs, asiaPremarketSampleLows, asiaPremarketSampleVolumes, asiaPremarketSampleDeltas)
+processBoundedNyAnchor(SOURCE_NY_EARLY, nyEarlyModeActive, SESSION_PROFILE_RETENTION, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, nyEarlyInSession, nyEarlySessionStart, nyEarlySessionEnd, nyEarlyFirstSampleTime, nyEarlyLastSampleEndTime, nyEarlyBarHighs, nyEarlyBarLows, nyEarlyBarVolumes, nyEarlyBarDeltas, nyEarlyProfiles, nyEarlyStartRef, nyEarlyLastBarRef, nyEarlySampleHighs, nyEarlySampleLows, nyEarlySampleVolumes, nyEarlySampleDeltas)
+processBoundedNyAnchor(SOURCE_EXTENDED_NY_EARLY, extendedNyEarlyModeActive, SESSION_PROFILE_RETENTION, NY_EARLY_START_MINUTE, extendedOpeningQualifiedThisBar ? EXTENDED_NY_EARLY_OPENING_END_MINUTE : IVB_START_MINUTE, extendedNyEarlyInSession, extendedNyEarlySessionStart, extendedNyEarlySessionEnd, extendedNyEarlyFirstSampleTime, extendedNyEarlyLastSampleEndTime, extendedNyEarlyBarHighs, extendedNyEarlyBarLows, extendedNyEarlyBarVolumes, extendedNyEarlyBarDeltas, extendedNyEarlyProfiles, extendedNyEarlyStartRef, extendedNyEarlyLastBarRef, extendedNyEarlySampleHighs, extendedNyEarlySampleLows, extendedNyEarlySampleVolumes, extendedNyEarlySampleDeltas)
+processBoundedNyAnchor(SOURCE_IVB, ivbModeActive, SESSION_PROFILE_RETENTION, IVB_START_MINUTE, IVB_END_MINUTE, ivbInSession, ivbSessionStart, ivbSessionEnd, ivbFirstSampleTime, ivbLastSampleEndTime, ivbBarHighs, ivbBarLows, ivbBarVolumes, ivbBarDeltas, ivbProfiles, ivbStartRef, ivbLastBarRef, ivbSampleHighs, ivbSampleLows, ivbSampleVolumes, ivbSampleDeltas)
 
 if barstate.isconfirmed and extendedOpeningWindowObserved
     if extendedOpeningQualifiedThisBar
@@ -2453,8 +2777,8 @@ if extendedNyEarlySessionEnd
     clearSamples(extendedOpeningPendingHighs, extendedOpeningPendingLows, extendedOpeningPendingVolumes, extendedOpeningPendingDeltas)
     extendedOpeningQualified := false
 
-processAnchor(weeklyModeActive, SESSION_PROFILE_RETENTION, true, weeklyPeriodStart, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, weeklyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
-processAnchor(monthlyModeActive, SESSION_PROFILE_RETENTION, true, monthlyPeriodStart, false, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyBarDeltas, monthlyProfiles, monthlyStartRef, monthlyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+processAnchor(SOURCE_WEEKLY, weeklyModeActive, SESSION_PROFILE_RETENTION, true, weeklyPeriodStart, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, weeklyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+processAnchor(SOURCE_MONTHLY, monthlyModeActive, SESSION_PROFILE_RETENTION, true, monthlyPeriodStart, false, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyBarDeltas, monthlyProfiles, monthlyStartRef, monthlyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
 
 bool fixedRangeBarInRange = fixedRangeEnabled and fixedRangeConfigured and time >= fixedRangeStart and time <= fixedRangeEnd
 bool rollingRangeConfigured = rollingSelected and not na(last_bar_time)
@@ -2466,6 +2790,42 @@ if barstate.isconfirmed
         appendRollingSamples(rollingSamples, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
     if fixedRangeBarInRange
         appendSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+
+int finalizedMitigationCount = array.size(finalizedMitigationProfiles)
+if finalizedMitigationCount > 0
+    for finalizedIndex = 0 to finalizedMitigationCount - 1
+        FinalizedMitigationProfile finalizedProfile = array.get(finalizedMitigationProfiles, finalizedIndex)
+        registerProfileMitigationLevels(finalizedProfile.profile, finalizedProfile.sourceName, isTwentyFourSevenAsset)
+    array.clear(finalizedMitigationProfiles)
+
+int mitigationEvaluationTime = currentBarEndTime()
+if mitigatedZoneExtensionEnabled(SOURCE_FIXED) and fixedRangeEnabled and fixedRangeConfigured and not fixedMitigationProfileRegistered and mitigationEvaluationTime >= fixedRangeEnd and array.size(fixedBarVolumes) > 0
+    DeltaProfile completedFixedProfile = buildDeltaProfile(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, PROFILE_ROWS, fixedRangeStart, fixedRangeEnd)
+    if completedFixedProfile.isValid
+        registerProfileMitigationLevels(completedFixedProfile, SOURCE_FIXED, isTwentyFourSevenAsset)
+        fixedMitigationProfileRegistered := true
+bool rollingMitigationProfileChanged = na(registeredRollingMitigationEndTime) or registeredRollingMitigationEndTime != rollingRangeEnd
+bool rollingLiveMitigationRefresh = rollingThrough == ROLLING_THROUGH_LIVE and not barstate.isconfirmed
+bool rollingMitigationSamplesAvailable = rollingSampleStoreSize(rollingSamples) > 0 or (not barstate.isconfirmed and rollingBarRetained and array.size(barSampleVolumes) > 0)
+if mitigatedZoneExtensionEnabled(SOURCE_ROLLING) and rollingRangeConfigured and (rollingMitigationProfileChanged or rollingLiveMitigationRefresh) and mitigationEvaluationTime >= rollingRangeEnd and rollingMitigationSamplesAvailable
+    DeltaProfile completedRollingProfile = buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
+    if completedRollingProfile.isValid
+        removeMitigatedSource(SOURCE_ROLLING)
+        registerProfileMitigationLevels(completedRollingProfile, SOURCE_ROLLING, isTwentyFourSevenAsset)
+        registeredRollingMitigationEndTime := rollingRangeEnd
+
+array<int> mitigationBoundaryTimes = array.new<int>()
+array<int> mitigationBoundaryEndTimes = array.new<int>()
+array<float> mitigationBoundaryHighs = array.new<float>()
+array<float> mitigationBoundaryLows = array.new<float>()
+string requestedMitigationTimeframe = mitigationBoundaryRequestTimeframe()
+if requestedMitigationTimeframe != ""
+    [requestedBoundaryTimes, requestedBoundaryEndTimes, requestedBoundaryHighs, requestedBoundaryLows] = mitigationBoundarySamples(requestedMitigationTimeframe)
+    mitigationBoundaryTimes := requestedBoundaryTimes
+    mitigationBoundaryEndTimes := requestedBoundaryEndTimes
+    mitigationBoundaryHighs := requestedBoundaryHighs
+    mitigationBoundaryLows := requestedBoundaryLows
+updateMitigatedZoneStates(mitigationBoundaryTimes, mitigationBoundaryEndTimes, mitigationBoundaryHighs, mitigationBoundaryLows)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHOW ONLY
@@ -2489,12 +2849,7 @@ if barstate.islast
     // Include the open bar once.
     DeltaProfile rollingProfile = na
     if rollingRangeConfigured
-        int originalSize = rollingSampleStoreSize(rollingSamples)
-        if not barstate.isconfirmed
-            if rollingBarRetained
-                appendRollingSamples(rollingSamples, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
-        rollingProfile := buildRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingThrough))
-        truncateRollingSamples(rollingSamples, originalSize)
+        rollingProfile := buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
 
     DeltaProfile fixedProfile = na
     if fixedRangeEnabled and fixedRangeConfigured
@@ -2593,12 +2948,14 @@ if barstate.islast
                 string sourceName = array.get(budgetedProfileSourceNames, selectionIndex)
                 ProfileSelection comparisonSelection = sourceName == SOURCE_EXTENDED_NY_EARLY ? selectedNyEarlyProfiles : sourceName == SOURCE_NY_EARLY ? selectedExtendedNyEarlyProfiles : na
                 renderProfileSelection(selection, sourceName, comparisonSelection, isTwentyFourSevenAsset, chartTimes, currentPass, renderBudgetedHistograms, activeHistogramPolylineLayers)
+    flushPendingMitigatedZones()
     flushPendingRightLines(mergeOverlaps)
     flushPendingRightLabels()
 
     if fixedRangeEnabled and not na(fixedProfile) and fixedProfile.isValid
         bool renderFixedHistogram = showHistogram and activeHistogramPolylineLayers > 0 and activeDeltaPolylineLayers + activeHistogramPolylineLayers <= INDICATOR_MAX_POLYLINES
         renderSelectedProfile(fixedProfile, SOURCE_FIXED, "", false, false, true, isTwentyFourSevenAsset, chartTimes, renderFixedHistogram, activeHistogramPolylineLayers)
+        flushPendingMitigatedZones()
         flushPendingRightLines(mergeOverlaps)
         flushPendingRightLabels()
 
