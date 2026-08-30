@@ -6,14 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const registryPath = resolve(repoRoot, "TRADINGVIEW-LIBRARY-VERSION-REGISTRY.md");
-const hostPath = resolve(repoRoot, "indicators/20-revelio/code/indicator/revelio.pine");
 const titleCheckerPath = resolve(repoRoot, "scripts/check-pine-indicator-titles.mjs");
 const registry = readFileSync(registryPath, "utf8");
-const host = readFileSync(hostPath, "utf8");
-const activeHost = host
-    .split(/\r?\n/)
-    .map(line => line.replace(/\/\/.*$/, ""))
-    .join("\n");
 
 function section(startMarker, endMarker) {
     const start = registry.indexOf(startMarker);
@@ -52,12 +46,26 @@ const instructionRows = tableRows(section("<!-- VERSION_REGISTRY_INSTRUCTIONS_ST
 const pendingNotes = section("## Pending release notes", "## Invariants");
 const failures = [];
 const currentLibraries = new Set();
+const instructionIds = new Set();
 
-try {
-    execFileSync(process.execPath, [titleCheckerPath, hostPath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
-} catch (error) {
-    const detail = typeof error.stderr === "string" ? error.stderr.trim() : "";
-    failures.push("Revelio host title check failed" + (detail ? ": " + detail : ""));
+for (const row of instructionRows) {
+    const instructionId = row["Instruction ID"];
+    if (!instructionId) {
+        failures.push("Publication instruction is missing an Instruction ID");
+    } else if (instructionIds.has(instructionId)) {
+        failures.push(`${instructionId}: duplicate publication instruction ID`);
+    }
+    instructionIds.add(instructionId);
+}
+
+for (const host of new Set(currentRows.map(row => row.Host))) {
+    const hostPath = resolve(repoRoot, host);
+    try {
+        execFileSync(process.execPath, [titleCheckerPath, hostPath], { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+    } catch (error) {
+        const detail = typeof error.stderr === "string" ? error.stderr.trim() : "";
+        failures.push(`${host}: title check failed` + (detail ? ": " + detail : ""));
+    }
 }
 
 for (const row of currentRows) {
@@ -65,6 +73,11 @@ for (const row of currentRows) {
     const highestPublished = versionNumber(row.Published);
     const pendingVersion = versionNumber(row.Pending);
     const developmentImport = pendingVersion ?? highestPublished;
+    const hostPath = resolve(repoRoot, row.Host);
+    const activeHost = readFileSync(hostPath, "utf8")
+        .split(/\r?\n/)
+        .map(line => line.replace(/\/\/.*$/, ""))
+        .join("\n");
     const importMatches = [...activeHost.matchAll(new RegExp(`^\\s*import\\s+midnightpaws87/${library}/(\\d+)\\s+as\\s+\\w+\\s*$`, "gm"))];
     const actualImport = importMatches.length === 1 ? Number(importMatches[0][1]) : null;
 
@@ -73,8 +86,8 @@ for (const row of currentRows) {
     }
     currentLibraries.add(library);
 
-    if (!isPositiveInteger(highestPublished)) {
-        failures.push(`${library}: Published must be a positive integer`);
+    if (highestPublished !== null && !isPositiveInteger(highestPublished)) {
+        failures.push(`${library}: Published must be a positive integer or —`);
     }
     if (pendingVersion !== null && !isPositiveInteger(pendingVersion)) {
         failures.push(`${library}: Pending must be a positive integer or —`);
@@ -88,6 +101,9 @@ for (const row of currentRows) {
     if (historyHighestPublished !== highestPublished) {
         failures.push(`${library}: Published /${highestPublished} does not match history maximum /${historyHighestPublished ?? "missing"}`);
     }
+    if (highestPublished === null && pendingVersion !== 1) {
+        failures.push(`${library}: an unpublished library must begin with pending /1`);
+    }
 
     if (importMatches.length !== 1) {
         failures.push(`${library}: expected exactly one active host import, found ${importMatches.length}`);
@@ -100,7 +116,7 @@ for (const row of currentRows) {
             .filter(history => history.Library === library && history.Status !== "Pending publication")
             .map(history => Number(history.Version))
             .filter(isPositiveInteger);
-        const highestOccupiedVersion = occupiedHistoryVersions.length > 0 ? Math.max(...occupiedHistoryVersions) : highestPublished;
+        const highestOccupiedVersion = occupiedHistoryVersions.length > 0 ? Math.max(...occupiedHistoryVersions) : highestPublished ?? 0;
         if (pendingVersion !== highestOccupiedVersion + 1) {
             failures.push(`${library}: pending /${pendingVersion} is not highest recorded /${highestOccupiedVersion} + 1`);
         }
@@ -130,6 +146,9 @@ for (const row of currentRows) {
             failures.push(`${library}: pending /${pendingVersion} is missing copy-ready version notes`);
         }
     } else {
+        if (highestPublished === null) {
+            failures.push(`${library}: a stable library requires a published version`);
+        }
         if (developmentImport !== highestPublished) {
             failures.push(`${library}: stable development import /${developmentImport} must match highest published /${highestPublished}`);
         }
@@ -159,5 +178,6 @@ if (failures.length > 0) {
 for (const row of currentRows) {
     const pending = row.Pending === "—" ? "none" : `/${row.Pending}`;
     const developmentImport = row.Pending === "—" ? row.Published : row.Pending;
-    console.log(`PASS ${row.Library}: published /${row.Published}, pending ${pending}, host import /${developmentImport}`);
+    const published = row.Published === "—" ? "none" : `/${row.Published}`;
+    console.log(`PASS ${row.Library}: published ${published}, pending ${pending}, host import /${developmentImport}`);
 }

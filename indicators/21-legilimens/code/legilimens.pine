@@ -1,5 +1,7 @@
 //@version=6
 
+import midnightpaws87/LegilimensProfileLibrary/2 as legilimensProfile
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // INDICATOR SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -95,14 +97,11 @@ MODE_MIDNIGHT = "🌃 Midnight"
 MODE_WEEKLY = "📅 Weekly"
 MODE_MONTHLY = "🗓️ Monthly"
 
-const string EXTENDED_NY_DISPLAY_OFF = "Off"
-const string EXTENDED_NY_DISPLAY_AUTO = "Auto"
-const string EXTENDED_NY_DISPLAY_ALWAYS = "Always"
-
 const string SOURCE_FIXED = "Fixed"
 const string SOURCE_ROLLING = "Rolling"
 const string SOURCE_NY_EARLY = "NY Early"
 const string DISPLAY_NY_EARLY_PLUS = "NY Early ⁺"
+const string DISPLAY_ROLLING_WEEKLY = "Rolling Weekly"
 const string SOURCE_EXTENDED_NY_EARLY = "Extended NY Early"
 const string SOURCE_IVB = "IVB"
 const string SOURCE_ASIA_PREMARKET = "Asia-Premarket"
@@ -140,8 +139,6 @@ ROLLING_DAYS_SHORT = "Days"
 
 const string OPTION_OFF = "Off"
 const string OPTION_ALL = "All"
-const string OPTION_ACTIVE = "Active"
-const string OPTION_CUSTOM = "Custom"
 const string DELTA_ROWS_BUY = "Delta+"
 const string DELTA_ROWS_SELL = "Delta-"
 
@@ -167,10 +164,8 @@ PROFILE_POSITION_LEFT_RIGHT = "Inside →"
 PROFILE_POSITION_RIGHT_LEFT = "← Inside"
 PROFILE_POSITION_RIGHT_RIGHT = "Outside →"
 
-// Compact before Pine's collection limit.
-SAMPLE_COMPACT_THRESHOLD = 10000
-SAMPLE_COMPACT_ROWS = 3000
 ROLLING_SAMPLE_COMPACT_THRESHOLD = 5000
+ROLLING_SHORT_WINDOW_COMPACT_THRESHOLD = 8 * 25 * 60
 
 PROFILE_ROWS = 400
 RANGE_TITLE_CONTAINER_PADDING = 8.0
@@ -192,7 +187,6 @@ LOW_VOLUME_MIN_SHOULDER_SHARE = 0.1
 LOW_VOLUME_MAX_ZONE_FRACTION = 0.15
 LOW_VOLUME_CLIFF_SEPARATION_ROWS = 6
 LOW_VOLUME_LEVEL_RANK = 100
-const float VALUE_AREA_PERCENT = 70.0
 const float LOW_VOLUME_SENSITIVITY = 1.8
 
 const int DELTA_TIER_5_LINE_WIDTH = 2
@@ -238,7 +232,6 @@ GROUP_WEEKLY = "📅 Weekly"
 GROUP_MONTHLY = "🗓️ Monthly"
 GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
 GROUP_QUICK_FILTER_SETTINGS = "⚡ Quick Filter: Settings"
-GROUP_QUICK_FILTER_EXTENSIONS = "⚡ Quick Filter: Extensions"
 GROUP_DELTA = "Delta"
 GROUP_APPEARANCE = "🖼️ Profile Appearance"
 GROUP_UTILITY = "🎨 Reference"
@@ -268,22 +261,16 @@ visibleTierCount(minimumStrength) =>
 // INPUTS — PROFILE
 // ═══════════════════════════════════════════════════════════════════════════════
 anchorMode = input.string(MODE_FIXED, "Profile", options=[MODE_FIXED, MODE_ROLLING, MODE_ASIA_PREMARKET, MODE_NY_EARLY_IVB, MODE_NY_EARLY, MODE_EXTENDED_NY_EARLY, MODE_IVB, MODE_RTH, MODE_GLOBEX, MODE_MIDNIGHT, MODE_WEEKLY, MODE_MONTHLY], inline="profile_mode", group=GROUP_DISPLAY)
-hideDeveloping = input.bool(false, INPUT_LABEL_HIDE_DEVELOPING, inline="profile_mode", group=GROUP_DISPLAY, active=anchorMode != MODE_FIXED and anchorMode != MODE_ROLLING and anchorMode != MODE_WEEKLY and anchorMode != MODE_MONTHLY, tooltip="Profile — Fixed and Rolling are unrestricted. Other profiles require a Range chart or timeframe up to 1h.\nHide Developing — active profile of the selected session.")
-extendedNyEarlyDisplay = input.string(EXTENDED_NY_DISPLAY_AUTO, "Extended NY Early", options=[EXTENDED_NY_DISPLAY_OFF, EXTENDED_NY_DISPLAY_AUTO, EXTENDED_NY_DISPLAY_ALWAYS], group=GROUP_DISPLAY, active=anchorMode == MODE_NY_EARLY or anchorMode == MODE_NY_EARLY_IVB or anchorMode == MODE_EXTENDED_NY_EARLY, tooltip="Off — NY Early only\nAuto — NY Early ⁺ until Extended differs after 09:00\nAlways — Extended always renders separately")
+hideDeveloping = input.bool(true, INPUT_LABEL_HIDE_DEVELOPING, inline="profile_mode", group=GROUP_DISPLAY, active=anchorMode != MODE_FIXED and anchorMode != MODE_ROLLING and anchorMode != MODE_WEEKLY and anchorMode != MODE_MONTHLY, tooltip="Profile — Fixed and Rolling are unrestricted. Other profiles require a Range chart or timeframe up to 1h.\nHide Developing — active profile of the selected session.")
+useRollingWeekly = input.bool(false, "Use Rolling Weekly", group=GROUP_DISPLAY, active=anchorMode == MODE_WEEKLY, tooltip="7 trading days through the latest 18:00.")
 showPriorProfiles = input.bool(true, "Show Prior Profiles", inline="profile_history", group=GROUP_DISPLAY, active=anchorMode != MODE_FIXED and anchorMode != MODE_ROLLING)
-priorProfiles = input.int(3, "Profiles", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24], inline="profile_history", group=GROUP_DISPLAY, active=showPriorProfiles and anchorMode != MODE_FIXED and anchorMode != MODE_ROLLING, tooltip=TOOLTIP_PROFILE_HISTORY)
+priorProfiles = input.int(10, "", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24], inline="profile_history", group=GROUP_DISPLAY, active=showPriorProfiles and anchorMode != MODE_FIXED and anchorMode != MODE_ROLLING, tooltip=TOOLTIP_PROFILE_HISTORY)
 priorProfilesToShow = showPriorProfiles ? priorProfiles : 0
 
 // Input flags gate controls; mode flags gate rendering.
-extendedNyEarlyStandaloneSelected = anchorMode == MODE_EXTENDED_NY_EARLY
 nyEarlyIvbSelected = anchorMode == MODE_NY_EARLY_IVB
-nyEarlyPrimarySelected = anchorMode == MODE_NY_EARLY or nyEarlyIvbSelected
-combineExtendedNyEarly = extendedNyEarlyDisplay == EXTENDED_NY_DISPLAY_AUTO
-extendedNyEarlyAlways = extendedNyEarlyDisplay == EXTENDED_NY_DISPLAY_ALWAYS
-// Standalone Auto compares against NY Early; Off intentionally shows NY Early only.
-nyEarlySelected = nyEarlyPrimarySelected or (extendedNyEarlyStandaloneSelected and not extendedNyEarlyAlways)
-extendedNyEarlyOverlaySelected = nyEarlyPrimarySelected and extendedNyEarlyDisplay != EXTENDED_NY_DISPLAY_OFF
-extendedNyEarlySelected = (extendedNyEarlyStandaloneSelected and extendedNyEarlyDisplay != EXTENDED_NY_DISPLAY_OFF) or extendedNyEarlyOverlaySelected
+nyEarlySelected = anchorMode == MODE_NY_EARLY or anchorMode == MODE_EXTENDED_NY_EARLY or nyEarlyIvbSelected
+extendedNyEarlySelected = nyEarlySelected
 ivbSelected = anchorMode == MODE_IVB or nyEarlyIvbSelected
 asiaPremarketSelected = anchorMode == MODE_ASIA_PREMARKET
 rthSelected = anchorMode == MODE_RTH
@@ -320,29 +307,17 @@ showOnlyMostRecent = input.bool(false, LABEL_MOST_RECENT_ONLY, inline="show_only
 // ═══════════════════════════════════════════════════════════════════════════════
 enableQuickCheck = input.bool(false, "Enable VAHL Quick Check", group=GROUP_QUICK_FILTER_SETTINGS, tooltip="Hides Delta/LVN tiers and dots. Shows VAH, VAL, and labeled POC while keeping the Delta profile, outline, and placement.")
 showDeltaTiers = input.bool(true, "Show Minimum Delta Tiers", inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
-minimumDeltaTierStrength = input.string(TIER_THRESHOLD_3, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showDeltaTiers and not enableQuickCheck)
+minimumDeltaTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showDeltaTiers and not enableQuickCheck)
 visibleDeltaTierCount = visibleTierCount(minimumDeltaTierStrength)
 showOutliersOnly = input.bool(false, "Show Outliers Only", inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, tooltip="Minimum — weakest visible tier\nOutliers — dominant histogram rows only")
 showMinimumLvnTiers = input.bool(true, "Show Minimum LVN Tiers", inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
-minimumLvnTierStrength = input.string(TIER_THRESHOLD_3, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showMinimumLvnTiers and not enableQuickCheck, tooltip="Minimum — weakest visible tier")
+minimumLvnTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showMinimumLvnTiers and not enableQuickCheck, tooltip="Minimum — weakest visible tier")
 visibleLvnTierCount = visibleTierCount(minimumLvnTierStrength)
 dotDisplay = input.string(DOT_DISPLAY_DOTS, "Dots", options=[DOT_DISPLAY_OFF, DOT_DISPLAY_DOTS, DOT_DISPLAY_DOTS_LABELS], inline="profile_visibility", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
 showDots = not enableQuickCheck and dotDisplay != DOT_DISPLAY_OFF
 showDotLabels = not enableQuickCheck and dotDisplay == DOT_DISPLAY_DOTS_LABELS
 
-mitigatedZoneExtensionMode = input.string(OPTION_OFF, "Extend Unmitigated", options=[OPTION_OFF, OPTION_ACTIVE, OPTION_CUSTOM], inline="profile_visibility", group=GROUP_QUICK_FILTER_SETTINGS, tooltip=TOOLTIP_EXTEND_MITIGATED_ZONES)
-customMitigatedZoneExtensionsActive = mitigatedZoneExtensionMode == OPTION_CUSTOM
-customExtendFixedMitigatedZones = input.bool(false, SOURCE_FIXED, inline="mitigated_extensions_range", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and fixedSelected)
-customExtendRollingMitigatedZones = input.bool(false, SOURCE_ROLLING, inline="mitigated_extensions_range", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and rollingSelected)
-customExtendAsiaPremarketMitigatedZones = input.bool(false, SOURCE_ASIA_PREMARKET, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and asiaPremarketSelected)
-customExtendGlobexMitigatedZones = input.bool(false, SOURCE_GLOBEX, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and globexSelected)
-customExtendMidnightMitigatedZones = input.bool(false, SOURCE_MIDNIGHT, inline="mitigated_extensions_overnight", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and midnightSelected)
-customExtendNyEarlyMitigatedZones = input.bool(false, SOURCE_NY_EARLY, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and nyEarlySelected)
-customExtendExtendedNyEarlyMitigatedZones = input.bool(false, SOURCE_EXTENDED_NY_EARLY, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and extendedNyEarlySelected)
-customExtendIvbMitigatedZones = input.bool(false, SOURCE_IVB, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and ivbSelected)
-customExtendRthMitigatedZones = input.bool(false, SOURCE_RTH, inline="mitigated_extensions_intraday", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and rthSelected)
-customExtendWeeklyMitigatedZones = input.bool(false, SOURCE_WEEKLY, inline="mitigated_extensions_calendar", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and weeklySelected)
-customExtendMonthlyMitigatedZones = input.bool(false, SOURCE_MONTHLY, inline="mitigated_extensions_calendar", group=GROUP_QUICK_FILTER_EXTENSIONS, active=customMitigatedZoneExtensionsActive and monthlySelected, tooltip=TOOLTIP_EXTEND_MITIGATED_ZONES)
+extendUnmitigated = input.bool(false, "Extend Unmitigated", inline="profile_visibility", group=GROUP_QUICK_FILTER_SETTINGS, tooltip=TOOLTIP_EXTEND_MITIGATED_ZONES)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — ROLLING RANGE
@@ -355,6 +330,13 @@ rollingLookbackTag = str.tostring(rollingLookbackDays) + "-Day"
 rollingProfilePosition = input.string(PROFILE_POSITION_RIGHT_LEFT, INPUT_LABEL_POSITION, options=[PROFILE_POSITION_LEFT_LEFT, PROFILE_POSITION_LEFT_RIGHT, PROFILE_POSITION_RIGHT_LEFT, PROFILE_POSITION_RIGHT_RIGHT], inline="rolling_position", group=GROUP_ROLLING, active=rollingSelected)
 rollingHours = input.float(6.0, INPUT_LABEL_HOURS, minval=0.0, step=1.0, inline="rolling_position", group=GROUP_ROLLING, active=rollingSelected, tooltip=TOOLTIP_PROFILE_HOURS)
 rollingDeltaWidthBars = input.int(DELTA_WIDTH_DEFAULT_BARS, INPUT_LABEL_DELTA_WIDTH, minval=DELTA_WIDTH_MIN_BARS, maxval=DELTA_WIDTH_MAX_BARS, inline="rolling_delta_width", group=GROUP_ROLLING, active=rollingSelected, tooltip=TOOLTIP_DELTA_WIDTH)
+
+weeklyRollingSelected = weeklyModeActive and useRollingWeekly
+calendarWeeklyModeActive = weeklyModeActive and not useRollingWeekly
+rollingWindowModeActive = rollingSelected or weeklyRollingSelected
+rollingWindowLookbackDays = weeklyRollingSelected ? 7 : rollingLookbackDays
+rollingWindowThrough = weeklyRollingSelected ? ROLLING_THROUGH_1800 : rollingThrough
+weeklyRollingHistoryCount = weeklyRollingSelected ? priorProfilesToShow : 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — SESSIONS
@@ -372,7 +354,7 @@ ivbProfilePosition = input.string(PROFILE_POSITION_RIGHT_RIGHT, INPUT_LABEL_POSI
 ivbHours = input.float(3.0, INPUT_LABEL_HOURS, minval=0.0, step=1.0, inline="ivb_position", group=GROUP_IVB, active=ivbSelected, tooltip=TOOLTIP_PROFILE_HOURS)
 ivbDeltaWidthBars = input.int(INTRADAY_DELTA_WIDTH_DEFAULT_BARS, INPUT_LABEL_DELTA_WIDTH, minval=DELTA_WIDTH_MIN_BARS, maxval=DELTA_WIDTH_MAX_BARS, inline="ivb_delta_width", group=GROUP_IVB, active=ivbSelected, tooltip=TOOLTIP_DELTA_WIDTH)
 
-useAsiaPremarketAlternateStyles = input.bool(false, "Use Alternate Styles", group=GROUP_ASIA_PREMARKET, active=asiaPremarketSelected, tooltip="Applies a fixed alternate palette to Asia-Premarket only.")
+useAsiaPremarketAlternateStyles = input.bool(true, "Use Alternate Styles", group=GROUP_ASIA_PREMARKET, active=asiaPremarketSelected, tooltip="Applies a fixed alternate palette to Asia-Premarket only.")
 asiaPremarketProfilePosition = input.string(PROFILE_POSITION_RIGHT_LEFT, INPUT_LABEL_POSITION, options=[PROFILE_POSITION_LEFT_LEFT, PROFILE_POSITION_LEFT_RIGHT, PROFILE_POSITION_RIGHT_LEFT, PROFILE_POSITION_RIGHT_RIGHT], inline="asia_premarket_position", group=GROUP_ASIA_PREMARKET, active=asiaPremarketSelected)
 asiaPremarketHours = input.float(3.0, INPUT_LABEL_HOURS, minval=0.0, step=1.0, inline="asia_premarket_position", group=GROUP_ASIA_PREMARKET, active=asiaPremarketSelected, tooltip=TOOLTIP_PROFILE_HOURS)
 asiaPremarketDeltaWidthBars = input.int(DELTA_WIDTH_DEFAULT_BARS, INPUT_LABEL_DELTA_WIDTH, minval=DELTA_WIDTH_MIN_BARS, maxval=DELTA_WIDTH_MAX_BARS, inline="asia_premarket_delta_width", group=GROUP_ASIA_PREMARKET, active=asiaPremarketSelected, tooltip=TOOLTIP_DELTA_WIDTH)
@@ -640,7 +622,7 @@ maximumCoreProfileCapacity(int sourceCount, int deltaLayersPerProfile, int lines
     totalProfileCapacity := math.min(totalProfileCapacity, profileCapacityForObjectLimit(INDICATOR_MAX_BOXES, boxesPerProfile, requestedCapacity))
     totalProfileCapacity
 
-int activeProfileSourceCount = (nyEarlyModeActive ? 1 : 0) + (extendedNyEarlyModeActive ? 1 : 0) + (ivbModeActive ? 1 : 0) + (asiaPremarketModeActive ? 1 : 0) + (rthModeActive ? 1 : 0) + (globexModeActive ? 1 : 0) + (midnightModeActive ? 1 : 0) + (weeklyModeActive ? 1 : 0) + (monthlyModeActive ? 1 : 0) + (rollingSelected ? 1 : 0) + (fixedSelected ? 1 : 0)
+int activeProfileSourceCount = (nyEarlyModeActive ? 1 : 0) + (extendedNyEarlyModeActive ? 1 : 0) + (ivbModeActive ? 1 : 0) + (asiaPremarketModeActive ? 1 : 0) + (rthModeActive ? 1 : 0) + (globexModeActive ? 1 : 0) + (midnightModeActive ? 1 : 0) + (calendarWeeklyModeActive ? 1 : 0) + (monthlyModeActive ? 1 : 0) + (rollingWindowModeActive ? 1 : 0) + (fixedSelected ? 1 : 0)
 int activeDeltaPolylineLayers = deltaPolylineLayersPerProfile(deltaHistogramRows, showOutliersOnly)
 int activeHistogramPolylineLayers = histogramPolylineLayersPerProfile(showHistogram, useHistogramValueAreaColors)
 [activeLinesPerProfile, activeLabelsPerProfile, activeBoxesPerProfile] = maximumCoreObjectCostsPerProfile()
@@ -649,9 +631,6 @@ int activeCoreProfileCapacity = maximumCoreProfileCapacity(activeProfileSourceCo
 autoIntrabarTimeframe() =>
     float chartSeconds = timeframe.in_seconds(timeframe.period)
     chart.is_range ? INTRABAR_TIMEFRAME_ONE_MINUTE : chartSeconds <= SECONDS_PER_MINUTE ? INTRABAR_TIMEFRAME_ONE_SECOND : chartSeconds <= 15 * SECONDS_PER_MINUTE ? INTRABAR_TIMEFRAME_ONE_MINUTE : chartSeconds <= 60 * SECONDS_PER_MINUTE ? INTRABAR_TIMEFRAME_FIVE_MINUTES : chartSeconds <= 4 * 60 * SECONDS_PER_MINUTE ? INTRABAR_TIMEFRAME_FIFTEEN_MINUTES : INTRABAR_TIMEFRAME_ONE_HOUR
-
-clampRow(float rawRow, int rowCount) =>
-    math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
 
 sameCalendarDate(int firstTime, int secondTime, string timezone) =>
     year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
@@ -676,18 +655,35 @@ quarterDurationValue(float duration) =>
 formatQuarterDuration(float duration) =>
     str.tostring(quarterDurationValue(duration), "#.##")
 
-formatFixedRangeDuration(int firstTime, int secondTime) =>
+fixedRangeTradingDayDuration(int firstTime, int secondTime) =>
+    int shiftedStartTime = math.min(firstTime, secondTime) + GLOBEX_REOPEN_SHIFT_MS
+    int shiftedEndTime = math.max(firstTime, secondTime) + GLOBEX_REOPEN_SHIFT_MS
+    int cursorDate = timestamp(NY_TIMEZONE, year(shiftedStartTime, NY_TIMEZONE), month(shiftedStartTime, NY_TIMEZONE), dayofmonth(shiftedStartTime, NY_TIMEZONE), 0, 0)
+    float tradingDays = 0.0
+    while cursorDate < shiftedEndTime
+        int nextDate = timestamp(NY_TIMEZONE, year(cursorDate, NY_TIMEZONE), month(cursorDate, NY_TIMEZONE), dayofmonth(cursorDate, NY_TIMEZONE) + 1, 0, 0)
+        int weekday = dayofweek(cursorDate, NY_TIMEZONE)
+        if weekday >= dayofweek.monday and weekday <= dayofweek.friday
+            int overlapStart = math.max(shiftedStartTime, cursorDate)
+            int overlapEnd = math.min(shiftedEndTime, nextDate)
+            if overlapEnd > overlapStart
+                tradingDays += float(overlapEnd - overlapStart) / float(nextDate - cursorDate)
+        cursorDate := nextDate
+    tradingDays
+
+formatFixedRangeDuration(int firstTime, int secondTime, bool twentyFourSeven) =>
     int durationMs = math.abs(secondTime - firstTime)
     float durationMinutes = float(durationMs) / MS_PER_MINUTE
     float durationHours = float(durationMs) / MS_PER_HOUR
     float durationDays = durationHours / 24.0
-    quarterDurationValue(durationHours) >= 24.0 ? formatQuarterDuration(durationDays) + "-Day" : durationHours >= 1.0 or quarterDurationValue(durationMinutes) >= 60.0 ? formatQuarterDuration(durationHours) + "-Hour" : formatQuarterDuration(durationMinutes) + "-Minute"
+    float displayedDays = twentyFourSeven ? durationDays : fixedRangeTradingDayDuration(firstTime, secondTime)
+    quarterDurationValue(durationHours) >= 24.0 ? formatQuarterDuration(displayedDays) + "-Day" : durationHours >= 1.0 or quarterDurationValue(durationMinutes) >= 60.0 ? formatQuarterDuration(durationHours) + "-Hour" : formatQuarterDuration(durationMinutes) + "-Minute"
 
-profileDisplayName(string sourceName, string displayNameOverride) =>
-    displayNameOverride != "" ? displayNameOverride : sourceName == SOURCE_FIXED ? PROFILE_EMOJI_FIXED + formatFixedRangeDuration(fixedRangeStartInput, fixedRangeEndInput) + " " + PROFILE_NAME_FIXED : sourceName == SOURCE_ROLLING ? "Rolling " + rollingLookbackTag + " Range" : sourceName
+profileDisplayName(string sourceName, string displayNameOverride, bool twentyFourSeven) =>
+    displayNameOverride != "" ? displayNameOverride : sourceName == SOURCE_FIXED ? PROFILE_EMOJI_FIXED + formatFixedRangeDuration(fixedRangeStartInput, fixedRangeEndInput, twentyFourSeven) + " " + PROFILE_NAME_FIXED : sourceName == SOURCE_ROLLING ? "Rolling " + rollingLookbackTag + " Range" : sourceName == SOURCE_WEEKLY and weeklyRollingSelected ? DISPLAY_ROLLING_WEEKLY : sourceName
 
 profileSourceName(string sourceName, string displayNameOverride) =>
-    displayNameOverride != "" ? displayNameOverride : sourceName == SOURCE_FIXED ? PROFILE_NAME_FIXED : sourceName == SOURCE_ROLLING ? PROFILE_NAME_ROLLING : sourceName
+    displayNameOverride != "" ? displayNameOverride : sourceName == SOURCE_FIXED ? PROFILE_NAME_FIXED : sourceName == SOURCE_ROLLING ? PROFILE_NAME_ROLLING : sourceName == SOURCE_WEEKLY and weeklyRollingSelected ? DISPLAY_ROLLING_WEEKLY : sourceName
 
 activeAnchorName() =>
     anchorMode == MODE_ROLLING ? SOURCE_ROLLING : anchorMode == MODE_NY_EARLY ? SOURCE_NY_EARLY : anchorMode == MODE_EXTENDED_NY_EARLY ? SOURCE_EXTENDED_NY_EARLY : anchorMode == MODE_IVB ? SOURCE_IVB : anchorMode == MODE_NY_EARLY_IVB ? SOURCE_NY_EARLY_IVB : anchorMode == MODE_ASIA_PREMARKET ? SOURCE_ASIA_PREMARKET : anchorMode == MODE_RTH ? SOURCE_RTH : anchorMode == MODE_GLOBEX ? SOURCE_GLOBEX : anchorMode == MODE_MIDNIGHT ? SOURCE_MIDNIGHT : anchorMode == MODE_WEEKLY ? SOURCE_WEEKLY : anchorMode == MODE_MONTHLY ? SOURCE_MONTHLY : ""
@@ -756,7 +752,7 @@ sessionOccurrenceClose(string sourceName, DeltaProfile profile, bool twentyFourS
     else if sourceName == SOURCE_RTH
         closeTime := developing ? nyMinuteBoundary(profile.startTime, 16 * 60) : profile.endTime
     else if sourceName == SOURCE_WEEKLY
-        closeTime := developing ? profile.endTime : twentyFourSeven ? nextCalendarWeekBoundary(profile.startTime, UTC_TIMEZONE, 0, 0) : nextCalendarWeekBoundary(profile.startTime, NY_TIMEZONE, SUNDAY_REOPEN_START_HOUR, 0)
+        closeTime := developing or weeklyRollingSelected ? profile.endTime : twentyFourSeven ? nextCalendarWeekBoundary(profile.startTime, UTC_TIMEZONE, 0, 0) : nextCalendarWeekBoundary(profile.startTime, NY_TIMEZONE, SUNDAY_REOPEN_START_HOUR, 0)
     closeTime
 
 profileHours(string sourceName) =>
@@ -777,33 +773,8 @@ profileSourceSelected(string sourceName) =>
         SOURCE_MONTHLY => monthlySelected
         => false
 
-customMitigatedZoneExtensionEnabled(string sourceName) =>
-    switch sourceName
-        SOURCE_FIXED => customExtendFixedMitigatedZones
-        SOURCE_ROLLING => customExtendRollingMitigatedZones
-        SOURCE_NY_EARLY => customExtendNyEarlyMitigatedZones
-        SOURCE_EXTENDED_NY_EARLY => customExtendExtendedNyEarlyMitigatedZones
-        SOURCE_IVB => customExtendIvbMitigatedZones
-        SOURCE_ASIA_PREMARKET => customExtendAsiaPremarketMitigatedZones
-        SOURCE_RTH => customExtendRthMitigatedZones
-        SOURCE_GLOBEX => customExtendGlobexMitigatedZones
-        SOURCE_MIDNIGHT => customExtendMidnightMitigatedZones
-        SOURCE_WEEKLY => customExtendWeeklyMitigatedZones
-        SOURCE_MONTHLY => customExtendMonthlyMitigatedZones
-        => false
-
 mitigatedZoneExtensionEnabled(string sourceName) =>
-    profileSourceSelected(sourceName) and (mitigatedZoneExtensionMode == OPTION_ACTIVE or mitigatedZoneExtensionMode == OPTION_CUSTOM and customMitigatedZoneExtensionEnabled(sourceName))
-
-var array<string> mitigationProfileSources = array.from(SOURCE_FIXED, SOURCE_ROLLING, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, SOURCE_IVB, SOURCE_ASIA_PREMARKET, SOURCE_RTH, SOURCE_GLOBEX, SOURCE_MIDNIGHT, SOURCE_WEEKLY, SOURCE_MONTHLY)
-
-anyMitigatedZoneExtensionEnabled() =>
-    bool enabled = false
-    for sourceName in mitigationProfileSources
-        if mitigatedZoneExtensionEnabled(sourceName)
-            enabled := true
-            break
-    enabled
+    extendUnmitigated and profileSourceSelected(sourceName)
 
 extendsPriorityZoneUntilMitigated(string sourceName, int strengthRank) =>
     strengthRank <= 2 and mitigatedZoneExtensionEnabled(sourceName)
@@ -821,7 +792,7 @@ profileOuterColor(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(128, 222, 234), 94) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 94) : sourceName == SOURCE_IVB ? color.new(color.rgb(245, 65, 240), 95) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(165, 214, 167), 70) : sourceName == SOURCE_RTH ? color.new(color.rgb(41, 98, 255), 90) : usesGlobexPalette(sourceName) ? color.new(color.rgb(233, 30, 99), 90) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(156, 39, 176), 90) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(223, 107, 12), 85) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(248, 187, 208), 75) : color.new(color.rgb(187, 217, 251), 70)
 
 profileInnerColor(string sourceName) =>
-    sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(128, 222, 234), 50) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 88) : sourceName == SOURCE_IVB ? color.new(color.rgb(249, 121, 246), 55) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(56, 142, 60), 15) : sourceName == SOURCE_RTH ? color.new(color.rgb(144, 191, 249), 30) : usesGlobexPalette(sourceName) ? color.new(color.rgb(248, 187, 208), 30) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(156, 39, 176), 20) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(255, 152, 0), 20) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(248, 187, 208), 30) : color.new(color.rgb(187, 217, 251), 30)
+    sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(128, 222, 234), 50) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 88) : sourceName == SOURCE_IVB ? color.new(color.rgb(249, 121, 246), 55) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(56, 142, 60), 88) : sourceName == SOURCE_RTH ? color.new(color.rgb(144, 191, 249), 30) : usesGlobexPalette(sourceName) ? color.new(color.rgb(248, 187, 208), 30) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(156, 39, 176), 88) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(255, 152, 0), 20) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(248, 187, 208), 30) : color.new(color.rgb(187, 217, 251), 30)
 
 profileRangeLabelColor(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(0, 188, 212), 9) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 9) : sourceName == SOURCE_IVB ? color.new(color.rgb(245, 65, 240), 20) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(56, 142, 60), 5) : sourceName == SOURCE_RTH ? color.new(color.rgb(48, 79, 254), 30) : usesGlobexPalette(sourceName) ? color.new(color.rgb(211, 47, 47), 30) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(123, 31, 162), 30) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(239, 108, 0), 30) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(173, 20, 87), 30) : color.new(color.rgb(41, 98, 255), 30)
@@ -929,6 +900,9 @@ previousNyCutoff(int cutoffTime, int cutoffHour, int cutoffMinute) =>
     int previousDateReference = cutoffTime - MS_PER_DAY
     timestamp(NY_TIMEZONE, year(previousDateReference, NY_TIMEZONE), month(previousDateReference, NY_TIMEZONE), dayofmonth(previousDateReference, NY_TIMEZONE), cutoffHour, cutoffMinute)
 
+nextNyCutoff(int cutoffTime, int cutoffHour, int cutoffMinute) =>
+    timestamp(NY_TIMEZONE, year(cutoffTime, NY_TIMEZONE), month(cutoffTime, NY_TIMEZONE), dayofmonth(cutoffTime, NY_TIMEZONE) + 1, cutoffHour, cutoffMinute)
+
 // Preserve NY clock time across DST.
 lookbackDaysStart(int endTime, int days, bool twentyFourSeven) =>
     int startTime = endTime
@@ -942,6 +916,19 @@ lookbackDaysStart(int endTime, int days, bool twentyFourSeven) =>
             if twentyFourSeven or (startDay != dayofweek.saturday and startDay != dayofweek.sunday)
                 countedDays += 1
     startTime
+
+lookforwardDaysEnd(int startTime, int days, bool twentyFourSeven) =>
+    int endTime = startTime
+    int countedDays = 0
+    if not na(startTime)
+        int anchorHour = hour(startTime, NY_TIMEZONE)
+        int anchorMinute = minute(startTime, NY_TIMEZONE)
+        while countedDays < days
+            endTime := nextNyCutoff(endTime, anchorHour, anchorMinute)
+            int endDay = dayofweek(endTime, NY_TIMEZONE)
+            if twentyFourSeven or (endDay != dayofweek.saturday and endDay != dayofweek.sunday)
+                countedDays += 1
+    endTime
 
 rollingClockCutoffMinute(string throughMode) =>
     switch throughMode
@@ -989,69 +976,17 @@ deltaTierSideVisible(bool buySide) =>
 clusterOutranks(float magnitude, float strength, float bestMagnitude, float bestStrength) =>
     magnitude > bestMagnitude or (magnitude == bestMagnitude and strength > bestStrength)
 
-// Bound memory with finer-than-display bins.
-compactSamples(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
-    int sampleCount = array.size(volumes)
-    if sampleCount > 0
-        float rawHigh = array.max(highs)
-        float rawLow = array.min(lows)
-        float priceSpan = math.max(rawHigh - rawLow, syminfo.mintick * SAMPLE_COMPACT_ROWS)
-        float compactLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
-        float rowHeight = priceSpan / SAMPLE_COMPACT_ROWS
-        array<float> rowVolumes = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
-        array<float> rowDeltas = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
-        for sampleIndex = 0 to sampleCount - 1
-            float sampleHigh = array.get(highs, sampleIndex)
-            float sampleLow = array.get(lows, sampleIndex)
-            float sampleVolume = array.get(volumes, sampleIndex)
-            float sampleDelta = array.get(deltas, sampleIndex)
-            int firstRow = clampRow((sampleLow - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
-            int lastRow = clampRow((sampleHigh - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
-            int coveredRows = math.max(1, lastRow - firstRow + 1)
-            float volumePerRow = sampleVolume / coveredRows
-            float deltaPerRow = sampleDelta / coveredRows
-            for rowIndex = firstRow to lastRow
-                array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + volumePerRow)
-                array.set(rowDeltas, rowIndex, array.get(rowDeltas, rowIndex) + deltaPerRow)
-        array.clear(highs)
-        array.clear(lows)
-        array.clear(volumes)
-        array.clear(deltas)
-        for rowIndex = 0 to SAMPLE_COMPACT_ROWS - 1
-            float rowVolume = array.get(rowVolumes, rowIndex)
-            if rowVolume > 0
-                float rowPrice = compactLow + (rowIndex + 0.5) * rowHeight
-                array.push(highs, rowPrice)
-                array.push(lows, rowPrice)
-                array.push(volumes, rowVolume)
-                array.push(deltas, array.get(rowDeltas, rowIndex))
-
 compactIfNeeded(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
-    if array.size(volumes) > SAMPLE_COMPACT_THRESHOLD
-        compactSamples(highs, lows, volumes, deltas)
+    legilimensProfile.compactIfNeeded(highs, lows, volumes, deltas, syminfo.mintick)
 
 clearSamples(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
-    array.clear(highs)
-    array.clear(lows)
-    array.clear(volumes)
-    array.clear(deltas)
+    legilimensProfile.clearSamples(highs, lows, volumes, deltas)
 
 appendSamples(array<float> destHighs, array<float> destLows, array<float> destVolumes, array<float> destDeltas, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, bool compactAfter) =>
-    int sampleCount = array.size(sourceVolumes)
-    if sampleCount > 0
-        for sampleIndex = 0 to sampleCount - 1
-            array.push(destHighs, array.get(sourceHighs, sampleIndex))
-            array.push(destLows, array.get(sourceLows, sampleIndex))
-            array.push(destVolumes, array.get(sourceVolumes, sampleIndex))
-            array.push(destDeltas, array.get(sourceDeltas, sampleIndex))
-    if compactAfter
-        compactIfNeeded(destHighs, destLows, destVolumes, destDeltas)
+    legilimensProfile.appendSamples(destHighs, destLows, destVolumes, destDeltas, sourceHighs, sourceLows, sourceVolumes, sourceDeltas, compactAfter, syminfo.mintick)
 
 appendBarSample(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, float sampleHigh, float sampleLow, float sampleVolume, float sampleDelta) =>
-    array.push(highs, sampleHigh)
-    array.push(lows, sampleLow)
-    array.push(volumes, sampleVolume)
-    array.push(deltas, sampleDelta)
+    legilimensProfile.appendBarSample(highs, lows, volumes, deltas, sampleHigh, sampleLow, sampleVolume, sampleDelta)
 
 // NY date + cutoff segment key.
 rollingSegmentIndex(int nyMinutes) =>
@@ -1114,12 +1049,12 @@ clearRollingSamples(RollingSampleStore store) =>
     store.headIndex := 0
     store.headIndex
 
-compactRollingSamples(RollingSampleStore store) =>
+compactRollingSamples(RollingSampleStore store, int mergeThreshold) =>
     requireRollingSampleStoreAligned(store)
     int sampleCount = rollingSampleStoreSize(store)
-    if sampleCount > ROLLING_SAMPLE_COMPACT_THRESHOLD
-        int activeSampleCount = sampleCount - store.headIndex
-        bool mergeActiveSamples = activeSampleCount > ROLLING_SAMPLE_COMPACT_THRESHOLD
+    int activeSampleCount = sampleCount - store.headIndex
+    if store.headIndex > ROLLING_SAMPLE_COMPACT_THRESHOLD or activeSampleCount > mergeThreshold
+        bool mergeActiveSamples = activeSampleCount > mergeThreshold
         int writeIndex = 0
         int readIndex = store.headIndex
         while readIndex < sampleCount
@@ -1142,7 +1077,17 @@ compactRollingSamples(RollingSampleStore store) =>
     requireRollingSampleStoreAligned(store)
     rollingSampleStoreSize(store)
 
-appendRollingSamples(RollingSampleStore store, array<int> sourceStartTimes, array<int> sourceEndTimes, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, bool compactAfter) =>
+appendRollingSample(RollingSampleStore store, int sampleStartTime, int sampleEndTime, float sampleHigh, float sampleLow, float sampleVolume, float sampleDelta) =>
+    array.push(store.startKeys, rollingSegmentKey(sampleStartTime))
+    array.push(store.endKeys, rollingSegmentKey(math.max(sampleStartTime, sampleEndTime - 1)))
+    array.push(store.startTimes, sampleStartTime)
+    array.push(store.endTimes, sampleEndTime)
+    array.push(store.highs, sampleHigh)
+    array.push(store.lows, sampleLow)
+    array.push(store.volumes, sampleVolume)
+    array.push(store.deltas, sampleDelta)
+
+appendRollingSamples(RollingSampleStore store, array<int> sourceStartTimes, array<int> sourceEndTimes, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, bool compactAfter, int mergeThreshold) =>
     requireRollingSampleStoreAligned(store)
     int sampleCount = array.size(sourceVolumes)
     bool sourceTimesAligned = array.size(sourceStartTimes) == sampleCount and array.size(sourceEndTimes) == sampleCount
@@ -1152,18 +1097,9 @@ appendRollingSamples(RollingSampleStore store, array<int> sourceStartTimes, arra
         runtime.error("Rolling source samples are misaligned.")
     if sampleCount > 0
         for sampleIndex = 0 to sampleCount - 1
-            int sampleStartTime = array.get(sourceStartTimes, sampleIndex)
-            int sampleEndTime = array.get(sourceEndTimes, sampleIndex)
-            array.push(store.startKeys, rollingSegmentKey(sampleStartTime))
-            array.push(store.endKeys, rollingSegmentKey(math.max(sampleStartTime, sampleEndTime - 1)))
-            array.push(store.startTimes, sampleStartTime)
-            array.push(store.endTimes, sampleEndTime)
-            array.push(store.highs, array.get(sourceHighs, sampleIndex))
-            array.push(store.lows, array.get(sourceLows, sampleIndex))
-            array.push(store.volumes, array.get(sourceVolumes, sampleIndex))
-            array.push(store.deltas, array.get(sourceDeltas, sampleIndex))
+            appendRollingSample(store, array.get(sourceStartTimes, sampleIndex), array.get(sourceEndTimes, sampleIndex), array.get(sourceHighs, sampleIndex), array.get(sourceLows, sampleIndex), array.get(sourceVolumes, sampleIndex), array.get(sourceDeltas, sampleIndex))
     if compactAfter
-        compactRollingSamples(store)
+        compactRollingSamples(store, mergeThreshold)
     requireRollingSampleStoreAligned(store)
     rollingSampleStoreSize(store)
 
@@ -1179,71 +1115,8 @@ pruneRollingSamples(RollingSampleStore store, int cutoffTime) =>
 
 // Prefer one-tick rows; bin wider ranges.
 buildDeltaProfileFromSelection(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, array<int> selectedIndices, int requestedRows, int startTime, int endTime) =>
-    bool usesSelection = not na(selectedIndices)
-    int sampleCount = usesSelection ? array.size(selectedIndices) : array.size(volumes)
-    float tickSize = syminfo.mintick
-    float rawHigh = na
-    float rawLow = na
-    if sampleCount > 0
-        if usesSelection
-            for selectedIndex = 0 to sampleCount - 1
-                int sampleIndex = array.get(selectedIndices, selectedIndex)
-                float sampleHigh = array.get(highs, sampleIndex)
-                float sampleLow = array.get(lows, sampleIndex)
-                rawHigh := na(rawHigh) ? sampleHigh : math.max(rawHigh, sampleHigh)
-                rawLow := na(rawLow) ? sampleLow : math.min(rawLow, sampleLow)
-        else
-            rawHigh := array.max(highs)
-            rawLow := array.min(lows)
-    int tickRows = sampleCount > 0 ? int(math.round((rawHigh - rawLow) / tickSize)) + 1 : 0
-    bool tickGranular = tickRows >= 1 and tickRows <= requestedRows
-    int rowCount = tickGranular ? tickRows : requestedRows
-    DeltaProfile profile = DeltaProfile.new(startTime, endTime, na, na, rawLow, rawHigh, rowCount, array.new<float>(rowCount, 0.0), array.new<float>(rowCount, 0.0), 0.0, 0.0, false)
-    if sampleCount > 0
-        float profileLow = na
-        float priceSpan = na
-        float rowHeight = na
-        if tickGranular
-            profileLow := math.round(rawLow / tickSize) * tickSize - tickSize * 0.5
-            priceSpan := rowCount * tickSize
-            rowHeight := tickSize
-        else
-            priceSpan := math.max(rawHigh - rawLow, tickSize * rowCount)
-            profileLow := rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
-            rowHeight := priceSpan / rowCount
-
-        for sampleIndex = 0 to sampleCount - 1
-            int sourceIndex = usesSelection ? array.get(selectedIndices, sampleIndex) : sampleIndex
-            float sampleHigh = array.get(highs, sourceIndex)
-            float sampleLow = array.get(lows, sourceIndex)
-            float sampleVolume = array.get(volumes, sourceIndex)
-            float sampleDelta = array.get(deltas, sourceIndex)
-            int firstRow = clampRow((sampleLow - profileLow) / rowHeight, rowCount)
-            int lastRow = clampRow((sampleHigh - profileLow) / rowHeight, rowCount)
-            int coveredRows = math.max(1, lastRow - firstRow + 1)
-            float volumePerRow = sampleVolume / coveredRows
-            float deltaPerRow = sampleDelta / coveredRows
-            for rowIndex = firstRow to lastRow
-                array.set(profile.rowVolumes, rowIndex, array.get(profile.rowVolumes, rowIndex) + volumePerRow)
-                array.set(profile.rowDeltas, rowIndex, array.get(profile.rowDeltas, rowIndex) + deltaPerRow)
-
-        float totalVolume = 0.0
-        float maxRowVolume = 0.0
-        float maxAbsRowDelta = 0.0
-        for rowIndex = 0 to rowCount - 1
-            float rowVolume = array.get(profile.rowVolumes, rowIndex)
-            float rowDelta = array.get(profile.rowDeltas, rowIndex)
-            totalVolume += rowVolume
-            if rowVolume > 0
-                maxRowVolume := math.max(maxRowVolume, rowVolume)
-                maxAbsRowDelta := math.max(maxAbsRowDelta, math.abs(rowDelta))
-
-        profile.priceLow := profileLow
-        profile.priceHigh := profileLow + priceSpan
-        profile.maxRowVolume := maxRowVolume
-        profile.maxAbsRowDelta := maxAbsRowDelta
-        profile.isValid := totalVolume > 0
-    profile
+    legilimensProfile.ProfileData profile = legilimensProfile.buildProfile(highs, lows, volumes, deltas, selectedIndices, requestedRows, syminfo.mintick)
+    DeltaProfile.new(startTime, endTime, profile.priceLow, profile.priceHigh, profile.rangeLow, profile.rangeHigh, profile.rowCount, profile.rowVolumes, profile.rowDeltas, profile.maxRowVolume, profile.maxAbsRowDelta, profile.isValid)
 
 buildDeltaProfile(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, int requestedRows, int startTime, int endTime) =>
     array<int> allSampleIndices = na
@@ -1265,7 +1138,7 @@ buildRollingDeltaProfile(RollingSampleStore store, int requestedRows, int startT
 buildCurrentRollingDeltaProfile(RollingSampleStore store, int requestedRows, int startTime, int endTime, bool includeEnd, bool requireFullContainment, bool currentBarRetained, array<int> sampleStartTimes, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
     int originalSize = rollingSampleStoreSize(store)
     if not barstate.isconfirmed and currentBarRetained
-        appendRollingSamples(store, sampleStartTimes, sampleEndTimes, sampleHighs, sampleLows, sampleVolumes, sampleDeltas, false)
+        appendRollingSamples(store, sampleStartTimes, sampleEndTimes, sampleHighs, sampleLows, sampleVolumes, sampleDeltas, false, ROLLING_SAMPLE_COMPACT_THRESHOLD)
     DeltaProfile profile = buildRollingDeltaProfile(store, requestedRows, startTime, endTime, includeEnd, requireFullContainment)
     truncateRollingSamples(store, originalSize)
     profile
@@ -1282,35 +1155,8 @@ buildDevelopingDeltaProfile(array<float> barHighs, array<float> barLows, array<f
         array.pop(barDeltas)
     profile
 
-// Expand from POC toward heavier rows.
 profileValueLevels(DeltaProfile profile) =>
-    int pocRow = 0
-    float pocVolume = -1.0
-    float totalVolume = 0.0
-    for rowIndex = 0 to profile.rowCount - 1
-        float rowVolume = array.get(profile.rowVolumes, rowIndex)
-        totalVolume += rowVolume
-        if rowVolume > pocVolume
-            pocVolume := rowVolume
-            pocRow := rowIndex
-    int valueAreaLowRow = pocRow
-    int valueAreaHighRow = pocRow
-    float accumulatedVolume = math.max(0.0, pocVolume)
-    float targetVolume = totalVolume * VALUE_AREA_PERCENT * 0.01
-    while accumulatedVolume < targetVolume and (valueAreaLowRow > 0 or valueAreaHighRow < profile.rowCount - 1)
-        float volumeBelow = valueAreaLowRow > 0 ? array.get(profile.rowVolumes, valueAreaLowRow - 1) : -1.0
-        float volumeAbove = valueAreaHighRow < profile.rowCount - 1 ? array.get(profile.rowVolumes, valueAreaHighRow + 1) : -1.0
-        if volumeAbove >= volumeBelow
-            valueAreaHighRow += 1
-            accumulatedVolume += math.max(0.0, volumeAbove)
-        else
-            valueAreaLowRow -= 1
-            accumulatedVolume += math.max(0.0, volumeBelow)
-    float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
-    float pocPrice = profile.priceLow + (pocRow + 0.5) * rowHeight
-    float valueAreaHighPrice = profile.priceLow + (valueAreaHighRow + 1) * rowHeight
-    float valueAreaLowPrice = profile.priceLow + valueAreaLowRow * rowHeight
-    [pocRow, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice]
+    legilimensProfile.profileValueLevels(profile.rowVolumes, profile.rowCount, profile.priceLow, profile.priceHigh)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ANCHOR ENGINE
@@ -1327,6 +1173,45 @@ finalizePeriod(string sourceName, array<float> barHighs, array<float> barLows, a
             while array.size(profiles) > keepProfiles
                 array.shift(profiles)
         clearSamples(barHighs, barLows, barVolumes, barDeltas)
+
+processWeeklyRollingAnchor(bool enabled, int oldestStartTime, int finalEndTime, bool twentyFourSeven, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> startRef, array<int> endRef, array<int> sampleStartTimes, array<int> sampleEndTimes, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas) =>
+    if enabled and barstate.isconfirmed
+        int activeStartTime = array.get(startRef, 0)
+        int activeEndTime = array.get(endRef, 0)
+        if activeStartTime == START_TIME_UNSET
+            activeStartTime := oldestStartTime
+            activeEndTime := lookforwardDaysEnd(activeStartTime, 7, twentyFourSeven)
+        int sampleCount = array.size(sampleVolumes)
+        if sampleCount > 0
+            for sampleIndex = 0 to sampleCount - 1
+                int sampleStartTime = array.get(sampleStartTimes, sampleIndex)
+                int sampleEndTime = array.get(sampleEndTimes, sampleIndex)
+                if sampleEndTime > oldestStartTime and sampleStartTime < finalEndTime
+                    while sampleStartTime >= activeEndTime and activeEndTime <= finalEndTime
+                        finalizePeriod(SOURCE_WEEKLY, barHighs, barLows, barVolumes, barDeltas, activeStartTime, activeEndTime, SESSION_PROFILE_RETENTION, profiles)
+                        activeStartTime := activeEndTime
+                        activeEndTime := lookforwardDaysEnd(activeStartTime, 7, twentyFourSeven)
+                    if sampleStartTime >= activeStartTime and sampleEndTime <= activeEndTime
+                        appendBarSample(barHighs, barLows, barVolumes, barDeltas, array.get(sampleHighs, sampleIndex), array.get(sampleLows, sampleIndex), array.get(sampleVolumes, sampleIndex), array.get(sampleDeltas, sampleIndex))
+        compactIfNeeded(barHighs, barLows, barVolumes, barDeltas)
+        int barEndTime = na(time_close) ? time : time_close
+        while barEndTime >= activeEndTime and activeEndTime <= finalEndTime
+            finalizePeriod(SOURCE_WEEKLY, barHighs, barLows, barVolumes, barDeltas, activeStartTime, activeEndTime, SESSION_PROFILE_RETENTION, profiles)
+            activeStartTime := activeEndTime
+            activeEndTime := lookforwardDaysEnd(activeStartTime, 7, twentyFourSeven)
+        array.set(startRef, 0, activeStartTime)
+        array.set(endRef, 0, activeEndTime)
+
+appendContainedSamples(array<float> destHighs, array<float> destLows, array<float> destVolumes, array<float> destDeltas, array<int> sourceStartTimes, array<int> sourceEndTimes, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, int rangeStartTime, int rangeEndTime, bool compactAfter) =>
+    int sampleCount = array.size(sourceVolumes)
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            int sampleStartTime = array.get(sourceStartTimes, sampleIndex)
+            int sampleEndTime = array.get(sourceEndTimes, sampleIndex)
+            if sampleStartTime >= rangeStartTime and sampleEndTime <= rangeEndTime
+                appendBarSample(destHighs, destLows, destVolumes, destDeltas, array.get(sourceHighs, sampleIndex), array.get(sourceLows, sampleIndex), array.get(sourceVolumes, sampleIndex), array.get(sourceDeltas, sampleIndex))
+    if compactAfter
+        compactIfNeeded(destHighs, destLows, destVolumes, destDeltas)
 
 processAnchor(string sourceName, bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, array<float> barHighs, array<float> barLows, array<float> barVolumes, array<float> barDeltas, array<DeltaProfile> profiles, array<int> periodStartRef, array<int> periodLastBarRef, array<float> sampleHighs, array<float> sampleLows, array<float> sampleVolumes, array<float> sampleDeltas, bool continuousBoundary) =>
     if enabled
@@ -2101,8 +1986,8 @@ renderOuterSessionFrame(DeltaProfile profile, string sourceName, int levelEndTim
     if canDrawBox()
         array.push(drawnBoxes, box.new(left=profile.startTime, top=rangeHighTitleY + titleClearance, right=levelEndTime, bottom=rangeLowTitleY - titleClearance, xloc=xloc.bar_time, border_color=outerColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(outerColor, 100)))
 
-renderReferenceLevel(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, float price, string levelName, color lineColor) =>
-    string labelText = profileDisplayName(sourceName, displayNameOverride) + " " + levelName
+renderReferenceLevel(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, float price, string levelName, color lineColor, bool twentyFourSeven) =>
+    string labelText = profileDisplayName(sourceName, displayNameOverride, twentyFourSeven) + " " + levelName
     bool pocLevel = levelName == LEVEL_POC
     string lineStyle = pocLevel ? STYLE_DASHED : STYLE_SOLID
     int effectiveWidth = pocLevel ? POC_LEVEL_WIDTH : VALUE_AREA_LEVEL_WIDTH
@@ -2112,22 +1997,22 @@ renderReferenceLevel(DeltaProfile profile, string sourceName, string displayName
         color labelColor = enableQuickCheck ? lineColor : color.rgb(49, 27, 146)
         array.push(drawnLabels, label.new(levelEndTime + pocLabelOffsetMs(), price, labelText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=labelColor, size=POC_LABEL_SIZE, color=color.new(color.white, 100)))
 
-renderProfileLevels(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, float pocPrice, float valueAreaLowPrice, float valueAreaHighPrice) =>
+renderProfileLevels(DeltaProfile profile, string sourceName, string displayNameOverride, int levelEndTime, float pocPrice, float valueAreaLowPrice, float valueAreaHighPrice, bool twentyFourSeven) =>
     color quickCheckLevelColor = profileRangeLabelColor(sourceName)
     if showValueAreaLevels or enableQuickCheck
         color valueAreaColor = profileValueAreaLevelColor(sourceName)
-        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, valueAreaHighPrice, LEVEL_VAH, valueAreaColor)
-        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, valueAreaLowPrice, LEVEL_VAL, valueAreaColor)
+        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, valueAreaHighPrice, LEVEL_VAH, valueAreaColor, twentyFourSeven)
+        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, valueAreaLowPrice, LEVEL_VAL, valueAreaColor, twentyFourSeven)
     if showPocLevel or enableQuickCheck
         color pocColor = enableQuickCheck ? quickCheckLevelColor : color.rgb(49, 27, 146)
-        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, LEVEL_POC, pocColor)
+        renderReferenceLevel(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, LEVEL_POC, pocColor, twentyFourSeven)
 
-renderRangeLabels(DeltaProfile profile, string sourceName, string displayNameOverride, bool pairedNyHeadings, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
+renderRangeLabels(DeltaProfile profile, string sourceName, string displayNameOverride, bool pairedNyHeadings, array<int> chartTimes, int startScaleIndex, int endScaleIndex, bool twentyFourSeven) =>
     string labelSize = profileRangeLabelSize(sourceName)
     color labelColor = profileRangeLabelColor(sourceName)
     int headingTime = rangeHeadingTime(profile, chartTimes, startScaleIndex, endScaleIndex, profileHeadingOffsetBars(sourceName, pairedNyHeadings))
     [rangeHighTitleY, rangeLowTitleY, _] = rangeTitleLayout(profile, labelSize)
-    string rangeLabel = profileDisplayName(sourceName, displayNameOverride)
+    string rangeLabel = profileDisplayName(sourceName, displayNameOverride, twentyFourSeven)
     color labelBackgroundColor = profileTextBackgroundColor(sourceName)
     bool fixedSource = sourceName == SOURCE_FIXED
     if fixedSource and canDrawLabel()
@@ -2187,23 +2072,20 @@ profileRenderDecision(DeltaProfile profile, string sourceName, ProfileSelection 
     bool shouldRender = true
     bool pairedNyHeadings = false
     string displayNameOverride = ""
-    if combineExtendedNyEarly
-        if sourceName == SOURCE_EXTENDED_NY_EARLY
-            DeltaProfile nyProfile = matchingNyProfile(comparisonSelection, profile)
-            bool postNyStart = extendedNyHasPostNySamples(profile)
-            bool matchingRange = nyRangeMatchesExtended(nyProfile, profile)
-            shouldRender := postNyStart and not na(nyProfile) and not matchingRange
-            pairedNyHeadings := shouldRender
-        else if sourceName == SOURCE_NY_EARLY
-            DeltaProfile extendedProfile = matchingNyProfile(comparisonSelection, profile)
-            bool extendedProfileVisible = false
-            if not na(extendedProfile) and extendedNyHasPostNySamples(extendedProfile)
-                bool matchingRange = nyRangeMatchesExtended(profile, extendedProfile)
-                extendedProfileVisible := not matchingRange
-            pairedNyHeadings := extendedProfileVisible
-            displayNameOverride := extendedNyEarlyModeActive and not extendedProfileVisible ? DISPLAY_NY_EARLY_PLUS : ""
-    else if extendedNyEarlyOverlaySelected and (sourceName == SOURCE_NY_EARLY or sourceName == SOURCE_EXTENDED_NY_EARLY)
-        pairedNyHeadings := true
+    if sourceName == SOURCE_EXTENDED_NY_EARLY
+        DeltaProfile nyProfile = matchingNyProfile(comparisonSelection, profile)
+        bool postNyStart = extendedNyHasPostNySamples(profile)
+        bool matchingRange = nyRangeMatchesExtended(nyProfile, profile)
+        shouldRender := postNyStart and not na(nyProfile) and not matchingRange
+        pairedNyHeadings := shouldRender
+    else if sourceName == SOURCE_NY_EARLY
+        DeltaProfile extendedProfile = matchingNyProfile(comparisonSelection, profile)
+        bool extendedProfileVisible = false
+        if not na(extendedProfile) and extendedNyHasPostNySamples(extendedProfile)
+            bool matchingRange = nyRangeMatchesExtended(profile, extendedProfile)
+            extendedProfileVisible := not matchingRange
+        pairedNyHeadings := extendedProfileVisible
+        displayNameOverride := extendedNyEarlyModeActive and not extendedProfileVisible ? DISPLAY_NY_EARLY_PLUS : ""
     [shouldRender, displayNameOverride, pairedNyHeadings]
 
 renderableProfileCount(ProfileSelection selection, string sourceName, ProfileSelection comparisonSelection) =>
@@ -2287,7 +2169,7 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNam
     int sessionTradingDayKey = tradingDayKey(sessionCloseTime)
 
     renderOuterSessionFrame(profile, sourceName, levelEndTime)
-    renderRangeLabels(profile, sourceName, displayNameOverride, pairedNyHeadings, chartTimes, startScaleIndex, endScaleIndex)
+    renderRangeLabels(profile, sourceName, displayNameOverride, pairedNyHeadings, chartTimes, startScaleIndex, endScaleIndex, twentyFourSeven)
     renderProfileBox(profile, sourceName)
 
     if renderBudgetedHistogram
@@ -2295,7 +2177,7 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNam
 
     array<float> strengths = computeRowStrengths(profile)
     renderDeltaPolylines(profile, sourceName, strengths, chartTimes, startScaleIndex, endScaleIndex)
-    renderProfileLevels(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, valueAreaLowPrice, valueAreaHighPrice)
+    renderProfileLevels(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, valueAreaLowPrice, valueAreaHighPrice, twentyFourSeven)
     renderLowVolumeStructures(profile, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false)
     collectOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical)
     flushPendingOutlierLevels(mergeOverlaps, false)
@@ -2432,7 +2314,7 @@ string intrabarTickerId = chart.is_range ? ticker.new(syminfo.prefix, syminfo.ti
 mitigationBoundarySamples(string requestedTimeframe) =>
     request.security_lower_tf(intrabarTickerId, requestedTimeframe, [time, time_close, high, low], ignore_invalid_timeframe=true)
 
-if barstate.islastconfirmedhistory and anyMitigatedZoneExtensionEnabled()
+if barstate.islastconfirmedhistory and extendUnmitigated
     if intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_SECOND and intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_MINUTE
         [_, _, _, _] = mitigationBoundarySamples(INTRABAR_TIMEFRAME_ONE_MINUTE)
     if intrabarTimeframe != INTRABAR_TIMEFRAME_ONE_SECOND
@@ -2564,8 +2446,9 @@ monthlyPeriodStart = isTwentyFourSevenAsset ? utcMonthStart : futuresMonthStart
 
 fixedRangeStart = math.min(fixedRangeStartInput, fixedRangeEndInput)
 fixedRangeEnd = math.max(fixedRangeStartInput, fixedRangeEndInput)
-rollingRangeEnd = rollingThroughTime(last_bar_time, rollingThrough, isTwentyFourSevenAsset)
-rollingRangeStart = lookbackDaysStart(rollingRangeEnd, rollingLookbackDays, isTwentyFourSevenAsset)
+rollingRangeEnd = rollingThroughTime(last_bar_time, rollingWindowThrough, isTwentyFourSevenAsset)
+rollingRangeStart = lookbackDaysStart(rollingRangeEnd, rollingWindowLookbackDays, isTwentyFourSevenAsset)
+weeklyRollingOldestStart = lookbackDaysStart(rollingRangeEnd, rollingWindowLookbackDays * (weeklyRollingHistoryCount + 1), isTwentyFourSevenAsset)
 
 array<int> barSampleStartTimes = array.new<int>()
 array<int> barSampleEndTimes = array.new<int>()
@@ -2737,7 +2620,7 @@ if extendedOpeningQualifiedThisBar
         appendSamples(extendedNyEarlySampleHighs, extendedNyEarlySampleLows, extendedNyEarlySampleVolumes, extendedNyEarlySampleDeltas, extendedOpeningPendingHighs, extendedOpeningPendingLows, extendedOpeningPendingVolumes, extendedOpeningPendingDeltas, false)
     appendSamples(extendedNyEarlySampleHighs, extendedNyEarlySampleLows, extendedNyEarlySampleVolumes, extendedNyEarlySampleDeltas, extendedOpeningSampleHighs, extendedOpeningSampleLows, extendedOpeningSampleVolumes, extendedOpeningSampleDeltas, false)
 
-int asiaPremarketEvaluationTime = barstate.isconfirmed and not na(time_close) ? time_close : timenow
+int asiaPremarketEvaluationTime = str.contains(syminfo.tickerid, "replay") ? time : barstate.isrealtime ? timenow : na(time_close) ? time : time_close
 bool asiaPremarketEvaluationDayAllowed = isTwentyFourSevenAsset or isNySessionTradingDay(asiaPremarketEvaluationTime, ASIA_PREMARKET_START_MINUTE, ASIA_PREMARKET_END_MINUTE)
 bool asiaPremarketEvaluationInSession = asiaPremarketModeActive and asiaPremarketEvaluationDayAllowed and inNyMinuteWindow(asiaPremarketEvaluationTime, ASIA_PREMARKET_START_MINUTE, ASIA_PREMARKET_END_MINUTE)
 bool asiaPremarketInSession = asiaPremarketEvaluationInSession
@@ -2777,19 +2660,21 @@ if extendedNyEarlySessionEnd
     clearSamples(extendedOpeningPendingHighs, extendedOpeningPendingLows, extendedOpeningPendingVolumes, extendedOpeningPendingDeltas)
     extendedOpeningQualified := false
 
-processAnchor(SOURCE_WEEKLY, weeklyModeActive, SESSION_PROFILE_RETENTION, true, weeklyPeriodStart, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, weeklyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+processAnchor(SOURCE_WEEKLY, calendarWeeklyModeActive, SESSION_PROFILE_RETENTION, true, weeklyPeriodStart, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, weeklyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
 processAnchor(SOURCE_MONTHLY, monthlyModeActive, SESSION_PROFILE_RETENTION, true, monthlyPeriodStart, false, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyBarDeltas, monthlyProfiles, monthlyStartRef, monthlyLastBarRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+processWeeklyRollingAnchor(weeklyRollingSelected, weeklyRollingOldestStart, rollingRangeEnd, isTwentyFourSevenAsset, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, weeklyLastBarRef, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
 
-bool fixedRangeBarInRange = fixedRangeEnabled and fixedRangeConfigured and time >= fixedRangeStart and time <= fixedRangeEnd
-bool rollingRangeConfigured = rollingSelected and not na(last_bar_time)
-bool rollingBarRetained = rollingRangeConfigured and (na(time_close) ? time >= rollingRangeStart : time_close > rollingRangeStart)
+bool fixedRangeBarMayOverlap = fixedRangeEnabled and fixedRangeConfigured and time < fixedRangeEnd and (na(time_close) or time_close > fixedRangeStart)
+bool rollingRangeConfigured = rollingWindowModeActive and not na(last_bar_time)
+bool rollingBarRetained = rollingSelected and rollingRangeConfigured and (na(time_close) ? time >= rollingRangeStart : time_close > rollingRangeStart)
 if rollingSelected
     pruneRollingSamples(rollingSamples, rollingRangeStart)
 if barstate.isconfirmed
     if rollingBarRetained
-        appendRollingSamples(rollingSamples, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
-    if fixedRangeBarInRange
-        appendSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true)
+        int rollingMergeThreshold = rollingLookbackDays <= 7 ? ROLLING_SHORT_WINDOW_COMPACT_THRESHOLD : ROLLING_SAMPLE_COMPACT_THRESHOLD
+        appendRollingSamples(rollingSamples, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, true, rollingMergeThreshold)
+    if fixedRangeBarMayOverlap
+        appendContainedSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, fixedRangeStart, fixedRangeEnd, true)
 
 int finalizedMitigationCount = array.size(finalizedMitigationProfiles)
 if finalizedMitigationCount > 0
@@ -2805,10 +2690,10 @@ if mitigatedZoneExtensionEnabled(SOURCE_FIXED) and fixedRangeEnabled and fixedRa
         registerProfileMitigationLevels(completedFixedProfile, SOURCE_FIXED, isTwentyFourSevenAsset)
         fixedMitigationProfileRegistered := true
 bool rollingMitigationProfileChanged = na(registeredRollingMitigationEndTime) or registeredRollingMitigationEndTime != rollingRangeEnd
-bool rollingLiveMitigationRefresh = rollingThrough == ROLLING_THROUGH_LIVE and not barstate.isconfirmed
+bool rollingLiveMitigationRefresh = rollingWindowThrough == ROLLING_THROUGH_LIVE and not barstate.isconfirmed
 bool rollingMitigationSamplesAvailable = rollingSampleStoreSize(rollingSamples) > 0 or (not barstate.isconfirmed and rollingBarRetained and array.size(barSampleVolumes) > 0)
-if mitigatedZoneExtensionEnabled(SOURCE_ROLLING) and rollingRangeConfigured and (rollingMitigationProfileChanged or rollingLiveMitigationRefresh) and mitigationEvaluationTime >= rollingRangeEnd and rollingMitigationSamplesAvailable
-    DeltaProfile completedRollingProfile = buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
+if mitigatedZoneExtensionEnabled(SOURCE_ROLLING) and rollingSelected and rollingRangeConfigured and (rollingMitigationProfileChanged or rollingLiveMitigationRefresh) and mitigationEvaluationTime >= rollingRangeEnd and rollingMitigationSamplesAvailable
+    DeltaProfile completedRollingProfile = buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingWindowThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingWindowThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
     if completedRollingProfile.isValid
         removeMitigatedSource(SOURCE_ROLLING)
         registerProfileMitigationLevels(completedRollingProfile, SOURCE_ROLLING, isTwentyFourSevenAsset)
@@ -2848,14 +2733,14 @@ if barstate.islast
 
     // Include the open bar once.
     DeltaProfile rollingProfile = na
-    if rollingRangeConfigured
-        rollingProfile := buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
+    if rollingSelected and rollingRangeConfigured
+        rollingProfile := buildCurrentRollingDeltaProfile(rollingSamples, PROFILE_ROWS, rollingRangeStart, rollingRangeEnd, rollingWindowThrough == ROLLING_THROUGH_LIVE, rollingUsesClockCutoff(rollingWindowThrough), rollingBarRetained, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas)
 
     DeltaProfile fixedProfile = na
     if fixedRangeEnabled and fixedRangeConfigured
         int originalSize = array.size(fixedBarVolumes)
-        if not barstate.isconfirmed and fixedRangeBarInRange
-            appendSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, false)
+        if not barstate.isconfirmed and fixedRangeBarMayOverlap
+            appendContainedSamples(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, barSampleStartTimes, barSampleEndTimes, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, fixedRangeStart, fixedRangeEnd, false)
         fixedProfile := buildDeltaProfile(fixedBarHighs, fixedBarLows, fixedBarVolumes, fixedBarDeltas, PROFILE_ROWS, fixedRangeStart, math.min(fixedRangeEnd, time))
         while array.size(fixedBarVolumes) > originalSize
             array.pop(fixedBarHighs)
@@ -2881,7 +2766,7 @@ if barstate.islast
     ProfileSelection selectedNyEarlyProfiles = na
     ProfileSelection selectedExtendedNyEarlyProfiles = na
     ProfileSelection selectedIvbProfiles = na
-    bool groupedNyProfilesActive = nyEarlyIvbModeActive or (nyEarlyModeActive and extendedNyEarlyModeActive) or (extendedNyEarlyStandaloneSelected and nyEarlyModeActive)
+    bool groupedNyProfilesActive = nyEarlyModeActive and extendedNyEarlyModeActive
     if groupedNyProfilesActive
         if nyEarlyModeActive
             selectedNyEarlyProfiles := selectSessionProfiles(priorProfilesToShow, nyEarlyInSession, hideDeveloping, nyEarlyBarHighs, nyEarlyBarLows, nyEarlyBarVolumes, nyEarlyBarDeltas, nyEarlyProfiles, nyEarlyStartRef, nyEarlySampleHighs, nyEarlySampleLows, nyEarlySampleVolumes, nyEarlySampleDeltas, nyEarlyDevelopingEndTime)
@@ -2903,7 +2788,9 @@ if barstate.islast
         selectedSessionProfiles := selectSessionProfiles(priorProfilesToShow, extendedNyEarlyInSession, hideDeveloping, extendedNyEarlyBarHighs, extendedNyEarlyBarLows, extendedNyEarlyBarVolumes, extendedNyEarlyBarDeltas, extendedNyEarlyProfiles, extendedNyEarlyStartRef, extendedNyEarlySampleHighs, extendedNyEarlySampleLows, extendedNyEarlySampleVolumes, extendedNyEarlySampleDeltas, extendedNyEarlyDevelopingEndTime)
     else if ivbModeActive
         selectedSessionProfiles := selectSessionProfiles(priorProfilesToShow, ivbInSession, hideDeveloping, ivbBarHighs, ivbBarLows, ivbBarVolumes, ivbBarDeltas, ivbProfiles, ivbStartRef, ivbSampleHighs, ivbSampleLows, ivbSampleVolumes, ivbSampleDeltas, ivbDevelopingEndTime)
-    else if weeklyModeActive
+    else if weeklyRollingSelected
+        selectedSessionProfiles := selectSessionProfiles(priorProfilesToShow, false, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, rollingRangeEnd)
+    else if calendarWeeklyModeActive
         selectedSessionProfiles := selectSessionProfiles(priorProfilesToShow, true, false, weeklyBarHighs, weeklyBarLows, weeklyBarVolumes, weeklyBarDeltas, weeklyProfiles, weeklyStartRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, time)
     else if monthlyModeActive
         selectedSessionProfiles := selectSessionProfiles(priorProfilesToShow, true, false, monthlyBarHighs, monthlyBarLows, monthlyBarVolumes, monthlyBarDeltas, monthlyProfiles, monthlyStartRef, barSampleHighs, barSampleLows, barSampleVolumes, barSampleDeltas, time)

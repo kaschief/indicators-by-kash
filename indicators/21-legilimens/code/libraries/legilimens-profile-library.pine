@@ -1,0 +1,180 @@
+//@version=6
+
+//@description Private Legilimens profile calculation library.
+library("LegilimensProfileLibrary", overlay=true)
+
+const int SAMPLE_COMPACT_THRESHOLD = 10000
+const int SAMPLE_COMPACT_ROWS = 3000
+const float VALUE_AREA_PERCENT = 70.0
+
+export type ProfileData
+    float priceLow
+    float priceHigh
+    float rangeLow
+    float rangeHigh
+    int rowCount
+    array<float> rowVolumes
+    array<float> rowDeltas
+    float maxRowVolume
+    float maxAbsRowDelta
+    bool isValid
+
+clampRow(float rawRow, int rowCount) =>
+    math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
+
+compactSamples(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, float tickSize) =>
+    int sampleCount = array.size(volumes)
+    if sampleCount > 0
+        float rawHigh = array.max(highs)
+        float rawLow = array.min(lows)
+        float priceSpan = math.max(rawHigh - rawLow, tickSize * SAMPLE_COMPACT_ROWS)
+        float compactLow = rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+        float rowHeight = priceSpan / SAMPLE_COMPACT_ROWS
+        array<float> rowVolumes = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
+        array<float> rowDeltas = array.new<float>(SAMPLE_COMPACT_ROWS, 0.0)
+        for sampleIndex = 0 to sampleCount - 1
+            float sampleHigh = array.get(highs, sampleIndex)
+            float sampleLow = array.get(lows, sampleIndex)
+            float sampleVolume = array.get(volumes, sampleIndex)
+            float sampleDelta = array.get(deltas, sampleIndex)
+            int firstRow = clampRow((sampleLow - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int lastRow = clampRow((sampleHigh - compactLow) / rowHeight, SAMPLE_COMPACT_ROWS)
+            int coveredRows = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = sampleVolume / coveredRows
+            float deltaPerRow = sampleDelta / coveredRows
+            for rowIndex = firstRow to lastRow
+                array.set(rowVolumes, rowIndex, array.get(rowVolumes, rowIndex) + volumePerRow)
+                array.set(rowDeltas, rowIndex, array.get(rowDeltas, rowIndex) + deltaPerRow)
+        array.clear(highs)
+        array.clear(lows)
+        array.clear(volumes)
+        array.clear(deltas)
+        for rowIndex = 0 to SAMPLE_COMPACT_ROWS - 1
+            float rowVolume = array.get(rowVolumes, rowIndex)
+            if rowVolume > 0
+                float rowPrice = compactLow + (rowIndex + 0.5) * rowHeight
+                array.push(highs, rowPrice)
+                array.push(lows, rowPrice)
+                array.push(volumes, rowVolume)
+                array.push(deltas, array.get(rowDeltas, rowIndex))
+export compactIfNeeded(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, float tickSize) =>
+    if array.size(volumes) > SAMPLE_COMPACT_THRESHOLD
+        compactSamples(highs, lows, volumes, deltas, tickSize)
+
+export clearSamples(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
+    array.clear(highs)
+    array.clear(lows)
+    array.clear(volumes)
+    array.clear(deltas)
+
+export appendSamples(array<float> destHighs, array<float> destLows, array<float> destVolumes, array<float> destDeltas, array<float> sourceHighs, array<float> sourceLows, array<float> sourceVolumes, array<float> sourceDeltas, bool compactAfter, float tickSize) =>
+    int sampleCount = array.size(sourceVolumes)
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            array.push(destHighs, array.get(sourceHighs, sampleIndex))
+            array.push(destLows, array.get(sourceLows, sampleIndex))
+            array.push(destVolumes, array.get(sourceVolumes, sampleIndex))
+            array.push(destDeltas, array.get(sourceDeltas, sampleIndex))
+    if compactAfter
+        compactIfNeeded(destHighs, destLows, destVolumes, destDeltas, tickSize)
+
+export appendBarSample(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, float sampleHigh, float sampleLow, float sampleVolume, float sampleDelta) =>
+    array.push(highs, sampleHigh)
+    array.push(lows, sampleLow)
+    array.push(volumes, sampleVolume)
+    array.push(deltas, sampleDelta)
+
+export buildProfile(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas, array<int> selectedIndices, int requestedRows, float tickSize) =>
+    bool usesSelection = not na(selectedIndices)
+    int sampleCount = usesSelection ? array.size(selectedIndices) : array.size(volumes)
+    float rawHigh = na
+    float rawLow = na
+    if sampleCount > 0
+        if usesSelection
+            for selectedIndex = 0 to sampleCount - 1
+                int sampleIndex = array.get(selectedIndices, selectedIndex)
+                float sampleHigh = array.get(highs, sampleIndex)
+                float sampleLow = array.get(lows, sampleIndex)
+                rawHigh := na(rawHigh) ? sampleHigh : math.max(rawHigh, sampleHigh)
+                rawLow := na(rawLow) ? sampleLow : math.min(rawLow, sampleLow)
+        else
+            rawHigh := array.max(highs)
+            rawLow := array.min(lows)
+    int tickRows = sampleCount > 0 ? int(math.round((rawHigh - rawLow) / tickSize)) + 1 : 0
+    bool tickGranular = tickRows >= 1 and tickRows <= requestedRows
+    int rowCount = tickGranular ? tickRows : requestedRows
+    ProfileData profile = ProfileData.new(na, na, rawLow, rawHigh, rowCount, array.new<float>(rowCount, 0.0), array.new<float>(rowCount, 0.0), 0.0, 0.0, false)
+    if sampleCount > 0
+        float profileLow = na
+        float priceSpan = na
+        float rowHeight = na
+        if tickGranular
+            profileLow := math.round(rawLow / tickSize) * tickSize - tickSize * 0.5
+            priceSpan := rowCount * tickSize
+            rowHeight := tickSize
+        else
+            priceSpan := math.max(rawHigh - rawLow, tickSize * rowCount)
+            profileLow := rawHigh == rawLow ? rawLow - priceSpan * 0.5 : rawLow
+            rowHeight := priceSpan / rowCount
+
+        for sampleIndex = 0 to sampleCount - 1
+            int sourceIndex = usesSelection ? array.get(selectedIndices, sampleIndex) : sampleIndex
+            float sampleHigh = array.get(highs, sourceIndex)
+            float sampleLow = array.get(lows, sourceIndex)
+            float sampleVolume = array.get(volumes, sourceIndex)
+            float sampleDelta = array.get(deltas, sourceIndex)
+            int firstRow = clampRow((sampleLow - profileLow) / rowHeight, rowCount)
+            int lastRow = clampRow((sampleHigh - profileLow) / rowHeight, rowCount)
+            int coveredRows = math.max(1, lastRow - firstRow + 1)
+            float volumePerRow = sampleVolume / coveredRows
+            float deltaPerRow = sampleDelta / coveredRows
+            for rowIndex = firstRow to lastRow
+                array.set(profile.rowVolumes, rowIndex, array.get(profile.rowVolumes, rowIndex) + volumePerRow)
+                array.set(profile.rowDeltas, rowIndex, array.get(profile.rowDeltas, rowIndex) + deltaPerRow)
+
+        float totalVolume = 0.0
+        float maxRowVolume = 0.0
+        float maxAbsRowDelta = 0.0
+        for rowIndex = 0 to rowCount - 1
+            float rowVolume = array.get(profile.rowVolumes, rowIndex)
+            float rowDelta = array.get(profile.rowDeltas, rowIndex)
+            totalVolume += rowVolume
+            if rowVolume > 0
+                maxRowVolume := math.max(maxRowVolume, rowVolume)
+                maxAbsRowDelta := math.max(maxAbsRowDelta, math.abs(rowDelta))
+
+        profile.priceLow := profileLow
+        profile.priceHigh := profileLow + priceSpan
+        profile.maxRowVolume := maxRowVolume
+        profile.maxAbsRowDelta := maxAbsRowDelta
+        profile.isValid := totalVolume > 0
+    profile
+
+export profileValueLevels(array<float> rowVolumes, int rowCount, float priceLow, float priceHigh) =>
+    int pocRow = 0
+    float pocVolume = -1.0
+    float totalVolume = 0.0
+    for rowIndex = 0 to rowCount - 1
+        float rowVolume = array.get(rowVolumes, rowIndex)
+        totalVolume += rowVolume
+        if rowVolume > pocVolume
+            pocVolume := rowVolume
+            pocRow := rowIndex
+    int valueAreaLowRow = pocRow
+    int valueAreaHighRow = pocRow
+    float accumulatedVolume = math.max(0.0, pocVolume)
+    float targetVolume = totalVolume * VALUE_AREA_PERCENT * 0.01
+    while accumulatedVolume < targetVolume and (valueAreaLowRow > 0 or valueAreaHighRow < rowCount - 1)
+        float volumeBelow = valueAreaLowRow > 0 ? array.get(rowVolumes, valueAreaLowRow - 1) : -1.0
+        float volumeAbove = valueAreaHighRow < rowCount - 1 ? array.get(rowVolumes, valueAreaHighRow + 1) : -1.0
+        if volumeAbove >= volumeBelow
+            valueAreaHighRow += 1
+            accumulatedVolume += math.max(0.0, volumeAbove)
+        else
+            valueAreaLowRow -= 1
+            accumulatedVolume += math.max(0.0, volumeBelow)
+    float rowHeight = (priceHigh - priceLow) / rowCount
+    float pocPrice = priceLow + (pocRow + 0.5) * rowHeight
+    float valueAreaHighPrice = priceLow + (valueAreaHighRow + 1) * rowHeight
+    float valueAreaLowPrice = priceLow + valueAreaLowRow * rowHeight
+    [pocRow, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice]

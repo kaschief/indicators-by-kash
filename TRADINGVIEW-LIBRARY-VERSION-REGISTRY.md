@@ -18,15 +18,16 @@ This is the repository's single source of truth for TradingView library versions
 ## Current canonical state
 
 <!-- VERSION_REGISTRY_CURRENT_START -->
-| Library | Source | Published | Pending |
-|---|---|---:|---:|
-| RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | 10 | — |
-| RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | 11 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | 21 | — |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 6 | 7 |
+| Library | Source | Host | Published | Pending |
+|---|---|---|---:|---:|
+| RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
+| RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 11 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 21 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 6 | 7 |
+| LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
-Development host: `indicators/20-revelio/code/indicator/revelio.pine`
+Development hosts are recorded per library in the current-state table.
 
 Development import rule: import `Pending` when present; otherwise import `Published`.
 
@@ -84,6 +85,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioProfileOrchestrationLibrary | 5 | Published · tested · approved | Fixes RTH and Globex Auto maturity at the strict 65% threshold and removes the preset selector contract | `2355df08eae115d857b80ccca0fa0737397ed0a5a2a2a50ba8f96a3ae1aa935a` |
 | RevelioProfileOrchestrationLibrary | 6 | Published · host loaded · runtime issues reported | Builds Weekly, Monthly, and Quarterly profiles from RTH-only samples when RTH Data Only is enabled | `0b2ad8c4ed01020425cd9aac91b85ac1372e3a6ac6b56c080bcca16e86d063ff` |
 | RevelioProfileOrchestrationLibrary | 7 | Pending publication | Preserves RTH-only calendar profiles and aligns Manual Composite eligibility with post-composite retention, merge resets, and source coverage | `8722770985e7818f729c9ee31e960f6dc921b4e8c47f678b8a724ba6c1abadf1` |
+| LegilimensProfileLibrary | 1 | Published · host compile return-type defect | Extracts profile sample storage, histogram construction, and value-area calculations from the Legilimens host | `a3d05564b9ce62240a4ce15e0f2022e2fd24e9b896d5076553b4ab9af58739da` |
+| LegilimensProfileLibrary | 2 | Published · tested · approved | Restores void return contracts for mutation helpers used inside host control-flow branches | `d65e604bcc817f621311729db8f733437e7d86199f1cc16c5287eaa4630241c3` |
 
 ## Publication-instruction log
 
@@ -152,6 +155,8 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-28-01 | 2026-08-28 | RevelioProfileOrchestrationLibrary | 5 | Publish the strict-only Auto maturity orchestration privately as `/5`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/5` across RTH, market Globex, and 24/7 UTC cycles | `PUBLISHED_TESTED_APPROVED` |
 | PUB-2026-08-28-02 | 2026-08-28 | RevelioProfileOrchestrationLibrary | 6 | Publish the RTH-only calendar-profile orchestration privately as `/6`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/6` across Weekly, Monthly, Quarterly, developing, Manual Composite, Touch Marker, swept-level, time-chart, Range-chart, holiday, and DST cases | `PUBLISHED_RUNTIME_ISSUES_REPORTED` |
 | PUB-2026-08-30-02 | 2026-08-30 | RevelioProfileOrchestrationLibrary | 7 | Publish the composite-budget correction privately as `/7`, then compile and verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/7` with Manual Composite ranges at and beyond the ordinary Show Last boundary, double-width composite histograms, labeled anchor contours, and Boost-controlled daily counts | `CURRENT_PENDING` |
+| PUB-2026-08-30-01 | 2026-08-30 | LegilimensProfileLibrary | 1 | Publish the extracted Legilimens profile calculation source privately as `/1`, then compile and visually verify the development Legilimens host against `/1` across session, Rolling, Fixed, developing, Replay, and Range-chart profiles | `PUBLISHED_HOST_COMPILE_FAILED_RETURN_TYPE` |
+| PUB-2026-08-30-03 | 2026-08-30 | LegilimensProfileLibrary | 2 | Publish the void-contract correction privately as `/2`, then compile and visually verify the development Legilimens host against `/2` across session, Rolling, Fixed, developing, Replay, and Range-chart profiles | `PUBLISHED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -162,6 +167,7 @@ Entries before this registry was created are reconstructed from the task history
 - Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/21` and pending Profile Orchestration `/7`.
 - Runtime status: Interactions `/21` is published, tested, and approved. Profile Orchestration `/6` was loaded with performance and Manual Composite eligibility issues reported; `/7` requires publication, TradingView compilation, Replay, visual validation, and Profiler checks.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
+- Legilimens: Profile Library `/2` is published, tested, and approved in `indicators/21-legilimens/code/legilimens.pine`.
 
 ## Pending release notes
 
