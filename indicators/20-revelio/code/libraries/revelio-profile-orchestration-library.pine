@@ -92,6 +92,9 @@ export type ProfileChronologyState
     array<int> endKeys
     array<int> memberKeys
     array<int> memberOwners
+    array<int> memberSpans
+    array<int> memberNormalSpans
+    array<bool> memberObservedStarts
     int normalSpan
     int pendingStartKey
     int foldCount
@@ -283,9 +286,9 @@ export resolvedEndTime(int endKey, string source, bool twentyFourSeven) =>
     source == ANCHOR_RTH ? dateKeyTimestamp(endKey, NY_TIMEZONE, int(RTH_END_MINUTE / 60), RTH_END_MINUTE % 60) : source == ANCHOR_GLOBEX ? (twentyFourSeven ? dateKeyTimestamp(endKey + 1, UTC_TIMEZONE, 0, 0) : dateKeyTimestamp(endKey, NY_TIMEZONE, int(GLOBEX_CLOSE_MINUTE / 60), GLOBEX_CLOSE_MINUTE % 60)) : calendarBoundaryTime(nextCalendarPeriodKey(endKey, source), source, twentyFourSeven)
 
 export newProfileChronologyState(int unsetTime) =>
-    ProfileChronologyState.new(array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), 0, unsetTime, 0)
+    ProfileChronologyState.new(array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), array.new<bool>(), 0, unsetTime, 0)
 
-export appendChronologyKey(ProfileChronologyState state, int periodKey) =>
+appendChronologyKey(ProfileChronologyState state, int periodKey) =>
     array.push(state.startKeys, periodKey)
     array.push(state.endKeys, periodKey)
     if array.size(state.startKeys) > CHRONOLOGY_PROFILE_LIMIT
@@ -294,10 +297,23 @@ export appendChronologyKey(ProfileChronologyState state, int periodKey) =>
         while array.size(state.memberOwners) > 0 and array.first(state.memberOwners) == removedOwner
             array.shift(state.memberKeys)
             array.shift(state.memberOwners)
+            array.shift(state.memberSpans)
+            array.shift(state.memberNormalSpans)
+            array.shift(state.memberObservedStarts)
     true
 
-export updateProfileChronology(ProfileChronologyState state, int periodKey, int startTime, int lastBarTime, MergeMode mergeMode, float shortSpanFraction, int unsetTime) =>
+export appendUnmergedChronologyKey(ProfileChronologyState state, int periodKey, bool observedStartBoundary) =>
+    appendChronologyKey(state, periodKey)
+    array.push(state.memberKeys, periodKey)
+    array.push(state.memberOwners, periodKey)
+    array.push(state.memberSpans, 0)
+    array.push(state.memberNormalSpans, 0)
+    array.push(state.memberObservedStarts, observedStartBoundary)
+    true
+
+export updateProfileChronology(ProfileChronologyState state, int periodKey, int startTime, int lastBarTime, bool observedStartBoundary, MergeMode mergeMode, float shortSpanFraction, int unsetTime) =>
     int periodSpan = lastBarTime - startTime
+    int normalSpanBeforePeriod = state.normalSpan
     bool mergeAllShorts = mergeAll(mergeMode)
     bool combineShorts = mergeCombine(mergeMode)
     int maximumFoldCount = mergeDepth(mergeMode)
@@ -321,22 +337,56 @@ export updateProfileChronology(ProfileChronologyState state, int periodKey, int 
                 state.foldCount := 0
     array.push(state.memberKeys, periodKey)
     array.push(state.memberOwners, canMerge ? array.last(state.startKeys) : periodKey)
+    array.push(state.memberSpans, periodSpan)
+    array.push(state.memberNormalSpans, normalSpanBeforePeriod)
+    array.push(state.memberObservedStarts, observedStartBoundary)
     true
 
-export startDisplayed(ProfileChronologyState chronology, int startKey, int currentKey, bool currentPeriodDisplayed, int profilesToShow) =>
-    bool displayed = currentPeriodDisplayed and startKey == currentKey
-    int profileCount = array.size(chronology.startKeys)
-    if not displayed and profileCount > 0
-        int oldestIndex = math.max(0, profileCount - math.max(1, profilesToShow))
-        int oldestOwner = array.get(chronology.startKeys, oldestIndex)
-        if array.size(chronology.memberKeys) > 0
-            for memberIndex = array.size(chronology.memberKeys) - 1 to 0
-                if array.get(chronology.memberOwners, memberIndex) < oldestOwner
-                    break
-                if array.get(chronology.memberKeys, memberIndex) == startKey
-                    displayed := true
-                    break
-    displayed
+export rangeDisplayed(ProfileChronologyState chronology, int startKey, int endKey, int currentKey, bool currentPeriodUsable, bool lastBar, int profilesToShow, MergeMode mergeMode, float shortSpanFraction) =>
+    bool startKnown = currentPeriodUsable and startKey == currentKey
+    bool endKnown = currentPeriodUsable and endKey == currentKey
+    int startMemberIndex = -1
+    int memberCount = math.min(array.size(chronology.memberKeys), math.min(array.size(chronology.memberSpans), math.min(array.size(chronology.memberNormalSpans), array.size(chronology.memberObservedStarts))))
+    if memberCount > 0 and (not startKnown or not endKnown)
+        for memberIndex = memberCount - 1 to 0
+            int memberKey = array.get(chronology.memberKeys, memberIndex)
+            if not startKnown and memberKey == startKey and array.get(chronology.memberObservedStarts, memberIndex)
+                startKnown := true
+                startMemberIndex := memberIndex
+            if not endKnown and memberKey == endKey
+                endKnown := true
+            if startKnown and endKnown
+                break
+    bool mergeAllShorts = mergeAll(mergeMode)
+    bool combineShorts = mergeCombine(mergeMode)
+    int maximumFoldCount = mergeDepth(mergeMode)
+    bool mergeEnabled = mergeAllShorts or maximumFoldCount > 0
+    int normalSpan = mergeEnabled ? startMemberIndex >= 0 ? array.get(chronology.memberNormalSpans, startMemberIndex) : chronology.normalSpan : 0
+    bool pendingBase = false
+    int foldCount = 0
+    int profilesAfterRange = 0
+    bool rangeEndUsable = endKey > currentKey ? not lastBar : endKnown
+    if startKnown and rangeEndUsable and memberCount > 0
+        for memberIndex = 0 to memberCount - 1
+            if array.get(chronology.memberKeys, memberIndex) > endKey
+                int periodSpan = array.get(chronology.memberSpans, memberIndex)
+                bool isShortPeriod = mergeEnabled and normalSpan > 0 and periodSpan < int(normalSpan * shortSpanFraction)
+                bool canMerge = isShortPeriod and (mergeAllShorts or foldCount < maximumFoldCount) and pendingBase
+                if canMerge
+                    foldCount += 1
+                else
+                    profilesAfterRange += 1
+                    if mergeEnabled
+                        bool becomesBase = combineShorts ? isShortPeriod : not isShortPeriod
+                        if becomesBase
+                            pendingBase := true
+                            foldCount := combineShorts ? 1 : 0
+                        else if combineShorts and not isShortPeriod
+                            pendingBase := false
+                            foldCount := 0
+                    if periodSpan > normalSpan
+                        normalSpan := periodSpan
+    startKnown and rangeEndUsable and 1 + profilesAfterRange <= math.max(1, profilesToShow)
 
 export matchesRange(bool manualComposite, int startKey, int endKey, revelioCore.ManualCompositeRange compositeRange) =>
     manualComposite and compositeRange.enabled and compositeRange.valid and startKey == compositeRange.startKey and endKey == compositeRange.endKey
@@ -441,6 +491,49 @@ export priceWindowTimestampEligible(int timestamp, int startMinute, bool allDays
     int minuteOfDay = hour(timestamp, NY_TIMEZONE) * 60 + minute(timestamp, NY_TIMEZONE)
     dayEligible and minuteOfDay >= startMinute and minuteOfDay < RTH_END_MINUTE
 
+rthFallbackBarEligible(int startTime, int endTime) =>
+    not na(startTime) and not na(endTime) and endTime > startTime and endTime - startTime <= 5 * MS_PER_MINUTE and sameCalendarDate(startTime, endTime - 1, NY_TIMEZONE) and priceWindowTimestampEligible(startTime, RTH_START_MINUTE, false) and priceWindowTimestampEligible(endTime - 1, RTH_START_MINUTE, false)
+
+export prepareCalendarVolumeSamples(array<float> highs, array<float> lows, array<float> volumes, array<int> times, float fallbackHigh, float fallbackLow, float fallbackVolume, int fallbackStartTime, int fallbackEndTime, bool rthDataOnly, bool enabled) =>
+    if not rthDataOnly
+        revelioCore.prepareBarVolumeSamples(highs, lows, volumes, fallbackHigh, fallbackLow, fallbackVolume, enabled)
+    else
+        array<float> preparedHighs = array.new<float>()
+        array<float> preparedLows = array.new<float>()
+        array<float> preparedVolumes = array.new<float>()
+        if enabled
+            int sampleCount = math.min(array.size(volumes), math.min(array.size(highs), math.min(array.size(lows), array.size(times))))
+            if sampleCount > 0
+                for sampleIndex = 0 to sampleCount - 1
+                    float sampleVolume = array.get(volumes, sampleIndex)
+                    float sampleHigh = array.get(highs, sampleIndex)
+                    float sampleLow = array.get(lows, sampleIndex)
+                    int sampleTime = array.get(times, sampleIndex)
+                    if priceWindowTimestampEligible(sampleTime, RTH_START_MINUTE, false) and not na(sampleVolume) and sampleVolume > 0 and not na(sampleHigh) and not na(sampleLow)
+                        array.push(preparedHighs, sampleHigh)
+                        array.push(preparedLows, sampleLow)
+                        array.push(preparedVolumes, sampleVolume)
+            if array.size(preparedVolumes) == 0 and rthFallbackBarEligible(fallbackStartTime, fallbackEndTime) and not na(fallbackVolume) and fallbackVolume > 0 and not na(fallbackHigh) and not na(fallbackLow)
+                array.push(preparedHighs, fallbackHigh)
+                array.push(preparedLows, fallbackLow)
+                array.push(preparedVolumes, fallbackVolume)
+        [preparedHighs, preparedLows, preparedVolumes]
+
+export latestRthSampleDate(array<float> highs, array<float> lows, array<float> volumes, array<int> times, float fallbackHigh, float fallbackLow, float fallbackVolume, int fallbackStartTime, int fallbackEndTime, int unsetDate) =>
+    int latestDate = unsetDate
+    int sampleCount = math.min(array.size(volumes), math.min(array.size(highs), math.min(array.size(lows), array.size(times))))
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            float sampleVolume = array.get(volumes, sampleIndex)
+            float sampleHigh = array.get(highs, sampleIndex)
+            float sampleLow = array.get(lows, sampleIndex)
+            int sampleTime = array.get(times, sampleIndex)
+            if priceWindowTimestampEligible(sampleTime, RTH_START_MINUTE, false) and not na(sampleVolume) and sampleVolume > 0 and not na(sampleHigh) and not na(sampleLow)
+                latestDate := calendarDateSerial(sampleTime, NY_TIMEZONE)
+    if latestDate == unsetDate and rthFallbackBarEligible(fallbackStartTime, fallbackEndTime) and not na(fallbackVolume) and fallbackVolume > 0 and not na(fallbackHigh) and not na(fallbackLow)
+        latestDate := calendarDateSerial(fallbackStartTime, NY_TIMEZONE)
+    latestDate
+
 export priceWindowMayContainEligiblePrice(int startMinute, array<int> intrabarTimes, bool allDays, bool fallbackWindow) =>
     bool possible = false
     int intrabarCount = array.size(intrabarTimes)
@@ -473,7 +566,7 @@ export emptyRemoteProfileResult(int unsetTime) =>
     float unavailablePrice = na
     revelioCore.Profile histogramSnapshot = na
     revelioCore.Profile developingSnapshot = na
-    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0]
+    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0, 0]
 
 export newDailyMaturityState() =>
     DailyMaturityState.new(array.new<float>(), array.new<int>(), array.new<bool>(), 0, false, false)
@@ -563,14 +656,24 @@ export updateMaturity(revelioCore.MaturityState maturityState, revelioCore.Ancho
 export showsDeveloping(revelioCore.MaturityState maturityState, revelioCore.AnchorState state, string source, bool enabled, DevelopingMode currentMode, bool useUtcCalendar, bool lastBar) =>
     enabled and revelioCore.maturityShowsDeveloping(maturityState, state, currentMode == DevelopingMode.on, currentMode == DevelopingMode.automatic, maturitySessions(source, useUtcCalendar), earlyMaturitySessions(source, useUtcCalendar), MATURITY_EARLY_VOLUME_THRESHOLD_PERCENT, lastBar)
 
-export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<float> fixedVolumes, bool developingEnabled, bool useUtcCalendar, bool prepareHistogram, bool compositeValid, int compositeStartKey, int compositeEndKey, int profilesToShow, DevelopingMode currentMode, int unsetTime, int rowCount, float valueAreaPercent) =>
+manualCompositeStored(array<revelioCore.Profile> profiles, revelioCore.ManualCompositeRange compositeRange) =>
+    bool stored = false
+    if compositeRange.valid and array.size(profiles) > 0
+        for profileIndex = array.size(profiles) - 1 to 0
+            revelioCore.Profile profile = array.get(profiles, profileIndex)
+            if profile.manualComposite and profile.manualCompositeStartKey == compositeRange.startKey and profile.manualCompositeEndKey == compositeRange.endKey
+                stored := true
+                break
+    stored
+
+export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<float> fixedVolumes, array<int> fixedTimes, bool developingEnabled, bool useUtcCalendar, bool rthDataOnly, bool prepareHistogram, bool compositeValid, int compositeStartKey, int compositeEndKey, int profilesToShow, DevelopingMode currentMode, int unsetTime, int rowCount, float valueAreaPercent) =>
     bool utcQuarterBoundary = calendarQuarterStart(UTC_TIMEZONE)
     bool marketQuarterBoundary = calendarQuarterStart(NY_TIMEZONE)
     bool quarterBoundary = useUtcCalendar ? utcQuarterBoundary : marketQuarterBoundary
     bool utcDayBoundary = calendarDayStart(UTC_TIMEZONE)
     bool marketRthInSession = not na(time(timeframe.period, RTH_SESSION, NY_TIMEZONE))
     bool marketSessionComplete = not marketRthInSession and marketRthInSession[1]
-    bool maturitySessionComplete = useUtcCalendar ? utcDayBoundary : marketSessionComplete
+    bool maturityUsesUtcCalendar = useUtcCalendar and not rthDataOnly
     var revelioCore.AnchorState state = revelioCore.newAnchorState(unsetTime)
     var revelioCore.MergeState mergeState = revelioCore.newMergeState(unsetTime)
     var revelioCore.ManualCompositeState compositeState = revelioCore.newManualCompositeState(unsetTime)
@@ -578,12 +681,29 @@ export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<f
     revelioCore.ManualCompositeRange compositeRange = compositeValid ? revelioCore.newManualCompositeRange(true, true, compositeStartKey, compositeEndKey) : disabledCompositeRange
     if compositeState.recoveryActive and not compositeRange.valid
         revelioCore.restoreManualCompositeRecovery(state, mergeState, compositeState, unsetTime)
+    [preparedHighs, preparedLows, preparedVolumes] = prepareCalendarVolumeSamples(fixedHighs, fixedLows, fixedVolumes, fixedTimes, high, low, volume, time, time_close, rthDataOnly, true)
+    int observedRthDate = rthDataOnly ? latestRthSampleDate(fixedHighs, fixedLows, fixedVolumes, fixedTimes, high, low, volume, time, time_close, unsetTime) : unsetTime
+    var int lastRthMaturityDate = unsetTime
+    bool rthSessionComplete = false
+    if rthDataOnly
+        if quarterBoundary
+            lastRthMaturityDate := unsetTime
+        if observedRthDate != unsetTime
+            rthSessionComplete := lastRthMaturityDate != unsetTime and observedRthDate != lastRthMaturityDate
+            lastRthMaturityDate := observedRthDate
+    bool maturitySessionComplete = rthDataOnly ? rthSessionComplete : maturityUsesUtcCalendar ? utcDayBoundary : marketSessionComplete
+    var bool rthCoverageSeen = false
+    var bool rthCoverageReady = false
+    if rthDataOnly
+        rthCoverageSeen := rthCoverageSeen or array.size(preparedVolumes) > 0
+        if quarterBoundary and rthCoverageSeen
+            rthCoverageReady := true
+    bool calculationReady = not rthDataOnly or rthCoverageReady
     var revelioCore.MaturityState maturityState = revelioCore.newMaturityState()
     var revelioCore.AnchorProcessPolicy policy = newCalendarAnchorProcessPolicy(profilesToShow, prepareHistogram, true)
-    updateMaturity(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, useUtcCalendar, quarterBoundary, maturitySessionComplete, rowCount, valueAreaPercent)
-    [preparedHighs, preparedLows, preparedVolumes] = revelioCore.prepareBarVolumeSamples(fixedHighs, fixedLows, fixedVolumes, high, low, volume, true)
+    updateMaturity(maturityState, state, ANCHOR_QUARTERLY, developingEnabled and calculationReady, currentMode, maturityUsesUtcCalendar, quarterBoundary, maturitySessionComplete, rowCount, valueAreaPercent)
     int compositePeriodKey = compositeRange.valid ? resolveEndKey(state.startTime != unsetTime ? state.startTime : time, ANCHOR_QUARTERLY, useUtcCalendar, useUtcCalendar) : unsetTime
-    revelioCore.processAnchor(state, mergeState, compositeState, compositeRange, compositePeriodKey, policy, true, true, quarterBoundary, false, preparedHighs, preparedLows, preparedVolumes, true, time, time[1], unsetTime, rowCount, valueAreaPercent)
+    revelioCore.processAnchor(state, mergeState, compositeState, compositeRange, compositePeriodKey, policy, calculationReady, true, quarterBoundary, false, preparedHighs, preparedLows, preparedVolumes, true, time, time[1], unsetTime, rowCount, valueAreaPercent)
     int developingCompositePeriodKey = compositeRange.valid ? resolveEndKey(state.startTime != unsetTime ? state.startTime : time, ANCHOR_QUARTERLY, useUtcCalendar, useUtcCalendar) : unsetTime
     revelioCore.Profile latestProfile = array.size(state.profiles) > 0 ? array.last(state.profiles) : na
     bool latestAvailable = not na(latestProfile) and latestProfile.isValid
@@ -592,8 +712,9 @@ export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<f
     revelioCore.Profile histogramSnapshot = prepareHistogram and latestAvailable and (sameCompletionDay or weeklyHistogramSnapshot or barstate.islast) ? latestProfile : na
     revelioCore.Profile developingCompositeSnapshot = barstate.islast ? buildConfirmedManualCompositeProfile(state, compositeState, compositeRange, developingCompositePeriodKey, time, prepareHistogram, rowCount, valueAreaPercent) : na
     revelioCore.Profile developingSnapshot = not na(developingCompositeSnapshot) ? developingCompositeSnapshot : developingEnabled and state.startTime != unsetTime and array.size(state.barVolumes) > 0 and barstate.islast ? revelioCore.buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, state.startTime, time, prepareHistogram) : na
-    bool showDeveloping = showsDeveloping(maturityState, state, ANCHOR_QUARTERLY, developingEnabled, currentMode, useUtcCalendar, barstate.islast)
-    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0]
+    bool showDeveloping = showsDeveloping(maturityState, state, ANCHOR_QUARTERLY, developingEnabled and calculationReady, currentMode, maturityUsesUtcCalendar, barstate.islast)
+    bool compositeReady = manualCompositeStored(state.profiles, compositeRange) or not na(developingCompositeSnapshot)
+    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.hasAlternatePoc : false, latestAvailable ? latestProfile.alternatePocPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0, compositeReady ? 1 : 0]
 
 focusDirectionMatches(float levelPrice, float focusPrice, FocusDirection focusDirection) =>
     focusDirection == FocusDirection.below ? levelPrice <= focusPrice : focusDirection == FocusDirection.above ? levelPrice >= focusPrice : focusDirection == FocusDirection.around

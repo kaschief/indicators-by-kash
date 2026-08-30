@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-08-27
+Updated: 2026-08-30
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -23,7 +23,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | 10 | — |
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | 11 | — |
 | RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | 21 | — |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 5 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | 6 | 7 |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development host: `indicators/20-revelio/code/indicator/revelio.pine`
@@ -82,6 +82,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioProfileOrchestrationLibrary | 3 | Published · superseded | Adds latched RTH and Globex volume maturity from eligible full-session history and removes the obsolete RTH cutoff-style helper | `0d35808f51caa4085f105a2a2fc00db1508bd6f8d08fc4a0e133f55c9b6b2a7f` |
 | RevelioProfileOrchestrationLibrary | 4 | Published · superseded | Adds one shared Standard / Conservative / Strict threshold preset for RTH and Globex Auto maturity | `a6154f6284e3514078ca8c0adaffe4d5dae8676fbd141d978f49d515da3aeaec` |
 | RevelioProfileOrchestrationLibrary | 5 | Published · tested · approved | Fixes RTH and Globex Auto maturity at the strict 65% threshold and removes the preset selector contract | `2355df08eae115d857b80ccca0fa0737397ed0a5a2a2a50ba8f96a3ae1aa935a` |
+| RevelioProfileOrchestrationLibrary | 6 | Published · host loaded · runtime issues reported | Builds Weekly, Monthly, and Quarterly profiles from RTH-only samples when RTH Data Only is enabled | `0b2ad8c4ed01020425cd9aac91b85ac1372e3a6ac6b56c080bcca16e86d063ff` |
+| RevelioProfileOrchestrationLibrary | 7 | Pending publication | Preserves RTH-only calendar profiles and aligns Manual Composite eligibility with post-composite retention, merge resets, and source coverage | `8722770985e7818f729c9ee31e960f6dc921b4e8c47f678b8a724ba6c1abadf1` |
 
 ## Publication-instruction log
 
@@ -148,20 +150,44 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-27-02 | 2026-08-27 | RevelioProfileOrchestrationLibrary | 3 | Publish the daily volume-maturity orchestration privately as `/3`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/3` across RTH, market Globex, and 24/7 UTC cycles; confirm the removed RTH Developing Profile / Until row and native live-RTH styling | `PUBLISHED_SUPERSEDED` |
 | PUB-2026-08-27-03 | 2026-08-27 | RevelioProfileOrchestrationLibrary | 4 | Publish the shared Auto Maturity preset orchestration privately as `/4`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/4` using Standard 45%, Conservative 55%, and Strict 65% across RTH, market Globex, and 24/7 UTC cycles | `PUBLISHED_SUPERSEDED` |
 | PUB-2026-08-28-01 | 2026-08-28 | RevelioProfileOrchestrationLibrary | 5 | Publish the strict-only Auto maturity orchestration privately as `/5`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/5` across RTH, market Globex, and 24/7 UTC cycles | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-08-28-02 | 2026-08-28 | RevelioProfileOrchestrationLibrary | 6 | Publish the RTH-only calendar-profile orchestration privately as `/6`, then compile and visually verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/6` across Weekly, Monthly, Quarterly, developing, Manual Composite, Touch Marker, swept-level, time-chart, Range-chart, holiday, and DST cases | `PUBLISHED_RUNTIME_ISSUES_REPORTED` |
+| PUB-2026-08-30-02 | 2026-08-30 | RevelioProfileOrchestrationLibrary | 7 | Publish the composite-budget correction privately as `/7`, then compile and verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/7` with Manual Composite ranges at and beyond the ordinary Show Last boundary, double-width composite histograms, labeled anchor contours, and Boost-controlled daily counts | `CURRENT_PENDING` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
-- Published chain: Core `/10`, Gaps `/11`, Interactions `/21`, Profile Orchestration `/5`.
-- Pending: none.
+- Published chain: Core `/10`, Gaps `/11`, Interactions `/21`, Profile Orchestration `/6`.
+- Pending: Profile Orchestration `/7` for corrected Manual Composite display-budget eligibility, with host-side double-width composite histograms, labeled anchor contours, and Boost-controlled daily-count activation.
 - Discarded: Interactions `/20`; it remains permanently retired.
-- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/21` and Profile Orchestration `/5`.
-- Runtime status: Interactions `/21` and Profile Orchestration `/5` are published, host loaded, tested, and approved.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/21` and pending Profile Orchestration `/7`.
+- Runtime status: Interactions `/21` is published, tested, and approved. Profile Orchestration `/6` was loaded with performance and Manual Composite eligibility issues reported; `/7` requires publication, TradingView compilation, Replay, visual validation, and Profiler checks.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
 
 ## Pending release notes
 
-No pending releases.
+### RevelioProfileOrchestrationLibrary `/7`
+
+```text
+Adds optional RTH-only sample preparation for Weekly, Monthly, and Quarterly profiles.
+Keeps calendar boundaries and interaction lifecycles unchanged while aligning developing, maturity, histogram, and Manual Composite data to the selected source.
+Waits for a clean calendar boundary after exact lower-timeframe coverage begins and rejects coarse fallback bars.
+Advances Auto maturity once per observed weekday RTH date without depending on out-of-session chart bars.
+Uses 5-minute calendar samples where the chart permits; sub-5-minute and Range charts retain their finer available source resolution.
+Counts a Manual Composite as one displayed profile after its selected constituents are replaced.
+Keeps the composite available until it plus every completed profile after Through exceeds Show Last.
+Replays post-Through short-session merging from the reset state created by the composite.
+Rejects partial, missing and future ranges, with Quarterly confirmed by its remote calculation history.
+```
+
+### Revelio host against Profile Orchestration `/7`
+
+```text
+Draws completed and developing Manual Composite histograms at twice the ordinary histogram width, currently 50% versus 25% of the profile span.
+Makes Boost the active RTH and Globex display-count control by disabling the ordinary count it replaces.
+Preserves each ordinary count so turning Boost Off restores its prior value.
+Shows one transparent source-colored contour for the matching Manual Composite with tiny From and Through labels and source-colored dotted guides at the raw input points.
+Defaults Auto Swept Lines to Off while preserving its enabled behavior.
+```
 
 ## Invariants
 
