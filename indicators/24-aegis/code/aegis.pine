@@ -1,0 +1,350 @@
+//@version=6
+indicator("aegis •", overlay=true, max_lines_count=6, max_labels_count=6, max_boxes_count=2)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+GROUP_LEVELS = "Trade Levels"
+GROUP_QUANTITIES = "Quantities"
+GROUP_DRAWING = "Drawing"
+GROUP_TABLE = "Table"
+
+TABLE_COLUMNS = 6
+
+SIZE_TINY = "Tiny"
+SIZE_SMALL = "Small"
+SIZE_NORMAL = "Normal"
+SIZE_LARGE = "Large"
+
+STOP_MODE_MANUAL = "Manual"
+STOP_MODE_MAX_RISK = "Max Risk"
+
+CURRENCY_USD = "USD"
+CURRENCY_EUR = "EUR"
+
+POSITION_TOP_LEFT = "Top Left"
+POSITION_TOP_CENTER = "Top Center"
+POSITION_TOP_RIGHT = "Top Right"
+POSITION_MIDDLE_LEFT = "Middle Left"
+POSITION_MIDDLE_CENTER = "Middle Center"
+POSITION_MIDDLE_RIGHT = "Middle Right"
+POSITION_BOTTOM_LEFT = "Bottom Left"
+POSITION_BOTTOM_CENTER = "Bottom Center"
+POSITION_BOTTOM_RIGHT = "Bottom Right"
+
+LABEL_SIDE_LEFT = "Left"
+LABEL_SIDE_RIGHT = "Right"
+
+ANCHOR_LATEST_BAR = "Latest Bar"
+ANCHOR_ENTRY_TIME = "Entry Time"
+
+ENTRY_1_TOOLTIP = "Click Entry 1 to set the activation time."
+ENTRY_2_TOOLTIP = "Click or drag Entry 2."
+ENTRY_3_TOOLTIP = "Click or drag Entry 3."
+TARGET_TOOLTIP = "Click or drag the take-profit level."
+STOP_TOOLTIP = "Manual mode: click or drag the shared stop level."
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+entryCount = input.int(2, "Entries", options=[1, 2, 3], group=GROUP_LEVELS, confirm=true)
+stopMode = input.string(STOP_MODE_MANUAL, "Stop Mode", options=[STOP_MODE_MANUAL, STOP_MODE_MAX_RISK], inline="stop_mode", group=GROUP_LEVELS)
+maxRiskAmount = input.float(100.0, "Max Risk", minval=0.01, step=1.0, inline="stop_mode", group=GROUP_LEVELS, active=stopMode == STOP_MODE_MAX_RISK, tooltip="Maximum loss if every selected entry fills.")
+
+entry1Input = input.price(0.0, "Entry 1", inline="entry_1", group=GROUP_LEVELS, confirm=true)
+entryTime = input.time(0, "", inline="entry_1", group=GROUP_LEVELS, confirm=true, tooltip=ENTRY_1_TOOLTIP)
+entry2Input = input.price(0.0, "Entry 2", group=GROUP_LEVELS, active=entryCount >= 2, confirm=true, tooltip=ENTRY_2_TOOLTIP)
+entry3Input = input.price(0.0, "Entry 3", group=GROUP_LEVELS, active=entryCount >= 3, confirm=true, tooltip=ENTRY_3_TOOLTIP)
+stopInput = input.price(0.0, "Stop Loss", group=GROUP_LEVELS, active=stopMode == STOP_MODE_MANUAL, confirm=true, tooltip=STOP_TOOLTIP)
+targetInput = input.price(0.0, "Take Profit", group=GROUP_LEVELS, confirm=true, tooltip=TARGET_TOOLTIP)
+
+entry1Quantity = input.int(1, "Entry 1", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], group=GROUP_QUANTITIES)
+entry2Quantity = input.int(1, "Entry 2", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], group=GROUP_QUANTITIES, active=entryCount >= 2)
+entry3Quantity = input.int(1, "Entry 3", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], group=GROUP_QUANTITIES, active=entryCount >= 3)
+
+showZones = input.bool(false, "RR Zones", group=GROUP_DRAWING)
+toolAnchorChoice = input.string(ANCHOR_LATEST_BAR, "Anchor", options=[ANCHOR_LATEST_BAR, ANCHOR_ENTRY_TIME], inline="tool_anchor", group=GROUP_DRAWING)
+extendToCurrentBar = input.bool(false, "To Current Bar", inline="tool_anchor", group=GROUP_DRAWING, active=toolAnchorChoice == ANCHOR_ENTRY_TIME)
+toolOffsetBars = input.int(2, "Offset", minval=-100, maxval=100, inline="tool_position", group=GROUP_DRAWING, active=toolAnchorChoice == ANCHOR_LATEST_BAR)
+toolWidthBars = input.int(6, "Width", minval=1, maxval=100, inline="tool_position", group=GROUP_DRAWING, active=not (toolAnchorChoice == ANCHOR_ENTRY_TIME and extendToCurrentBar), tooltip="Offset moves the latest-bar tool. Width controls its horizontal span.")
+labelSideChoice = input.string(LABEL_SIDE_RIGHT, "Labels", options=[LABEL_SIDE_LEFT, LABEL_SIDE_RIGHT], inline="label_position", group=GROUP_DRAWING)
+labelOffsetBars = input.int(0, "Offset", minval=-100, maxval=100, inline="label_position", group=GROUP_DRAWING, tooltip="Choose a tool edge, then offset the labels in bars.")
+labelSizeChoice = input.string(SIZE_SMALL, "Label Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_DRAWING)
+
+displayCurrency = input.string(CURRENCY_USD, "Currency", options=[CURRENCY_USD, CURRENCY_EUR], group=GROUP_TABLE)
+tableSizeChoice = input.string(SIZE_SMALL, "Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_TABLE)
+tablePositionChoice = input.string(POSITION_BOTTOM_RIGHT, "Position", options=[POSITION_TOP_LEFT, POSITION_TOP_CENTER, POSITION_TOP_RIGHT, POSITION_MIDDLE_LEFT, POSITION_MIDDLE_CENTER, POSITION_MIDDLE_RIGHT, POSITION_BOTTOM_LEFT, POSITION_BOTTOM_CENTER, POSITION_BOTTOM_RIGHT], group=GROUP_TABLE)
+
+displayCurrencyRate = request.currency_rate(syminfo.currency, displayCurrency)
+quantitySymbol = syminfo.root != "" ? syminfo.root : syminfo.ticker
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+formatPrice(float value) =>
+    str.tostring(value, format.mintick)
+
+formatQuantity(float value) =>
+    str.tostring(value, "#,###")
+
+formatSymbolQuantity(float value) =>
+    formatQuantity(value) + " " + quantitySymbol + (value == 1 ? "" : "s")
+
+formatMoney(float value) =>
+    str.tostring(value * displayCurrencyRate, "#,###.00") + " " + displayCurrency
+
+resolveTextSize(string sizeChoice) =>
+    switch sizeChoice
+        SIZE_SMALL => size.small
+        SIZE_NORMAL => size.normal
+        SIZE_LARGE => size.large
+        => size.tiny
+
+resolveTablePosition(string positionChoice) =>
+    switch positionChoice
+        POSITION_TOP_LEFT => position.top_left
+        POSITION_TOP_CENTER => position.top_center
+        POSITION_TOP_RIGHT => position.top_right
+        POSITION_MIDDLE_LEFT => position.middle_left
+        POSITION_MIDDLE_CENTER => position.middle_center
+        POSITION_MIDDLE_RIGHT => position.middle_right
+        POSITION_BOTTOM_LEFT => position.bottom_left
+        POSITION_BOTTOM_CENTER => position.bottom_center
+        => position.bottom_right
+
+setTableCell(table tbl, int column, int row, string cellText, color background, color cellTextColor, string cellTextSize, string alignment=text.align_right) =>
+    table.cell(tbl, column, row, cellText, bgcolor=background, text_color=cellTextColor, text_size=cellTextSize, text_halign=alignment)
+
+updateLevel(line levelLine, label levelLabel, bool showLevel, int leftX, int rightX, int labelX, string labelStyle, float price, string levelText, color levelColor, color levelTextColor, string levelTextSize, int width) =>
+    if showLevel
+        line.set_xy1(levelLine, leftX, price)
+        line.set_xy2(levelLine, rightX, price)
+        line.set_color(levelLine, levelColor)
+        line.set_width(levelLine, width)
+        line.set_style(levelLine, line.style_solid)
+        label.set_xy(levelLabel, labelX, price)
+        label.set_style(levelLabel, labelStyle)
+        label.set_text(levelLabel, levelText)
+        label.set_color(levelLabel, chart.bg_color)
+        label.set_textcolor(levelLabel, levelTextColor)
+        label.set_size(levelLabel, levelTextSize)
+    else
+        line.set_xy1(levelLine, na, na)
+        line.set_xy2(levelLine, na, na)
+        label.set_xy(levelLabel, na, na)
+        label.set_text(levelLabel, "")
+
+updateZone(box zone, bool showZone, int leftX, int rightX, float firstPrice, float secondPrice, color zoneColor) =>
+    if showZone
+        box.set_lefttop(zone, leftX, math.max(firstPrice, secondPrice))
+        box.set_rightbottom(zone, rightX, math.min(firstPrice, secondPrice))
+        box.set_border_color(zone, color.new(zoneColor, 100))
+        box.set_bgcolor(zone, color.new(zoneColor, 90))
+    else
+        box.set_lefttop(zone, na, na)
+        box.set_rightbottom(zone, na, na)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+entry1Price = math.round_to_mintick(entry1Input)
+entry2Price = math.round_to_mintick(entry2Input)
+entry3Price = math.round_to_mintick(entry3Input)
+targetPrice = math.round_to_mintick(targetInput)
+manualStopPrice = math.round_to_mintick(stopInput)
+
+entryPrices = array.from(entry1Price, entry2Price, entry3Price)
+entryQuantities = array.from(entry1Quantity, entry2Quantity, entry3Quantity)
+
+float totalQuantity = 0.0
+float totalEntryValue = 0.0
+bool entriesValid = entryTime > 0
+
+for entryIndex = 0 to entryCount - 1
+    float entryPrice = array.get(entryPrices, entryIndex)
+    float entryQuantity = array.get(entryQuantities, entryIndex)
+    totalQuantity += entryQuantity
+    totalEntryValue += entryPrice * entryQuantity
+    entriesValid := entriesValid and entryPrice > 0 and entryQuantity > 0
+
+averageEntry = totalQuantity > 0 ? totalEntryValue / totalQuantity : na
+bool usesMaxRiskStop = stopMode == STOP_MODE_MAX_RISK
+bool targetDefinesDirection = entriesValid and targetPrice > 0 and targetPrice != averageEntry
+isLong = usesMaxRiskStop ? targetPrice > averageEntry : manualStopPrice < averageEntry
+
+float maxRiskInSymbolCurrency = maxRiskAmount / displayCurrencyRate
+float autoStopDistance = entriesValid and targetDefinesDirection and totalQuantity > 0 and syminfo.pointvalue > 0 ? maxRiskInSymbolCurrency / (totalQuantity * syminfo.pointvalue) : na
+float rawAutoStopPrice = isLong ? averageEntry - autoStopDistance : averageEntry + autoStopDistance
+float autoStopTicks = rawAutoStopPrice / syminfo.mintick
+float autoStopPrice = (isLong ? math.ceil(autoStopTicks) : math.floor(autoStopTicks)) * syminfo.mintick
+stopPrice = usesMaxRiskStop ? autoStopPrice : manualStopPrice
+
+stopHasDirection = stopPrice > 0 and stopPrice != averageEntry
+targetHasDirection = targetPrice > 0 and (isLong ? targetPrice > averageEntry : targetPrice < averageEntry)
+
+bool stopBeyondEntries = stopHasDirection
+for entryIndex = 0 to entryCount - 1
+    float entryPrice = array.get(entryPrices, entryIndex)
+    stopBeyondEntries := stopBeyondEntries and (isLong ? stopPrice < entryPrice : stopPrice > entryPrice)
+
+riskPlanValid = entriesValid and stopBeyondEntries
+fullPlanValid = riskPlanValid and targetHasDirection
+
+stageAveragePrices = array.new_float()
+stageRisks = array.new_float()
+stageValidities = array.new_bool()
+stageRewards = array.new_float()
+stageRewardValidities = array.new_bool()
+
+float cumulativeQuantity = 0.0
+float cumulativeEntryValue = 0.0
+float cumulativePointRisk = 0.0
+bool cumulativeRiskValid = entriesValid and stopHasDirection
+
+for entryIndex = 0 to entryCount - 1
+    float entryPrice = array.get(entryPrices, entryIndex)
+    float entryQuantity = array.get(entryQuantities, entryIndex)
+    float stopDistance = isLong ? entryPrice - stopPrice : stopPrice - entryPrice
+
+    cumulativeQuantity += entryQuantity
+    cumulativeEntryValue += entryPrice * entryQuantity
+    cumulativePointRisk += stopDistance * entryQuantity
+    cumulativeRiskValid := cumulativeRiskValid and stopDistance > 0
+
+    float stageAveragePrice = cumulativeEntryValue / cumulativeQuantity
+    float targetDistance = isLong ? targetPrice - stageAveragePrice : stageAveragePrice - targetPrice
+
+    array.push(stageAveragePrices, stageAveragePrice)
+    array.push(stageRisks, cumulativePointRisk * syminfo.pointvalue)
+    array.push(stageValidities, cumulativeRiskValid)
+    array.push(stageRewards, targetDistance * cumulativeQuantity * syminfo.pointvalue)
+    array.push(stageRewardValidities, stopHasDirection and targetPrice > 0 and targetDistance > 0)
+
+var int filledEntryCount = 0
+
+if fullPlanValid and time >= entryTime and filledEntryCount < entryCount
+    for entryIndex = 0 to entryCount - 1
+        if entryIndex == filledEntryCount
+            float entryPrice = array.get(entryPrices, entryIndex)
+            bool entryTouched = isLong ? low <= entryPrice : high >= entryPrice
+            if entryTouched
+                filledEntryCount += 1
+
+int displayedStageIndex = filledEntryCount > 0 ? filledEntryCount - 1 : entryCount - 1
+float displayedAverage = array.get(stageAveragePrices, displayedStageIndex)
+float displayedRisk = array.get(stageRisks, displayedStageIndex)
+float displayedReward = array.get(stageRewards, displayedStageIndex)
+bool displayedRiskValid = array.get(stageValidities, displayedStageIndex)
+bool displayedRewardValid = array.get(stageRewardValidities, displayedStageIndex)
+bool displayedPlanValid = displayedRiskValid and displayedRewardValid
+float displayedRiskReward = displayedPlanValid and displayedRisk > 0 ? displayedReward / displayedRisk : na
+bool averageOverlapsEntry = false
+for entryIndex = 0 to entryCount - 1
+    averageOverlapsEntry := averageOverlapsEntry or displayedAverage == array.get(entryPrices, entryIndex)
+int entryAnchorIndex = ta.valuewhen(time == entryTime, bar_index, 0)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POSITION TOOL
+// ═══════════════════════════════════════════════════════════════════════════
+
+var line entry1Line = line.new(na, na, na, na, xloc=xloc.bar_index)
+var line entry2Line = line.new(na, na, na, na, xloc=xloc.bar_index)
+var line entry3Line = line.new(na, na, na, na, xloc=xloc.bar_index)
+var line averageLine = line.new(na, na, na, na, xloc=xloc.bar_index)
+var line targetLine = line.new(na, na, na, na, xloc=xloc.bar_index)
+var line stopLine = line.new(na, na, na, na, xloc=xloc.bar_index)
+
+var label entry1Label = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+var label entry2Label = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+var label entry3Label = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+var label averageLabel = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+var label targetLabel = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+var label stopLabel = label.new(na, na, "", xloc=xloc.bar_index, style=label.style_label_left, size=size.tiny)
+
+var box rewardZone = box.new(na, na, na, na, xloc=xloc.bar_index, border_width=1)
+var box riskZone = box.new(na, na, na, na, xloc=xloc.bar_index, border_width=1)
+
+if barstate.islast
+    bool anchorsAtEntryTime = toolAnchorChoice == ANCHOR_ENTRY_TIME and not na(entryAnchorIndex)
+    int leftIndex = anchorsAtEntryTime ? entryAnchorIndex : bar_index + toolOffsetBars
+    int rightIndex = anchorsAtEntryTime and extendToCurrentBar ? bar_index : leftIndex + toolWidthBars
+    bool labelsOnLeft = labelSideChoice == LABEL_SIDE_LEFT
+    int labelDirection = labelsOnLeft ? -1 : 1
+    int labelIndex = (labelsOnLeft ? leftIndex : rightIndex) + labelOffsetBars + labelDirection
+    string selectedLabelStyle = labelsOnLeft ? label.style_label_right : label.style_label_left
+    bool hasDrawingSpan = entryTime > 0
+    string selectedLabelSize = resolveTextSize(labelSizeChoice)
+
+    updateZone(rewardZone, showZones and hasDrawingSpan and displayedPlanValid, leftIndex, rightIndex, displayedAverage, targetPrice, color.rgb(178, 235, 242))
+    updateZone(riskZone, showZones and hasDrawingSpan and displayedRiskValid, leftIndex, rightIndex, displayedAverage, stopPrice, color.rgb(206, 147, 216))
+
+    updateLevel(entry1Line, entry1Label, hasDrawingSpan and entry1Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry1Price, "#1  |  " + formatSymbolQuantity(entry1Quantity), color.rgb(120, 123, 134), color.rgb(120, 123, 134), selectedLabelSize, 1)
+    updateLevel(entry2Line, entry2Label, hasDrawingSpan and entryCount >= 2 and entry2Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry2Price, "#2  |  " + formatSymbolQuantity(entry2Quantity), color.rgb(120, 123, 134), color.rgb(120, 123, 134), selectedLabelSize, 1)
+    updateLevel(entry3Line, entry3Label, hasDrawingSpan and entryCount >= 3 and entry3Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry3Price, "#3  |  " + formatSymbolQuantity(entry3Quantity), color.rgb(120, 123, 134), color.rgb(148, 160, 203), selectedLabelSize, 1)
+
+    string averageText = "AVG"
+    string targetText = displayedPlanValid ? "TP  + " + formatMoney(displayedReward) : "TP"
+    string stopText = displayedRiskValid ? "SL  - " + formatMoney(displayedRisk) : "SL"
+
+    updateLevel(averageLine, averageLabel, hasDrawingSpan and entriesValid and not averageOverlapsEntry, leftIndex, rightIndex, labelIndex, selectedLabelStyle, displayedAverage, averageText, color.rgb(255, 152, 80), color.rgb(255, 152, 80), selectedLabelSize, 2)
+    updateLevel(targetLine, targetLabel, hasDrawingSpan and targetPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, targetPrice, targetText, color.rgb(178, 235, 242), color.rgb(76, 175, 80), selectedLabelSize, 2)
+    updateLevel(stopLine, stopLabel, hasDrawingSpan and stopPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, stopPrice, stopText, color.rgb(206, 147, 216), color.rgb(242, 54, 69), selectedLabelSize, 2)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RISK TABLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+var table riskTable = table.new(position.bottom_right, TABLE_COLUMNS, entryCount + 2, bgcolor=chart.bg_color, border_width=1, border_color=color.new(chart.fg_color, 70), frame_width=1, frame_color=color.new(chart.fg_color, 70))
+
+if barstate.islast
+    string selectedTableSize = resolveTextSize(tableSizeChoice)
+    table.set_position(riskTable, resolveTablePosition(tablePositionChoice))
+
+    color headerBackground = color.new(chart.fg_color, 85)
+    color directionColor = displayedPlanValid ? (isLong ? color.new(color.rgb(76, 175, 80), 85) : color.new(color.rgb(242, 54, 69), 85)) : color.new(color.rgb(242, 54, 69), 85)
+    string summaryText = displayedPlanValid ? (isLong ? "LONG" : "SHORT") + "  •  " + str.tostring(displayedRiskReward, "#.##") + "R" : not entriesValid ? "SET ENTRY LEVELS" : usesMaxRiskStop and not targetDefinesDirection ? "SET TP DIRECTION" : usesMaxRiskStop and autoStopPrice <= 0 ? "MAX RISK TOO HIGH" : not riskPlanValid ? (usesMaxRiskStop ? "MAX RISK TOO LOW" : "STOP MUST CLEAR ALL ENTRIES") : "TP MUST OPPOSE STOP"
+
+    table.merge_cells(riskTable, 0, 0, TABLE_COLUMNS - 1, 0)
+    setTableCell(riskTable, 0, 0, summaryText, directionColor, color.black, selectedTableSize, text.align_center)
+
+    setTableCell(riskTable, 0, 1, "Entries", headerBackground, color.black, selectedTableSize, text.align_center)
+    setTableCell(riskTable, 1, 1, "Qty", headerBackground, color.black, selectedTableSize, text.align_center)
+    setTableCell(riskTable, 3, 1, "+ Risk", headerBackground, color.black, selectedTableSize, text.align_center)
+    setTableCell(riskTable, 2, 1, "Total Risk", headerBackground, color.black, selectedTableSize, text.align_center)
+    setTableCell(riskTable, 5, 1, "+ TP", headerBackground, color.black, selectedTableSize, text.align_center)
+    setTableCell(riskTable, 4, 1, "Total TP", headerBackground, color.black, selectedTableSize, text.align_center)
+
+    for stageRow = 0 to entryCount - 1
+        int tableRow = stageRow + 2
+        bool isCurrentStage = filledEntryCount > 0 and stageRow == filledEntryCount - 1
+        color rowBackground = isCurrentStage ? (isLong ? color.new(color.rgb(76, 175, 80), 85) : color.new(color.rgb(242, 54, 69), 85)) : stageRow % 2 == 0 ? color.new(chart.bg_color, 0) : color.new(chart.fg_color, 96)
+
+        float entryQuantity = array.get(entryQuantities, stageRow)
+        float stageRisk = array.get(stageRisks, stageRow)
+        bool stageValid = array.get(stageValidities, stageRow)
+        float stageReward = array.get(stageRewards, stageRow)
+        bool stageRewardValid = array.get(stageRewardValidities, stageRow)
+        float priorRisk = stageRow > 0 ? array.get(stageRisks, stageRow - 1) : 0.0
+        float priorReward = stageRow > 0 ? array.get(stageRewards, stageRow - 1) : 0.0
+        float addedRisk = stageRisk - priorRisk
+        float addedReward = stageReward - priorReward
+        string stageText = str.tostring(stageRow + 1)
+        string riskText = stageValid ? formatMoney(stageRisk) : "Invalid"
+        string addedRiskText = stageValid and stageRow > 0 ? formatMoney(math.abs(addedRisk)) : ""
+        string rewardText = stageRewardValid ? formatMoney(stageReward) : "Invalid"
+        string addedRewardText = stageRewardValid and stageRow > 0 ? formatMoney(math.abs(addedReward)) : ""
+
+        color rewardCellColor = stageRewardValid ? color.new(color.rgb(76, 175, 80), 85) : color.new(color.rgb(242, 54, 69), 85)
+        color addedRiskCellColor = stageValid and stageRow > 0 ? (addedRisk >= 0 ? color.new(color.rgb(242, 54, 69), 85) : color.new(color.rgb(76, 175, 80), 85)) : rowBackground
+        color addedRewardCellColor = stageRewardValid and stageRow > 0 ? (addedReward >= 0 ? color.new(color.rgb(76, 175, 80), 85) : color.new(color.rgb(242, 54, 69), 85)) : rowBackground
+
+        setTableCell(riskTable, 0, tableRow, stageText, rowBackground, color.black, selectedTableSize, text.align_center)
+        setTableCell(riskTable, 1, tableRow, formatQuantity(entryQuantity), rowBackground, color.black, selectedTableSize, text.align_center)
+        setTableCell(riskTable, 2, tableRow, riskText, color.new(color.rgb(242, 54, 69), 85), color.black, selectedTableSize)
+        setTableCell(riskTable, 3, tableRow, addedRiskText, addedRiskCellColor, color.black, selectedTableSize)
+        setTableCell(riskTable, 4, tableRow, rewardText, rewardCellColor, color.black, selectedTableSize)
+        setTableCell(riskTable, 5, tableRow, addedRewardText, addedRewardCellColor, color.black, selectedTableSize)
