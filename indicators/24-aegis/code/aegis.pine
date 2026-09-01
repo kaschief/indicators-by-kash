@@ -11,6 +11,10 @@ GROUP_DRAWING = "Drawing"
 GROUP_TABLE = "Table"
 
 TABLE_COLUMNS = 6
+ENTRY_LINE_WIDTH = 1
+KEY_LEVEL_LINE_WIDTH = 2
+ENTRY_LINE_STYLE = line.style_dotted
+KEY_LEVEL_LINE_STYLE = line.style_solid
 
 SIZE_TINY = "Tiny"
 SIZE_SMALL = "Small"
@@ -50,7 +54,7 @@ maxRiskAmount = input.float(100.0, "Max Risk", minval=0.01, step=1.0, inline="st
 entry1Input = input.price(0.0, "Entry 1", inline="Entry 1", group=GROUP_LEVELS)
 entryTime = input.time(0, "Entry 1", inline="Entry 1", group=GROUP_LEVELS)
 entry2Input = input.price(0.0, "Entry 2", group=GROUP_LEVELS, active=entryCount >= 2)
-entry3Input = input.price(0.0, "Entry 3", group=GROUP_LEVELS, active=entryCount >= 3)
+entry3Input = input.float(0.0, "Entry 3", minval=0.0, group=GROUP_LEVELS, active=entryCount >= 3, tooltip="Enter the price manually.")
 stopInput = input.price(0.0, "Stop Loss", group=GROUP_LEVELS, active=stopMode == STOP_MODE_MANUAL)
 targetInput = input.price(0.0, "TP", group=GROUP_LEVELS)
 
@@ -58,11 +62,11 @@ entry1Quantity = input.int(1, "Entry 1", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 entry2Quantity = input.int(1, "Entry 2", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], group=GROUP_QUANTITIES, active=entryCount >= 2)
 entry3Quantity = input.int(1, "Entry 3", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], group=GROUP_QUANTITIES, active=entryCount >= 3)
 
-showZones = input.bool(false, "RR Zones", group=GROUP_DRAWING)
+showZones = input.bool(true, "RR Zones", group=GROUP_DRAWING)
 toolAnchorChoice = input.string(ANCHOR_ENTRY_TIME, "Anchor", options=[ANCHOR_LATEST_BAR, ANCHOR_ENTRY_TIME], inline="tool_anchor", group=GROUP_DRAWING)
 extendToCurrentBar = input.bool(true, "To Current Bar", inline="tool_anchor", group=GROUP_DRAWING, active=toolAnchorChoice == ANCHOR_ENTRY_TIME)
-toolOffsetBars = input.int(2, "Offset", minval=-100, maxval=100, inline="tool_position", group=GROUP_DRAWING, active=toolAnchorChoice == ANCHOR_LATEST_BAR)
-toolWidthBars = input.int(6, "Width", minval=1, maxval=100, inline="tool_position", group=GROUP_DRAWING, active=not (toolAnchorChoice == ANCHOR_ENTRY_TIME and extendToCurrentBar))
+toolOffsetBars = input.int(2, "Offset", minval=-200, maxval=200, inline="tool_position", group=GROUP_DRAWING, active=toolAnchorChoice == ANCHOR_LATEST_BAR)
+toolWidthBars = input.int(100, "Width", minval=1, maxval=500, inline="tool_position", group=GROUP_DRAWING, active=not (toolAnchorChoice == ANCHOR_ENTRY_TIME and extendToCurrentBar))
 labelSideChoice = input.string(LABEL_SIDE_RIGHT, "Labels", options=[LABEL_SIDE_LEFT, LABEL_SIDE_RIGHT], inline="label_position", group=GROUP_DRAWING)
 labelOffsetBars = input.int(0, "Offset", minval=-100, maxval=100, inline="label_position", group=GROUP_DRAWING)
 labelSizeChoice = input.string(SIZE_SMALL, "Label Size", options=[SIZE_TINY, SIZE_SMALL, SIZE_NORMAL, SIZE_LARGE], group=GROUP_DRAWING)
@@ -74,6 +78,7 @@ tablePositionChoice = input.string(POSITION_BOTTOM_CENTER, "Position", options=[
 
 displayCurrencyRate = request.currency_rate(syminfo.currency, displayCurrency)
 quantitySymbol = syminfo.root != "" ? syminfo.root : syminfo.ticker
+max_bars_back(time, 5000)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -87,6 +92,9 @@ formatQuantity(float value) =>
 
 formatSymbolQuantity(float value) =>
     formatQuantity(value) + " " + quantitySymbol + (value == 1 ? "" : "s")
+
+formatEntryLabel(int entryNumber, float quantity, float price) =>
+    "#" + str.tostring(entryNumber) + "  •  " + formatSymbolQuantity(quantity) + "  •  " + formatPrice(price)
 
 formatMoney(float value) =>
     str.tostring(value * displayCurrencyRate, "#,###.00") + " " + displayCurrency
@@ -113,13 +121,13 @@ resolveTablePosition(string positionChoice) =>
 setTableCell(table tbl, int column, int row, string cellText, color background, color cellTextColor, string cellTextSize) =>
     table.cell(tbl, column, row, cellText, bgcolor=background, text_color=cellTextColor, text_size=cellTextSize, text_halign=text.align_center)
 
-updateLevel(line levelLine, label levelLabel, bool showLevel, int leftX, int rightX, int labelX, string labelStyle, float price, string levelText, color levelColor, color levelTextColor, string levelTextSize) =>
+updateLevel(line levelLine, label levelLabel, bool showLevel, int leftX, int rightX, int labelX, string labelStyle, float price, string levelText, color levelColor, color levelTextColor, string levelTextSize, int levelWidth, string levelStyle) =>
     if showLevel
         line.set_xy1(levelLine, leftX, price)
         line.set_xy2(levelLine, rightX, price)
         line.set_color(levelLine, levelColor)
-        line.set_width(levelLine, 2)
-        line.set_style(levelLine, line.style_solid)
+        line.set_width(levelLine, levelWidth)
+        line.set_style(levelLine, levelStyle)
         label.set_xy(levelLabel, labelX, price)
         label.set_style(levelLabel, labelStyle)
         label.set_text(levelLabel, levelText)
@@ -277,17 +285,17 @@ if barstate.islast
     updateZone(rewardZone, showZones and hasDrawingSpan and displayedPlanValid, leftIndex, rightIndex, displayedAverage, targetPrice, color.rgb(178, 235, 242))
     updateZone(riskZone, showZones and hasDrawingSpan and displayedRiskValid, leftIndex, rightIndex, displayedAverage, stopPrice, color.rgb(206, 147, 216))
 
-    updateLevel(entry1Line, entry1Label, hasDrawingSpan and entry1Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry1Price, "#1  |  " + formatSymbolQuantity(entry1Quantity), color.rgb(120, 123, 134), color.rgb(120, 123, 134), selectedLabelSize)
-    updateLevel(entry2Line, entry2Label, hasDrawingSpan and entryCount >= 2 and entry2Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry2Price, "#2  |  " + formatSymbolQuantity(entry2Quantity), color.rgb(120, 123, 134), color.rgb(120, 123, 134), selectedLabelSize)
-    updateLevel(entry3Line, entry3Label, hasDrawingSpan and entryCount >= 3 and entry3Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry3Price, "#3  |  " + formatSymbolQuantity(entry3Quantity), color.rgb(120, 123, 134), color.rgb(148, 160, 203), selectedLabelSize)
+    updateLevel(entry1Line, entry1Label, hasDrawingSpan and entry1Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry1Price, formatEntryLabel(1, entry1Quantity, entry1Price), color.rgb(120, 123, 134), color.rgb(120, 123, 134), size.tiny, ENTRY_LINE_WIDTH, ENTRY_LINE_STYLE)
+    updateLevel(entry2Line, entry2Label, hasDrawingSpan and entryCount >= 2 and entry2Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry2Price, formatEntryLabel(2, entry2Quantity, entry2Price), color.rgb(120, 123, 134), color.rgb(120, 123, 134), size.tiny, ENTRY_LINE_WIDTH, ENTRY_LINE_STYLE)
+    updateLevel(entry3Line, entry3Label, hasDrawingSpan and entryCount >= 3 and entry3Price > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, entry3Price, formatEntryLabel(3, entry3Quantity, entry3Price), color.rgb(120, 123, 134), color.rgb(148, 160, 203), size.tiny, ENTRY_LINE_WIDTH, ENTRY_LINE_STYLE)
 
-    string averageText = "AVG"
+    string averageText = "AVG  •  " + formatPrice(displayedAverage)
     string targetText = displayedPlanValid ? "TP  + " + formatMoney(displayedReward) : "TP"
     string stopText = displayedRiskValid ? "SL  - " + formatMoney(displayedRisk) : "SL"
 
-    updateLevel(averageLine, averageLabel, hasDrawingSpan and entriesValid and not averageOverlapsEntry, leftIndex, rightIndex, labelIndex, selectedLabelStyle, displayedAverage, averageText, color.rgb(255, 152, 80), color.rgb(255, 152, 80), selectedLabelSize)
-    updateLevel(targetLine, targetLabel, hasDrawingSpan and targetPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, targetPrice, targetText, color.rgb(178, 235, 242), color.rgb(76, 175, 80), selectedLabelSize)
-    updateLevel(stopLine, stopLabel, hasDrawingSpan and stopPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, stopPrice, stopText, color.rgb(206, 147, 216), color.rgb(242, 54, 69), selectedLabelSize)
+    updateLevel(averageLine, averageLabel, hasDrawingSpan and entriesValid and not averageOverlapsEntry, leftIndex, rightIndex, labelIndex, selectedLabelStyle, displayedAverage, averageText, color.rgb(255, 152, 80), color.rgb(255, 152, 80), selectedLabelSize, KEY_LEVEL_LINE_WIDTH, KEY_LEVEL_LINE_STYLE)
+    updateLevel(targetLine, targetLabel, hasDrawingSpan and targetPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, targetPrice, targetText, color.rgb(178, 235, 242), color.rgb(76, 175, 80), selectedLabelSize, KEY_LEVEL_LINE_WIDTH, KEY_LEVEL_LINE_STYLE)
+    updateLevel(stopLine, stopLabel, hasDrawingSpan and stopPrice > 0, leftIndex, rightIndex, labelIndex, selectedLabelStyle, stopPrice, stopText, color.rgb(206, 147, 216), color.rgb(242, 54, 69), selectedLabelSize, KEY_LEVEL_LINE_WIDTH, KEY_LEVEL_LINE_STYLE)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RISK TABLE
