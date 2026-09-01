@@ -141,6 +141,8 @@ const string OPTION_OFF = "Off"
 const string OPTION_ALL = "All"
 const string DELTA_ROWS_BUY = "Delta+"
 const string DELTA_ROWS_SELL = "Delta-"
+const string DELTA_ROW_FILTER_OUTLIERS = "Outliers Only"
+const string DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS = "Selected Tier Outliers"
 
 const string DELTA_TIER_VISIBILITY_BUY = "Delta++"
 const string DELTA_TIER_VISIBILITY_SELL = "Delta--"
@@ -309,7 +311,7 @@ enableQuickCheck = input.bool(false, "Enable VAHL Quick Check", group=GROUP_QUIC
 showDeltaTiers = input.bool(true, "Show Minimum Delta Tiers", inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
 minimumDeltaTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showDeltaTiers and not enableQuickCheck)
 visibleDeltaTierCount = visibleTierCount(minimumDeltaTierStrength)
-showOutliersOnly = input.bool(false, "Show Outliers Only", inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, tooltip="Minimum — weakest visible tier\nOutliers — dominant histogram rows only")
+deltaRowFilter = input.string(OPTION_ALL, "", options=[OPTION_ALL, DELTA_ROW_FILTER_OUTLIERS, DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS], inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, tooltip="Selected Tier Outliers follows Minimum Delta Tiers. Strong⁺ includes Dominant and Strong⁺.")
 showMinimumLvnTiers = input.bool(true, "Show Minimum LVN Tiers", inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=not enableQuickCheck)
 minimumLvnTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showMinimumLvnTiers and not enableQuickCheck, tooltip="Minimum — weakest visible tier")
 visibleLvnTierCount = visibleTierCount(minimumLvnTierStrength)
@@ -479,6 +481,25 @@ type PendingOutlierLevel
     string displayNameOverride
     int tradingDayKey
     bool historical
+    int firstRow
+    int lastRow
+
+type RankedOutlierLevel
+    float price
+    float zoneLow
+    float zoneHigh
+    bool buySide
+    int profileStartTime
+    int lineStartTime
+    int rightTime
+    int markerTime
+    string sourceName
+    string displayNameOverride
+    int tradingDayKey
+    bool historical
+    int firstRow
+    int lastRow
+    int strengthRank
 
 type PendingMitigatedZone
     float price
@@ -579,6 +600,12 @@ deltaPolylineLayersPerProfile(string visibleRows, bool outliersOnly) =>
     int layersPerSide = outliersOnly ? 1 : DELTA_POLYLINE_LAYER_COUNT_PER_SIDE
     visibleSides * layersPerSide
 
+filteredDeltaRowsOnly() =>
+    deltaRowFilter != OPTION_ALL
+
+selectedTierOutlierRowsOnly() =>
+    deltaRowFilter == DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS
+
 histogramPolylineLayersPerProfile(bool enabled, bool useValueAreaColors) =>
     enabled ? useValueAreaColors ? HISTOGRAM_VALUE_AREA_POLYLINE_LAYER_COUNT : HISTOGRAM_POLYLINE_LAYER_COUNT : 0
 
@@ -623,7 +650,7 @@ maximumCoreProfileCapacity(int sourceCount, int deltaLayersPerProfile, int lines
     totalProfileCapacity
 
 int activeProfileSourceCount = (nyEarlyModeActive ? 1 : 0) + (extendedNyEarlyModeActive ? 1 : 0) + (ivbModeActive ? 1 : 0) + (asiaPremarketModeActive ? 1 : 0) + (rthModeActive ? 1 : 0) + (globexModeActive ? 1 : 0) + (midnightModeActive ? 1 : 0) + (calendarWeeklyModeActive ? 1 : 0) + (monthlyModeActive ? 1 : 0) + (rollingWindowModeActive ? 1 : 0) + (fixedSelected ? 1 : 0)
-int activeDeltaPolylineLayers = deltaPolylineLayersPerProfile(deltaHistogramRows, showOutliersOnly)
+int activeDeltaPolylineLayers = deltaPolylineLayersPerProfile(deltaHistogramRows, filteredDeltaRowsOnly())
 int activeHistogramPolylineLayers = histogramPolylineLayersPerProfile(showHistogram, useHistogramValueAreaColors)
 [activeLinesPerProfile, activeLabelsPerProfile, activeBoxesPerProfile] = maximumCoreObjectCostsPerProfile()
 int activeCoreProfileCapacity = maximumCoreProfileCapacity(activeProfileSourceCount, activeDeltaPolylineLayers, activeLinesPerProfile, activeLabelsPerProfile, activeBoxesPerProfile)
@@ -1562,12 +1589,12 @@ computeRowStrengths(DeltaProfile profile) =>
 isOutlierStrength(float strength) =>
     not na(strength) and strength >= OUTLIER_MULTIPLIER
 
-rowPassesDeltaFilter(float rowDelta, float strength) =>
+rowPassesDeltaFilter(float rowDelta, float strength, bool selectedOutlierRow) =>
     bool isBuy = rowDelta > 0
     bool isSell = rowDelta < 0
-    bool isOutlier = isOutlierStrength(strength)
     bool directionVisible = deltaHistogramRows == OPTION_ALL ? isBuy or isSell : deltaHistogramRows == OPTION_OFF ? false : deltaHistogramRows == DELTA_ROWS_BUY ? isBuy : deltaHistogramRows == DELTA_ROWS_SELL ? isSell : false
-    directionVisible and (not showOutliersOnly or isOutlier)
+    bool filterPassed = deltaRowFilter == OPTION_ALL ? true : deltaRowFilter == DELTA_ROW_FILTER_OUTLIERS ? isOutlierStrength(strength) : selectedOutlierRow
+    directionVisible and filterPassed
 
 appendDeltaRowPoints(array<chart.point> points, int baselineTime, int outerTime, float rowBottom, float rowTop) =>
     array.push(points, chart.point.from_time(baselineTime, rowBottom))
@@ -1579,7 +1606,7 @@ renderDeltaLayer(array<chart.point> points, color fillColor) =>
     if array.size(points) >= 4 and canDrawPolyline()
         array.push(drawnPolylines, polyline.new(points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(fillColor, 100), fill_color=fillColor))
 
-renderDeltaPolylines(DeltaProfile profile, string sourceName, array<float> strengths, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
+renderDeltaPolylines(DeltaProfile profile, string sourceName, array<float> strengths, array<bool> selectedOutlierRows, array<int> chartTimes, int startScaleIndex, int endScaleIndex) =>
     if profile.maxAbsRowDelta > 0
         array<chart.point> buyPoints = array.new<chart.point>()
         array<chart.point> sellPoints = array.new<chart.point>()
@@ -1598,7 +1625,8 @@ renderDeltaPolylines(DeltaProfile profile, string sourceName, array<float> stren
                 bool outlierRow = isOutlierStrength(strength)
                 float rowDelta = array.get(profile.rowDeltas, rowIndex)
                 float magnitude = math.abs(rowDelta)
-                if magnitude > 0 and rowPassesDeltaFilter(rowDelta, strength)
+                bool selectedOutlierRow = rowIndex < array.size(selectedOutlierRows) and array.get(selectedOutlierRows, rowIndex)
+                if magnitude > 0 and rowPassesDeltaFilter(rowDelta, strength, selectedOutlierRow)
                     float rowBottom = profile.priceLow + rowIndex * rowHeight
                     int outerTime = deltaOuterTime(profile, chartTimes, startScaleIndex, endScaleIndex, baselineIndex, magnitude / profile.maxAbsRowDelta, profileDeltaWidthBars(sourceName), faceLeft, attachRight)
                     if rowDelta >= 0 and outlierRow
@@ -1809,7 +1837,7 @@ queueOutlierPeak(DeltaProfile profile, string sourceName, string displayNameOver
     float peakPrice = profile.priceLow + (anchorRow + 0.5) * rowHeight
     float zoneLow = profile.priceLow + firstRow * rowHeight
     float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
-    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.startTime, profile.endTime, levelEndTime, markerTime, sourceName, displayNameOverride, sessionTradingDayKey, historical))
+    array.push(pendingOutlierLevels, PendingOutlierLevel.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, profile.startTime, profile.endTime, levelEndTime, markerTime, sourceName, displayNameOverride, sessionTradingDayKey, historical, firstRow, lastRow))
 
 collectSideOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceName, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool buySide, int markerTime) =>
     int peaksFound = 0
@@ -1858,7 +1886,8 @@ collectOutlierPeaks(DeltaProfile profile, array<float> strengths, string sourceN
         peaksFound += collectSideOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false, markerTime)
     peaksFound
 
-flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
+rankPendingOutlierLevels(bool merge) =>
+    array<RankedOutlierLevel> rankedLevels = array.new<RankedOutlierLevel>()
     int pendingCount = array.size(pendingOutlierLevels)
     if pendingCount > 0
         array<float> clusterPrices = array.new<float>()
@@ -1875,6 +1904,8 @@ flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
         array<string> clusterDisplayNameOverrides = array.new<string>()
         array<int> clusterTradingDayKeys = array.new<int>()
         array<bool> clusterHistoricalFlags = array.new<bool>()
+        array<int> clusterFirstRows = array.new<int>()
+        array<int> clusterLastRows = array.new<int>()
         for pendingIndex = 0 to pendingCount - 1
             PendingOutlierLevel pending = array.get(pendingOutlierLevels, pendingIndex)
             float tolerance = math.max(syminfo.mintick, math.abs(pending.price) * mergeDistancePercent / 100.0)
@@ -1898,6 +1929,8 @@ flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
                 array.set(clusterZoneLows, foundIndex, math.min(array.get(clusterZoneLows, foundIndex), pending.zoneLow))
                 array.set(clusterZoneHighs, foundIndex, math.max(array.get(clusterZoneHighs, foundIndex), pending.zoneHigh))
                 array.set(clusterDeltas, foundIndex, array.get(clusterDeltas, foundIndex) + pending.delta)
+                array.set(clusterFirstRows, foundIndex, math.min(array.get(clusterFirstRows, foundIndex), pending.firstRow))
+                array.set(clusterLastRows, foundIndex, math.max(array.get(clusterLastRows, foundIndex), pending.lastRow))
                 if pending.strength > array.get(clusterStrengths, foundIndex)
                     array.set(clusterPrices, foundIndex, pending.price)
                     array.set(clusterStrengths, foundIndex, pending.strength)
@@ -1916,6 +1949,8 @@ flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
                 array.push(clusterDisplayNameOverrides, pending.displayNameOverride)
                 array.push(clusterTradingDayKeys, pending.tradingDayKey)
                 array.push(clusterHistoricalFlags, pending.historical)
+                array.push(clusterFirstRows, pending.firstRow)
+                array.push(clusterLastRows, pending.lastRow)
         int clusterCount = array.size(clusterPrices)
         array<string> sourceNames = array.new<string>()
         for clusterIndex = 0 to clusterCount - 1
@@ -1929,7 +1964,6 @@ flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
             for sideIndex = 0 to 1
                 bool buySide = sideIndex == 0
                 for strengthRank = 1 to visibleDeltaTierCount
-                    int tier = 6 - strengthRank
                     int bestCluster = -1
                     float bestMagnitude = -1.0
                     float bestStrength = -1.0
@@ -1944,36 +1978,51 @@ flushPendingOutlierLevels(bool merge, bool registrationOnly) =>
                                 bestCluster := clusterIndex
                     if bestCluster >= 0
                         array.set(selectedClusters, bestCluster, true)
-                        float price = array.get(clusterPrices, bestCluster)
-                        float zoneLow = array.get(clusterZoneLows, bestCluster)
-                        float zoneHigh = array.get(clusterZoneHighs, bestCluster)
-                        int profileStartTime = array.get(clusterProfileStartTimes, bestCluster)
-                        int lineStartTime = array.get(clusterLineStartTimes, bestCluster)
-                        int rightTime = array.get(clusterRightTimes, bestCluster)
-                        int markerTime = array.get(clusterMarkerTimes, bestCluster)
-                        string sourceName = array.get(clusterSourceNames, bestCluster)
-                        string displayNameOverride = array.get(clusterDisplayNameOverrides, bestCluster)
-                        DeltaTierAppearance appearance = deltaTierAppearance(buySide, tier, sourceName)
-                        bool sideVisible = deltaTierSideVisible(buySide)
-                        int sessionTradingDayKey = array.get(clusterTradingDayKeys, bestCluster)
-                        bool historical = array.get(clusterHistoricalFlags, bestCluster)
-                        int levelRank = 2000 - strengthRank
-                        bool extendPriorityZone = extendsPriorityZoneUntilMitigated(sourceName, strengthRank)
-                        int direction = buySide ? 1 : -1
-                        string markerLabel = showDotLabels and strengthRank == 1 ? profileSourceName(sourceName, displayNameOverride) : ""
-                        int markerSize = tierMarkerSize(tierMarkerSizes, tier)
-                        if sideVisible
-                            if registrationOnly
-                                if extendPriorityZone
-                                    registerMitigatedZone(sourceName, profileStartTime, rightTime, price)
-                            else if extendPriorityZone
-                                queueMitigatedZone(price, zoneLow, zoneHigh, profileStartTime, lineStartTime, rightTime, appearance.zoneColor, appearance.hasLine, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction, markerLabel, appearance.textColor, markerSize)
-                            else
-                                renderZoneFill(lineStartTime, rightTime, zoneLow, zoneHigh, appearance.zoneColor)
-                                if appearance.hasLine
-                                    queueRightLine(price, lineStartTime, rightTime, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, sourceName, sessionTradingDayKey, historical, direction)
-                                queueLevelMarker(price, markerTime, markerLabel, appearance.textColor, markerSize)
+                        array.push(rankedLevels, RankedOutlierLevel.new(array.get(clusterPrices, bestCluster), array.get(clusterZoneLows, bestCluster), array.get(clusterZoneHighs, bestCluster), buySide, array.get(clusterProfileStartTimes, bestCluster), array.get(clusterLineStartTimes, bestCluster), array.get(clusterRightTimes, bestCluster), array.get(clusterMarkerTimes, bestCluster), array.get(clusterSourceNames, bestCluster), array.get(clusterDisplayNameOverrides, bestCluster), array.get(clusterTradingDayKeys, bestCluster), array.get(clusterHistoricalFlags, bestCluster), array.get(clusterFirstRows, bestCluster), array.get(clusterLastRows, bestCluster), strengthRank))
         array.clear(pendingOutlierLevels)
+    rankedLevels
+
+selectedOutlierRowMask(DeltaProfile profile, array<float> strengths, array<RankedOutlierLevel> rankedLevels) =>
+    array<bool> selectedRows = array.new<bool>(profile.rowCount, false)
+    int rankedCount = array.size(rankedLevels)
+    if selectedTierOutlierRowsOnly() and showDeltaTiers and not enableQuickCheck and deltaTierSideVisibility != OPTION_OFF and rankedCount > 0
+        for rankedIndex = 0 to rankedCount - 1
+            RankedOutlierLevel ranked = array.get(rankedLevels, rankedIndex)
+            if ranked.profileStartTime == profile.startTime and deltaTierSideVisible(ranked.buySide)
+                int firstRow = math.max(0, ranked.firstRow)
+                int lastRow = math.min(profile.rowCount - 1, ranked.lastRow)
+                if firstRow <= lastRow
+                    for rowIndex = firstRow to lastRow
+                        float rowDelta = array.get(profile.rowDeltas, rowIndex)
+                        float strength = array.get(strengths, rowIndex)
+                        bool correctSide = ranked.buySide ? rowDelta > 0 : rowDelta < 0
+                        if correctSide and isOutlierStrength(strength)
+                            array.set(selectedRows, rowIndex, true)
+    selectedRows
+
+renderRankedOutlierLevels(array<RankedOutlierLevel> rankedLevels, bool registrationOnly) =>
+    int rankedCount = array.size(rankedLevels)
+    if rankedCount > 0
+        for rankedIndex = 0 to rankedCount - 1
+            RankedOutlierLevel ranked = array.get(rankedLevels, rankedIndex)
+            int tier = 6 - ranked.strengthRank
+            DeltaTierAppearance appearance = deltaTierAppearance(ranked.buySide, tier, ranked.sourceName)
+            int levelRank = 2000 - ranked.strengthRank
+            bool extendPriorityZone = extendsPriorityZoneUntilMitigated(ranked.sourceName, ranked.strengthRank)
+            int direction = ranked.buySide ? 1 : -1
+            string markerLabel = showDotLabels and ranked.strengthRank == 1 ? profileSourceName(ranked.sourceName, ranked.displayNameOverride) : ""
+            int markerSize = tierMarkerSize(tierMarkerSizes, tier)
+            if deltaTierSideVisible(ranked.buySide)
+                if registrationOnly
+                    if extendPriorityZone
+                        registerMitigatedZone(ranked.sourceName, ranked.profileStartTime, ranked.rightTime, ranked.price)
+                else if extendPriorityZone
+                    queueMitigatedZone(ranked.price, ranked.zoneLow, ranked.zoneHigh, ranked.profileStartTime, ranked.lineStartTime, ranked.rightTime, appearance.zoneColor, appearance.hasLine, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction, markerLabel, appearance.textColor, markerSize)
+                else
+                    renderZoneFill(ranked.lineStartTime, ranked.rightTime, ranked.zoneLow, ranked.zoneHigh, appearance.zoneColor)
+                    if appearance.hasLine
+                        queueRightLine(ranked.price, ranked.lineStartTime, ranked.rightTime, appearance.lineColor, appearance.lineWidth, appearance.lineStyle, levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction)
+                    queueLevelMarker(ranked.price, ranked.markerTime, markerLabel, appearance.textColor, markerSize)
 
 renderProfileBox(DeltaProfile profile, string sourceName) =>
     color innerColor = profileInnerColor(sourceName)
@@ -2158,7 +2207,8 @@ registerProfileMitigationLevels(DeltaProfile profile, string sourceName, bool tw
         renderLowVolumeStructures(profile, sourceName, "", levelEndTime, sessionTradingDayKey, true, true)
         array<float> strengths = computeRowStrengths(profile)
         collectOutlierPeaks(profile, strengths, sourceName, "", levelEndTime, sessionTradingDayKey, true)
-        flushPendingOutlierLevels(mergeOverlaps, true)
+        array<RankedOutlierLevel> rankedOutlierLevels = rankPendingOutlierLevels(mergeOverlaps)
+        renderRankedOutlierLevels(rankedOutlierLevels, true)
 
 renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNameOverride, bool pairedNyHeadings, bool historical, bool developing, bool twentyFourSeven, array<int> chartTimes, bool renderBudgetedHistogram, int histogramLayersPerProfile) =>
     [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = profileValueLevels(profile)
@@ -2176,11 +2226,13 @@ renderSelectedProfile(DeltaProfile profile, string sourceName, string displayNam
         renderHistogram(profile, valueAreaLowRow, valueAreaHighRow, histogramLayersPerProfile, chartTimes, startScaleIndex, endScaleIndex)
 
     array<float> strengths = computeRowStrengths(profile)
-    renderDeltaPolylines(profile, sourceName, strengths, chartTimes, startScaleIndex, endScaleIndex)
+    collectOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical)
+    array<RankedOutlierLevel> rankedOutlierLevels = rankPendingOutlierLevels(mergeOverlaps)
+    array<bool> selectedOutlierRows = selectedOutlierRowMask(profile, strengths, rankedOutlierLevels)
+    renderDeltaPolylines(profile, sourceName, strengths, selectedOutlierRows, chartTimes, startScaleIndex, endScaleIndex)
     renderProfileLevels(profile, sourceName, displayNameOverride, levelEndTime, pocPrice, valueAreaLowPrice, valueAreaHighPrice, twentyFourSeven)
     renderLowVolumeStructures(profile, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false)
-    collectOutlierPeaks(profile, strengths, sourceName, displayNameOverride, levelEndTime, sessionTradingDayKey, historical)
-    flushPendingOutlierLevels(mergeOverlaps, false)
+    renderRankedOutlierLevels(rankedOutlierLevels, false)
 
 renderProfileSelection(ProfileSelection selection, string sourceName, ProfileSelection comparisonSelection, bool twentyFourSeven, array<int> chartTimes, bool currentPass, bool renderBudgetedHistograms, int histogramLayersPerProfile) =>
     int selectedCount = array.size(selection.profiles)
