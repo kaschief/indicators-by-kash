@@ -1,7 +1,7 @@
 //@version=6
 indicator("elderwand •", overlay=true, max_polylines_count=100, max_labels_count=100)
 
-// max_polylines_count=100 is the platform cap; high History can exceed it and Pine silently drops the oldest.
+// max_polylines_count=100 is the platform cap; high Show Last can exceed it and Pine silently drops the oldest.
 
 // CONSTANTS
 
@@ -79,8 +79,7 @@ const string WEEKLY_BAND_3_SIGMA_WIDTH = "3"
 const string ROLLING_BAND_2_SIGMA_WIDTH = "3"
 const string ROLLING_BAND_3_SIGMA_WIDTH = "3"
 
-const int HISTORY_MIN         = 1
-const int HISTORY_MAX         = 10
+const int SHOW_LAST_MIN       = 1
 const int SHOW_ONLY_MAX_TIMEFRAME_SECONDS = 60 * 60
 const int MAX_POLYLINE_POINTS = 9000
 const float FILL_OPACITY_OTHER_DEFAULT   = 1.0
@@ -109,7 +108,7 @@ const string LABEL_ENABLE_QUARTERLY = "Enable Quarterly VWAP"
 const string LABEL_ENABLE_YEARLY    = "Enable Yearly VWAP"
 const string LABEL_ENABLE_NY        = "Enable NY VWAP"
 const string LABEL_ENABLE_ROLLING   = "Enable Rolling VWAP"
-const string LABEL_HISTORY          = "History"
+const string LABEL_SHOW_LAST        = "Show Last"
 const string LABEL_FILL             = "Fill"
 const string LABEL_BAND1            = "1σ"
 const string LABEL_BAND2            = "2σ"
@@ -136,6 +135,7 @@ const string FILTER_ROLLING                = "Rolling Only"
 const string FILTER_DAILY                  = "Daily Only"
 const string FILTER_NY                     = "NY Only"
 const string FILTER_WEEKLY_DAILY           = "● Weekly + Daily"
+const string FILTER_WEEKLY_DAILY_NY        = "● Weekly + Daily + NY"
 const string FILTER_MONTHLY_WEEKLY_DAILY   = "● ● Monthly + Weekly + Daily"
 const string FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY = "● ● ● Quarterly + Monthly + Weekly + Daily"
 const string FILTER_MONTHLY_WEEKLY         = "● ● Monthly + Weekly"
@@ -154,7 +154,7 @@ const string TOOLTIP_VWAP_ONLY = "Global: hide every σ band (1σ / 2σ / 3σ) a
 const string TOOLTIP_LABEL_MERGE = "Combines nearby right-edge labels into one identity.\n\n• Strict — 0.005%.\n• Balanced — 0.010%.\n• Wide — 0.025%.\n• Custom — use %.\n\nMinimum distance is one tick. The widest line supplies the label style; ties use timeframe priority."
 const string TOOLTIP_BAND_WIDTH = "Widths left→right: VWAP · " + LABEL_BAND1 + " · " + LABEL_BAND2 + " · " + LABEL_BAND3 + ". VWAP is 1–5; each σ band is Off (hidden) or 1–5 (line width)."
 const string TOOLTIP_MAIN   = "Show this VWAP · colour. Auto-hides once the chart timeframe reaches the anchor period."
-const string TOOLTIP_HISTORY_FILL = "History: 1 = current only, N = current + N−1 past. Fill: None disables fill; each σ choice fills exactly that band range. The number beside Fill controls fill strength from 0.1–100."
+const string TOOLTIP_HISTORY_FILL = "Show Last: total periods shown, including current.\n\nFill: None disables fill; each σ choice fills exactly that band range. The number beside Fill controls fill strength from 0.1–100."
 const string TOOLTIP_FILL = "Fill: None disables fill; each σ choice fills exactly that band range. The number beside Fill controls fill strength from 0.1–100."
 const string TOOLTIP_ROLLING_SESSIONS = "Number of trading sessions in the rolling window. A session = a calendar day (New York time) that printed bars, so it adapts to the asset: every day counts on 24/7 markets, while weekends and no-trade holidays are skipped and half-days count once."
 const string TOOLTIP_INTRADAY_EXTENSION = "Controls how long this intraday VWAP continues plotting after its session ends, using New York time."
@@ -212,9 +212,9 @@ new_anchor(string name) =>
 var array<PendingLabel> pendingLabels = array.new<PendingLabel>()
 var array<label> renderedLabels = array.new<label>()
 
-// INPUTS — per anchor: main (Show · colour · History), fill (Fill · strength), bands
+// INPUTS — per anchor: main (Show · colour · Show Last), fill (Fill · strength), bands
 
-quickFilter = input.string(FILTER_WEEKLY_DAILY, "Quick Filter", options=[FILTER_ALL, FILTER_WEEKLY_DAILY, FILTER_MONTHLY_WEEKLY, FILTER_MONTHLY_WEEKLY_DAILY, FILTER_QUARTERLY_MONTHLY, FILTER_QUARTERLY_MONTHLY_WEEKLY, FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY, FILTER_YEARLY_QUARTERLY_MONTHLY, FILTER_YEARLY, FILTER_QUARTERLY, FILTER_MONTHLY, FILTER_WEEKLY, FILTER_ROLLING, FILTER_DAILY, FILTER_NY], group=GROUP_GENERAL, tooltip=TOOLTIP_QUICK_FILTER)
+quickFilter = input.string(FILTER_WEEKLY_DAILY, "Quick Filter", options=[FILTER_ALL, FILTER_WEEKLY_DAILY, FILTER_WEEKLY_DAILY_NY, FILTER_MONTHLY_WEEKLY, FILTER_MONTHLY_WEEKLY_DAILY, FILTER_QUARTERLY_MONTHLY, FILTER_QUARTERLY_MONTHLY_WEEKLY, FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY, FILTER_YEARLY_QUARTERLY_MONTHLY, FILTER_YEARLY, FILTER_QUARTERLY, FILTER_MONTHLY, FILTER_WEEKLY, FILTER_ROLLING, FILTER_DAILY, FILTER_NY], group=GROUP_GENERAL, tooltip=TOOLTIP_QUICK_FILTER)
 quickPriceMode = input.string(PRICE_MODE_OFF, "Prices", options=[PRICE_MODE_OFF, PRICE_MODE_ACTIVE, PRICE_MODE_CUSTOM], group=GROUP_GENERAL, tooltip=TOOLTIP_PRICE_MODE)
 vwapLinesOnly = input.bool(false, "VWAP Lines Only", group=GROUP_GENERAL, tooltip=TOOLTIP_VWAP_ONLY)
 mergeOverlappingLabels = input.bool(true, "Merge Overlapping Labels", inline="label_merge", group=GROUP_GENERAL)
@@ -227,10 +227,10 @@ manualFilterSelected = quickFilter == FILTER_ALL
 yearlyFilterSelected = quickFilter == FILTER_YEARLY or quickFilter == FILTER_YEARLY_QUARTERLY_MONTHLY
 quarterlyFilterSelected = quickFilter == FILTER_QUARTERLY or quickFilter == FILTER_QUARTERLY_MONTHLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_YEARLY_QUARTERLY_MONTHLY
 monthlyFilterSelected = quickFilter == FILTER_MONTHLY or quickFilter == FILTER_MONTHLY_WEEKLY or quickFilter == FILTER_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_QUARTERLY_MONTHLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_YEARLY_QUARTERLY_MONTHLY
-weeklyFilterSelected = quickFilter == FILTER_WEEKLY or quickFilter == FILTER_WEEKLY_DAILY or quickFilter == FILTER_MONTHLY_WEEKLY or quickFilter == FILTER_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY
+weeklyFilterSelected = quickFilter == FILTER_WEEKLY or quickFilter == FILTER_WEEKLY_DAILY or quickFilter == FILTER_WEEKLY_DAILY_NY or quickFilter == FILTER_MONTHLY_WEEKLY or quickFilter == FILTER_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY
 rollingFilterSelected = quickFilter == FILTER_ROLLING
-dailyFilterSelected = quickFilter == FILTER_DAILY or quickFilter == FILTER_WEEKLY_DAILY or quickFilter == FILTER_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY
-nyFilterSelected = quickFilter == FILTER_NY
+dailyFilterSelected = quickFilter == FILTER_DAILY or quickFilter == FILTER_WEEKLY_DAILY or quickFilter == FILTER_WEEKLY_DAILY_NY or quickFilter == FILTER_MONTHLY_WEEKLY_DAILY or quickFilter == FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY
+nyFilterSelected = quickFilter == FILTER_NY or quickFilter == FILTER_WEEKLY_DAILY_NY
 customPricesSelected = quickPriceMode == PRICE_MODE_CUSTOM
 
 in_quick_filter(string name) =>
@@ -243,6 +243,7 @@ in_quick_filter(string name) =>
         FILTER_DAILY                  => name == NAME_DAILY
         FILTER_NY                     => name == NAME_NY
         FILTER_WEEKLY_DAILY           => name == NAME_DAILY or name == NAME_WEEKLY
+        FILTER_WEEKLY_DAILY_NY        => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_NY
         FILTER_MONTHLY_WEEKLY_DAILY   => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_MONTHLY
         FILTER_QUARTERLY_MONTHLY_WEEKLY_DAILY => name == NAME_DAILY or name == NAME_WEEKLY or name == NAME_MONTHLY or name == NAME_QUARTERLY
         FILTER_MONTHLY_WEEKLY         => name == NAME_WEEKLY or name == NAME_MONTHLY
@@ -269,7 +270,7 @@ showOnlyMostRecent = input.bool(false, "Most Recent Only", inline="show_only", g
 dailyShow = input.bool(false, LABEL_ENABLE_DAILY, inline="d", group=GROUP_DAILY, active=manualFilterSelected)
 dailyControlsActive = manualFilterSelected ? dailyShow : dailyFilterSelected
 dailyColor = input.color(DEFAULT_DAILY_COLOR, "", inline="d", group=GROUP_DAILY, active=dailyControlsActive, tooltip=TOOLTIP_MAIN)
-dailyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="d", group=GROUP_DAILY, active=dailyControlsActive)
+dailyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="d", group=GROUP_DAILY, active=dailyControlsActive)
 dailyFillRange = input.string(FILL_RANGE_2_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="d_fill", group=GROUP_DAILY, active=dailyControlsActive)
 dailyFillOpacity = input.float(FILL_OPACITY_DAILY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="d_fill", group=GROUP_DAILY, active=dailyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
 dailyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "3", "4", "5"], inline="d_bands", group=GROUP_DAILY, active=dailyControlsActive)
@@ -281,7 +282,7 @@ dailySkipHolidayResets = input.bool(true, "Skip Holiday Resets", group=GROUP_DAI
 weeklyShow = input.bool(false, LABEL_ENABLE_WEEKLY, inline="w", group=GROUP_WEEKLY, active=manualFilterSelected)
 weeklyControlsActive = manualFilterSelected ? weeklyShow : weeklyFilterSelected
 weeklyColor = input.color(DEFAULT_WEEKLY_COLOR, "", inline="w", group=GROUP_WEEKLY, active=weeklyControlsActive, tooltip=TOOLTIP_MAIN)
-weeklyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="w", group=GROUP_WEEKLY, active=weeklyControlsActive)
+weeklyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="w", group=GROUP_WEEKLY, active=weeklyControlsActive)
 weeklyFillRange = input.string(FILL_RANGE_NONE, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="w_fill", group=GROUP_WEEKLY, active=weeklyControlsActive)
 weeklyFillOpacity = input.float(FILL_OPACITY_WEEKLY_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="w_fill", group=GROUP_WEEKLY, active=weeklyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
 weeklyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "3", "4", "5"], inline="w_bands", group=GROUP_WEEKLY, active=weeklyControlsActive)
@@ -293,7 +294,7 @@ weeklySkipHolidayResets = input.bool(true, "Skip Holiday Resets", group=GROUP_WE
 nyShow = input.bool(false, LABEL_ENABLE_NY, inline="ny", group=GROUP_NY, active=manualFilterSelected)
 nyControlsActive = manualFilterSelected ? nyShow : nyFilterSelected
 nyColor = input.color(DEFAULT_NY_COLOR, "", inline="ny", group=GROUP_NY, active=nyControlsActive, tooltip=TOOLTIP_MAIN)
-nyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="ny", group=GROUP_NY, active=nyControlsActive)
+nyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="ny", group=GROUP_NY, active=nyControlsActive)
 nyExtension = input.string(EXT_SESSION_ONLY, LABEL_EXTENSION, options=[EXT_SESSION_ONLY, EXT_TO_NEXT_OPEN], group=GROUP_NY, active=nyControlsActive, tooltip=TOOLTIP_INTRADAY_EXTENSION)
 nyFillRange = input.string(FILL_RANGE_2_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="ny_fill", group=GROUP_NY, active=nyControlsActive)
 nyFillOpacity = input.float(FILL_OPACITY_OTHER_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="ny_fill", group=GROUP_NY, active=nyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
@@ -316,7 +317,7 @@ rollingBand3Choice = input.string(ROLLING_BAND_3_SIGMA_WIDTH, "", options=[BAND_
 monthlyShow = input.bool(false, LABEL_ENABLE_MONTHLY, inline="m", group=GROUP_MONTHLY, active=manualFilterSelected)
 monthlyControlsActive = manualFilterSelected ? monthlyShow : monthlyFilterSelected
 monthlyColor = input.color(DEFAULT_MONTHLY_COLOR, "", inline="m", group=GROUP_MONTHLY, active=monthlyControlsActive, tooltip=TOOLTIP_MAIN)
-monthlyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="m", group=GROUP_MONTHLY, active=monthlyControlsActive)
+monthlyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="m", group=GROUP_MONTHLY, active=monthlyControlsActive)
 monthlyFillRange = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="m_fill", group=GROUP_MONTHLY, active=monthlyControlsActive)
 monthlyFillOpacity = input.float(FILL_OPACITY_OTHER_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="m_fill", group=GROUP_MONTHLY, active=monthlyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
 monthlyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "3", "4", "5"], inline="m_bands", group=GROUP_MONTHLY, active=monthlyControlsActive)
@@ -327,7 +328,7 @@ monthlyBand3Choice = input.string(DEFAULT_BAND_3_SIGMA_WIDTH, "", options=[BAND_
 quarterlyShow = input.bool(false, LABEL_ENABLE_QUARTERLY, inline="q", group=GROUP_QUARTERLY, active=manualFilterSelected)
 quarterlyControlsActive = manualFilterSelected ? quarterlyShow : quarterlyFilterSelected
 quarterlyColor = input.color(DEFAULT_QUARTERLY_COLOR, "", inline="q", group=GROUP_QUARTERLY, active=quarterlyControlsActive, tooltip=TOOLTIP_MAIN)
-quarterlyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="q", group=GROUP_QUARTERLY, active=quarterlyControlsActive)
+quarterlyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="q", group=GROUP_QUARTERLY, active=quarterlyControlsActive)
 quarterlyFillRange = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="q_fill", group=GROUP_QUARTERLY, active=quarterlyControlsActive)
 quarterlyFillOpacity = input.float(FILL_OPACITY_OTHER_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="q_fill", group=GROUP_QUARTERLY, active=quarterlyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
 quarterlyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "3", "4", "5"], inline="q_bands", group=GROUP_QUARTERLY, active=quarterlyControlsActive)
@@ -338,7 +339,7 @@ quarterlyBand3Choice = input.string(DEFAULT_BAND_3_SIGMA_WIDTH, "", options=[BAN
 yearlyShow = input.bool(false, LABEL_ENABLE_YEARLY, inline="y", group=GROUP_YEARLY, active=manualFilterSelected)
 yearlyControlsActive = manualFilterSelected ? yearlyShow : yearlyFilterSelected
 yearlyColor = input.color(DEFAULT_YEARLY_COLOR, "", inline="y", group=GROUP_YEARLY, active=yearlyControlsActive, tooltip=TOOLTIP_MAIN)
-yearlyHistory = input.int(HISTORY_MIN, LABEL_HISTORY, minval=HISTORY_MIN, maxval=HISTORY_MAX, inline="y", group=GROUP_YEARLY, active=yearlyControlsActive)
+yearlyShowLast = input.int(SHOW_LAST_MIN, LABEL_SHOW_LAST, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], inline="y", group=GROUP_YEARLY, active=yearlyControlsActive)
 yearlyFillRange = input.string(FILL_RANGE_1_SIGMA, LABEL_FILL, options=[FILL_RANGE_NONE, FILL_RANGE_1_SIGMA, FILL_RANGE_2_SIGMA, FILL_RANGE_3_SIGMA], inline="y_fill", group=GROUP_YEARLY, active=yearlyControlsActive)
 yearlyFillOpacity = input.float(FILL_OPACITY_OTHER_DEFAULT, "", minval=FILL_OPACITY_MIN, maxval=FILL_OPACITY_MAX, step=FILL_OPACITY_STEP, inline="y_fill", group=GROUP_YEARLY, active=yearlyControlsActive, tooltip=TOOLTIP_HISTORY_FILL)
 yearlyVwapWidthChoice = input.string(DEFAULT_VWAP_WIDTH, "", options=["1", "2", "3", "4", "5"], inline="y_bands", group=GROUP_YEARLY, active=yearlyControlsActive)
@@ -809,7 +810,7 @@ effectiveRollingShowPrice = showActivePrices or (useCustomPrices and rollingShow
 effectiveDailyShowPrice = showActivePrices or (useCustomPrices and dailyShowPrice)
 effectiveNyShowPrice = showActivePrices or (useCustomPrices and nyShowPrice)
 
-daily.historyDepth := dailyHistory
+daily.historyDepth := dailyShowLast
 daily.fillOpacity := dailyFillOpacity
 daily.fillRange := dailyFillRange
 daily.pricesEnabled := effectiveDailyShowPrice
@@ -821,7 +822,7 @@ daily.band1Width := dailyBand1Width
 daily.band2Width := dailyBand2Width
 daily.band3Width := dailyBand3Width
 
-weekly.historyDepth := weeklyHistory
+weekly.historyDepth := weeklyShowLast
 weekly.fillOpacity := weeklyFillOpacity
 weekly.fillRange := weeklyFillRange
 weekly.pricesEnabled := effectiveWeeklyShowPrice
@@ -833,7 +834,7 @@ weekly.band1Width := weeklyBand1Width
 weekly.band2Width := weeklyBand2Width
 weekly.band3Width := weeklyBand3Width
 
-monthly.historyDepth := monthlyHistory
+monthly.historyDepth := monthlyShowLast
 monthly.fillOpacity := monthlyFillOpacity
 monthly.fillRange := monthlyFillRange
 monthly.pricesEnabled := effectiveMonthlyShowPrice
@@ -845,7 +846,7 @@ monthly.band1Width := monthlyBand1Width
 monthly.band2Width := monthlyBand2Width
 monthly.band3Width := monthlyBand3Width
 
-quarterly.historyDepth := quarterlyHistory
+quarterly.historyDepth := quarterlyShowLast
 quarterly.fillOpacity := quarterlyFillOpacity
 quarterly.fillRange := quarterlyFillRange
 quarterly.pricesEnabled := effectiveQuarterlyShowPrice
@@ -857,7 +858,7 @@ quarterly.band1Width := quarterlyBand1Width
 quarterly.band2Width := quarterlyBand2Width
 quarterly.band3Width := quarterlyBand3Width
 
-yearly.historyDepth := yearlyHistory
+yearly.historyDepth := yearlyShowLast
 yearly.fillOpacity := yearlyFillOpacity
 yearly.fillRange := yearlyFillRange
 yearly.pricesEnabled := effectiveYearlyShowPrice
@@ -869,7 +870,7 @@ yearly.band1Width := yearlyBand1Width
 yearly.band2Width := yearlyBand2Width
 yearly.band3Width := yearlyBand3Width
 
-ny.historyDepth := nyHistory
+ny.historyDepth := nyShowLast
 ny.fillOpacity := nyFillOpacity
 ny.fillRange := nyFillRange
 ny.pricesEnabled := effectiveNyShowPrice
@@ -881,7 +882,7 @@ ny.band1Width := nyBand1Width
 ny.band2Width := nyBand2Width
 ny.band3Width := nyBand3Width
 
-// Rolling has no discrete periods, so no History; everything else mirrors the other anchors.
+// Rolling has no discrete periods, so no Show Last; everything else mirrors the other anchors.
 rolling.fillOpacity := rollingFillOpacity
 rolling.fillRange := rollingFillRange
 rolling.pricesEnabled := effectiveRollingShowPrice
