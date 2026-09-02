@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-08-30
+Updated: 2026-09-02
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -24,7 +24,8 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 11 | — |
 | RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 21 | — |
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 8 | — |
-| LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
+| LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
+| LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -88,6 +89,10 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioProfileOrchestrationLibrary | 8 | Published · tested · approved | Validates Quarterly Manual Composite eligibility inside its deep remote history instead of requiring the selected boundary in host-chart history | `14283772373ecb96390d3f1f0f964f6ec813a3b0542d38fafe7863c22ee1609d` |
 | LegilimensProfileLibrary | 1 | Published · host compile return-type defect | Extracts profile sample storage, histogram construction, and value-area calculations from the Legilimens host | `a3d05564b9ce62240a4ce15e0f2022e2fd24e9b896d5076553b4ab9af58739da` |
 | LegilimensProfileLibrary | 2 | Published · tested · approved | Restores void return contracts for mutation helpers used inside host control-flow branches | `d65e604bcc817f621311729db8f733437e7d86199f1cc16c5287eaa4630241c3` |
+| LegilimensProfileLibrary | 3 | Published · tested · approved | Extracts rolling sample storage, compaction, pruning, window selection, and profile calculation while preserving host lifecycle and presentation ownership | `5e3cd93d7621d8e793d546f6d13fbd0863a2e90c43bb2dfec973dca403bff227` |
+| LegilimensProfileLibrary | 4 | Published · tested · approved | Extracts pure row-strength, LVN/cliff, outlier peak, clustering, ranking, and selected-row-mask analytics | `d0fb6868335b8322a436443ee5ec76bba66688b4b5d240be0099e868702f1239` |
+| LegilimensProfileOrchestrationLibrary | 1 | Published · host compile missing function reference | Extracts anchor state, boundary calculations, profile retention, and selection lifecycle into compact orchestration types | `6580a8976ad93eb9c5d5531a8b92522de4277b9c6ef99092cfb8e0e0ee76b37b` |
+| LegilimensProfileOrchestrationLibrary | 2 | Published · host compiled · runtime validation pending | Exports the NY cutoff boundary used by the reorganized host | `560b8ae0a37c38f15eb033ccef2eb7a6926cb55c52b5d85c47493158ad32b68e` |
 
 ## Publication-instruction log
 
@@ -159,6 +164,10 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-08-30-01 | 2026-08-30 | LegilimensProfileLibrary | 1 | Publish the extracted Legilimens profile calculation source privately as `/1`, then compile and visually verify the development Legilimens host against `/1` across session, Rolling, Fixed, developing, Replay, and Range-chart profiles | `PUBLISHED_HOST_COMPILE_FAILED_RETURN_TYPE` |
 | PUB-2026-08-30-03 | 2026-08-30 | LegilimensProfileLibrary | 2 | Publish the void-contract correction privately as `/2`, then compile and visually verify the development Legilimens host against `/2` across session, Rolling, Fixed, developing, Replay, and Range-chart profiles | `PUBLISHED_TESTED_APPROVED` |
 | PUB-2026-08-30-04 | 2026-08-30 | RevelioProfileOrchestrationLibrary | 8 | Publish the remote Quarterly eligibility correction privately as `/8`, then compile and verify the development Revelio host against Core `/10`, Gaps `/11`, Interactions `/21`, and Profile Orchestration `/8` with prior-to-current Quarterly Manual Composite ranges on host charts that do not contain the selected quarter boundary, plus partial, missing, future, reversed, and Show Last-exceeded ranges | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-09-02-01 | 2026-09-02 | LegilimensProfileLibrary | 3 | Publish the rolling sample-store and profile-mechanics extraction privately as `/3`, then compile the development Legilimens host against `/3` and verify Rolling, seven-day Weekly, thirty-day Monthly, calendar Weekly/Monthly with Use Rolling disabled, history ordering and retention, mitigation, Replay, Range charts, visuals, object budgets, and Profiler behavior | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-09-02-02 | 2026-09-02 | LegilimensProfileLibrary | 4 | Publish the pure profile-analytics extraction privately as `/4`, then compile the development Legilimens host against `/4` and verify Delta tiers, selected-tier outliers, LVN/cliff levels, overlap merging, mitigation registration, Replay, Range charts, visuals, object budgets, and Profiler behavior | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-09-02-03 | 2026-09-02 | LegilimensProfileOrchestrationLibrary | 1 | Publish the Legilimens anchor, boundary, retention, and selection lifecycle privately as `/1`, then compile the reorganized development host against Profile `/4` and Profile Orchestration `/1` and verify every profile mode, developing/history behavior, Replay, Range charts, mitigation, visuals, object budgets, and Profiler behavior | `PUBLISHED_HOST_COMPILE_FAILED_MISSING_FUNCTION_REFERENCE` |
+| PUB-2026-09-02-04 | 2026-09-02 | LegilimensProfileOrchestrationLibrary | 2 | Publish the NY cutoff export correction privately as `/2`, then compile the reorganized development host against Profile `/4` and Profile Orchestration `/2` and verify Rolling Through clock cutoffs plus the full profile-mode regression set | `PUBLISHED_HOST_COMPILED_RUNTIME_VALIDATION_PENDING` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -169,11 +178,11 @@ Entries before this registry was created are reconstructed from the task history
 - Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Interactions `/21` and Profile Orchestration `/8`.
 - Runtime status: Interactions `/21` and Profile Orchestration `/8` are published, tested, and approved. Profile Orchestration `/7` remains recorded as superseded after principal review found the Quarterly host-history eligibility defect.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
-- Legilimens: Profile Library `/2` is published, tested, and approved in `indicators/21-legilimens/code/legilimens.pine`.
+- Legilimens: Profile Library `/4` is published, tested, and approved. Development imports `/4`.
+- Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
+- Legilimens: Profile Orchestration Library `/2` is published and development imports `/2`. The reorganized host compiles live against Profile `/4` and Orchestration `/2`; runtime and visual validation remain pending.
 
 ## Pending release notes
-
-No pending releases.
 
 ## Invariants
 

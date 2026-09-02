@@ -6,6 +6,22 @@ library("LegilimensProfileLibrary", overlay=true)
 const int SAMPLE_COMPACT_THRESHOLD = 10000
 const int SAMPLE_COMPACT_ROWS = 3000
 const float VALUE_AREA_PERCENT = 70.0
+const string NY_TIMEZONE = "America/New_York"
+const int ROLLING_CUTOFF_0500_MINUTE = 5 * 60
+const int ROLLING_CUTOFF_0830_MINUTE = 8 * 60 + 30
+const int ROLLING_CUTOFF_0930_MINUTE = 9 * 60 + 30
+const int ROLLING_CUTOFF_1600_MINUTE = 16 * 60
+const int ROLLING_CUTOFF_1800_MINUTE = 18 * 60
+const int ROLLING_SAMPLE_COMPACT_THRESHOLD = 5000
+const int ROLLING_SHORT_WINDOW_COMPACT_THRESHOLD = 8 * 25 * 60
+const int OUTLIER_PEAK_GAP_ROWS = 1
+const float OUTLIER_MULTIPLIER = 1.5
+const int LOW_VOLUME_SMOOTH_RADIUS = 2
+const float LOW_VOLUME_SHOULDER_FRACTION = 0.08
+const float LOW_VOLUME_MIN_SHOULDER_SHARE = 0.1
+const float LOW_VOLUME_MAX_ZONE_FRACTION = 0.15
+const int LOW_VOLUME_CLIFF_SEPARATION_ROWS = 6
+const float LOW_VOLUME_SENSITIVITY = 1.8
 
 export type ProfileData
     float priceLow
@@ -18,6 +34,91 @@ export type ProfileData
     float maxRowVolume
     float maxAbsRowDelta
     bool isValid
+
+export type SampleBatch
+    array<int> startTimes
+    array<int> endTimes
+    array<float> highs
+    array<float> lows
+    array<float> volumes
+    array<float> deltas
+
+export type RollingProfileWindow
+    int startTime
+    int endTime
+    bool includeEnd
+    bool requireFullContainment
+
+export type RollingSampleStore
+    int headIndex
+    array<int> startKeys
+    array<int> endKeys
+    array<int> startTimes
+    array<int> endTimes
+    array<float> highs
+    array<float> lows
+    array<float> volumes
+    array<float> deltas
+    array<int> selectedIndices
+
+export type LowVolumeCandidate
+    float price
+    float zoneLow
+    float zoneHigh
+    float strength
+    bool isLvn
+
+export type OutlierPeak
+    float price
+    float zoneLow
+    float zoneHigh
+    float delta
+    float strength
+    bool buySide
+    int firstRow
+    int lastRow
+
+export type OutlierCandidate
+    float price
+    float zoneLow
+    float zoneHigh
+    float delta
+    float strength
+    bool buySide
+    string sourceKey
+    int occurrenceKey
+    bool historical
+    int profileKey
+    int firstRow
+    int lastRow
+
+export type RankedOutlierSelection
+    array<int> memberIndices
+    int representativeIndex
+    float price
+    float zoneLow
+    float zoneHigh
+    bool buySide
+    int profileKey
+    int firstRow
+    int lastRow
+    int strengthRank
+
+type OutlierCluster
+    array<int> memberIndices
+    int representativeIndex
+    float price
+    float zoneLow
+    float zoneHigh
+    float delta
+    float strength
+    bool buySide
+    string sourceKey
+    int occurrenceKey
+    bool historical
+    int profileKey
+    int firstRow
+    int lastRow
 
 clampRow(float rawRow, int rowCount) =>
     math.max(0, math.min(rowCount - 1, int(math.floor(rawRow))))
@@ -149,6 +250,433 @@ export buildProfile(array<float> highs, array<float> lows, array<float> volumes,
         profile.maxAbsRowDelta := maxAbsRowDelta
         profile.isValid := totalVolume > 0
     profile
+
+rollingSegmentIndex(int nyMinutes) =>
+    switch
+        nyMinutes < ROLLING_CUTOFF_0500_MINUTE => 0
+        nyMinutes < ROLLING_CUTOFF_0830_MINUTE => 1
+        nyMinutes < ROLLING_CUTOFF_0930_MINUTE => 2
+        nyMinutes < ROLLING_CUTOFF_1600_MINUTE => 3
+        nyMinutes < ROLLING_CUTOFF_1800_MINUTE => 4
+        => 5
+
+rollingSegmentKey(int sampleTime) =>
+    int nyMinutes = hour(sampleTime, NY_TIMEZONE) * 60 + minute(sampleTime, NY_TIMEZONE)
+    int segment = rollingSegmentIndex(nyMinutes)
+    (year(sampleTime, NY_TIMEZONE) * 10000 + month(sampleTime, NY_TIMEZONE) * 100 + dayofmonth(sampleTime, NY_TIMEZONE)) * 10 + segment
+
+rollingSampleStoreAligned(RollingSampleStore store) =>
+    int sampleCount = array.size(store.volumes)
+    bool keysAligned = array.size(store.startKeys) == sampleCount and array.size(store.endKeys) == sampleCount
+    bool timesAligned = array.size(store.startTimes) == sampleCount and array.size(store.endTimes) == sampleCount
+    bool valuesAligned = array.size(store.highs) == sampleCount and array.size(store.lows) == sampleCount and array.size(store.deltas) == sampleCount
+    store.headIndex >= 0 and store.headIndex <= sampleCount and keysAligned and timesAligned and valuesAligned
+
+requireRollingSampleStoreAligned(RollingSampleStore store) =>
+    if not rollingSampleStoreAligned(store)
+        runtime.error("Rolling sample storage is misaligned.")
+
+sampleBatchAligned(SampleBatch samples) =>
+    int sampleCount = array.size(samples.volumes)
+    bool timesAligned = array.size(samples.startTimes) == sampleCount and array.size(samples.endTimes) == sampleCount
+    bool valuesAligned = array.size(samples.highs) == sampleCount and array.size(samples.lows) == sampleCount and array.size(samples.deltas) == sampleCount
+    timesAligned and valuesAligned
+
+requireSampleBatchAligned(SampleBatch samples) =>
+    if not sampleBatchAligned(samples)
+        runtime.error("Rolling source samples are misaligned.")
+
+popRollingSample(RollingSampleStore store) =>
+    array.pop(store.startKeys)
+    array.pop(store.endKeys)
+    array.pop(store.startTimes)
+    array.pop(store.endTimes)
+    array.pop(store.highs)
+    array.pop(store.lows)
+    array.pop(store.volumes)
+    array.pop(store.deltas)
+
+truncateRollingSamples(RollingSampleStore store, int retainedSize) =>
+    while array.size(store.volumes) > retainedSize
+        popRollingSample(store)
+
+clearRollingSamples(RollingSampleStore store) =>
+    array.clear(store.startKeys)
+    array.clear(store.endKeys)
+    array.clear(store.startTimes)
+    array.clear(store.endTimes)
+    array.clear(store.highs)
+    array.clear(store.lows)
+    array.clear(store.volumes)
+    array.clear(store.deltas)
+    store.headIndex := 0
+
+compactRollingSamples(RollingSampleStore store, int mergeThreshold) =>
+    requireRollingSampleStoreAligned(store)
+    int sampleCount = array.size(store.volumes)
+    int activeSampleCount = sampleCount - store.headIndex
+    if store.headIndex > ROLLING_SAMPLE_COMPACT_THRESHOLD or activeSampleCount > mergeThreshold
+        bool mergeActiveSamples = activeSampleCount > mergeThreshold
+        int writeIndex = 0
+        int readIndex = store.headIndex
+        while readIndex < sampleCount
+            int nextIndex = readIndex + 1
+            bool currentWithinSegment = array.get(store.startKeys, readIndex) == array.get(store.endKeys, readIndex)
+            bool nextWithinSegment = nextIndex < sampleCount and array.get(store.startKeys, nextIndex) == array.get(store.endKeys, nextIndex)
+            bool mergeNext = mergeActiveSamples and currentWithinSegment and nextWithinSegment and array.get(store.endKeys, readIndex) == array.get(store.startKeys, nextIndex)
+            array.set(store.startKeys, writeIndex, array.get(store.startKeys, readIndex))
+            array.set(store.endKeys, writeIndex, mergeNext ? array.get(store.endKeys, nextIndex) : array.get(store.endKeys, readIndex))
+            array.set(store.startTimes, writeIndex, array.get(store.startTimes, readIndex))
+            array.set(store.endTimes, writeIndex, mergeNext ? array.get(store.endTimes, nextIndex) : array.get(store.endTimes, readIndex))
+            array.set(store.highs, writeIndex, mergeNext ? math.max(array.get(store.highs, readIndex), array.get(store.highs, nextIndex)) : array.get(store.highs, readIndex))
+            array.set(store.lows, writeIndex, mergeNext ? math.min(array.get(store.lows, readIndex), array.get(store.lows, nextIndex)) : array.get(store.lows, readIndex))
+            array.set(store.volumes, writeIndex, array.get(store.volumes, readIndex) + (mergeNext ? array.get(store.volumes, nextIndex) : 0.0))
+            array.set(store.deltas, writeIndex, array.get(store.deltas, readIndex) + (mergeNext ? array.get(store.deltas, nextIndex) : 0.0))
+            writeIndex += 1
+            readIndex += mergeNext ? 2 : 1
+        truncateRollingSamples(store, writeIndex)
+        store.headIndex := 0
+    requireRollingSampleStoreAligned(store)
+
+appendRollingSample(RollingSampleStore store, int sampleStartTime, int sampleEndTime, float sampleHigh, float sampleLow, float sampleVolume, float sampleDelta) =>
+    array.push(store.startKeys, rollingSegmentKey(sampleStartTime))
+    array.push(store.endKeys, rollingSegmentKey(math.max(sampleStartTime, sampleEndTime - 1)))
+    array.push(store.startTimes, sampleStartTime)
+    array.push(store.endTimes, sampleEndTime)
+    array.push(store.highs, sampleHigh)
+    array.push(store.lows, sampleLow)
+    array.push(store.volumes, sampleVolume)
+    array.push(store.deltas, sampleDelta)
+
+appendRollingBatch(RollingSampleStore store, SampleBatch samples) =>
+    requireRollingSampleStoreAligned(store)
+    requireSampleBatchAligned(samples)
+    int sampleCount = array.size(samples.volumes)
+    if sampleCount > 0
+        for sampleIndex = 0 to sampleCount - 1
+            appendRollingSample(store, array.get(samples.startTimes, sampleIndex), array.get(samples.endTimes, sampleIndex), array.get(samples.highs, sampleIndex), array.get(samples.lows, sampleIndex), array.get(samples.volumes, sampleIndex), array.get(samples.deltas, sampleIndex))
+
+rollingMergeThreshold(int lookbackDays) =>
+    lookbackDays <= 7 ? ROLLING_SHORT_WINDOW_COMPACT_THRESHOLD : ROLLING_SAMPLE_COMPACT_THRESHOLD
+
+buildRollingProfileData(RollingSampleStore store, RollingProfileWindow window, int requestedRows, float tickSize) =>
+    requireRollingSampleStoreAligned(store)
+    array.clear(store.selectedIndices)
+    int sampleCount = array.size(store.volumes)
+    if store.headIndex < sampleCount
+        for sampleIndex = store.headIndex to sampleCount - 1
+            int sampleStartTime = array.get(store.startTimes, sampleIndex)
+            int sampleEndTime = array.get(store.endTimes, sampleIndex)
+            bool sampleInsideRange = window.includeEnd ? sampleEndTime > window.startTime : window.requireFullContainment ? sampleStartTime >= window.startTime and sampleEndTime <= window.endTime : sampleEndTime >= window.startTime and sampleStartTime < window.endTime
+            if sampleInsideRange
+                array.push(store.selectedIndices, sampleIndex)
+    buildProfile(store.highs, store.lows, store.volumes, store.deltas, store.selectedIndices, requestedRows, tickSize)
+
+export newRollingSampleStore() =>
+    RollingSampleStore.new(0, array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<int>())
+
+export rollingSampleStoreSize(RollingSampleStore store) =>
+    array.size(store.volumes)
+
+export appendRollingSamples(RollingSampleStore store, SampleBatch samples, int lookbackDays) =>
+    appendRollingBatch(store, samples)
+    compactRollingSamples(store, rollingMergeThreshold(lookbackDays))
+    requireRollingSampleStoreAligned(store)
+
+export pruneRollingSamples(RollingSampleStore store, int cutoffTime) =>
+    requireRollingSampleStoreAligned(store)
+    int sampleCount = array.size(store.volumes)
+    while store.headIndex < sampleCount and array.get(store.endTimes, store.headIndex) <= cutoffTime
+        store.headIndex += 1
+    if store.headIndex == sampleCount and sampleCount > 0
+        clearRollingSamples(store)
+    requireRollingSampleStoreAligned(store)
+
+export buildRollingProfile(RollingSampleStore store, SampleBatch currentSamples, bool includeCurrentSamples, RollingProfileWindow window, int requestedRows, float tickSize) =>
+    int originalSize = array.size(store.volumes)
+    if includeCurrentSamples
+        appendRollingBatch(store, currentSamples)
+    ProfileData profile = buildRollingProfileData(store, window, requestedRows, tickSize)
+    truncateRollingSamples(store, originalSize)
+    profile
+
+export computeRowStrengths(ProfileData profile) =>
+    array<float> strengths = array.new<float>(profile.rowCount, na)
+    float absDeltaSum = 0.0
+    int occupiedCount = 0
+    for rowIndex = 0 to profile.rowCount - 1
+        if array.get(profile.rowVolumes, rowIndex) > 0
+            absDeltaSum += math.abs(array.get(profile.rowDeltas, rowIndex))
+            occupiedCount += 1
+    if occupiedCount > 2
+        float averageAbsDelta = absDeltaSum / occupiedCount
+        if averageAbsDelta > 0
+            for rowIndex = 0 to profile.rowCount - 1
+                if array.get(profile.rowVolumes, rowIndex) > 0
+                    array.set(strengths, rowIndex, math.abs(array.get(profile.rowDeltas, rowIndex)) / averageAbsDelta)
+    strengths
+
+export isOutlierStrength(float strength) =>
+    not na(strength) and strength >= OUTLIER_MULTIPLIER
+
+smoothProfileVolumes(ProfileData profile) =>
+    array<float> smoothedVolumes = array.new<float>(profile.rowCount, 0.0)
+    for rowIndex = 0 to profile.rowCount - 1
+        int firstRow = math.max(0, rowIndex - LOW_VOLUME_SMOOTH_RADIUS)
+        int lastRow = math.min(profile.rowCount - 1, rowIndex + LOW_VOLUME_SMOOTH_RADIUS)
+        float volumeSum = 0.0
+        for sampleRow = firstRow to lastRow
+            volumeSum += array.get(profile.rowVolumes, sampleRow)
+        array.set(smoothedVolumes, rowIndex, volumeSum / (lastRow - firstRow + 1))
+    smoothedVolumes
+
+volumeWindowAverage(array<float> volumes, int firstRow, int lastRow) =>
+    float volumeSum = 0.0
+    for rowIndex = firstRow to lastRow
+        volumeSum += array.get(volumes, rowIndex)
+    volumeSum / (lastRow - firstRow + 1)
+
+collectLowVolumeCandidates(ProfileData profile) =>
+    array<LowVolumeCandidate> candidates = array.new<LowVolumeCandidate>()
+    int rowCount = profile.rowCount
+    float rowHeight = (profile.priceHigh - profile.priceLow) / rowCount
+    int shoulderWindow = math.max(4, math.min(32, int(math.round(rowCount * LOW_VOLUME_SHOULDER_FRACTION))))
+    if rowCount >= LOW_VOLUME_SMOOTH_RADIUS * 2 + 3
+        array<float> smoothedVolumes = smoothProfileVolumes(profile)
+        float maxSmoothedVolume = array.max(smoothedVolumes)
+        float minimumShoulderVolume = maxSmoothedVolume * LOW_VOLUME_MIN_SHOULDER_SHARE
+        float minimumDenominator = math.max(maxSmoothedVolume * 0.001, 0.0000001)
+        if rowCount >= shoulderWindow * 2 + 3
+            int maximumZoneRows = math.max(1, int(math.floor(rowCount * LOW_VOLUME_MAX_ZONE_FRACTION)))
+            int firstLvnRow = shoulderWindow
+            int lastLvnRow = rowCount - shoulderWindow - 1
+            for rowIndex = firstLvnRow to lastLvnRow
+                float valleyVolume = array.get(smoothedVolumes, rowIndex)
+                float leftShoulderVolume = 0.0
+                float rightShoulderVolume = 0.0
+                for shoulderOffset = 1 to shoulderWindow
+                    leftShoulderVolume := math.max(leftShoulderVolume, array.get(smoothedVolumes, rowIndex - shoulderOffset))
+                    rightShoulderVolume := math.max(rightShoulderVolume, array.get(smoothedVolumes, rowIndex + shoulderOffset))
+                float shoulderVolume = math.min(leftShoulderVolume, rightShoulderVolume)
+                float strength = shoulderVolume / math.max(valleyVolume, minimumDenominator)
+                bool boundedValley = valleyVolume < leftShoulderVolume and valleyVolume < rightShoulderVolume
+                if boundedValley and shoulderVolume >= minimumShoulderVolume and strength >= LOW_VOLUME_SENSITIVITY
+                    float zoneThreshold = shoulderVolume / LOW_VOLUME_SENSITIVITY
+                    int firstZoneRow = rowIndex
+                    int lastZoneRow = rowIndex
+                    while firstZoneRow > 0 and lastZoneRow - firstZoneRow + 1 <= maximumZoneRows and array.get(smoothedVolumes, firstZoneRow - 1) <= zoneThreshold
+                        firstZoneRow -= 1
+                    while lastZoneRow < rowCount - 1 and lastZoneRow - firstZoneRow + 1 <= maximumZoneRows and array.get(smoothedVolumes, lastZoneRow + 1) <= zoneThreshold
+                        lastZoneRow += 1
+                    int zoneRows = lastZoneRow - firstZoneRow + 1
+                    if zoneRows <= maximumZoneRows
+                        float valleyPrice = profile.priceLow + (rowIndex + 0.5) * rowHeight
+                        float zoneLow = profile.priceLow + firstZoneRow * rowHeight
+                        float zoneHigh = profile.priceLow + (lastZoneRow + 1) * rowHeight
+                        array.push(candidates, LowVolumeCandidate.new(valleyPrice, zoneLow, zoneHigh, strength, true))
+        int compareRows = LOW_VOLUME_SMOOTH_RADIUS + 1
+        if rowCount >= compareRows * 2 + 1
+            int firstCliffBoundary = compareRows
+            int lastCliffBoundary = rowCount - compareRows
+            for boundaryRow = firstCliffBoundary to lastCliffBoundary
+                int lowerFirstRow = boundaryRow - compareRows
+                int lowerLastRow = boundaryRow - 1
+                int upperFirstRow = boundaryRow
+                int upperLastRow = boundaryRow + compareRows - 1
+                float lowerVolume = volumeWindowAverage(smoothedVolumes, lowerFirstRow, lowerLastRow)
+                float upperVolume = volumeWindowAverage(smoothedVolumes, upperFirstRow, upperLastRow)
+                float highVolume = math.max(lowerVolume, upperVolume)
+                float lowVolume = math.min(lowerVolume, upperVolume)
+                float strength = highVolume / math.max(lowVolume, minimumDenominator)
+                if highVolume >= minimumShoulderVolume and strength >= LOW_VOLUME_SENSITIVITY
+                    float cliffPrice = profile.priceLow + boundaryRow * rowHeight
+                    array.push(candidates, LowVolumeCandidate.new(cliffPrice, cliffPrice, cliffPrice, strength, false))
+    candidates
+
+lowVolumeCandidatesOverlap(LowVolumeCandidate first, LowVolumeCandidate second, float rowHeight) =>
+    bool overlap = false
+    if first.isLvn and second.isLvn
+        overlap := first.zoneLow <= second.zoneHigh and second.zoneLow <= first.zoneHigh
+    else if not first.isLvn and not second.isLvn
+        overlap := math.abs(first.price - second.price) <= rowHeight * LOW_VOLUME_CLIFF_SEPARATION_ROWS
+    else
+        float lvnLow = first.isLvn ? first.zoneLow : second.zoneLow
+        float lvnHigh = first.isLvn ? first.zoneHigh : second.zoneHigh
+        float cliffPrice = first.isLvn ? second.price : first.price
+        float cliffMargin = rowHeight * LOW_VOLUME_CLIFF_SEPARATION_ROWS
+        overlap := cliffPrice >= lvnLow - cliffMargin and cliffPrice <= lvnHigh + cliffMargin
+    overlap
+
+export selectLowVolumeCandidates(ProfileData profile, int visibleTierCount) =>
+    array<LowVolumeCandidate> candidates = collectLowVolumeCandidates(profile)
+    array<LowVolumeCandidate> selectedCandidates = array.new<LowVolumeCandidate>()
+    int candidateCount = array.size(candidates)
+    if candidateCount > 0
+        array<bool> discarded = array.new<bool>(candidateCount, false)
+        float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
+        for structureRank = 1 to visibleTierCount
+            int bestCandidateIndex = -1
+            float bestStrength = -1.0
+            for candidateIndex = 0 to candidateCount - 1
+                LowVolumeCandidate candidate = array.get(candidates, candidateIndex)
+                if not array.get(discarded, candidateIndex) and candidate.strength > bestStrength
+                    bestCandidateIndex := candidateIndex
+                    bestStrength := candidate.strength
+            if bestCandidateIndex >= 0
+                LowVolumeCandidate selectedCandidate = array.get(candidates, bestCandidateIndex)
+                array.push(selectedCandidates, selectedCandidate)
+                array.set(discarded, bestCandidateIndex, true)
+                for candidateIndex = 0 to candidateCount - 1
+                    if not array.get(discarded, candidateIndex) and lowVolumeCandidatesOverlap(selectedCandidate, array.get(candidates, candidateIndex), rowHeight)
+                        array.set(discarded, candidateIndex, true)
+    selectedCandidates
+
+outlierPeak(ProfileData profile, bool buySide, int firstRow, int lastRow, int anchorRow, float peakDelta, float peakStrength) =>
+    float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
+    float peakPrice = profile.priceLow + (anchorRow + 0.5) * rowHeight
+    float zoneLow = profile.priceLow + firstRow * rowHeight
+    float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
+    OutlierPeak.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, firstRow, lastRow)
+
+collectSideOutlierPeaks(ProfileData profile, array<float> strengths, bool buySide) =>
+    array<OutlierPeak> peaks = array.new<OutlierPeak>()
+    bool peakActive = false
+    float peakDelta = 0.0
+    float peakStrength = 0.0
+    int peakFirstRow = -1
+    int peakLastRow = -1
+    int peakAnchorRow = -1
+    int lastQualifiedRow = -100000
+    for rowIndex = 0 to profile.rowCount - 1
+        float rowDelta = array.get(profile.rowDeltas, rowIndex)
+        float strength = array.get(strengths, rowIndex)
+        bool correctSide = buySide ? rowDelta > 0 : rowDelta < 0
+        bool qualifies = correctSide and isOutlierStrength(strength)
+        if qualifies
+            bool startsNewPeak = peakActive and rowIndex - lastQualifiedRow > OUTLIER_PEAK_GAP_ROWS + 1
+            if startsNewPeak
+                array.push(peaks, outlierPeak(profile, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength))
+                peakActive := false
+                peakDelta := 0.0
+                peakStrength := 0.0
+                peakFirstRow := -1
+                peakLastRow := -1
+                peakAnchorRow := -1
+            if not peakActive
+                peakActive := true
+                peakFirstRow := rowIndex
+            peakDelta += rowDelta
+            peakLastRow := rowIndex
+            if strength > peakStrength
+                peakStrength := strength
+                peakAnchorRow := rowIndex
+            lastQualifiedRow := rowIndex
+    if peakActive
+        array.push(peaks, outlierPeak(profile, buySide, peakFirstRow, peakLastRow, peakAnchorRow, peakDelta, peakStrength))
+    peaks
+
+export collectOutlierPeaks(ProfileData profile, array<float> strengths) =>
+    array<OutlierPeak> peaks = array.new<OutlierPeak>()
+    for sideIndex = 0 to 1
+        bool buySide = sideIndex == 0
+        array<OutlierPeak> sidePeaks = collectSideOutlierPeaks(profile, strengths, buySide)
+        int sidePeakCount = array.size(sidePeaks)
+        if sidePeakCount > 0
+            for peakIndex = 0 to sidePeakCount - 1
+                array.push(peaks, array.get(sidePeaks, peakIndex))
+    peaks
+
+clusterOutranks(float magnitude, float strength, float bestMagnitude, float bestStrength) =>
+    magnitude > bestMagnitude or (magnitude == bestMagnitude and strength > bestStrength)
+
+export rankOutlierCandidates(array<OutlierCandidate> candidates, bool merge, float tickSize, float mergeDistancePercent, int visibleTierCount) =>
+    array<OutlierCluster> clusters = array.new<OutlierCluster>()
+    int candidateCount = array.size(candidates)
+    if candidateCount > 0
+        for candidateIndex = 0 to candidateCount - 1
+            OutlierCandidate candidate = array.get(candidates, candidateIndex)
+            float tolerance = math.max(tickSize, math.abs(candidate.price) * mergeDistancePercent / 100.0)
+            int foundIndex = -1
+            float minimumDistance = tolerance + tickSize
+            int clusterCount = array.size(clusters)
+            if merge and clusterCount > 0
+                for clusterIndex = 0 to clusterCount - 1
+                    OutlierCluster cluster = array.get(clusters, clusterIndex)
+                    float distance = math.abs(cluster.price - candidate.price)
+                    bool sameSide = cluster.buySide == candidate.buySide
+                    bool sameSource = cluster.sourceKey == candidate.sourceKey
+                    bool sameOccurrence = cluster.occurrenceKey == candidate.occurrenceKey and cluster.historical == candidate.historical
+                    if sameSide and sameSource and sameOccurrence and distance <= tolerance and distance < minimumDistance
+                        minimumDistance := distance
+                        foundIndex := clusterIndex
+            if foundIndex >= 0
+                OutlierCluster cluster = array.get(clusters, foundIndex)
+                array.push(cluster.memberIndices, candidateIndex)
+                cluster.zoneLow := math.min(cluster.zoneLow, candidate.zoneLow)
+                cluster.zoneHigh := math.max(cluster.zoneHigh, candidate.zoneHigh)
+                cluster.delta += candidate.delta
+                cluster.firstRow := math.min(cluster.firstRow, candidate.firstRow)
+                cluster.lastRow := math.max(cluster.lastRow, candidate.lastRow)
+                if candidate.strength > cluster.strength
+                    cluster.price := candidate.price
+                    cluster.strength := candidate.strength
+                    cluster.representativeIndex := candidateIndex
+            else
+                array<int> memberIndices = array.new<int>()
+                array.push(memberIndices, candidateIndex)
+                array.push(clusters, OutlierCluster.new(memberIndices, candidateIndex, candidate.price, candidate.zoneLow, candidate.zoneHigh, candidate.delta, candidate.strength, candidate.buySide, candidate.sourceKey, candidate.occurrenceKey, candidate.historical, candidate.profileKey, candidate.firstRow, candidate.lastRow))
+    array<RankedOutlierSelection> rankedSelections = array.new<RankedOutlierSelection>()
+    int clusterCount = array.size(clusters)
+    if clusterCount > 0
+        array<string> sourceKeys = array.new<string>()
+        for clusterIndex = 0 to clusterCount - 1
+            OutlierCluster cluster = array.get(clusters, clusterIndex)
+            string sourceKey = cluster.sourceKey
+            if not array.includes(sourceKeys, sourceKey)
+                array.push(sourceKeys, sourceKey)
+        array<bool> selectedClusters = array.new<bool>(clusterCount, false)
+        int sourceCount = array.size(sourceKeys)
+        for sourceIndex = 0 to sourceCount - 1
+            string selectedSourceKey = array.get(sourceKeys, sourceIndex)
+            for sideIndex = 0 to 1
+                bool buySide = sideIndex == 0
+                for strengthRank = 1 to visibleTierCount
+                    int bestCluster = -1
+                    float bestMagnitude = -1.0
+                    float bestStrength = -1.0
+                    for clusterIndex = 0 to clusterCount - 1
+                        OutlierCluster cluster = array.get(clusters, clusterIndex)
+                        bool eligible = not array.get(selectedClusters, clusterIndex) and cluster.buySide == buySide and cluster.sourceKey == selectedSourceKey
+                        if eligible
+                            float magnitude = math.abs(cluster.delta)
+                            if clusterOutranks(magnitude, cluster.strength, bestMagnitude, bestStrength)
+                                bestMagnitude := magnitude
+                                bestStrength := cluster.strength
+                                bestCluster := clusterIndex
+                    if bestCluster >= 0
+                        array.set(selectedClusters, bestCluster, true)
+                        OutlierCluster selectedCluster = array.get(clusters, bestCluster)
+                        array.push(rankedSelections, RankedOutlierSelection.new(selectedCluster.memberIndices, selectedCluster.representativeIndex, selectedCluster.price, selectedCluster.zoneLow, selectedCluster.zoneHigh, selectedCluster.buySide, selectedCluster.profileKey, selectedCluster.firstRow, selectedCluster.lastRow, strengthRank))
+    rankedSelections
+
+export selectedOutlierRowMask(ProfileData profile, int profileKey, array<float> strengths, array<RankedOutlierSelection> rankedSelections, bool enabled, bool buyVisible, bool sellVisible) =>
+    array<bool> selectedRows = array.new<bool>(profile.rowCount, false)
+    int rankedCount = array.size(rankedSelections)
+    if enabled and rankedCount > 0
+        for rankedIndex = 0 to rankedCount - 1
+            RankedOutlierSelection ranked = array.get(rankedSelections, rankedIndex)
+            bool sideVisible = ranked.buySide ? buyVisible : sellVisible
+            if ranked.profileKey == profileKey and sideVisible
+                int firstRow = math.max(0, ranked.firstRow)
+                int lastRow = math.min(profile.rowCount - 1, ranked.lastRow)
+                if firstRow <= lastRow
+                    for rowIndex = firstRow to lastRow
+                        float rowDelta = array.get(profile.rowDeltas, rowIndex)
+                        float strength = array.get(strengths, rowIndex)
+                        bool correctSide = ranked.buySide ? rowDelta > 0 : rowDelta < 0
+                        if correctSide and isOutlierStrength(strength)
+                            array.set(selectedRows, rowIndex, true)
+    selectedRows
 
 export profileValueLevels(array<float> rowVolumes, int rowCount, float priceLow, float priceHigh) =>
     int pocRow = 0

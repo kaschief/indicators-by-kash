@@ -1,0 +1,400 @@
+//@version=6
+
+//@description Private Legilimens profile lifecycle and orchestration library.
+library("LegilimensProfileOrchestrationLibrary", overlay=true)
+
+import midnightpaws87/LegilimensProfileLibrary/4 as legilimensProfile
+
+const string NY_TIMEZONE = "America/New_York"
+const string UTC_TIMEZONE = "GMT+0"
+const int START_TIME_UNSET = -1
+
+export type Profile
+    int startTime
+    int endTime
+    legilimensProfile.ProfileData data
+
+export type AnchorState
+    array<float> highs
+    array<float> lows
+    array<float> volumes
+    array<float> deltas
+    array<Profile> profiles
+    array<Profile> finalizedProfiles
+    int startTime
+    int lastBarTime
+    int periodEndTime
+
+export type ProfileSelection
+    array<Profile> profiles
+    int currentIndex
+    bool currentDeveloping
+
+export type RenderDecision
+    bool shouldRender
+    string displayNameOverride
+    bool pairedHeadings
+
+isNyWeekdayValue(int barTime) =>
+    int weekday = dayofweek(barTime, NY_TIMEZONE)
+    weekday >= dayofweek.monday and weekday <= dayofweek.friday
+
+inNyMinuteWindowValue(int barTime, int startMinute, int endMinute) =>
+    int barMinute = hour(barTime, NY_TIMEZONE) * 60 + minute(barTime, NY_TIMEZONE)
+    startMinute <= endMinute ? barMinute >= startMinute and barMinute < endMinute : barMinute >= startMinute or barMinute < endMinute
+
+nyMinuteBoundaryValue(int referenceTime, int minuteOfDay) =>
+    timestamp(NY_TIMEZONE, year(referenceTime, NY_TIMEZONE), month(referenceTime, NY_TIMEZONE), dayofmonth(referenceTime, NY_TIMEZONE), int(math.floor(minuteOfDay / 60)), minuteOfDay % 60)
+
+nySessionStartBoundaryValue(int referenceTime, int startMinute, int endMinute) =>
+    int referenceMinute = hour(referenceTime, NY_TIMEZONE) * 60 + minute(referenceTime, NY_TIMEZONE)
+    int startDayOffset = startMinute > endMinute and referenceMinute < endMinute ? -1 : 0
+    timestamp(NY_TIMEZONE, year(referenceTime, NY_TIMEZONE), month(referenceTime, NY_TIMEZONE), dayofmonth(referenceTime, NY_TIMEZONE) + startDayOffset, int(math.floor(startMinute / 60)), startMinute % 60)
+
+nySessionEndBoundaryValue(int referenceTime, int startMinute, int endMinute) =>
+    int startTime = nySessionStartBoundaryValue(referenceTime, startMinute, endMinute)
+    int endDayOffset = startMinute >= endMinute ? 1 : 0
+    timestamp(NY_TIMEZONE, year(startTime, NY_TIMEZONE), month(startTime, NY_TIMEZONE), dayofmonth(startTime, NY_TIMEZONE) + endDayOffset, int(math.floor(endMinute / 60)), endMinute % 60)
+
+tradingDayKeyValue(int sessionCloseTime) =>
+    year(sessionCloseTime, NY_TIMEZONE) * 10000 + month(sessionCloseTime, NY_TIMEZONE) * 100 + dayofmonth(sessionCloseTime, NY_TIMEZONE)
+
+export previousNyCutoff(int cutoffTime, int cutoffHour, int cutoffMinute) =>
+    int previousDateReference = cutoffTime - 24 * 60 * 60 * 1000
+    timestamp(NY_TIMEZONE, year(previousDateReference, NY_TIMEZONE), month(previousDateReference, NY_TIMEZONE), dayofmonth(previousDateReference, NY_TIMEZONE), cutoffHour, cutoffMinute)
+
+nextNyCutoff(int cutoffTime, int cutoffHour, int cutoffMinute) =>
+    timestamp(NY_TIMEZONE, year(cutoffTime, NY_TIMEZONE), month(cutoffTime, NY_TIMEZONE), dayofmonth(cutoffTime, NY_TIMEZONE) + 1, cutoffHour, cutoffMinute)
+
+lookforwardDaysEndValue(int startTime, int days, bool twentyFourSeven) =>
+    int endTime = startTime
+    int countedDays = 0
+    if not na(startTime)
+        int anchorHour = hour(startTime, NY_TIMEZONE)
+        int anchorMinute = minute(startTime, NY_TIMEZONE)
+        while countedDays < days
+            endTime := nextNyCutoff(endTime, anchorHour, anchorMinute)
+            int endDay = dayofweek(endTime, NY_TIMEZONE)
+            if twentyFourSeven or (endDay != dayofweek.saturday and endDay != dayofweek.sunday)
+                countedDays += 1
+    endTime
+
+export newAnchorState() =>
+    AnchorState.new(array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Profile>(), array.new<Profile>(), START_TIME_UNSET, START_TIME_UNSET, START_TIME_UNSET)
+
+profileValid(Profile profile) =>
+    not na(profile) and profile.data.isValid
+
+export finalizedProfileCount(AnchorState state) =>
+    array.size(state.finalizedProfiles)
+
+export finalizedProfileAt(AnchorState state, int index) =>
+    array.get(state.finalizedProfiles, index)
+
+export clearFinalizedProfiles(AnchorState state) =>
+    array.clear(state.finalizedProfiles)
+    true
+
+buildProfile(AnchorState state, int startTime, int endTime, int requestedRows, float tickSize) =>
+    array<int> allSampleIndices = na
+    legilimensProfile.ProfileData data = legilimensProfile.buildProfile(state.highs, state.lows, state.volumes, state.deltas, allSampleIndices, requestedRows, tickSize)
+    Profile.new(startTime, endTime, data)
+
+finalizePeriod(AnchorState state, int startTime, int endTime, int keepProfiles, int requestedRows, float tickSize) =>
+    if array.size(state.volumes) > 0
+        Profile profile = buildProfile(state, startTime, endTime, requestedRows, tickSize)
+        if profile.data.isValid
+            array.push(state.profiles, profile)
+            array.push(state.finalizedProfiles, profile)
+            while array.size(state.profiles) > keepProfiles
+                array.shift(state.profiles)
+        legilimensProfile.clearSamples(state.highs, state.lows, state.volumes, state.deltas)
+
+appendBatch(AnchorState state, legilimensProfile.SampleBatch samples, bool compactAfter, float tickSize) =>
+    legilimensProfile.appendSamples(state.highs, state.lows, state.volumes, state.deltas, samples.highs, samples.lows, samples.volumes, samples.deltas, compactAfter, tickSize)
+
+appendBatchSample(AnchorState state, legilimensProfile.SampleBatch samples, int sampleIndex) =>
+    legilimensProfile.appendBarSample(state.highs, state.lows, state.volumes, state.deltas, array.get(samples.highs, sampleIndex), array.get(samples.lows, sampleIndex), array.get(samples.volumes, sampleIndex), array.get(samples.deltas, sampleIndex))
+
+export processAnchor(AnchorState state, bool enabled, int keepProfiles, bool inWindow, bool periodStart, bool periodEnd, int barTime, int previousBarTime, bool confirmed, legilimensProfile.SampleBatch samples, bool continuousBoundary, int requestedRows, float tickSize) =>
+    if enabled
+        bool shouldStart = periodStart or (state.startTime == START_TIME_UNSET and inWindow)
+        if periodEnd and array.size(state.volumes) > 0
+            finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+        if shouldStart
+            if array.size(state.volumes) > 0
+                int boundaryEnd = continuousBoundary ? barTime : previousBarTime
+                finalizePeriod(state, state.startTime, boundaryEnd, keepProfiles, requestedRows, tickSize)
+            state.startTime := barTime
+        if inWindow and confirmed and array.size(samples.volumes) > 0
+            appendBatch(state, samples, true, tickSize)
+            state.lastBarTime := barTime
+    true
+
+export processBoundedNyAnchor(AnchorState state, bool enabled, int keepProfiles, int startMinute, int endMinute, bool inWindow, bool periodStart, bool periodEnd, int firstSampleTime, int lastSampleEndTime, bool confirmed, legilimensProfile.SampleBatch samples, int requestedRows, float tickSize) =>
+    if enabled
+        if periodEnd and array.size(state.volumes) > 0
+            finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+        bool shouldStart = periodStart or (state.startTime == START_TIME_UNSET and inWindow)
+        if shouldStart
+            if array.size(state.volumes) > 0
+                finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+            state.startTime := nySessionStartBoundaryValue(firstSampleTime, startMinute, endMinute)
+        if inWindow and confirmed and array.size(samples.volumes) > 0
+            appendBatch(state, samples, true, tickSize)
+            int sessionEndTime = nySessionEndBoundaryValue(state.startTime, startMinute, endMinute)
+            state.lastBarTime := math.min(lastSampleEndTime, sessionEndTime)
+    true
+
+export processKeyedBoundedNyAnchor(AnchorState state, bool enabled, int keepProfiles, int startMinute, int endMinute, bool currentWindowActive, int currentSessionStart, array<int> sampleSessionStarts, array<int> sampleEndTimes, legilimensProfile.SampleBatch samples, int requestedRows, float tickSize) =>
+    if enabled
+        int sampleCount = array.size(samples.volumes)
+        if sampleCount > 0
+            for sampleIndex = 0 to sampleCount - 1
+                int sampleSessionStart = array.get(sampleSessionStarts, sampleIndex)
+                if state.startTime != sampleSessionStart
+                    if array.size(state.volumes) > 0
+                        legilimensProfile.compactIfNeeded(state.highs, state.lows, state.volumes, state.deltas, tickSize)
+                        finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+                    state.startTime := sampleSessionStart
+                appendBatchSample(state, samples, sampleIndex)
+                int sessionEndTime = nySessionEndBoundaryValue(sampleSessionStart, startMinute, endMinute)
+                state.lastBarTime := math.min(array.get(sampleEndTimes, sampleIndex), sessionEndTime)
+            legilimensProfile.compactIfNeeded(state.highs, state.lows, state.volumes, state.deltas, tickSize)
+        if not currentWindowActive and array.size(state.volumes) > 0
+            finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+        else if currentWindowActive and currentSessionStart != START_TIME_UNSET and state.startTime != currentSessionStart
+            if array.size(state.volumes) > 0
+                finalizePeriod(state, state.startTime, state.lastBarTime, keepProfiles, requestedRows, tickSize)
+            state.startTime := currentSessionStart
+    true
+
+export processRollingPeriodAnchor(AnchorState state, bool enabled, int periodDays, int oldestStartTime, int finalEndTime, bool twentyFourSeven, bool confirmed, int barEndTime, legilimensProfile.SampleBatch samples, int keepProfiles, int requestedRows, float tickSize) =>
+    if enabled and confirmed
+        int activeStartTime = state.startTime
+        int activeEndTime = state.periodEndTime
+        if activeStartTime == START_TIME_UNSET
+            activeStartTime := oldestStartTime
+            activeEndTime := lookforwardDaysEndValue(activeStartTime, periodDays, twentyFourSeven)
+        int sampleCount = array.size(samples.volumes)
+        if sampleCount > 0
+            for sampleIndex = 0 to sampleCount - 1
+                int sampleStartTime = array.get(samples.startTimes, sampleIndex)
+                int sampleEndTime = array.get(samples.endTimes, sampleIndex)
+                if sampleEndTime > oldestStartTime and sampleStartTime < finalEndTime
+                    while sampleStartTime >= activeEndTime and activeEndTime <= finalEndTime
+                        finalizePeriod(state, activeStartTime, activeEndTime, keepProfiles, requestedRows, tickSize)
+                        activeStartTime := activeEndTime
+                        activeEndTime := lookforwardDaysEndValue(activeStartTime, periodDays, twentyFourSeven)
+                    if sampleStartTime >= activeStartTime and sampleEndTime <= activeEndTime
+                        appendBatchSample(state, samples, sampleIndex)
+        legilimensProfile.compactIfNeeded(state.highs, state.lows, state.volumes, state.deltas, tickSize)
+        while barEndTime >= activeEndTime and activeEndTime <= finalEndTime
+            finalizePeriod(state, activeStartTime, activeEndTime, keepProfiles, requestedRows, tickSize)
+            activeStartTime := activeEndTime
+            activeEndTime := lookforwardDaysEndValue(activeStartTime, periodDays, twentyFourSeven)
+        state.startTime := activeStartTime
+        state.periodEndTime := activeEndTime
+    true
+
+developingProfile(AnchorState state, legilimensProfile.SampleBatch currentSamples, bool includeCurrentSamples, int endTime, int requestedRows, float tickSize) =>
+    int originalSize = array.size(state.volumes)
+    if includeCurrentSamples
+        appendBatch(state, currentSamples, false, tickSize)
+    Profile profile = buildProfile(state, state.startTime, endTime, requestedRows, tickSize)
+    while array.size(state.volumes) > originalSize
+        array.pop(state.highs)
+        array.pop(state.lows)
+        array.pop(state.volumes)
+        array.pop(state.deltas)
+    profile
+
+export selectProfiles(int historyCount, bool currentPeriodActive, bool hideDeveloping, AnchorState state, legilimensProfile.SampleBatch currentSamples, bool includeCurrentSamples, int developingEndTime, int requestedRows, float tickSize) =>
+    array<Profile> selectedProfiles = array.new<Profile>()
+    int completedCount = array.size(state.profiles)
+    bool showDeveloping = currentPeriodActive and not hideDeveloping
+    int currentCompletedIndex = currentPeriodActive ? -1 : completedCount - 1
+    int historyEndIndex = currentPeriodActive ? completedCount - 1 : currentCompletedIndex - 1
+    int availableHistoryCount = math.max(0, historyEndIndex + 1)
+    int selectedHistoryCount = math.min(historyCount, availableHistoryCount)
+    int historyStartIndex = historyEndIndex - selectedHistoryCount + 1
+    if selectedHistoryCount > 0
+        for profileIndex = historyStartIndex to historyEndIndex
+            array.push(selectedProfiles, array.get(state.profiles, profileIndex))
+    int currentIndex = -1
+    Profile currentProfile = na
+    if showDeveloping
+        currentProfile := developingProfile(state, currentSamples, includeCurrentSamples, developingEndTime, requestedRows, tickSize)
+    else if currentCompletedIndex >= 0
+        currentProfile := array.get(state.profiles, currentCompletedIndex)
+    if profileValid(currentProfile)
+        currentIndex := array.size(selectedProfiles)
+        array.push(selectedProfiles, currentProfile)
+    ProfileSelection.new(selectedProfiles, currentIndex, showDeveloping and currentIndex >= 0)
+
+profileOccurrenceKey(Profile profile, int occurrenceEndMinute) =>
+    tradingDayKeyValue(nyMinuteBoundaryValue(profile.startTime, occurrenceEndMinute))
+
+matchingProfile(ProfileSelection selection, Profile referenceProfile, int occurrenceEndMinute) =>
+    Profile matchedProfile = na
+    if not na(selection)
+        int referenceKey = profileOccurrenceKey(referenceProfile, occurrenceEndMinute)
+        int count = array.size(selection.profiles)
+        if count > 0
+            for index = 0 to count - 1
+                Profile candidate = array.get(selection.profiles, index)
+                if na(matchedProfile) and profileOccurrenceKey(candidate, occurrenceEndMinute) == referenceKey
+                    matchedProfile := candidate
+    matchedProfile
+
+hasPostBoundarySamples(Profile profile, int boundaryMinute) =>
+    profile.endTime > nyMinuteBoundaryValue(profile.startTime, boundaryMinute)
+
+rangesMatch(Profile first, Profile second, float tickSize) =>
+    not na(first) and int(math.round(first.data.rangeHigh / tickSize)) == int(math.round(second.data.rangeHigh / tickSize)) and int(math.round(first.data.rangeLow / tickSize)) == int(math.round(second.data.rangeLow / tickSize))
+
+export renderDecision(Profile profile, string sourceName, ProfileSelection comparisonSelection, string primarySourceName, string extendedSourceName, int primaryEndMinute, bool extendedModeActive, string primaryPlusDisplayName, float tickSize) =>
+    bool shouldRender = true
+    bool pairedHeadings = false
+    string displayNameOverride = ""
+    if sourceName == extendedSourceName
+        Profile primaryProfile = matchingProfile(comparisonSelection, profile, primaryEndMinute)
+        bool postPrimaryEnd = hasPostBoundarySamples(profile, primaryEndMinute)
+        bool matchingRange = rangesMatch(primaryProfile, profile, tickSize)
+        shouldRender := postPrimaryEnd and not na(primaryProfile) and not matchingRange
+        pairedHeadings := shouldRender
+    else if sourceName == primarySourceName
+        Profile extendedProfile = matchingProfile(comparisonSelection, profile, primaryEndMinute)
+        bool extendedProfileVisible = false
+        if not na(extendedProfile) and hasPostBoundarySamples(extendedProfile, primaryEndMinute)
+            extendedProfileVisible := not rangesMatch(profile, extendedProfile, tickSize)
+        pairedHeadings := extendedProfileVisible
+        displayNameOverride := extendedModeActive and not extendedProfileVisible ? primaryPlusDisplayName : ""
+    RenderDecision.new(shouldRender, displayNameOverride, pairedHeadings)
+
+comparisonSelectionForSource(array<ProfileSelection> selections, array<string> sourceNames, string sourceName, string primarySourceName, string extendedSourceName) =>
+    string comparisonSourceName = sourceName == extendedSourceName ? primarySourceName : sourceName == primarySourceName ? extendedSourceName : ""
+    ProfileSelection comparisonSelection = na
+    int selectionCount = array.size(selections)
+    if comparisonSourceName != "" and selectionCount > 0
+        for selectionIndex = 0 to selectionCount - 1
+            if na(comparisonSelection) and array.get(sourceNames, selectionIndex) == comparisonSourceName
+                comparisonSelection := array.get(selections, selectionIndex)
+    comparisonSelection
+
+export renderableProfileCount(ProfileSelection selection, string sourceName, ProfileSelection comparisonSelection, string primarySourceName, string extendedSourceName, int primaryEndMinute, bool extendedModeActive, string primaryPlusDisplayName, float tickSize) =>
+    int renderableCount = 0
+    int count = array.size(selection.profiles)
+    if count > 0
+        for index = 0 to count - 1
+            RenderDecision decision = renderDecision(array.get(selection.profiles, index), sourceName, comparisonSelection, primarySourceName, extendedSourceName, primaryEndMinute, extendedModeActive, primaryPlusDisplayName, tickSize)
+            if decision.shouldRender
+                renderableCount += 1
+    renderableCount
+
+totalRenderableProfileCount(array<ProfileSelection> selections, array<string> sourceNames, string primarySourceName, string extendedSourceName, int primaryEndMinute, bool extendedModeActive, string primaryPlusDisplayName, float tickSize) =>
+    int totalCount = 0
+    int selectionCount = array.size(selections)
+    if selectionCount > 0
+        for selectionIndex = 0 to selectionCount - 1
+            ProfileSelection selection = array.get(selections, selectionIndex)
+            string sourceName = array.get(sourceNames, selectionIndex)
+            ProfileSelection comparisonSelection = comparisonSelectionForSource(selections, sourceNames, sourceName, primarySourceName, extendedSourceName)
+            totalCount += renderableProfileCount(selection, sourceName, comparisonSelection, primarySourceName, extendedSourceName, primaryEndMinute, extendedModeActive, primaryPlusDisplayName, tickSize)
+    totalCount
+
+export trimProfileSelectionsToCapacity(array<ProfileSelection> selections, array<string> sourceNames, int profileCapacity, string primarySourceName, string extendedSourceName, int primaryEndMinute, bool extendedModeActive, string primaryPlusDisplayName, float tickSize) =>
+    int selectionCount = array.size(selections)
+    int selectedCount = totalRenderableProfileCount(selections, sourceNames, primarySourceName, extendedSourceName, primaryEndMinute, extendedModeActive, primaryPlusDisplayName, tickSize)
+    while selectedCount > profileCapacity
+        int oldestSelectionIndex = -1
+        int oldestProfileIndex = -1
+        int oldestProfileEndTime = na
+        for selectionIndex = 0 to selectionCount - 1
+            ProfileSelection selection = array.get(selections, selectionIndex)
+            string sourceName = array.get(sourceNames, selectionIndex)
+            ProfileSelection comparisonSelection = comparisonSelectionForSource(selections, sourceNames, sourceName, primarySourceName, extendedSourceName)
+            int count = array.size(selection.profiles)
+            if count > 0
+                for profileIndex = 0 to count - 1
+                    bool currentProfile = profileIndex == selection.currentIndex
+                    Profile candidate = array.get(selection.profiles, profileIndex)
+                    RenderDecision decision = renderDecision(candidate, sourceName, comparisonSelection, primarySourceName, extendedSourceName, primaryEndMinute, extendedModeActive, primaryPlusDisplayName, tickSize)
+                    if not currentProfile and decision.shouldRender and (oldestSelectionIndex < 0 or candidate.endTime < oldestProfileEndTime)
+                        oldestSelectionIndex := selectionIndex
+                        oldestProfileIndex := profileIndex
+                        oldestProfileEndTime := candidate.endTime
+        if oldestSelectionIndex < 0
+            break
+        ProfileSelection oldestSelection = array.get(selections, oldestSelectionIndex)
+        array.remove(oldestSelection.profiles, oldestProfileIndex)
+        if oldestSelection.currentIndex > oldestProfileIndex
+            oldestSelection.currentIndex -= 1
+        selectedCount := totalRenderableProfileCount(selections, sourceNames, primarySourceName, extendedSourceName, primaryEndMinute, extendedModeActive, primaryPlusDisplayName, tickSize)
+    selectedCount
+
+export sameCalendarDate(int firstTime, int secondTime, string timezone) =>
+    year(firstTime, timezone) == year(secondTime, timezone) and month(firstTime, timezone) == month(secondTime, timezone) and dayofmonth(firstTime, timezone) == dayofmonth(secondTime, timezone)
+
+export isTrueWeekendBar(int barTime, int sundayReopenStartHour) =>
+    int barDay = dayofweek(barTime, NY_TIMEZONE)
+    int barHour = hour(barTime, NY_TIMEZONE)
+    barDay == dayofweek.saturday or (barDay == dayofweek.sunday and barHour < sundayReopenStartHour)
+
+export calendarDayStart(int barTime, string timezone) =>
+    ta.change(dayofmonth(barTime, timezone)) != 0
+
+export shiftedCalendarDayStart(int barTime, string timezone, int timeShiftMilliseconds) =>
+    ta.change(dayofmonth(barTime + timeShiftMilliseconds, timezone)) != 0
+
+export shiftedCalendarMonthStart(int barTime, string timezone, int timeShiftMilliseconds) =>
+    ta.change(month(barTime + timeShiftMilliseconds, timezone)) != 0
+
+export weeklyBoundary(bool twentyFourSeven, bool utcBoundary, bool futuresBoundary, int barTime) =>
+    twentyFourSeven ? utcBoundary and dayofweek(barTime, UTC_TIMEZONE) == dayofweek.monday : futuresBoundary and dayofweek(barTime, NY_TIMEZONE) == dayofweek.sunday
+
+export isNyWeekday(int barTime) =>
+    isNyWeekdayValue(barTime)
+
+export inNyMinuteWindow(int barTime, int startMinute, int endMinute) =>
+    inNyMinuteWindowValue(barTime, startMinute, endMinute)
+
+export nyMinuteBoundary(int referenceTime, int minuteOfDay) =>
+    nyMinuteBoundaryValue(referenceTime, minuteOfDay)
+
+export nySessionStartBoundary(int referenceTime, int startMinute, int endMinute) =>
+    nySessionStartBoundaryValue(referenceTime, startMinute, endMinute)
+
+export nySessionEndBoundary(int referenceTime, int startMinute, int endMinute) =>
+    nySessionEndBoundaryValue(referenceTime, startMinute, endMinute)
+
+export isNySessionTradingDay(int barTime, int startMinute, int endMinute) =>
+    int referenceMinute = hour(barTime, NY_TIMEZONE) * 60 + minute(barTime, NY_TIMEZONE)
+    int closeDayOffset = startMinute > endMinute and referenceMinute >= startMinute ? 1 : 0
+    int closeDayReference = timestamp(NY_TIMEZONE, year(barTime, NY_TIMEZONE), month(barTime, NY_TIMEZONE), dayofmonth(barTime, NY_TIMEZONE) + closeDayOffset, 12, 0)
+    isNyWeekdayValue(closeDayReference)
+
+export barFitsNyMinuteWindow(int barTime, int barEndTime, int startMinute, int endMinute) =>
+    inNyMinuteWindowValue(barTime, startMinute, endMinute) and not na(barEndTime) and barEndTime <= nySessionEndBoundaryValue(barTime, startMinute, endMinute)
+
+export nextCalendarWeekBoundary(int referenceTime, string timezone, int boundaryHour, int boundaryMinute) =>
+    timestamp(timezone, year(referenceTime, timezone), month(referenceTime, timezone), dayofmonth(referenceTime, timezone) + 7, boundaryHour, boundaryMinute)
+
+export tradingDayKey(int sessionCloseTime) =>
+    tradingDayKeyValue(sessionCloseTime)
+
+export lookbackDaysStart(int endTime, int days, bool twentyFourSeven) =>
+    int startTime = endTime
+    int countedDays = 0
+    if not na(endTime)
+        int anchorHour = hour(endTime, NY_TIMEZONE)
+        int anchorMinute = minute(endTime, NY_TIMEZONE)
+        while countedDays < days
+            startTime := previousNyCutoff(startTime, anchorHour, anchorMinute)
+            int startDay = dayofweek(startTime, NY_TIMEZONE)
+            if twentyFourSeven or (startDay != dayofweek.saturday and startDay != dayofweek.sunday)
+                countedDays += 1
+    startTime
+
+export lookforwardDaysEnd(int startTime, int days, bool twentyFourSeven) =>
+    lookforwardDaysEndValue(startTime, days, twentyFourSeven)
