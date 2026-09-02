@@ -78,6 +78,10 @@ line.new(..., style=line.style_dotted)  // Value used directly
 
 Lazy refactoring leaves "dead" code controls that serve no purpose and confuse future developers. Clean code means removing unnecessary abstractions entirely.
 
+## Keep Every Touched File Clean and Organized
+
+Whenever any code is touched, leave that code path cleaner and easier to follow without expanding the requested scope. Preserve clear section boundaries, keep detection, state, calculation, and rendering concerns separate, parameterize shared behavior, and remove superseded controls, state, and drawing code completely instead of retaining parallel legacy paths.
+
 ## Always Keep Code DRY - Parameterize Functions
 
 **CORE PRINCIPLE: Never duplicate code. Always parameterize functions to make them reusable.**
@@ -137,30 +141,17 @@ is_displacement_candle(htf2_o2, htf2_c2, htf2_o3, htf2_c3, htf2_o4, htf2_c4) // 
 - Code is easier to understand and maintain
 - Reduces file size and cognitive load
 
-## Never Add Subjective Commentary
+## Code Must Speak for Itself
 
-**NEVER add subjective or editorial comments in code such as:**
+- Prefer clear names and structure over explanatory comments.
+- Do not add comments that narrate, rank, or restate code.
+- Refactor unclear code instead of explaining it with prose.
+- Keep comments only for platform constraints or invariants that code cannot express.
+- Preserve concise section dividers for navigation.
 
-- "(most important)"
-- "(2nd most important)"
-- "(3rd importance)"
-- Any commentary about priority, ranking, or personal opinion
-- Any parenthetical explanations that aren't objectively technical
+## Keep Tooltips Concise
 
-**Only include comments that provide:**
-
-- Technical clarification (e.g., "positioned after behavior")
-- Context about behavior (e.g., "Reverse the array for bearish stacking")
-- Warnings or constraints (e.g., "Must be called before X")
-
-## Keep Comments and Tooltips Concise
-
-**CORE PRINCIPLE: Do not turn source comments or TradingView tooltips into documentation essays.**
-
-- Keep comments only when they explain a non-obvious constraint, invariant, or algorithmic choice.
-- Remove comments that merely restate the next line of code.
-- Prefer one short technical sentence over multi-line commentary.
-- Preserve section dividers because they are navigation aids.
+- Do not turn TradingView tooltips into documentation essays.
 - Keep single-purpose tooltips brief.
 - When a tooltip covers multiple controls or behaviors, use short headings and blank lines; use bullets when the points are meaningfully separate or important to scan independently.
 - For multi-control inline tooltips, prefer a short heading followed by one concise explanation per control. Use `• Control — Explanation.` lines when that improves scanning; otherwise use a compact sentence or paragraph.
