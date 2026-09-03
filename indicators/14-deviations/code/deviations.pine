@@ -268,6 +268,9 @@ TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top o
 TOOLTIP_FOCUS_COUNT = "Per session type."
 TOOLTIP_FOCUS_ANCHOR = "Manual ranks from the Price level."
 
+NY_EARLY_START_MIN = 360
+NY_EARLY_END_MIN = 540
+
 // IVB session window (NY minutes) - shared by the session config and the extension statistics
 IVB_START_MIN = 570
 IVB_END_MIN = 600
@@ -325,6 +328,9 @@ FILTER_PREP2 = "★ Rafael + Asia Open + Early + IVB + Premarket"
 PRICE_MODE_OFF = "Off"
 PRICE_MODE_ACTIVE = "Active"
 PRICE_MODE_CUSTOM = "Custom"
+CORE_VISIBILITY_AUTO = "Auto"
+CORE_VISIBILITY_HIDDEN = "Hidden"
+CORE_VISIBILITY_SHOWN = "Shown"
 LABEL_EXT_AVG = "ivb avg"
 LABEL_EXT_STD = "ivb +1σ"
 TOOLTIP_PRICE_MODE = "Show numeric prices for Rafael, Asia Open and IVB projections. Custom uses the choices below."
@@ -420,7 +426,11 @@ completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fad
 fadeCompletedMitigationLevels = input.bool(true, "Fade Completed Mitigation Levels", inline="mitigation_fade", group=GROUP_DISPLAY)
 completedMitigationFadeOpacity = input.int(85, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels)
 completedMitigationDistanceThreshold = input.float(0.2, "Distance Threshold %", minval=0.0, maxval=100.0, step=0.1, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
-hideNyEarlyIvbCores = input.bool(false, "Hide NY Early + IVB Cores", group=GROUP_DISPLAY, tooltip="Hide only these core boxes; their other drawings remain visible.")
+nyEarlyIvbCoreVisibility = input.string(CORE_VISIBILITY_AUTO, "NY Early + IVB Cores", options=[CORE_VISIBILITY_AUTO, CORE_VISIBILITY_HIDDEN, CORE_VISIBILITY_SHOWN], inline="ny_early_ivb_cores", group=GROUP_DISPLAY)
+includePastNyEarlyIvbCores = input.bool(false, "Include Past Cores", inline="ny_early_ivb_cores", group=GROUP_DISPLAY, active=nyEarlyIvbCoreVisibility != CORE_VISIBILITY_SHOWN, tooltip="Auto — Hide today's cores 06:00–10:00 NY.\nHidden — Hide today's cores all day.\nShown — Show all cores.\n\nInclude Past Cores — Extend Auto or Hidden to retained prior-day cores.")
+currentNyMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
+currentNyDayKey = validChartContext ? year(time, NY_TIMEZONE) * 10000 + month(time, NY_TIMEZONE) * 100 + dayofmonth(time, NY_TIMEZONE) : 0
+nyEarlyIvbCoreAutoHideActive = nyEarlyIvbCoreVisibility == CORE_VISIBILITY_AUTO and currentNyMinutes >= NY_EARLY_START_MIN and currentNyMinutes < IVB_END_MIN
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Glow
@@ -431,7 +441,7 @@ enableAsiaOpenDeviationGlow = input.bool(true, "Asia Open Glow", inline="asia_gl
 asiaOpenDeviationTrigger = input.float(1.25, "Beyond", options=[1.0, 1.25, 1.5], inline="asia_glow", group=GROUP_GLOW, active=enableAsiaOpenDeviationGlow, tooltip="From 21:00–09:00 NY: 1 plots the exact level; 1.25 plots 1–1.25; 1.5 plots 1.25–1.5. Each side triggers independently.")
 glowDarkenPercent = input.float(25.0, "  └ Opacity", inline="glow_settings", group=GROUP_GLOW, minval=0.1, maxval=99.9, step=0.1, active=enableDeviationGlow or enableAsiaOpenDeviationGlow)
 glowWindowHours = input.float(6.0, "Duration", inline="glow_settings", group=GROUP_GLOW, minval=0.5, maxval=24.0, step=0.5, active=enableDeviationGlow, tooltip="Deviation glow window.")
-keepPastSessionGlow = input.bool(true, "Keep Past Glows", group=GROUP_GLOW, active=enableDeviationGlow, tooltip=TOOLTIP_KEEP_PAST_GLOW)
+keepPastSessionGlow = input.bool(false, "Keep Past Glows", group=GROUP_GLOW, active=enableDeviationGlow, tooltip=TOOLTIP_KEEP_PAST_GLOW)
 enableIvbExtensionGlow = input.bool(true, "IVB Extension Glow", inline="ivb_ext_glow", group=GROUP_GLOW)
 glowIvbExtensionWidth = input.int(4, "Width", inline="ivb_ext_glow", group=GROUP_GLOW, options=[1, 2, 3, 4, 5], active=enableIvbExtensionGlow)
 ivbExtensionGlowWindowHours = input.float(20.0, "Duration", inline="ivb_ext_glow", group=GROUP_GLOW, minval=0.5, maxval=24.0, step=0.5, active=enableIvbExtensionGlow, tooltip="Keep a hit projection widened for this duration or until the next IVB.")
@@ -562,8 +572,11 @@ BAR_MS = int(timeframe.in_seconds() * 1000)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Sessions that show deviations only (no core boxes)
-skipsCore(int idx) =>
-    idx == IDX_PREMARKET or (hideNyEarlyIvbCores and (idx == IDX_NY_EARLY or idx == IDX_IVB))
+skipsCore(SessionData sess) =>
+    bool isNyEarlyOrIvb = sess.sessionIndex == IDX_NY_EARLY or sess.sessionIndex == IDX_IVB
+    bool hideCurrentCores = nyEarlyIvbCoreVisibility == CORE_VISIBILITY_HIDDEN or nyEarlyIvbCoreAutoHideActive
+    bool hidesNyEarlyOrIvb = hideCurrentCores and (includePastNyEarlyIvbCores or sess.startDayKey == currentNyDayKey)
+    sess.sessionIndex == IDX_PREMARKET or (isNyEarlyOrIvb and hidesNyEarlyOrIvb)
 
 // Key sessions whose mitigated high/low line should NOT carry the session-name reminder.
 skipsMitigationName(int idx) =>
@@ -1112,6 +1125,21 @@ drawAsiaDeviationReveal(SessionData sess, bool isUpper, float asiaRange, float t
 drawCoreBox(SessionData sess, float highPrice, float lowPrice) =>
     box.new(sess.startTime, highPrice, sess.endTime, lowPrice, bgcolor=sess.coreColor, border_color=na, xloc=xloc.bar_time)
 
+syncNyEarlyIvbCoreVisibility(SessionData sess) =>
+    if sess.sessionIndex == IDX_NY_EARLY or sess.sessionIndex == IDX_IVB
+        if skipsCore(sess)
+            if not na(sess.bodyBox)
+                box.delete(sess.bodyBox)
+                sess.bodyBox := na
+            if not na(sess.wickBox)
+                box.delete(sess.wickBox)
+                sess.wickBox := na
+        else if sess.deviationMode != OPT_HIDDEN
+            if na(sess.bodyBox)
+                sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
+            if na(sess.wickBox)
+                sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
+
 // Get cached deviation zones by session index
 getCachedZones(int sessionIdx) =>
     switch sessionIdx
@@ -1481,7 +1509,7 @@ focusPotentialDrawingCounts(SessionData sess) =>
     bool drawWickDeviations = sess.deviationMode == OPT_WICK or sess.deviationMode == OPT_BOTH
     bool labelBodyDeviations = showAllLabels and (sess.deviationLabelsMode == OPT_BODY or sess.deviationLabelsMode == OPT_BOTH)
     bool labelWickDeviations = showAllLabels and (sess.deviationLabelsMode == OPT_WICK or sess.deviationLabelsMode == OPT_BOTH)
-    int boxCount = baseSessionVisible and not skipsCore(sess.sessionIndex) ? 2 : 0
+    int boxCount = baseSessionVisible and not skipsCore(sess) ? 2 : 0
     int lineCount = 0
     int labelCount = 0
     array<DeviationZone> zones = getCachedZones(sess.sessionIndex)
@@ -1614,7 +1642,7 @@ renderFocusSession(SessionData sess, bool selected) =>
     if selected
         // deleteSession nulls bodyBox on deselection, so na doubles as the drawn-once sentinel.
         if sess.deviationMode != OPT_HIDDEN and na(sess.bodyBox)
-            if not skipsCore(sess.sessionIndex)
+            if not skipsCore(sess)
                 sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
                 sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
             if sess.deviationMode == OPT_BODY or sess.deviationMode == OPT_BOTH
@@ -1668,7 +1696,7 @@ drawLiveSessionDeviations(SessionData sess, int projectedEndTime, int currentBar
     wickHeight = sess.wickHigh - sess.wickLow
 
     // Draw core boxes
-    if not skipsCore(sess.sessionIndex)
+    if not skipsCore(sess)
         sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
         sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
 
@@ -1769,7 +1797,7 @@ updateLiveSessionDrawings(SessionData sess, int projectedEndTime, int currentBar
     float bodyHeight = sess.bodyHigh - sess.bodyLow
     float wickHeight = sess.wickHigh - sess.wickLow
 
-    if not skipsCore(sess.sessionIndex)
+    if not skipsCore(sess)
         box.set_right(sess.bodyBox, projectedEndTime)
         box.set_top(sess.bodyBox, sess.bodyHigh)
         box.set_bottom(sess.bodyBox, sess.bodyLow)
@@ -1809,7 +1837,7 @@ if na(cachedDeviations_0129)
 
 var array<SessionConfig> sessionConfigs = array.from(
     SessionConfig.new(opening_2130_0129, opening_2130_0129_showLabels, 1290, 90, opening_2130_0129_coreColor, opening_2130_0129_deviationColor, CHART_LABEL_0129, opening_2130_0129_mitigationColor, true, opening_2130_0129_extend, true, opening_2130_0129_retraceLabelTextColor, opening_2130_0129_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
-    SessionConfig.new(opening_0600_0900, opening_0600_0900_showLabels, 360, 540, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, CHART_LABEL_0600_0900, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
+    SessionConfig.new(opening_0600_0900, opening_0600_0900_showLabels, NY_EARLY_START_MIN, NY_EARLY_END_MIN, opening_0600_0900_coreColor, opening_0600_0900_deviationColor, CHART_LABEL_0600_0900, opening_0600_0900_mitigationColor, false, opening_0600_0900_extend, true, opening_0600_0900_retraceLabelTextColor, opening_0600_0900_retraceLabelBgColor, true, opening_0600_0900_showRetracement, opening_0600_0900_retracementMode),
     SessionConfig.new(opening_0500_0915, opening_0500_0915_showLabels, 300, 555, opening_0500_0915_coreColor, opening_0500_0915_deviationColor, CHART_LABEL_0500_0915, opening_0500_0915_mitigationColor, false, opening_0500_0915_extend, false, color.rgb(120, 123, 134), color.new(color.rgb(255, 255, 255), 50), false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_1800_2100, opening_1800_2100_showLabels, ASIA_OPEN_START_MIN, ASIA_OPEN_END_MIN, opening_1800_2100_coreColor, opening_1800_2100_deviationColor, CHART_LABEL_1800_2100, opening_1800_2100_mitigationColor, true, opening_1800_2100_extend, true, opening_1800_2100_retraceLabelTextColor, opening_1800_2100_retraceLabelBgColor, false, true, RETRACE_MODE_STANDARD),
     SessionConfig.new(opening_0930_1000, opening_0930_1000_showLabels, IVB_START_MIN, IVB_END_MIN, opening_0930_1000_coreColor, opening_0930_1000_deviationColor, CHART_LABEL_0930_1000, opening_0930_1000_mitigationColor, false, opening_0930_1000_extend, true, opening_0930_1000_retraceLabelTextColor, opening_0930_1000_retraceLabelBgColor, true, true, RETRACE_MODE_STANDARD)
@@ -1819,8 +1847,8 @@ var array<SessionConfig> sessionConfigs = array.from(
 // PHASE 1: SESSION DETECTION - Detect new sessions starting
 // ═══════════════════════════════════════════════════════════════════════════
 
-barMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
-currentDayKey = validChartContext ? dayKey(time) : 0
+barMinutes = currentNyMinutes
+currentDayKey = currentNyDayKey
 prevBarMinutes = validChartContext ? hour(time[1], NY_TIMEZONE) * 60 + minute(time[1], NY_TIMEZONE) : 0
 currentDayStart = timestamp(NY_TIMEZONE, year(time, NY_TIMEZONE), month(time, NY_TIMEZONE), dayofmonth(time, NY_TIMEZONE), 0, 0)
 
@@ -2103,7 +2131,7 @@ if validChartContext and array.size(activeSessions) > 0
             // Focus-managed sessions defer their drawings to Phase 4.5; Phase 4 owns every lifecycle.
             if sess.deviationMode != OPT_HIDDEN and not focusManaged(idx)
                 // Draw core boxes
-                if not skipsCore(idx)
+                if not skipsCore(sess)
                     sess.bodyBox := drawCoreBox(sess, sess.bodyHigh, sess.bodyLow)
                     sess.wickBox := drawCoreBox(sess, sess.wickHigh, sess.wickLow)
 
@@ -2149,6 +2177,11 @@ if validChartContext and array.size(activeSessions) > 0
 
             // Remove from active sessions
             array.remove(activeSessions, i)
+
+bool nyEarlyIvbCoreVisibilityChanged = currentNyDayKey != currentNyDayKey[1] or nyEarlyIvbCoreAutoHideActive != nyEarlyIvbCoreAutoHideActive[1]
+if validChartContext and nyEarlyIvbCoreVisibilityChanged and array.size(sessions) > 0
+    for sess in sessions
+        syncNyEarlyIvbCoreVisibility(sess)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IVB BREAKOUT EXTENSION STATISTICS
