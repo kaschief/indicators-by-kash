@@ -38,7 +38,7 @@ export type LevelHitPresentation
     color labelBgColor
     bool showPrice
     string circleSize
-    string labelSize
+    int labelSize
     int labelOffset
     int effectiveLineWidth
     int rank
@@ -57,11 +57,16 @@ export type PendingLabel
     bool hitTrace
     color textColor
     color bgColor
-    string sizeName
+    int textSize
     int rank
     int effectiveLineWidth
     line activeLine
-    color activeLineColor
+    line primaryLine
+    color primaryLineColor
+    line continuationLine
+    color continuationLineColor
+    line carrierLine
+    color carrierLineColor
 
 //@type Buffered swept reminder awaiting cluster composition.
 export type PendingReminder
@@ -70,7 +75,7 @@ export type PendingReminder
     LabelIdentity labelIdentity
     color textColor
     color bgColor
-    string sizeName
+    int textSize
     string levelName
     int rank
     int effectiveLineWidth
@@ -83,7 +88,7 @@ export type PendingAnchorReminder
     LabelIdentity labelIdentity
     color textColor
     color bgColor
-    string sizeName
+    int textSize
     string levelName
     int rank
     int effectiveLineWidth
@@ -104,7 +109,6 @@ export type PresentationConfig
     int anchorReminderMaxPerLevel
     int sweptReminderBaseMs
     int sweptReminderMaxPerLine
-    string alternatePocName
     string valueAreaHighName
     string valueAreaLowName
     string unselectedAnchorSymbol
@@ -285,17 +289,17 @@ shortenedClusterIdentities(int clusterIndex, string separator, int fallbackOrder
 composedClusterIdentities(bool shortenLabels, int clusterIndex, string separator, int fallbackOrder, array<int> identityCluster, array<string> identityName, array<LabelIdentity> identityLabel, array<int> identityPriority, array<int> identityWidth, array<int> identityRank, array<int> identityOrder) =>
     shortenLabels ? shortenedClusterIdentities(clusterIndex, separator, fallbackOrder, identityCluster, identityLabel, identityPriority, identityWidth, identityRank, identityOrder) : orderedClusterIdentities(clusterIndex, separator, fallbackOrder, identityCluster, identityName, identityPriority, identityWidth, identityRank, identityOrder)
 
-labelSizeRank(string sizeName, PresentationConfig config) =>
-    sizeName == config.sizeTiny ? 0 : sizeName == config.sizeNormal ? 2 : sizeName == config.sizeLarge ? 3 : sizeName == config.sizeHuge ? 4 : 1
-
-largerLabelSize(string a, string b, PresentationConfig config) =>
-    labelSizeRank(a, config) >= labelSizeRank(b, config) ? a : b
+largerTextSize(int a, int b) =>
+    math.max(a, b)
 
 export toLabelSize(string sizeName, string sizeTiny, string sizeNormal, string sizeLarge, string sizeHuge) =>
     sizeName == sizeTiny ? size.tiny : sizeName == sizeNormal ? size.normal : sizeName == sizeLarge ? size.large : sizeName == sizeHuge ? size.huge : size.small
 
 export fadeColor(color baseColor, float fadeFraction) =>
     color.new(baseColor, 100 - (100 - color.t(baseColor)) * (1 - fadeFraction))
+
+mergedLineColor(color baseColor, int transparency) =>
+    color.new(baseColor, math.max(int(color.t(baseColor)), transparency))
 
 export trackLabel(array<label> drawnLabels, int maxLabels, label drawing) =>
     bool retained = array.size(drawnLabels) < maxLabels
@@ -336,7 +340,7 @@ eventActive(int hitTime, PresentationConfig config, HitTracePolicy policy) =>
 levelHitArchivedSwept(LevelHitEvent hitEvent, LevelHitPresentation presentation) =>
     hitEvent.archivedSwept and not presentation.lineVisibleAtLiveEdge
 
-//@function Composes nearby right-edge labels and fades non-carrier lines.
+//@function Composes nearby right-edge labels and fades secondary line paths.
 export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool shortenLabels, map<string, int> touchClusters, map<int, LevelHitPresentation> touchGroupPresentations, map<int, int> firstHitDirections, array<label> drawnLabels, PresentationConfig config) =>
     int pendingCount = array.size(pendingLabels)
     if pendingCount > 0
@@ -347,7 +351,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
         array<string> clusterPriceText = array.new<string>()
         array<color> clusterColor = array.new<color>()
         array<color> clusterBg = array.new<color>()
-        array<string> clusterSize = array.new<string>()
+        array<int> clusterSize = array.new<int>()
         array<int> clusterX = array.new<int>()
         array<int> clusterRecencyTime = array.new<int>()
         array<int> clusterDominantWidth = array.new<int>()
@@ -377,7 +381,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.set(clusterRecencyTime, foundIndex, math.max(array.get(clusterRecencyTime, foundIndex), pending.recencyTime))
                 array.set(clusterWantPrice, foundIndex, array.get(clusterWantPrice, foundIndex) or pending.wantPrice)
                 array.set(clusterHitTrace, foundIndex, array.get(clusterHitTrace, foundIndex) or pending.hitTrace)
-                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                array.set(clusterSize, foundIndex, largerTextSize(array.get(clusterSize, foundIndex), pending.textSize))
                 if firstHit
                     bool clusterAlreadyFirstHit = array.get(clusterFirstHit, foundIndex)
                     int mergedFirstHitDirection = clusterAlreadyFirstHit and array.get(clusterFirstHitDirection, foundIndex) != firstHitDirection ? 0 : firstHitDirection
@@ -413,7 +417,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.push(clusterPriceText, pending.pricePart)
                 array.push(clusterColor, pending.textColor)
                 array.push(clusterBg, pending.bgColor)
-                array.push(clusterSize, pending.sizeName)
+                array.push(clusterSize, pending.textSize)
                 array.push(clusterX, pending.xPos)
                 array.push(clusterRecencyTime, pending.recencyTime)
                 array.push(clusterDominantWidth, pending.effectiveLineWidth)
@@ -437,13 +441,17 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.push(identityRank, pending.rank)
                 array.push(identityOrder, pendingIndex)
         if dedupe and config.mergedLineFadePercent > 0
-            float mergedLineFadeFraction = config.mergedLineFadePercent / 100.0
             for pendingIndex = 0 to pendingCount - 1
                 int clusterIndex = array.get(pendingCluster, pendingIndex)
                 if pendingIndex != array.get(clusterDominantPending, clusterIndex)
                     PendingLabel pending = array.get(pendingLabels, pendingIndex)
                     if not na(pending.activeLine)
-                        line.set_color(pending.activeLine, fadeColor(pending.activeLineColor, mergedLineFadeFraction))
+                        if not na(pending.primaryLine)
+                            line.set_color(pending.primaryLine, mergedLineColor(pending.primaryLineColor, config.mergedLineFadePercent))
+                        if not na(pending.continuationLine)
+                            line.set_color(pending.continuationLine, mergedLineColor(pending.continuationLineColor, config.mergedLineFadePercent))
+                        if not na(pending.carrierLine)
+                            line.set_color(pending.carrierLine, mergedLineColor(pending.carrierLineColor, config.mergedLineFadePercent))
         int clusterCount = array.size(clusterPrice)
         array<bool> clusterRendered = array.new<bool>(clusterCount, false)
         for renderPosition = 0 to clusterCount - 1
@@ -460,14 +468,14 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 string hitPrefix = "●" + (array.get(clusterFirstHit, clusterIndex) ? " " + firstHitBadge : "") + " "
                 string finalText = array.get(clusterHitTrace, clusterIndex) ? hitPrefix + labelText : labelText
                 color finalTextColor = array.get(clusterColor, clusterIndex)
-                string finalSizeName = array.get(clusterSize, clusterIndex)
+                int finalTextSize = array.get(clusterSize, clusterIndex)
                 int dominantTouchGroup = array.get(clusterDominantTouchGroup, clusterIndex)
                 // Temporary hit labels reuse the winning anchor's native label styling.
                 if array.get(clusterHitTrace, clusterIndex) and dominantTouchGroup >= 0 and map.contains(touchGroupPresentations, dominantTouchGroup)
                     LevelHitPresentation touchPresentation = map.get(touchGroupPresentations, dominantTouchGroup)
                     finalTextColor := touchPresentation.labelColor
-                    finalSizeName := touchPresentation.labelSize
-                trackLabel(drawnLabels, config.maxLabels, label.new(array.get(clusterX, clusterIndex), array.get(clusterPrice, clusterIndex), finalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=finalTextColor, size=toLabelSize(finalSizeName, config.sizeTiny, config.sizeNormal, config.sizeLarge, config.sizeHuge), color=array.get(clusterBg, clusterIndex)))
+                    finalTextSize := touchPresentation.labelSize
+                trackLabel(drawnLabels, config.maxLabels, label.new(array.get(clusterX, clusterIndex), array.get(clusterPrice, clusterIndex), finalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, textcolor=finalTextColor, size=finalTextSize, color=array.get(clusterBg, clusterIndex)))
         array.clear(pendingLabels)
     true
 
@@ -480,7 +488,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
         array<int> clusterRunEndTime = array.new<int>()
         array<color> clusterColor = array.new<color>()
         array<color> clusterBg = array.new<color>()
-        array<string> clusterSize = array.new<string>()
+        array<int> clusterSize = array.new<int>()
         array<string> clusterLevelName = array.new<string>()
         array<int> clusterDominantWidth = array.new<int>()
         array<int> clusterDominantRank = array.new<int>()
@@ -496,7 +504,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
             PendingAnchorReminder pending = array.get(pendingReminders, reminderIndex)
             int foundIndex = nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
             if foundIndex >= 0
-                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                array.set(clusterSize, foundIndex, largerTextSize(array.get(clusterSize, foundIndex), pending.textSize))
                 if identityPrecedes(pending.effectiveLineWidth, pending.rank, reminderIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex))
                     array.set(clusterPrice, foundIndex, pending.price)
                     array.set(clusterAnchorEndTime, foundIndex, pending.anchorEndTime)
@@ -513,7 +521,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
                 array.push(clusterRunEndTime, pending.runEndTime)
                 array.push(clusterColor, pending.textColor)
                 array.push(clusterBg, pending.bgColor)
-                array.push(clusterSize, pending.sizeName)
+                array.push(clusterSize, pending.textSize)
                 array.push(clusterLevelName, pending.levelName)
                 array.push(clusterDominantWidth, pending.effectiveLineWidth)
                 array.push(clusterDominantRank, pending.rank)
@@ -537,7 +545,7 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
                 string reminderText = composedClusterIdentities(shortenLabels, clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 for placement = 1 to reminderCount
                     int reminderTime = reminderRunStart + int(eligibleRunMs * (placement - 1 + levelFrac) / reminderCount)
-                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, array.get(clusterPrice, clusterIndex), reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=toLabelSize(array.get(clusterSize, clusterIndex), config.sizeTiny, config.sizeNormal, config.sizeLarge, config.sizeHuge), color=array.get(clusterBg, clusterIndex)))
+                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, array.get(clusterPrice, clusterIndex), reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=array.get(clusterSize, clusterIndex), color=array.get(clusterBg, clusterIndex)))
         array.clear(pendingReminders)
     true
 
@@ -549,7 +557,7 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
         array<int> clusterEndTime = array.new<int>()
         array<color> clusterColor = array.new<color>()
         array<color> clusterBg = array.new<color>()
-        array<string> clusterSize = array.new<string>()
+        array<int> clusterSize = array.new<int>()
         array<string> clusterLevelName = array.new<string>()
         array<int> clusterDominantWidth = array.new<int>()
         array<int> clusterDominantRank = array.new<int>()
@@ -566,7 +574,7 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
             int foundIndex = nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
             if foundIndex >= 0
                 array.set(clusterEndTime, foundIndex, math.min(array.get(clusterEndTime, foundIndex), pending.endTime))
-                array.set(clusterSize, foundIndex, largerLabelSize(array.get(clusterSize, foundIndex), pending.sizeName, config))
+                array.set(clusterSize, foundIndex, largerTextSize(array.get(clusterSize, foundIndex), pending.textSize))
                 if identityPrecedes(pending.effectiveLineWidth, pending.rank, reminderIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex))
                     array.set(clusterColor, foundIndex, pending.textColor)
                     array.set(clusterBg, foundIndex, pending.bgColor)
@@ -580,7 +588,7 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
                 array.push(clusterEndTime, pending.endTime)
                 array.push(clusterColor, pending.textColor)
                 array.push(clusterBg, pending.bgColor)
-                array.push(clusterSize, pending.sizeName)
+                array.push(clusterSize, pending.textSize)
                 array.push(clusterLevelName, pending.levelName)
                 array.push(clusterDominantWidth, pending.effectiveLineWidth)
                 array.push(clusterDominantRank, pending.rank)
@@ -599,15 +607,15 @@ export flushPendingReminders(array<PendingReminder> pendingReminders, bool dedup
             if sweptRunMs > 0
                 int runReminderCount = reminderPlacements(sweptRunMs, config.sweptReminderBaseMs, config.sweptReminderMaxPerLine)
                 string levelName = array.get(clusterLevelName, clusterIndex)
-                float levelFrac = levelName == config.valueAreaHighName ? 0.4 : levelName == config.valueAreaLowName ? 0.6 : levelName == config.alternatePocName ? 0.8 : 0.2
+                float levelFrac = levelName == config.valueAreaHighName ? 0.4 : levelName == config.valueAreaLowName ? 0.6 : 0.2
                 float price = array.get(clusterPrice, clusterIndex)
                 string reminderText = composedClusterIdentities(shortenLabels, clusterIndex, config.nameSeparator, reminderCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 color textColor = array.get(clusterColor, clusterIndex)
                 color bgColor = array.get(clusterBg, clusterIndex)
-                string sizeName = array.get(clusterSize, clusterIndex)
+                int textSize = array.get(clusterSize, clusterIndex)
                 for placement = 1 to runReminderCount
                     int reminderTime = endTime + int(sweptRunMs * (placement - 1 + levelFrac) / runReminderCount)
-                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, price, reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=textColor, size=toLabelSize(sizeName, config.sizeTiny, config.sizeNormal, config.sizeLarge, config.sizeHuge), color=bgColor))
+                    trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, price, reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=textColor, size=textSize, color=bgColor))
         array.clear(pendingReminders)
     true
 
@@ -732,7 +740,7 @@ export bufferLevelHitLabels(array<LevelHitEvent> events, bool labelsActive, map<
                 string priceText = str.tostring(hitEvent.price, format.mintick)
                 string extraSuffix = (hitEvent.unselectedAnchor ? config.unselectedAnchorSymbol : "") + (archived ? config.archivedSymbol : "")
                 LabelIdentity labelIdentity = labelIdentityWithSuffix(presentation.labelIdentity, extraSuffix)
-                array.push(pendingLabels, PendingLabel.new(hitEvent.price, config.currentBarIndex + presentation.labelOffset, hitEvent.hitTime, hitEvent.key, labelIdentity, priceText, presentation.showPrice, true, presentation.labelColor, presentation.labelBgColor, presentation.labelSize, presentation.rank, presentation.effectiveLineWidth, na, na))
+                array.push(pendingLabels, PendingLabel.new(hitEvent.price, config.currentBarIndex + presentation.labelOffset, hitEvent.hitTime, hitEvent.key, labelIdentity, priceText, presentation.showPrice, true, presentation.labelColor, presentation.labelBgColor, presentation.labelSize, presentation.rank, presentation.effectiveLineWidth, na, na, na, na, na, na, na))
                 map.put(bufferedKeys, hitEvent.key, true)
     true
 
