@@ -70,6 +70,7 @@ MERGED_LINE_FADE_PERCENT = 85
 LABEL_NAME_SEPARATOR = " | "
 HISTOGRAM_WIDTH_PERCENT = 25.0
 VALUE_AREA_PERCENT = 70.0
+COMPOSITE_ALL_DISPLAYED = "All Displayed"
 COMPOSITE_FRAME_TRANSPARENCY = 70
 COMPOSITE_FRAME_PADDING_ROWS = 8.0
 
@@ -373,8 +374,7 @@ globexMergeMode = input.enum(revelioProfiles.MergeMode.allIntoPrevious, revelioP
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Manual Composite
 // ═══════════════════════════════════════════════════════════════════════════════
-manualCompositeSource = input.string(revelioProfiles.OPTION_OFF, "Composite", options=[revelioProfiles.OPTION_OFF, revelioProfiles.ANCHOR_RTH, revelioProfiles.ANCHOR_GLOBEX, revelioProfiles.ANCHOR_WEEKLY, revelioProfiles.ANCHOR_MONTHLY, revelioProfiles.ANCHOR_QUARTERLY], inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
-manualCompositeActive = manualCompositeSource != revelioProfiles.OPTION_OFF
+manualCompositeSource = input.string(revelioProfiles.OPTION_OFF, "Composite", options=[revelioProfiles.OPTION_OFF, COMPOSITE_ALL_DISPLAYED, revelioProfiles.ANCHOR_RTH, revelioProfiles.ANCHOR_GLOBEX, revelioProfiles.ANCHOR_WEEKLY, revelioProfiles.ANCHOR_MONTHLY, revelioProfiles.ANCHOR_QUARTERLY], inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
 manualCompositeFrom = input.time(0, "From", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
 manualCompositeThrough = input.time(0, "Through", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE, tooltip="Reset points")
 
@@ -924,6 +924,42 @@ levelHitDetectionStartMinute() =>
 mostRecentWeekday(int dateSerial) =>
     int weekday = dayofweek(dateSerial * revelioProfiles.MS_PER_DAY, revelioProfiles.UTC_TIMEZONE)
     weekday == dayofweek.saturday ? dateSerial - 1 : weekday == dayofweek.sunday ? dateSerial - 2 : dateSerial
+
+manualCompositeIncludesAnchor(string selection, string anchor, bool displayed) =>
+    displayed and (selection == COMPOSITE_ALL_DISPLAYED or selection == anchor)
+
+resolveManualCompositeSelection(bool configured, string source, int fromTime, int throughTime, bool useUtcCalendar, bool twentyFourSeven) =>
+    var revelioCore.ManualCompositeRange disabledRange = revelioCore.newManualCompositeRange(false, false, START_TIME_UNSET, START_TIME_UNSET)
+    int startKey = configured ? revelioProfiles.resolveStartKey(fromTime, source, useUtcCalendar, twentyFourSeven) : START_TIME_UNSET
+    int endKey = configured ? revelioProfiles.resolveEndKey(throughTime, source, useUtcCalendar, twentyFourSeven) : START_TIME_UNSET
+    bool valid = configured and startKey < endKey
+    valid ? revelioCore.newManualCompositeRange(true, true, startKey, endKey) : disabledRange
+
+prepareManualCompositeRange(revelioProfiles.ProfileChronologyState chronology, revelioCore.AnchorState state, bool configured, string source, bool completedPeriod, bool currentPeriodUsable, int fromTime, int throughTime, bool useUtcCalendar, bool twentyFourSeven, int currentTime, bool lastBar, int profilesToShow, revelioProfiles.MergeMode mergeMode, float shortSpanFraction) =>
+    var revelioCore.ManualCompositeRange disabledRange = revelioCore.newManualCompositeRange(false, false, START_TIME_UNSET, START_TIME_UNSET)
+    if configured and completedPeriod and array.size(state.barVolumes) > 0
+        int chronologyKey = source == revelioProfiles.ANCHOR_RTH ? revelioProfiles.calendarDateSerial(state.startTime, revelioProfiles.NY_TIMEZONE) : source == revelioProfiles.ANCHOR_GLOBEX ? revelioProfiles.autoSweptCycleSerial(state.startTime, useUtcCalendar) : revelioProfiles.resolveEndKey(state.startTime, source, useUtcCalendar, twentyFourSeven)
+        revelioProfiles.updateProfileChronology(chronology, chronologyKey, state.startTime, state.lastBarTime, state.observedStartBoundary, mergeMode, shortSpanFraction, START_TIME_UNSET)
+    revelioCore.ManualCompositeRange selection = resolveManualCompositeSelection(configured, source, fromTime, throughTime, useUtcCalendar, twentyFourSeven)
+    if selection.valid
+        int currentKey = revelioProfiles.resolveEndKey(currentTime, source, useUtcCalendar, twentyFourSeven)
+        bool displayed = revelioProfiles.rangeDisplayed(chronology, selection.startKey, selection.endKey, currentKey, currentPeriodUsable, lastBar, profilesToShow, mergeMode, shortSpanFraction)
+        if not displayed
+            selection := disabledRange
+    selection
+
+restoreInactiveManualComposite(revelioCore.AnchorState state, revelioCore.MergeState mergeState, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange) =>
+    bool restore = compositeState.recoveryActive and not compositeRange.valid
+    if restore
+        revelioCore.restoreManualCompositeRecovery(state, mergeState, compositeState, START_TIME_UNSET)
+    restore
+
+purgeInvalidatedManualComposite(revelioCore.AnchorState state, revelioCore.AutoSweptState autoSweptState, revelioCore.ManualCompositeRange compositeRange) =>
+    bool valid = compositeRange.valid
+    bool removed = false
+    if valid[1] and not valid
+        removed := revelioProfiles.purgeInactive(state, autoSweptState, compositeRange)
+    removed
 
 renderManualCompositeSelectionGuides(int fromTime, int throughTime, color selectionColor) =>
     if fromTime > 0
@@ -1827,7 +1863,10 @@ var revelioCore.ManualCompositeState globexManualCompositeState = revelioCore.ne
 var revelioCore.ManualCompositeState weeklyManualCompositeState = revelioCore.newManualCompositeState(START_TIME_UNSET)
 var revelioCore.ManualCompositeState monthlyManualCompositeState = revelioCore.newManualCompositeState(START_TIME_UNSET)
 var revelioCore.ManualCompositeRange disabledManualCompositeRange = revelioCore.newManualCompositeRange(false, false, START_TIME_UNSET, START_TIME_UNSET)
-var revelioProfiles.ProfileChronologyState manualCompositeProfileChronology = revelioProfiles.newProfileChronologyState(START_TIME_UNSET)
+var revelioProfiles.ProfileChronologyState rthManualCompositeChronology = revelioProfiles.newProfileChronologyState(START_TIME_UNSET)
+var revelioProfiles.ProfileChronologyState globexManualCompositeChronology = revelioProfiles.newProfileChronologyState(START_TIME_UNSET)
+var revelioProfiles.ProfileChronologyState weeklyManualCompositeChronology = revelioProfiles.newProfileChronologyState(START_TIME_UNSET)
+var revelioProfiles.ProfileChronologyState monthlyManualCompositeChronology = revelioProfiles.newProfileChronologyState(START_TIME_UNSET)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
@@ -1863,7 +1902,12 @@ globexFilterEnabled = intradayTimeframeAllowed and (globexQuickFilterActive or g
 weeklyFilterEnabled = calendarAnchorTimeframeEnabled and (weeklyQuickFilterActive or (isAll and weeklyEnabled))
 monthlyFilterEnabled = calendarAnchorTimeframeEnabled and (monthlyQuickFilterActive or (isAll and monthlyEnabled))
 quarterlyFilterEnabled = calendarAnchorTimeframeEnabled and (quarterlyQuickFilterActive or (isAll and quarterlyEnabled))
-manualCompositeFilterEnabled = manualCompositeActive and (manualCompositeSource == revelioProfiles.ANCHOR_RTH ? rthFilterEnabled : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? globexFilterEnabled : manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY ? weeklyFilterEnabled : manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY ? monthlyFilterEnabled : quarterlyFilterEnabled)
+rthManualCompositeEnabled = manualCompositeIncludesAnchor(manualCompositeSource, revelioProfiles.ANCHOR_RTH, rthFilterEnabled)
+globexManualCompositeEnabled = manualCompositeIncludesAnchor(manualCompositeSource, revelioProfiles.ANCHOR_GLOBEX, globexFilterEnabled)
+weeklyManualCompositeEnabled = manualCompositeIncludesAnchor(manualCompositeSource, revelioProfiles.ANCHOR_WEEKLY, weeklyFilterEnabled)
+monthlyManualCompositeEnabled = manualCompositeIncludesAnchor(manualCompositeSource, revelioProfiles.ANCHOR_MONTHLY, monthlyFilterEnabled)
+quarterlyManualCompositeEnabled = manualCompositeIncludesAnchor(manualCompositeSource, revelioProfiles.ANCHOR_QUARTERLY, quarterlyFilterEnabled)
+manualCompositeFilterEnabled = rthManualCompositeEnabled or globexManualCompositeEnabled or weeklyManualCompositeEnabled or monthlyManualCompositeEnabled or quarterlyManualCompositeEnabled
 
 // Deep history only for an anchor that actually draws.
 rthProfilesToRetain = focusSelected and rthFilterEnabled ? FOCUS_SEARCH_DEPTH : rthEffectiveProfilesToShow
@@ -1882,7 +1926,6 @@ weeklyCalculationEnabled = weeklyFilterEnabled or weeklyHiddenTouchCalculationAc
 monthlyCalculationEnabled = monthlyFilterEnabled or monthlyHiddenTouchCalculationActive
 quarterlyCalculationEnabled = quarterlyFilterEnabled or quarterlyHiddenTouchCalculationActive
 manualCompositePointsPlaced = manualCompositeFrom > 0 and manualCompositeThrough > 0
-manualCompositeConfigured = manualCompositeFilterEnabled and manualCompositePointsPlaced
 
 // The gaps preset changes presentation only; it does not rewrite anchor controls.
 rthEffectiveExtensionMode = rthGapsPreset ? LEVEL_BREACH_ANY : rthExtensionMode
@@ -2007,32 +2050,11 @@ if rthDataOnly
         weeklyLastRthMaturityDate := observedRthDate
         monthlyLastRthMaturityDate := observedRthDate
 
-// Mirror only the selected source so Composite eligibility matches Show Last.
-if manualCompositeConfigured and manualCompositeSource == revelioProfiles.ANCHOR_RTH and array.size(rthState.barVolumes) > 0 and (rthSessionStart or rthSessionEnd)
-    int rthChronologyKey = revelioProfiles.calendarDateSerial(rthState.startTime, revelioProfiles.NY_TIMEZONE)
-    revelioProfiles.updateProfileChronology(manualCompositeProfileChronology, rthChronologyKey, rthState.startTime, rthState.lastBarTime, rthState.observedStartBoundary, rthMergeMode, RTH_MERGE_SPAN_FRACTION, START_TIME_UNSET)
-if manualCompositeConfigured and manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX and array.size(globexState.barVolumes) > 0 and globexDayStart
-    int globexChronologyKey = revelioProfiles.autoSweptCycleSerial(globexState.startTime, useUtcCalendarAnchors)
-    revelioProfiles.updateProfileChronology(manualCompositeProfileChronology, globexChronologyKey, globexState.startTime, globexState.lastBarTime, globexState.observedStartBoundary, globexMergeMode, GLOBEX_MERGE_SPAN_FRACTION, START_TIME_UNSET)
-if manualCompositeConfigured and manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY and array.size(weeklyState.barVolumes) > 0 and weeklyPeriodStart
-    int weeklyChronologyKey = revelioProfiles.resolveEndKey(weeklyState.startTime, revelioProfiles.ANCHOR_WEEKLY, useUtcCalendarAnchors, isTwentyFourSevenAsset)
-    revelioProfiles.updateProfileChronology(manualCompositeProfileChronology, weeklyChronologyKey, weeklyState.startTime, weeklyState.lastBarTime, weeklyState.observedStartBoundary, revelioProfiles.MergeMode.off, 1.0, START_TIME_UNSET)
-if manualCompositeConfigured and manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY and array.size(monthlyState.barVolumes) > 0 and monthlyPeriodStart
-    int monthlyChronologyKey = revelioProfiles.resolveEndKey(monthlyState.startTime, revelioProfiles.ANCHOR_MONTHLY, useUtcCalendarAnchors, isTwentyFourSevenAsset)
-    revelioProfiles.updateProfileChronology(manualCompositeProfileChronology, monthlyChronologyKey, monthlyState.startTime, monthlyState.lastBarTime, monthlyState.observedStartBoundary, revelioProfiles.MergeMode.off, 1.0, START_TIME_UNSET)
-int manualCompositeStartKey = manualCompositeConfigured ? revelioProfiles.resolveStartKey(manualCompositeFrom, manualCompositeSource, useUtcCalendarAnchors, isTwentyFourSevenAsset) : START_TIME_UNSET
-int manualCompositeEndKey = manualCompositeConfigured ? revelioProfiles.resolveEndKey(manualCompositeThrough, manualCompositeSource, useUtcCalendarAnchors, isTwentyFourSevenAsset) : START_TIME_UNSET
-int manualCompositeProfilesToShow = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? rthEffectiveProfilesToShow : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? globexEffectiveProfilesToShow : manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY ? weeklyProfilesToShow : manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY ? monthlyProfilesToShow : quarterlyProfilesToShow
-revelioProfiles.MergeMode manualCompositeMergeMode = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? rthMergeMode : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? globexMergeMode : revelioProfiles.MergeMode.off
-float manualCompositeShortSpanFraction = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? RTH_MERGE_SPAN_FRACTION : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? GLOBEX_MERGE_SPAN_FRACTION : 1.0
-int manualCompositeLatestDisplayKey = manualCompositeConfigured ? revelioProfiles.resolveEndKey(time, manualCompositeSource, useUtcCalendarAnchors, isTwentyFourSevenAsset) : START_TIME_UNSET
-bool manualCompositeRangeDisplayed = false
-if manualCompositeConfigured and manualCompositeSource != revelioProfiles.ANCHOR_QUARTERLY
-    bool currentCompositePeriodUsable = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? rthInSession and (rthSessionStart or rthState.observedStartBoundary) : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? globexDayStart or globexState.observedStartBoundary : manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY ? weeklyPeriodStart or weeklyState.observedStartBoundary : manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY ? monthlyPeriodStart or monthlyState.observedStartBoundary : true
-    manualCompositeRangeDisplayed := revelioProfiles.rangeDisplayed(manualCompositeProfileChronology, manualCompositeStartKey, manualCompositeEndKey, manualCompositeLatestDisplayKey, currentCompositePeriodUsable, barstate.islast, manualCompositeProfilesToShow, manualCompositeMergeMode, manualCompositeShortSpanFraction)
-bool manualCompositeRangeCandidateValid = manualCompositeRangeDisplayed and manualCompositeStartKey < manualCompositeEndKey
-bool quarterlyManualCompositeRequested = manualCompositeConfigured and manualCompositeSource == revelioProfiles.ANCHOR_QUARTERLY and manualCompositeStartKey < manualCompositeEndKey
-revelioCore.ManualCompositeRange candidateQuarterlyManualCompositeRange = quarterlyManualCompositeRequested ? revelioCore.newManualCompositeRange(true, true, manualCompositeStartKey, manualCompositeEndKey) : disabledManualCompositeRange
+revelioCore.ManualCompositeRange rthManualCompositeRange = prepareManualCompositeRange(rthManualCompositeChronology, rthState, rthManualCompositeEnabled and manualCompositePointsPlaced, revelioProfiles.ANCHOR_RTH, rthSessionStart or rthSessionEnd, rthInSession and (rthSessionStart or rthState.observedStartBoundary), manualCompositeFrom, manualCompositeThrough, useUtcCalendarAnchors, isTwentyFourSevenAsset, time, barstate.islast, rthEffectiveProfilesToShow, rthMergeMode, RTH_MERGE_SPAN_FRACTION)
+revelioCore.ManualCompositeRange globexManualCompositeRange = prepareManualCompositeRange(globexManualCompositeChronology, globexState, globexManualCompositeEnabled and manualCompositePointsPlaced, revelioProfiles.ANCHOR_GLOBEX, globexDayStart, globexDayStart or globexState.observedStartBoundary, manualCompositeFrom, manualCompositeThrough, useUtcCalendarAnchors, isTwentyFourSevenAsset, time, barstate.islast, globexEffectiveProfilesToShow, globexMergeMode, GLOBEX_MERGE_SPAN_FRACTION)
+revelioCore.ManualCompositeRange weeklyManualCompositeRange = prepareManualCompositeRange(weeklyManualCompositeChronology, weeklyState, weeklyManualCompositeEnabled and manualCompositePointsPlaced, revelioProfiles.ANCHOR_WEEKLY, weeklyPeriodStart, weeklyPeriodStart or weeklyState.observedStartBoundary, manualCompositeFrom, manualCompositeThrough, useUtcCalendarAnchors, isTwentyFourSevenAsset, time, barstate.islast, weeklyProfilesToShow, revelioProfiles.MergeMode.off, 1.0)
+revelioCore.ManualCompositeRange monthlyManualCompositeRange = prepareManualCompositeRange(monthlyManualCompositeChronology, monthlyState, monthlyManualCompositeEnabled and manualCompositePointsPlaced, revelioProfiles.ANCHOR_MONTHLY, monthlyPeriodStart, monthlyPeriodStart or monthlyState.observedStartBoundary, manualCompositeFrom, manualCompositeThrough, useUtcCalendarAnchors, isTwentyFourSevenAsset, time, barstate.islast, monthlyProfilesToShow, revelioProfiles.MergeMode.off, 1.0)
+revelioCore.ManualCompositeRange candidateQuarterlyManualCompositeRange = resolveManualCompositeSelection(quarterlyManualCompositeEnabled and manualCompositePointsPlaced, revelioProfiles.ANCHOR_QUARTERLY, manualCompositeFrom, manualCompositeThrough, useUtcCalendarAnchors, isTwentyFourSevenAsset)
 globexStyle.useUtcLabelTimezone := useUtcCalendarAnchors
 weeklyStyle.useUtcLabelTimezone := useUtcCalendarAnchors
 monthlyStyle.useUtcLabelTimezone := useUtcCalendarAnchors
@@ -2043,43 +2065,16 @@ quarterlyStyle.useUtcLabelTimezone := useUtcCalendarAnchors
     request.security(syminfo.tickerid, QUARTERLY_CALCULATION_TIMEFRAME, fixedQuarterlyContext(quarterlyFilterEnabled, useUtcCalendarAnchors, rthDataOnly, quarterlyFilterEnabled and quarterlyShowHistogram, candidateQuarterlyManualCompositeRange.valid, candidateQuarterlyManualCompositeRange.startKey, candidateQuarterlyManualCompositeRange.endKey), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=QUARTERLY_CALCULATION_BARS)
 else
     revelioProfiles.emptyRemoteProfileResult(START_TIME_UNSET)
-bool manualCompositeRangeValid = manualCompositeSource == revelioProfiles.ANCHOR_QUARTERLY ? quarterlyManualCompositeRequested and requestedQuarterlyCompositeReady == 1 : manualCompositeRangeCandidateValid
-bool manualCompositeRangeInvalidated = manualCompositeRangeValid[1] and not manualCompositeRangeValid
-revelioCore.ManualCompositeRange configuredManualCompositeRange = manualCompositeRangeValid ? revelioCore.newManualCompositeRange(true, true, manualCompositeStartKey, manualCompositeEndKey) : disabledManualCompositeRange
-revelioCore.ManualCompositeRange rthManualCompositeRange = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? configuredManualCompositeRange : disabledManualCompositeRange
-revelioCore.ManualCompositeRange globexManualCompositeRange = manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? configuredManualCompositeRange : disabledManualCompositeRange
-revelioCore.ManualCompositeRange weeklyManualCompositeRange = manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY ? configuredManualCompositeRange : disabledManualCompositeRange
-revelioCore.ManualCompositeRange monthlyManualCompositeRange = manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY ? configuredManualCompositeRange : disabledManualCompositeRange
-revelioCore.ManualCompositeRange quarterlyManualCompositeRange = manualCompositeSource == revelioProfiles.ANCHOR_QUARTERLY ? configuredManualCompositeRange : disabledManualCompositeRange
-bool rthManualCompositeRecoveryWillRestore = false
-bool globexManualCompositeRecoveryWillRestore = false
-if manualCompositeSource == revelioProfiles.ANCHOR_RTH
-    rthManualCompositeRecoveryWillRestore := rthManualCompositeState.recoveryActive and not rthManualCompositeRange.valid
-    if rthManualCompositeRecoveryWillRestore
-        revelioCore.restoreManualCompositeRecovery(rthState, rthMergeState, rthManualCompositeState, START_TIME_UNSET)
-else if manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX
-    globexManualCompositeRecoveryWillRestore := globexManualCompositeState.recoveryActive and not globexManualCompositeRange.valid
-    if globexManualCompositeRecoveryWillRestore
-        revelioCore.restoreManualCompositeRecovery(globexState, globexMergeState, globexManualCompositeState, START_TIME_UNSET)
-else if manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY
-    if weeklyManualCompositeState.recoveryActive and not weeklyManualCompositeRange.valid
-        revelioCore.restoreManualCompositeRecovery(weeklyState, weeklyMergeState, weeklyManualCompositeState, START_TIME_UNSET)
-else if manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY
-    if monthlyManualCompositeState.recoveryActive and not monthlyManualCompositeRange.valid
-        revelioCore.restoreManualCompositeRecovery(monthlyState, monthlyMergeState, monthlyManualCompositeState, START_TIME_UNSET)
-bool removedRthManualComposite = false
-bool removedGlobexManualComposite = false
-if manualCompositeRangeInvalidated
-    if manualCompositeSource == revelioProfiles.ANCHOR_RTH
-        removedRthManualComposite := revelioProfiles.purgeInactive(rthState, rthAutoSweptState, rthManualCompositeRange)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX
-        removedGlobexManualComposite := revelioProfiles.purgeInactive(globexState, globexAutoSweptState, globexManualCompositeRange)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY
-        revelioProfiles.purgeInactive(weeklyState, weeklyAutoSweptState, weeklyManualCompositeRange)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY
-        revelioProfiles.purgeInactive(monthlyState, monthlyAutoSweptState, monthlyManualCompositeRange)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_QUARTERLY
-        revelioProfiles.purgeInactive(quarterlyState, quarterlyAutoSweptState, quarterlyManualCompositeRange)
+revelioCore.ManualCompositeRange quarterlyManualCompositeRange = candidateQuarterlyManualCompositeRange.valid and requestedQuarterlyCompositeReady == 1 ? candidateQuarterlyManualCompositeRange : disabledManualCompositeRange
+bool rthManualCompositeRecoveryWillRestore = restoreInactiveManualComposite(rthState, rthMergeState, rthManualCompositeState, rthManualCompositeRange)
+bool globexManualCompositeRecoveryWillRestore = restoreInactiveManualComposite(globexState, globexMergeState, globexManualCompositeState, globexManualCompositeRange)
+restoreInactiveManualComposite(weeklyState, weeklyMergeState, weeklyManualCompositeState, weeklyManualCompositeRange)
+restoreInactiveManualComposite(monthlyState, monthlyMergeState, monthlyManualCompositeState, monthlyManualCompositeRange)
+bool removedRthManualComposite = purgeInvalidatedManualComposite(rthState, rthAutoSweptState, rthManualCompositeRange)
+bool removedGlobexManualComposite = purgeInvalidatedManualComposite(globexState, globexAutoSweptState, globexManualCompositeRange)
+purgeInvalidatedManualComposite(weeklyState, weeklyAutoSweptState, weeklyManualCompositeRange)
+purgeInvalidatedManualComposite(monthlyState, monthlyAutoSweptState, monthlyManualCompositeRange)
+purgeInvalidatedManualComposite(quarterlyState, quarterlyAutoSweptState, quarterlyManualCompositeRange)
 bool valueGapRecoveryRebuild = (rthManualCompositeRecoveryWillRestore and valueGapSourceIsRth) or (globexManualCompositeRecoveryWillRestore and not valueGapSourceIsRth)
 if valueGapRecoveryRebuild
     revelioGaps.copyState(valueGapRecoveryState, valueGapState)
@@ -2353,8 +2348,8 @@ int rthDevelopingManualCompositePeriodKey = rthManualCompositeRange.valid ? reve
 int globexDevelopingManualCompositePeriodKey = globexManualCompositeRange.valid ? revelioProfiles.autoSweptCycleSerial(globexState.startTime != START_TIME_UNSET ? globexState.startTime : time, useUtcCalendarAnchors) : START_TIME_UNSET
 int weeklyDevelopingManualCompositePeriodKey = weeklyManualCompositeRange.valid ? revelioProfiles.resolveEndKey(weeklyState.startTime != START_TIME_UNSET ? weeklyState.startTime : time, revelioProfiles.ANCHOR_WEEKLY, useUtcCalendarAnchors, isTwentyFourSevenAsset) : START_TIME_UNSET
 int monthlyDevelopingManualCompositePeriodKey = monthlyManualCompositeRange.valid ? revelioProfiles.resolveEndKey(monthlyState.startTime != START_TIME_UNSET ? monthlyState.startTime : time, revelioProfiles.ANCHOR_MONTHLY, useUtcCalendarAnchors, isTwentyFourSevenAsset) : START_TIME_UNSET
-weeklyCompositeDeveloping = manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY and revelioProfiles.manualCompositeDevelopingReady(weeklyState, weeklyManualCompositeState, weeklyManualCompositeRange, weeklyDevelopingManualCompositePeriodKey)
-monthlyCompositeDeveloping = manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY and revelioProfiles.manualCompositeDevelopingReady(monthlyState, monthlyManualCompositeState, monthlyManualCompositeRange, monthlyDevelopingManualCompositePeriodKey)
+weeklyCompositeDeveloping = weeklyManualCompositeEnabled and revelioProfiles.manualCompositeDevelopingReady(weeklyState, weeklyManualCompositeState, weeklyManualCompositeRange, weeklyDevelopingManualCompositePeriodKey)
+monthlyCompositeDeveloping = monthlyManualCompositeEnabled and revelioProfiles.manualCompositeDevelopingReady(monthlyState, monthlyManualCompositeState, monthlyManualCompositeRange, monthlyDevelopingManualCompositePeriodKey)
 weeklyShowDeveloping = weeklyFilterEnabled and (weeklyCompositeDeveloping or weeklyOrdinaryShowDeveloping)
 monthlyShowDeveloping = monthlyFilterEnabled and (monthlyCompositeDeveloping or monthlyOrdinaryShowDeveloping)
 if autoSweptLines
@@ -2407,13 +2402,13 @@ updateConfirmedSweepSample(float sampleClose, int sampleTime, float marginFracti
     revelioCore.updateAnchorLevels(weeklyState, false, false, true, weeklySweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
     revelioCore.updateAnchorLevels(monthlyState, false, false, true, monthlySweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
     revelioCore.updateAnchorLevels(quarterlyState, false, false, true, quarterlySweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
-    if manualCompositeSource == revelioProfiles.ANCHOR_RTH
+    if rthManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(rthManualCompositeState, false, false, true, rthSweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX
+    if globexManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(globexManualCompositeState, false, false, true, globexSweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY
+    if weeklyManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(weeklyManualCompositeState, false, false, true, weeklySweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY
+    if monthlyManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(monthlyManualCompositeState, false, false, true, monthlySweepActive, unusedBreachHigh, unusedBreachLow, marginFraction, sampleClose, sampleTime)
     if autoSweptLines
         revelioCore.updateAutoSweptArchive(rthAutoSweptState, rthSweepActive, marginFraction, sampleClose, sampleTime)
@@ -2463,13 +2458,13 @@ if barstate.isconfirmed
     revelioCore.updateAnchorLevels(weeklyState, weeklyMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
     revelioCore.updateAnchorLevels(monthlyState, monthlyMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
     revelioCore.updateAnchorLevels(quarterlyState, quarterlyMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
-    if manualCompositeSource == revelioProfiles.ANCHOR_RTH
+    if rthManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(rthManualCompositeState, rthMitigationActive, rthEffectiveExtensionMode == LEVEL_BREACH_SAME, rthInSession, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX
+    if globexManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(globexManualCompositeState, globexMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY
+    if weeklyManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(weeklyManualCompositeState, weeklyMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
-    else if manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY
+    if monthlyManualCompositeEnabled
         revelioCore.updateManualCompositeRecoveryLevels(monthlyManualCompositeState, monthlyMitigationActive, false, true, false, mitigationBreachHigh, mitigationBreachLow, sweepMarginFraction, close, time)
     if autoSweptLines
         int autoSweptActivationTime = barstate.isrealtime and chart.is_range and na(time_close) ? timenow : na(time_close) ? time : time_close
@@ -2486,7 +2481,7 @@ plot(autoSweptLines and autoSweptAudit ? autoSweptPlan.adr : na, title="Ⓐ ADR"
 if barstate.islast
     clearDrawings()
     if manualCompositeFilterEnabled
-        color manualCompositeGuideColor = manualCompositeSource == revelioProfiles.ANCHOR_RTH ? rthStyle.valueAreaLastColor : manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX ? globexStyle.valueAreaLastColor : manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY ? weeklyStyle.valueAreaLastColor : manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY ? monthlyStyle.valueAreaLastColor : quarterlyStyle.valueAreaLastColor
+        color manualCompositeGuideColor = rthManualCompositeEnabled ? rthStyle.valueAreaLastColor : globexManualCompositeEnabled ? globexStyle.valueAreaLastColor : weeklyManualCompositeEnabled ? weeklyStyle.valueAreaLastColor : monthlyManualCompositeEnabled ? monthlyStyle.valueAreaLastColor : quarterlyStyle.valueAreaLastColor
         renderManualCompositeSelectionGuides(manualCompositeFrom, manualCompositeThrough, manualCompositeGuideColor)
     map.clear(renderedLevelHitKeys)
     map.clear(levelHitPresentations)
@@ -2502,10 +2497,10 @@ if barstate.islast
     revelioCore.Profile weeklyLiveProfile = na
     revelioCore.Profile monthlyLiveProfile = na
     revelioCore.Profile quarterlyLiveProfile = na
-    revelioCore.Profile rthCompositeLiveProfile = manualCompositeSource == revelioProfiles.ANCHOR_RTH and rthFilterEnabled ? (rthInSession ? revelioProfiles.buildDevelopingManualCompositeProfile(rthState, rthManualCompositeState, rthManualCompositeRange, rthDevelopingManualCompositePeriodKey, intrabarHighs, intrabarLows, intrabarVolumes, fallbackBucketHigh, fallbackBucketLow, fallbackBucketVolume, barstate.isconfirmed, high, low, volume, rthFilterEnabled and rthShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : revelioProfiles.buildConfirmedManualCompositeProfile(rthState, rthManualCompositeState, rthManualCompositeRange, rthDevelopingManualCompositePeriodKey, rthState.lastBarTime, rthFilterEnabled and rthShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT)) : na
-    revelioCore.Profile globexCompositeLiveProfile = manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX and globexFilterEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(globexState, globexManualCompositeState, globexManualCompositeRange, globexDevelopingManualCompositePeriodKey, intrabarHighs, intrabarLows, intrabarVolumes, fallbackBucketHigh, fallbackBucketLow, fallbackBucketVolume, barstate.isconfirmed, high, low, volume, globexFilterEnabled and globexShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
-    revelioCore.Profile weeklyCompositeLiveProfile = manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY and weeklyFilterEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(weeklyState, weeklyManualCompositeState, weeklyManualCompositeRange, weeklyDevelopingManualCompositePeriodKey, calendarLiveHighs, calendarLiveLows, calendarLiveVolumes, calendarFallbackHigh, calendarFallbackLow, calendarFallbackVolume, barstate.isconfirmed, calendarCurrentHigh, calendarCurrentLow, calendarCurrentVolume, weeklyShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
-    revelioCore.Profile monthlyCompositeLiveProfile = manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY and monthlyFilterEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(monthlyState, monthlyManualCompositeState, monthlyManualCompositeRange, monthlyDevelopingManualCompositePeriodKey, calendarLiveHighs, calendarLiveLows, calendarLiveVolumes, calendarFallbackHigh, calendarFallbackLow, calendarFallbackVolume, barstate.isconfirmed, calendarCurrentHigh, calendarCurrentLow, calendarCurrentVolume, monthlyShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
+    revelioCore.Profile rthCompositeLiveProfile = rthManualCompositeEnabled ? (rthInSession ? revelioProfiles.buildDevelopingManualCompositeProfile(rthState, rthManualCompositeState, rthManualCompositeRange, rthDevelopingManualCompositePeriodKey, intrabarHighs, intrabarLows, intrabarVolumes, fallbackBucketHigh, fallbackBucketLow, fallbackBucketVolume, barstate.isconfirmed, high, low, volume, rthFilterEnabled and rthShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : revelioProfiles.buildConfirmedManualCompositeProfile(rthState, rthManualCompositeState, rthManualCompositeRange, rthDevelopingManualCompositePeriodKey, rthState.lastBarTime, rthFilterEnabled and rthShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT)) : na
+    revelioCore.Profile globexCompositeLiveProfile = globexManualCompositeEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(globexState, globexManualCompositeState, globexManualCompositeRange, globexDevelopingManualCompositePeriodKey, intrabarHighs, intrabarLows, intrabarVolumes, fallbackBucketHigh, fallbackBucketLow, fallbackBucketVolume, barstate.isconfirmed, high, low, volume, globexFilterEnabled and globexShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
+    revelioCore.Profile weeklyCompositeLiveProfile = weeklyManualCompositeEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(weeklyState, weeklyManualCompositeState, weeklyManualCompositeRange, weeklyDevelopingManualCompositePeriodKey, calendarLiveHighs, calendarLiveLows, calendarLiveVolumes, calendarFallbackHigh, calendarFallbackLow, calendarFallbackVolume, barstate.isconfirmed, calendarCurrentHigh, calendarCurrentLow, calendarCurrentVolume, weeklyShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
+    revelioCore.Profile monthlyCompositeLiveProfile = monthlyManualCompositeEnabled ? revelioProfiles.buildDevelopingManualCompositeProfile(monthlyState, monthlyManualCompositeState, monthlyManualCompositeRange, monthlyDevelopingManualCompositePeriodKey, calendarLiveHighs, calendarLiveLows, calendarLiveVolumes, calendarFallbackHigh, calendarFallbackLow, calendarFallbackVolume, barstate.isconfirmed, calendarCurrentHigh, calendarCurrentLow, calendarCurrentVolume, monthlyShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time) : na
     bool rthLiveVisible = not na(rthCompositeLiveProfile) or rthShowDeveloping
     bool globexLiveVisible = not na(globexCompositeLiveProfile) or globexShowDeveloping
     bool weeklyLiveVisible = not na(weeklyCompositeLiveProfile) or weeklyShowDeveloping
@@ -2528,17 +2523,16 @@ if barstate.islast
         monthlyLiveProfile := revelioProfiles.buildDevelopingAnchorProfile(monthlyState, calendarLiveHighs, calendarLiveLows, calendarLiveVolumes, calendarFallbackHigh, calendarFallbackLow, calendarFallbackVolume, barstate.isconfirmed, calendarCurrentHigh, calendarCurrentLow, calendarCurrentVolume, monthlyShowHistogram, revelioCore.PROFILE_ROW_COUNT, VALUE_AREA_PERCENT, time)
     if quarterlyFilterEnabled and quarterlyShowDeveloping and not na(quarterlyDevelopingCache)
         quarterlyLiveProfile := quarterlyDevelopingCache
-    if manualCompositeRangeValid
-        if manualCompositeSource == revelioProfiles.ANCHOR_RTH
-            renderManualCompositeFrame(rthState.profiles, rthLiveProfile, manualCompositeStartKey, manualCompositeEndKey, manualCompositeFrom, manualCompositeThrough, rthStyle.valueAreaLastColor, rthStyle.levelLabelBgColor)
-        else if manualCompositeSource == revelioProfiles.ANCHOR_GLOBEX
-            renderManualCompositeFrame(globexState.profiles, globexLiveProfile, manualCompositeStartKey, manualCompositeEndKey, manualCompositeFrom, manualCompositeThrough, globexStyle.valueAreaLastColor, globexStyle.levelLabelBgColor)
-        else if manualCompositeSource == revelioProfiles.ANCHOR_WEEKLY
-            renderManualCompositeFrame(weeklyState.profiles, weeklyLiveProfile, manualCompositeStartKey, manualCompositeEndKey, manualCompositeFrom, manualCompositeThrough, weeklyStyle.valueAreaLastColor, weeklyStyle.levelLabelBgColor)
-        else if manualCompositeSource == revelioProfiles.ANCHOR_MONTHLY
-            renderManualCompositeFrame(monthlyState.profiles, monthlyLiveProfile, manualCompositeStartKey, manualCompositeEndKey, manualCompositeFrom, manualCompositeThrough, monthlyStyle.valueAreaLastColor, monthlyStyle.levelLabelBgColor)
-        else if manualCompositeSource == revelioProfiles.ANCHOR_QUARTERLY
-            renderManualCompositeFrame(quarterlyState.profiles, quarterlyLiveProfile, manualCompositeStartKey, manualCompositeEndKey, manualCompositeFrom, manualCompositeThrough, quarterlyStyle.valueAreaLastColor, quarterlyStyle.levelLabelBgColor)
+    if rthManualCompositeRange.valid
+        renderManualCompositeFrame(rthState.profiles, rthLiveProfile, rthManualCompositeRange.startKey, rthManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, rthStyle.valueAreaLastColor, rthStyle.levelLabelBgColor)
+    if globexManualCompositeRange.valid
+        renderManualCompositeFrame(globexState.profiles, globexLiveProfile, globexManualCompositeRange.startKey, globexManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, globexStyle.valueAreaLastColor, globexStyle.levelLabelBgColor)
+    if weeklyManualCompositeRange.valid
+        renderManualCompositeFrame(weeklyState.profiles, weeklyLiveProfile, weeklyManualCompositeRange.startKey, weeklyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, weeklyStyle.valueAreaLastColor, weeklyStyle.levelLabelBgColor)
+    if monthlyManualCompositeRange.valid
+        renderManualCompositeFrame(monthlyState.profiles, monthlyLiveProfile, monthlyManualCompositeRange.startKey, monthlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, monthlyStyle.valueAreaLastColor, monthlyStyle.levelLabelBgColor)
+    if quarterlyManualCompositeRange.valid
+        renderManualCompositeFrame(quarterlyState.profiles, quarterlyLiveProfile, quarterlyManualCompositeRange.startKey, quarterlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, quarterlyStyle.valueAreaLastColor, quarterlyStyle.levelLabelBgColor)
     array<int> floatingValueGapIndices = revelioGaps.selectFloats(valueGapState.records, valueGapFloatingActive, valueGapNearestFloats, close)
     int historicalGapLimit = valueGapDisplayMode == VALUE_GAP_DISPLAY_RECENT_FLOATING ? 1 : valueGapsToShow
     renderValueGaps(valueGapState.records, valueGapHistoricalActive, floatingValueGapIndices, historicalGapLimit, useUtcValueGapLabels)
