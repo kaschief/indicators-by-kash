@@ -258,7 +258,7 @@ const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 25
 
 // Tooltips
 TOOLTIP_KEEP_PAST_GLOW = "Keep earned historical glows; only current sessions register new touches."
-TOOLTIP_MAX_SESSIONS = "Max sessions shown per opening type."
+TOOLTIP_MAX_SESSIONS = "Max sessions shown per opening type, including the developing session."
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_FADE_RETRACE = "Fade completed 0.5 / 0.618 traversals. IVB-Based completes at the later opposite NY Early boundary."
@@ -1359,6 +1359,30 @@ deleteSession(SessionData sess) =>
         label.delete(sess.lowUnmitigatedLabel)
         sess.lowUnmitigatedLabel := na
 
+completedSessionSlots(array<SessionData> active, int sessionIndex, int visibleLimit) =>
+    int available = visibleLimit
+    for sess in active
+        if sess.sessionIndex == sessionIndex
+            available -= 1
+    math.max(0, available)
+
+pruneCompletedSessions(array<SessionData> completed, array<SessionData> lifecycle, int sessionIndex, int keepCount) =>
+    int retained = 0
+    if array.size(completed) > 0
+        for sessionPosition = array.size(completed) - 1 to 0
+            SessionData sess = array.get(completed, sessionPosition)
+            if sess.sessionIndex == sessionIndex
+                retained += 1
+                if retained > keepCount
+                    if array.size(lifecycle) > 0
+                        for lifecyclePosition = array.size(lifecycle) - 1 to 0
+                            SessionData tracked = array.get(lifecycle, lifecyclePosition)
+                            if tracked.sessionIndex == sess.sessionIndex and tracked.startTime == sess.startTime
+                                array.remove(lifecycle, lifecyclePosition)
+                                break
+                    deleteSession(sess)
+                    array.remove(completed, sessionPosition)
+
 focusDirectionMatches(float levelPrice, float anchorPrice) =>
     focusDirection == FOCUS_DIRECTION_BELOW ? levelPrice <= anchorPrice : focusDirection == FOCUS_DIRECTION_ABOVE ? levelPrice >= anchorPrice : true
 
@@ -2024,6 +2048,8 @@ if validChartContext
                  )
 
                 array.push(activeSessions, newSession)
+                if not focusManaged(i)
+                    pruneCompletedSessions(sessions, lifecycleSessions, i, completedSessionSlots(activeSessions, i, maxSessions))
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 2: SESSION TRACKING - Update all active sessions
@@ -2153,30 +2179,9 @@ if validChartContext and array.size(activeSessions) > 0
             if sess.deviationMode != OPT_HIDDEN
                 lifecycleSessions.push(sess)
 
-            // Focus-managed sessions retain all loaded history for deep ranking.
-            if not focusManaged(idx)
-                int sessionsOfThisType = 0
-                int oldestSessionIndex = na
-                for j = 0 to array.size(sessions) - 1
-                    SessionData retainedSess = array.get(sessions, j)
-                    if retainedSess.sessionIndex == sess.sessionIndex
-                        sessionsOfThisType += 1
-                        if na(oldestSessionIndex)
-                            oldestSessionIndex := j
-
-                if sessionsOfThisType > maxSessions and not na(oldestSessionIndex)
-                    SessionData oldSession = array.get(sessions, oldestSessionIndex)
-                    if array.size(lifecycleSessions) > 0
-                        for lifecycleIndex = array.size(lifecycleSessions) - 1 to 0
-                            SessionData lifecycleSession = array.get(lifecycleSessions, lifecycleIndex)
-                            if lifecycleSession.sessionIndex == oldSession.sessionIndex and lifecycleSession.startTime == oldSession.startTime
-                                array.remove(lifecycleSessions, lifecycleIndex)
-                                break
-                    deleteSession(oldSession)
-                    array.remove(sessions, oldestSessionIndex)
-
-            // Remove from active sessions
             array.remove(activeSessions, i)
+            if not focusManaged(idx)
+                pruneCompletedSessions(sessions, lifecycleSessions, idx, completedSessionSlots(activeSessions, idx, maxSessions))
 
 bool nyEarlyIvbCoreVisibilityChanged = currentNyDayKey != currentNyDayKey[1] or nyEarlyIvbCoreAutoHideActive != nyEarlyIvbCoreAutoHideActive[1]
 if validChartContext and nyEarlyIvbCoreVisibilityChanged and array.size(sessions) > 0
@@ -2765,8 +2770,8 @@ if validChartContext and focusActive and barstate.islast and array.size(sessions
     collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_0129, focusAnchorPrice, focusSessionCount)
     collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_ASIA_OPEN, focusAnchorPrice, focusSessionCount)
     // The recent view comes first so it can never lose its slots to a better-ranked distant level.
-    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_0129, maxSessions)
-    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_ASIA_OPEN, maxSessions)
+    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_0129, completedSessionSlots(activeSessions, IDX_0129, maxSessions))
+    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_ASIA_OPEN, completedSessionSlots(activeSessions, IDX_ASIA_OPEN, maxSessions))
     for selectedIndex in selectedFocusIndices
         SessionData recentSess = array.get(sessions, selectedIndex)
         map.put(selectedFocusSessionKeys, recentSess.startTime, true)
