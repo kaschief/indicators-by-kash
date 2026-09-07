@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-04
+Updated: 2026-09-07
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -23,7 +23,7 @@ This is the repository's single source of truth for TradingView library versions
 |---|---|---|---:|---:|
 | RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 11 | — |
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 12 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 26 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 28 | — |
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 9 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
@@ -86,6 +86,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioInteractionsLibrary | 24 | Published · host loaded · testing | Removes the merged-line period feature and fades the complete primary, swept-continuation, and carrier paths of secondary merged levels while preserving the dominant line | `3838f0b326fd847ce5fcd1c192e0edd4573690f6bb53db11aa06cee5cb1f0909` |
 | RevelioInteractionsLibrary | 25 | Published · host loaded · testing | Removes the Alternate POC compositor contract and its swept-reminder placement slot | `3e4c897cf94b9b6d65754843846ee359f64fa44818e75dfa0980e943216c6d8c` |
 | RevelioInteractionsLibrary | 26 | Published · host loaded · testing | Converts Touch Marker circles from coarse size presets to independently adjustable numeric point sizes | `ee5abc9c6083460d8106298b1d62c1873176b2381117a7d128f394610d46440e` |
+| RevelioInteractionsLibrary | 27 | Published · user confirmed | Adds optional small, muted native identities to secondary merged lines; defaults On at size 6 with fixed 50% additional text fading; preserves combined labels, merging, and line fading | `a63cffc890a6c0e41f245c659e79373990db356dbe8c403492ada41287d28c63` |
+| RevelioInteractionsLibrary | 28 | Published · deployed · user approved | Exposes additional secondary-label fading as Fade %, default 50, range 0–100; preserves merging and combined labels | `34424722e266711b4a997fbff5b86635a38bf7dad60497235785aab9e2d8de34` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
 | RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
@@ -187,17 +189,22 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-04-07 | 2026-09-04 | RevelioInteractionsLibrary | 25 | Publish the Alternate POC compositor-contract removal privately as `/25` | `PUBLISHED_HOST_LOADED_TESTING` |
 | PUB-2026-09-04-08 | 2026-09-04 | RevelioProfileOrchestrationLibrary | 9 | After Core `/11` is published, publish the Alternate POC transport removal and hourly-Quarterly snapshot alignment privately as `/9`, then compile the development host against Core `/11`, Gaps `/12`, Interactions `/25`, and Profile Orchestration `/9` | `PUBLISHED_HOST_LOADED_TESTING` |
 | PUB-2026-09-04-09 | 2026-09-04 | RevelioInteractionsLibrary | 26 | Publish the numeric Touch Marker sizing contract privately as `/26`, then compile the development Revelio host against Core `/11`, Gaps `/12`, Interactions `/26`, and Profile Orchestration `/9` | `PUBLISHED_HOST_LOADED_TESTING` |
+| PUB-2026-09-07-01 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the optional merged-bullet source privately as `/27`, then compile the canonical Revelio host against `/27`; verify toggle On/Off, size 4, merging presets, swept lines, label offsets, time and Range charts, Replay, and label pressure | `SUPERSEDED_BEFORE_PUBLICATION` |
+| PUB-2026-09-07-02 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the revised secondary-label source privately as `/27`, then compile the canonical host; verify Merged Line Labels On/Off, size 6, Shorten Labels On/Off, unchanged combined labels and merging, swept lines, time/Range charts, Replay, and label pressure | `PUBLISHED_USER_CONFIRMED` |
+| PUB-2026-09-07-03 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the adjustable secondary-label fade source privately as `/27`, then compile the canonical host; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged combined labels and merging on time and Range charts | `WITHDRAWN_ALREADY_PUBLISHED` |
+| PUB-2026-09-07-04 | 2026-09-07 | RevelioInteractionsLibrary | 28 | Publish the adjustable secondary-label fade source privately as `/28`, then compile the canonical host importing `/28`; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged merged labels on time and Range charts | `PUBLISHED_DEPLOYED_USER_CONFIRMED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
-- Published chain: Core `/11`, Gaps `/12`, Interactions `/26`, Profile Orchestration `/9`.
-- Pending: none.
+- Published chain: Core `/11`, Gaps `/12`, Interactions `/28`, Profile Orchestration `/9`.
+- Pending: none. Host-only finalization uses size 6 and 65% additional fading directly and removes both tuning inputs; recompile the host.
 - Discarded: Interactions `/20`; it remains permanently retired.
-- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing published Core `/11`, Gaps `/12`, Interactions `/26`, and Profile Orchestration `/9`.
-- Runtime status: Core `/11`, Gaps `/12`, Interactions `/26`, and Profile Orchestration `/9` are published and host-loaded for testing. The current host-only removal of the temporary size controls still requires recompilation.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/11`, Gaps `/12`, Interactions `/28`, and Profile Orchestration `/9`.
+- Interactions `/27`: user confirmed publication of the preceding fixed-fade secondary-label source. `/28` was subsequently tested and the user selected size 6 and 65% fading; its library source is unchanged by the host-only UI cleanup.
+- Runtime status: Core `/11`, Gaps `/12`, Interactions `/28`, and Profile Orchestration `/9` are published and host-loaded for testing. The current host-only removal of the temporary size controls still requires recompilation.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
-- Current host presentation changes: fixed profile label-text and Touch Marker sizes are RTH 8/10, Globex 8/10, Weekly 8/14, Monthly 9/17, and Quarterly 9/19, with the temporary size controls removed from the UI; Value Gap text remains 8 and Guides/Repeats remain 6; merged-line period markers are removed end to end; secondary merged levels use at least 85% transparency across their full primary, swept-continuation, and carrier paths while the dominant line remains unchanged; original swept line styles; no newest value-area width boost; every regular profile POC, VAH, and VAL uses width 2 except Globex POC, which remains width 1; and Until Swept mitigation uses a 70% faded pre-sweep segment plus an 85% faded continuation when Fade Mitigated Levels is on, while Off preserves the native pre-sweep segment and standard 75% continuation.
+- Current host presentation changes: fixed profile label-text and Touch Marker sizes are RTH 8/10, Globex 8/10, Weekly 8/14, Monthly 9/17, and Quarterly 9/19, with the temporary size controls removed from the UI; Value Gap text remains 8 and Guides/Repeats remain 6; Interactions `/28` adds optional small, muted native secondary labels (On, fixed size 6, fixed additional Fade 65%) after combined labels and before optional markers/reminders; secondary merged levels use at least 85% transparency across their full primary, swept-continuation, and carrier paths while the dominant line remains unchanged; original swept line styles; no newest value-area width boost; every regular profile POC, VAH, and VAL uses width 2 except Globex POC, which remains width 1; and Until Swept mitigation uses a 70% faded pre-sweep segment plus an 85% faded continuation when Fade Mitigated Levels is on, while Off preserves the native pre-sweep segment and standard 75% continuation.
 - Current Quarterly performance change: the deep Quarterly calculation runs in 60-minute outer batches instead of 15-minute batches while retaining every underlying 5-minute price and volume sample. Developing Quarterly results can therefore refresh once per hour; completed profile levels are intended to remain unchanged.
 - Legilimens: Profile Library `/4` is published, tested, and approved. Development imports `/4`.
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
@@ -205,7 +212,13 @@ Entries before this registry was created are reconstructed from the task history
 
 ## Pending release notes
 
-None.
+None. No new library version is required for the host-only removal of Size and Fade controls.
+
+## Current host validation
+
+- Import remains `midnightpaws87/RevelioInteractionsLibrary/28`; source fingerprint unchanged.
+- Recompile `indicators/20-revelio/code/indicator/revelio.pine` and confirm the Merged Line Labels toggle remains while Size and Fade % are removed.
+- On NQ 5m and 180R/360R, compare secondary-label appearance with the selected size 6 and 65% additional fading; combined labels and merge behavior must remain unchanged.
 
 ## Invariants
 
