@@ -160,7 +160,7 @@ const int FIB_LOCATION_CONTRADICTORY = 0
 const int FIB_LOCATION_QUALIFIED = 1
 const int FIB_LOCATION_PREFERRED = 2
 const int FIB_LOCATION_VERY_STRONG = 3
-const int FIB_LOCATION_NEUTRAL = 4
+const int FIB_LOCATION_QUALIFIED_BORDER_TRANSPARENCY = 75
 const int FIB_LOCATION_WRONG_SIDE_ZONE_TRANSPARENCY = 97
 const int FIB_LOCATION_WRONG_SIDE_LINE_TRANSPARENCY = 80
 const int FIB_LOCATION_WRONG_SIDE_MARKER_TRANSPARENCY = 80
@@ -227,7 +227,6 @@ const string LEVEL_VAL = "VAL"
 const string LEVEL_MARKER_GLYPH = "●"
 const string FIB_LOCATION_PREFERRED_MARKER_GLYPH = "◆"
 const string FIB_LOCATION_VERY_STRONG_MARKER_GLYPH = "✦"
-const string FIB_LOCATION_MIDPOINT_SUFFIX = "½"
 
 GROUP_DISPLAY = "⚙️ Profile"
 GROUP_DEVELOPING = "⚙️ Developing Profile Visibility"
@@ -264,7 +263,7 @@ TOOLTIP_MOST_RECENT_ONLY = "Most Recent — today only"
 TOOLTIP_ROLLING_WINDOW = "Window — lookback\nDays — custom Short\nThrough — NY endpoint"
 INPUT_LABEL_DELTA_WIDTH = "Delta Width"
 TOOLTIP_DELTA_WIDTH = "Maximum width in chart bars, capped to the profile length. Preserves the same bar-based appearance across timeframes and profile age."
-TOOLTIP_FIB_QUALIFICATION = "Grades Delta tiers within each profile range.\n✦ + double border — Buy below 0.214; Sell above 0.786.\n◆ + border — Buy 0.214–0.382; Sell 0.618–0.786.\nZones crossing 0.5 split into qualified and faded portions.\nWrong-side zones are faded."
+TOOLTIP_FIB_QUALIFICATION = "Grades Delta tiers within each profile range.\n✦ + double border — Buy below 0.214; Sell above 0.786.\n◆ + border — Buy 0.214–0.382; Sell 0.618–0.786.\n● + faint border — Buy 0.382 to below 0.5; Sell above 0.5 to 0.618.\nZones crossing 0.5 split into qualified and faded portions.\nWrong-side zones are faded."
 TOOLTIP_ZONE_ROLE_REVERSAL = "Tracks completed non-Rolling Delta zones during their active extension.\nSell approaches from below, trades, then closes above — green support border.\nBuy approaches from above, trades, then closes below — red resistance border.\nReversal is retained for the profile."
 TOOLTIP_SPECIAL_SETTINGS = "Fib Qualification\n" + TOOLTIP_FIB_QUALIFICATION + "\n\nZone Role Reversal\n" + TOOLTIP_ZONE_ROLE_REVERSAL
 
@@ -327,7 +326,7 @@ extendUnmitigated = input.bool(false, "Extend Unmitigated", inline="profile_visi
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — SPECIAL SETTINGS
 // ═══════════════════════════════════════════════════════════════════════════════
-qualifyDeltaTiersByProfileFib = input.bool(false, "Fib Qualification", inline="special_settings", group=GROUP_SPECIAL_SETTINGS, active=showDeltaTiers and not enableQuickCheck)
+qualifyDeltaTiersByProfileFib = input.bool(true, "Fib Qualification", inline="special_settings", group=GROUP_SPECIAL_SETTINGS, active=showDeltaTiers and not enableQuickCheck)
 showZoneRoleReversal = input.bool(false, "Zone Role Reversal", inline="special_settings", group=GROUP_SPECIAL_SETTINGS, active=showDeltaTiers and not enableQuickCheck and anchorMode != MODE_ROLLING, tooltip=TOOLTIP_SPECIAL_SETTINGS)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1115,16 +1114,12 @@ deltaTierFibLocationGrade(bool buySide, float tierPrice, float rangeLow, float r
         float fibPosition = (tierPrice - rangeLow) / profileRange
         bool veryStrong = buySide ? fibPosition < FIB_LOCATION_BUY_PREFERRED_LOW : fibPosition > FIB_LOCATION_SELL_PREFERRED_HIGH
         bool preferred = buySide ? fibPosition >= FIB_LOCATION_BUY_PREFERRED_LOW and fibPosition <= FIB_LOCATION_BUY_PREFERRED_HIGH : fibPosition >= FIB_LOCATION_SELL_PREFERRED_LOW and fibPosition <= FIB_LOCATION_SELL_PREFERRED_HIGH
-        bool qualified = buySide ? fibPosition < FIB_LOCATION_MIDPOINT : fibPosition > FIB_LOCATION_MIDPOINT
-        bool neutral = fibPosition == FIB_LOCATION_MIDPOINT
-        grade := veryStrong ? FIB_LOCATION_VERY_STRONG : preferred ? FIB_LOCATION_PREFERRED : qualified ? FIB_LOCATION_QUALIFIED : neutral ? FIB_LOCATION_NEUTRAL : FIB_LOCATION_CONTRADICTORY
+        bool qualified = buySide ? fibPosition <= FIB_LOCATION_MIDPOINT : fibPosition >= FIB_LOCATION_MIDPOINT
+        grade := veryStrong ? FIB_LOCATION_VERY_STRONG : preferred ? FIB_LOCATION_PREFERRED : qualified ? FIB_LOCATION_QUALIFIED : FIB_LOCATION_CONTRADICTORY
     grade
 
 fibLocationMarkerGlyph(int fibLocationGrade) =>
-    string markerGlyph = fibLocationGrade == FIB_LOCATION_VERY_STRONG ? FIB_LOCATION_VERY_STRONG_MARKER_GLYPH : fibLocationGrade == FIB_LOCATION_PREFERRED ? FIB_LOCATION_PREFERRED_MARKER_GLYPH : LEVEL_MARKER_GLYPH
-    if fibLocationGrade == FIB_LOCATION_NEUTRAL
-        markerGlyph += FIB_LOCATION_MIDPOINT_SUFFIX
-    markerGlyph
+    fibLocationGrade == FIB_LOCATION_VERY_STRONG ? FIB_LOCATION_VERY_STRONG_MARKER_GLYPH : fibLocationGrade == FIB_LOCATION_PREFERRED ? FIB_LOCATION_PREFERRED_MARKER_GLYPH : LEVEL_MARKER_GLYPH
 
 fadeTierColor(color sourceColor, int minimumTransparency) =>
     color.new(sourceColor, math.max(int(color.t(sourceColor)), minimumTransparency))
@@ -1697,7 +1692,8 @@ renderRankedOutlierLevels(array<RankedOutlierLevel> rankedLevels, bool registrat
             int direction = ranked.buySide ? 1 : -1
             string markerLabel = showDotLabels and ranked.strengthRank == 1 ? profileSourceName(ranked.sourceName, ranked.displayNameOverride) : ""
             int markerSize = tierMarkerSize(tierMarkerSizes, tier)
-            int fibZoneBorderWidth = qualifyDeltaTiersByProfileFib ? ranked.fibLocationGrade == FIB_LOCATION_VERY_STRONG ? 2 : ranked.fibLocationGrade == FIB_LOCATION_PREFERRED ? 1 : 0 : 0
+            bool borderedQualifiedFibLocation = qualifyDeltaTiersByProfileFib and ranked.fibLocationGrade == FIB_LOCATION_QUALIFIED and (ranked.buySide ? ranked.price < ranked.fibMidpointPrice : ranked.price > ranked.fibMidpointPrice)
+            int fibZoneBorderWidth = qualifyDeltaTiersByProfileFib ? ranked.fibLocationGrade == FIB_LOCATION_VERY_STRONG ? 2 : ranked.fibLocationGrade == FIB_LOCATION_PREFERRED or borderedQualifiedFibLocation ? 1 : 0 : 0
             bool contradictoryFibLocation = qualifyDeltaTiersByProfileFib and ranked.fibLocationGrade == FIB_LOCATION_CONTRADICTORY
             color zoneColor = appearanceZoneColor(tierAppearance)
             color lineColor = contradictoryFibLocation ? fadeTierColor(appearanceLineColor(tierAppearance), FIB_LOCATION_WRONG_SIDE_LINE_TRANSPARENCY) : appearanceLineColor(tierAppearance)
@@ -1705,7 +1701,7 @@ renderRankedOutlierLevels(array<RankedOutlierLevel> rankedLevels, bool registrat
             string markerGlyph = qualifyDeltaTiersByProfileFib ? fibLocationMarkerGlyph(ranked.fibLocationGrade) : LEVEL_MARKER_GLYPH
             float fibMidpointPrice = qualifyDeltaTiersByProfileFib ? ranked.fibMidpointPrice : na
             bool roleReversed = showZoneRoleReversal and roleReversalZoneIsReversed(ranked.sourceName, ranked.profileStartTime, ranked.price, direction)
-            color zoneBorderColor = markerColor
+            color zoneBorderColor = borderedQualifiedFibLocation ? fadeTierColor(markerColor, FIB_LOCATION_QUALIFIED_BORDER_TRANSPARENCY) : markerColor
             if roleReversed
                 DeltaTierAppearance reversedRoleAppearance = deltaTierAppearance(not ranked.buySide, tier, ranked.sourceName)
                 zoneBorderColor := appearanceTextColor(reversedRoleAppearance)
