@@ -70,6 +70,7 @@ MERGED_LINE_FADE_PERCENT = 85
 LABEL_NAME_SEPARATOR = " | "
 HISTOGRAM_WIDTH_PERCENT = 25.0
 VALUE_AREA_PERCENT = 70.0
+HISTOGRAM_BATCH_POINT_LIMIT = 9900
 COMPOSITE_ALL_DISPLAYED = "All Displayed"
 COMPOSITE_FRAME_TRANSPARENCY = 70
 COMPOSITE_FRAME_PADDING_ROWS = 8.0
@@ -378,7 +379,6 @@ manualCompositeSource = input.string(revelioProfiles.OPTION_OFF, "Composite", op
 manualCompositeFrom = input.time(0, "From", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
 manualCompositeThrough = input.time(0, "Through", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE, tooltip="Reset points")
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Quick Filter: Prices
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -605,6 +605,15 @@ type RenderBudgetAnchor
     bool surfaceSweptLevels
     array<bool> histogramSelections
     array<bool> levelSelections
+
+type HistogramBatch
+    array<chart.point> outside
+    array<chart.point> inside
+    int outsideCount = 0
+    int insideCount = 0
+    int completedCount = 0
+    int rightTime = na
+    float spinePrice = na
 
 type FocusHitLevel
     revelioCore.Profile profile
@@ -1140,6 +1149,89 @@ pushHistogramPolyline(array<chart.point> points, color fillColor) =>
     if array.size(points) >= 3
         trackPolyline(polyline.new(points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(fillColor, 100), fill_color=fillColor))
 
+newHistogramBatch() =>
+    HistogramBatch.new(array.new<chart.point>(), array.new<chart.point>())
+
+histogramWidthMilliseconds(revelioCore.Profile profile) =>
+    int span = math.max(1, profile.histogramSpanMs > 0 ? profile.histogramSpanMs : profile.endTime - profile.startTime)
+    math.max(1, int(math.round(span * (profile.manualComposite ? HISTOGRAM_WIDTH_PERCENT * 2.0 : HISTOGRAM_WIDTH_PERCENT) * 0.01)))
+
+histogramRegionRows(revelioCore.Profile profile, int region) =>
+    int firstRow = region == 0 ? 0 : region == 1 ? profile.valueAreaLowRow : profile.valueAreaHighRow + 1
+    int lastRow = region == 0 ? profile.valueAreaLowRow - 1 : region == 1 ? profile.valueAreaHighRow : profile.rowCount - 1
+    [firstRow, lastRow]
+
+histogramRegionPoints(revelioCore.Profile profile, int firstRow, int lastRow) =>
+    array<chart.point> points = array.new<chart.point>()
+    float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
+    int width = histogramWidthMilliseconds(profile)
+    array.push(points, chart.point.from_time(profile.startTime, profile.priceLow + firstRow * rowHeight))
+    for row = firstRow to lastRow
+        int outerTime = profile.startTime + int(math.round(array.get(profile.rowVolumes, row) / profile.maxHistogramVolume * width))
+        array.push(points, chart.point.from_time(outerTime, profile.priceLow + (row + 0.5) * rowHeight))
+    array.push(points, chart.point.from_time(profile.startTime, profile.priceLow + (lastRow + 1) * rowHeight))
+    points
+
+flushHistogramRegion(HistogramBatch batch, bool insideVa, color fillColor, bool draw) =>
+    int count = insideVa ? batch.insideCount : batch.outsideCount
+    if count > 0
+        if draw
+            array<chart.point> points = insideVa ? batch.inside : batch.outside
+            pushHistogramPolyline(points, fillColor)
+            array.clear(points)
+        batch.completedCount += 1
+        if insideVa
+            batch.insideCount := 0
+        else
+            batch.outsideCount := 0
+    true
+
+flushHistogramBatch(HistogramBatch batch, SessionStyle style, bool draw) =>
+    flushHistogramRegion(batch, false, style.histogramOutsideColor, draw)
+    flushHistogramRegion(batch, true, style.histogramInsideColor, draw)
+    batch.rightTime := na
+    batch.spinePrice := na
+    true
+
+processHistogramBatch(HistogramBatch batch, revelioCore.Profile profile, SessionStyle style, bool draw) =>
+    bool overlaps = not na(batch.rightTime) and profile.startTime <= batch.rightTime
+    bool noCommonPrice = not na(batch.spinePrice) and (batch.spinePrice < profile.priceLow or batch.spinePrice > profile.priceHigh)
+    if overlaps or noCommonPrice
+        flushHistogramBatch(batch, style, draw)
+    batch.rightTime := profile.startTime + histogramWidthMilliseconds(profile)
+    batch.spinePrice := na(batch.spinePrice) ? profile.priceLow : batch.spinePrice
+    for region = 0 to 2
+        [firstRow, lastRow] = histogramRegionRows(profile, region)
+        if firstRow <= lastRow
+            bool insideVa = region == 1
+            int addedPoints = lastRow - firstRow + 6
+            int pointCount = insideVa ? batch.insideCount : batch.outsideCount
+            if pointCount + addedPoints > HISTOGRAM_BATCH_POINT_LIMIT
+                flushHistogramRegion(batch, insideVa, insideVa ? style.histogramInsideColor : style.histogramOutsideColor, draw)
+            if draw
+                array<chart.point> points = insideVa ? batch.inside : batch.outside
+                array<chart.point> regionPoints = histogramRegionPoints(profile, firstRow, lastRow)
+                // Retraced branches add no filled area; the shared spine stays inside every member's price range.
+                array.push(points, chart.point.from_time(profile.startTime, batch.spinePrice))
+                array.concat(points, regionPoints)
+                array.push(points, array.first(regionPoints))
+                array.push(points, chart.point.from_time(profile.startTime, batch.spinePrice))
+            if insideVa
+                batch.insideCount += addedPoints
+            else
+                batch.outsideCount += addedPoints
+    true
+
+renderHistogram(revelioCore.Profile profile, SessionStyle style, HistogramBatch batch, bool isLive) =>
+    if isLive
+        for region = 0 to 2
+            [firstRow, lastRow] = histogramRegionRows(profile, region)
+            if firstRow <= lastRow
+                pushHistogramPolyline(histogramRegionPoints(profile, firstRow, lastRow), region == 1 ? style.histogramInsideColor : style.histogramOutsideColor)
+    else
+        processHistogramBatch(batch, profile, style, true)
+    true
+
 // Later of two breach timestamps, ignoring na so an unswept level never wins.
 maxBreachTime(int a, int b) =>
     int result = na(a) ? b : na(b) ? a : int(math.max(a, b))
@@ -1164,10 +1256,6 @@ profileSweptVisibilityMask(revelioCore.AutoSweptState autoState, revelioCore.Pro
         else if profileSweptContinuationVisible(profile, isMostRecentCompleted, style.extensionMode, style.sweptKeepMs, focusSurfaced)
             visibilityMask := revelioCore.sweptLevelMask(profile)
     visibilityMask
-
-// The value area splits the silhouette into at most three runs (below/inside/above VA), one polyline each.
-histogramRunCount(revelioCore.Profile profile) =>
-    not profile.isValid ? 0 : (profile.valueAreaLowRow > 0 ? 1 : 0) + 1 + (profile.valueAreaHighRow < profile.rowCount - 1 ? 1 : 0)
 
 // An unplaced manual anchor falls back to price.
 focusAnchorPrice(string anchorMode, float manualPrice, bool manualPlaced, float currentPrice) =>
@@ -1239,20 +1327,21 @@ previousBudgetCandidate(array<revelioCore.Profile> profiles, int fromIndex, bool
                 break
     candidateIndex
 
-// Allocate a completed-profile drawing budget newest-first; registration order breaks ties.
-anchorHistogramCost(RenderBudgetAnchor anchor) =>
-    int cost = 0
+anchorHistogramCost(RenderBudgetAnchor anchor, bool selectedOnly) =>
+    HistogramBatch batch = newHistogramBatch()
     if anchor.histogramEnabled and array.size(anchor.profiles) > 0
         for profileIndex = 0 to array.size(anchor.profiles) - 1
-            if renderBudgetProfileAllowed(anchor, profileIndex)
-                cost += histogramRunCount(array.get(anchor.profiles, profileIndex))
-    cost
+            bool selected = selectedOnly ? array.get(anchor.histogramSelections, profileIndex) : renderBudgetProfileAllowed(anchor, profileIndex)
+            revelioCore.Profile profile = array.get(anchor.profiles, profileIndex)
+            if selected and profile.isValid and profile.maxHistogramVolume > 0
+                processHistogramBatch(batch, profile, anchor.style, false)
+    flushHistogramBatch(batch, anchor.style, false)
+    batch.completedCount
 
-totalHistogramCost(array<RenderBudgetAnchor> anchors) =>
+totalHistogramCost(array<RenderBudgetAnchor> anchors, bool selectedOnly) =>
     int cost = 0
-    if array.size(anchors) > 0
-        for anchorIndex = 0 to array.size(anchors) - 1
-            cost += anchorHistogramCost(array.get(anchors, anchorIndex))
+    for anchor in anchors
+        cost += anchorHistogramCost(anchor, selectedOnly)
     cost
 
 // The allocator drops oldest first, which would discard the closest focus profiles. Trim the farthest
@@ -1261,7 +1350,7 @@ trimFocusToBudget(array<RenderBudgetAnchor> anchors, int dailyAnchorCount, float
     int anchorLimit = math.min(dailyAnchorCount, array.size(anchors))
     if anchorLimit > 0
         bool trimming = true
-        while trimming and totalHistogramCost(anchors) > budget
+        while trimming and totalHistogramCost(anchors, false) > budget
             int farthestAnchorIndex = -1
             int farthestProfileIndex = -1
             float farthestDistance = na
@@ -1281,28 +1370,21 @@ trimFocusToBudget(array<RenderBudgetAnchor> anchors, int dailyAnchorCount, float
                 array.set(array.get(anchors, farthestAnchorIndex).focusSelections, farthestProfileIndex, false)
     true
 
-allocateProfileBudget(array<RenderBudgetAnchor> anchors, int budget, bool histogramBudget) =>
+allocateLevelBudget(array<RenderBudgetAnchor> anchors, int budget) =>
     int remaining = budget
     int anchorCount = array.size(anchors)
     for anchorIndex = 0 to anchorCount - 1
         RenderBudgetAnchor anchor = array.get(anchors, anchorIndex)
-        if histogramBudget
-            array.clear(anchor.histogramSelections)
-        else
-            array.clear(anchor.levelSelections)
+        array.clear(anchor.levelSelections)
         if array.size(anchor.profiles) > 0
             for profileIndex = 0 to array.size(anchor.profiles) - 1
-                if histogramBudget
-                    array.push(anchor.histogramSelections, false)
-                else
-                    array.push(anchor.levelSelections, false)
+                array.push(anchor.levelSelections, false)
     for priorityPass = 0 to 1
         bool manualCompositePass = priorityPass == 0
         array<int> candidateIndices = array.new<int>(anchorCount, -1)
         for anchorIndex = 0 to anchorCount - 1
             RenderBudgetAnchor anchor = array.get(anchors, anchorIndex)
-            bool enabled = histogramBudget ? anchor.histogramEnabled : anchor.levelsEnabled
-            int firstCandidate = enabled ? previousBudgetCandidate(anchor.profiles, array.size(anchor.profiles) - 1, manualCompositePass) : -1
+            int firstCandidate = anchor.levelsEnabled ? previousBudgetCandidate(anchor.profiles, array.size(anchor.profiles) - 1, manualCompositePass) : -1
             array.set(candidateIndices, anchorIndex, firstCandidate)
         bool exhausted = false
         while not exhausted
@@ -1322,17 +1404,42 @@ allocateProfileBudget(array<RenderBudgetAnchor> anchors, int budget, bool histog
                 revelioCore.Profile chosen = array.get(newestAnchor.profiles, newestProfileIndex)
                 bool isMostRecentCompleted = newestProfileIndex == array.size(newestAnchor.profiles) - 1
                 bool profileAllowed = renderBudgetProfileAllowed(newestAnchor, newestProfileIndex)
-                int cost = not profileAllowed ? 0 : histogramBudget ? histogramRunCount(chosen) : profileLineCount(chosen, newestAnchor, isMostRecentCompleted, anchorSurfacesSweptLevels(newestAnchor, newestProfileIndex))
+                int cost = not profileAllowed ? 0 : profileLineCount(chosen, newestAnchor, isMostRecentCompleted, anchorSurfacesSweptLevels(newestAnchor, newestProfileIndex))
                 if cost > remaining
                     exhausted := true
                 else
                     if profileAllowed
-                        if histogramBudget
-                            array.set(newestAnchor.histogramSelections, newestProfileIndex, true)
-                        else
-                            array.set(newestAnchor.levelSelections, newestProfileIndex, true)
+                        array.set(newestAnchor.levelSelections, newestProfileIndex, true)
                     remaining -= cost
                     array.set(candidateIndices, newestAnchorIndex, previousBudgetCandidate(newestAnchor.profiles, newestProfileIndex - 1, manualCompositePass))
+    true
+
+allocateHistogramBudget(array<RenderBudgetAnchor> anchors, int budget) =>
+    for anchor in anchors
+        array.clear(anchor.histogramSelections)
+        if array.size(anchor.profiles) > 0
+            for profileIndex = 0 to array.size(anchor.profiles) - 1
+                array.push(anchor.histogramSelections, anchor.histogramEnabled and renderBudgetProfileAllowed(anchor, profileIndex))
+    while totalHistogramCost(anchors, true) > budget
+        int oldestAnchor = -1
+        int oldestProfile = -1
+        int oldestTime = na
+        for priorityPass = 0 to 1
+            bool manualPass = priorityPass == 1
+            for anchorIndex = 0 to array.size(anchors) - 1
+                RenderBudgetAnchor anchor = array.get(anchors, anchorIndex)
+                if array.size(anchor.profiles) > 0
+                    for profileIndex = 0 to array.size(anchor.profiles) - 1
+                        revelioCore.Profile profile = array.get(anchor.profiles, profileIndex)
+                        if array.get(anchor.histogramSelections, profileIndex) and profile.manualComposite == manualPass and (na(oldestTime) or profile.endTime < oldestTime)
+                            oldestAnchor := anchorIndex
+                            oldestProfile := profileIndex
+                            oldestTime := profile.endTime
+            if oldestAnchor >= 0
+                break
+        if oldestAnchor < 0
+            break
+        array.set(array.get(anchors, oldestAnchor).histogramSelections, oldestProfile, false)
     true
 
 profileLevelBreachTime(revelioCore.Profile profile, string levelName) =>
@@ -1388,41 +1495,11 @@ autoSweptLevelAuditSuffix(revelioCore.AutoSweptState autoState, revelioCore.Prof
     bool selectedOnly = autoSweptLines and autoSweptAudit and sweptDenote and revelioCore.autoSweptCurrentSelected(autoState, profile.startTime, profile.endTime, level) and not revelioCore.autoSweptMaskContains(protectedVisibilityMask, level)
     selectedOnly ? AUTO_SWEPT_AUDIT_SUFFIX : ""
 
-renderProfile(revelioCore.Profile profile, RenderBudgetAnchor anchor, bool isMostRecentCompleted, bool focusSurfaced, bool isLive, bool histogramAllowed, bool levelsAllowed, bool touchLabelsActive, map<string, bool> archivedLevelHitKeys, map<string, bool> renderedLevelHitKeys) =>
+renderProfile(revelioCore.Profile profile, RenderBudgetAnchor anchor, bool isMostRecentCompleted, bool focusSurfaced, bool isLive, bool histogramAllowed, bool levelsAllowed, bool touchLabelsActive, map<string, bool> archivedLevelHitKeys, map<string, bool> renderedLevelHitKeys, HistogramBatch batch) =>
     if profile.isValid
         SessionStyle style = anchor.style
-        float priceRange = profile.priceHigh - profile.priceLow
-
         if style.showHistogram and histogramAllowed and profile.maxHistogramVolume > 0
-            int rowCount = profile.rowCount
-            float rowHeight = priceRange / rowCount
-            int baselineTime = profile.startTime
-            int profileMilliseconds = math.max(1, profile.histogramSpanMs > 0 ? profile.histogramSpanMs : profile.endTime - profile.startTime)
-            float histogramWidthPercent = profile.manualComposite ? HISTOGRAM_WIDTH_PERCENT * 2.0 : HISTOGRAM_WIDTH_PERCENT
-            int histogramWidthMilliseconds = math.max(1, int(math.round(profileMilliseconds * histogramWidthPercent * 0.01)))
-            array<chart.point> points = array.new<chart.point>()
-            bool runStarted = false
-            bool runInsideVa = false
-            for rowIndex = 0 to rowCount - 1
-                bool insideVa = rowIndex >= profile.valueAreaLowRow and rowIndex <= profile.valueAreaHighRow
-                float rowBottom = profile.priceLow + rowIndex * rowHeight
-                float rowVolume = array.get(profile.rowVolumes, rowIndex)
-                int widthMilliseconds = int(math.round(rowVolume / profile.maxHistogramVolume * histogramWidthMilliseconds))
-                int outerTime = baselineTime + widthMilliseconds
-                // VA membership flipped: close this run and start a new one at the same boundary.
-                if runStarted and insideVa != runInsideVa
-                    array.push(points, chart.point.from_time(baselineTime, rowBottom))
-                    pushHistogramPolyline(points, runInsideVa ? style.histogramInsideColor : style.histogramOutsideColor)
-                    points := array.new<chart.point>()
-                    runStarted := false
-                if not runStarted
-                    runStarted := true
-                    runInsideVa := insideVa
-                    array.push(points, chart.point.from_time(baselineTime, rowBottom))
-                array.push(points, chart.point.from_time(outerTime, rowBottom + rowHeight / 2))
-                if rowIndex == rowCount - 1
-                    array.push(points, chart.point.from_time(baselineTime, rowBottom + rowHeight))
-                    pushHistogramPolyline(points, runInsideVa ? style.histogramInsideColor : style.histogramOutsideColor)
+            renderHistogram(profile, style, batch, isLive)
 
         if style.showSessionBox
             trackBox(box.new(left=profile.startTime, top=profile.priceHigh, right=profile.endTime, bottom=profile.priceLow, xloc=xloc.bar_time, border_width=0, bgcolor=style.sessionBoxColor))
@@ -1811,6 +1888,7 @@ registerFocusedLevelHitSourceProfiles(map<string, bool> retainedSourceProfiles, 
     true
 
 renderAnchor(RenderBudgetAnchor anchor, revelioCore.Profile liveProfile, bool showDeveloping, bool touchLabelsActive, map<string, bool> archivedLevelHitKeys, map<string, bool> renderedLevelHitKeys) =>
+    HistogramBatch batch = newHistogramBatch()
     if anchor.levelsEnabled
         int profileCount = array.size(anchor.profiles)
         if profileCount > 0
@@ -1820,9 +1898,10 @@ renderAnchor(RenderBudgetAnchor anchor, revelioCore.Profile liveProfile, bool sh
                     bool levelsAllowed = profileIndex < array.size(anchor.levelSelections) and array.get(anchor.levelSelections, profileIndex)
                     // Focused profiles draw whole or not at all.
                     bool focusWholeProfile = not anchor.restrictToFocus or not anchor.histogramEnabled or histogramAllowed
-                    renderProfile(array.get(anchor.profiles, profileIndex), anchor, profileIndex == profileCount - 1, anchorSurfacesSweptLevels(anchor, profileIndex), false, histogramAllowed, levelsAllowed and focusWholeProfile, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys)
+                    renderProfile(array.get(anchor.profiles, profileIndex), anchor, profileIndex == profileCount - 1, anchorSurfacesSweptLevels(anchor, profileIndex), false, histogramAllowed, levelsAllowed and focusWholeProfile, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys, batch)
+        flushHistogramBatch(batch, anchor.style, true)
         if showDeveloping and not na(liveProfile)
-            renderProfile(liveProfile, anchor, false, false, true, true, true, false, archivedLevelHitKeys, renderedLevelHitKeys)
+            renderProfile(liveProfile, anchor, false, false, true, true, true, false, archivedLevelHitKeys, renderedLevelHitKeys, batch)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATE
@@ -2592,10 +2671,10 @@ if barstate.islast
     revelioInteractions.PresentationConfig interactionConfig = revelioInteractions.PresentationConfig.new(labelMergeDistancePercent, syminfo.mintick, INDICATOR_MAX_LABELS, LABEL_NAME_SEPARATOR, BRAND_BULLET, MERGED_LINE_FADE_PERCENT, ANCHOR_REMINDER_MIN_SPACING_MS, ANCHOR_REMINDER_MAX_PER_LEVEL, SWEPT_REMINDER_BASE_MS, SWEPT_REMINDER_MAX_PER_LINE, LABEL_VAH, LABEL_VAL, LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL, LEVEL_HIT_ARCHIVED_SYMBOL, LEVEL_HIT_FIRST_SYMBOL, LEVEL_HIT_FROM_ABOVE_SYMBOL, LEVEL_HIT_FROM_BELOW_SYMBOL, LEVEL_HIT_FROM_ABOVE_TEXT, LEVEL_HIT_FROM_BELOW_TEXT, revelioProfiles.NY_TIMEZONE, time, bar_index)
     revelioInteractions.HitTracePolicy interactionHitTracePolicy = revelioInteractions.HitTracePolicy.new(levelHitTracePresentationActive, levelHitHistory == LEVEL_HIT_HISTORY_CURRENT_WINDOW, levelHitRetentionDays(), levelHitReferenceDateSerial(), isTwentyFourSevenAsset, revelioProfiles.UTC_TIMEZONE, revelioProfiles.MS_PER_DAY, MAX_LEVEL_HIT_TRADING_DAY_SCAN, MAX_LEVEL_HIT_WEEKDAY_RETENTION_DAYS)
     revelioInteractions.pruneLevelHitEvents(levelHitEvents, retainedLevelHitSourceProfiles, interactionConfig, interactionHitTracePolicy)
-    allocateProfileBudget(renderBudgetAnchors, INDICATOR_MAX_POLYLINES - liveHistogramReserve, true)
+    allocateHistogramBudget(renderBudgetAnchors, INDICATOR_MAX_POLYLINES - liveHistogramReserve)
     int liveLineReserve = liveProfileLineCount(rthLiveProfile, rthFilterEnabled and rthLiveVisible, array.get(renderBudgetAnchors, 0)) + liveProfileLineCount(globexLiveProfile, globexFilterEnabled and globexLiveVisible, array.get(renderBudgetAnchors, 1)) + liveProfileLineCount(weeklyLiveProfile, weeklyFilterEnabled and weeklyLiveVisible, array.get(renderBudgetAnchors, 2)) + liveProfileLineCount(monthlyLiveProfile, monthlyFilterEnabled and monthlyLiveVisible, array.get(renderBudgetAnchors, 3)) + liveProfileLineCount(quarterlyLiveProfile, quarterlyFilterEnabled and quarterlyShowDeveloping, array.get(renderBudgetAnchors, 4))
     int completedLineBudget = math.max(0, INDICATOR_MAX_LINES - array.size(drawnLines) - liveLineReserve)
-    allocateProfileBudget(renderBudgetAnchors, completedLineBudget, false)
+    allocateLevelBudget(renderBudgetAnchors, completedLineBudget)
     revelioInteractions.registerArchivedLevelHitKeys(levelHitEvents, levelHitPresentations, archivedLevelHitKeys, interactionConfig)
     renderAnchor(array.get(renderBudgetAnchors, 0), rthLiveProfile, rthLiveVisible, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys)
     renderAnchor(array.get(renderBudgetAnchors, 1), globexLiveProfile, globexLiveVisible, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys)
