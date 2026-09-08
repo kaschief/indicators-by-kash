@@ -366,17 +366,17 @@ includeSundayEvening = input.bool(false, "Include Sunday Evening", group=GROUP_T
 
 // ─── Daily ───
 showDaily = input.bool(true, GROUP_DAILY, group=GROUP_DAILY, inline='daily')
-dailyShowLast = input.int(5, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_DAILY, group=GROUP_DAILY, inline='daily')
+dailyShowLast = input.int(20, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_DAILY, group=GROUP_DAILY, inline='daily')
 enableDailyLiquidityDepth = input.bool(false, UI_LD, group=GROUP_DAILY, inline='daily', tooltip="LD valid on 15m–1H charts.")
 
 // ─── Weekly ───
 showWeekly = input.bool(true, GROUP_WEEKLY, group=GROUP_WEEKLY, inline='weekly')
-weeklyShowLast = input.int(1, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_WEEKLY, group=GROUP_WEEKLY, inline='weekly')
+weeklyShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_WEEKLY, group=GROUP_WEEKLY, inline='weekly')
 enableWeeklyLiquidityDepth = input.bool(false, UI_LD, group=GROUP_WEEKLY, inline='weekly', tooltip="LD valid on 4H–12H charts.")
 
 // ─── Monthly ───
 showMonthly = input.bool(true, GROUP_MONTHLY, group=GROUP_MONTHLY, inline='monthly')
-monthlyShowLast = input.int(1, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_MONTHLY, group=GROUP_MONTHLY, inline='monthly')
+monthlyShowLast = input.int(10, UI_SHOW_LAST, minval=SHOW_LAST_MIN, maxval=SHOW_LAST_MAX_MONTHLY, group=GROUP_MONTHLY, inline='monthly')
 enableMonthlyLiquidityDepth = input.bool(false, UI_LD, group=GROUP_MONTHLY, inline='monthly', tooltip="LD valid on 12H–1W charts.")
 
 detectedAsset = get_detected_asset_name()
@@ -712,6 +712,16 @@ pool_get_low_end_index(pool, index, fallback_index) =>
     low_breached = array.get(pool.low_breached, index)
     low_breach_index = array.get(pool.low_breach_indices, index)
     low_breached and not na(low_breach_index) ? low_breach_index : fallback_index
+
+pool_track_extremes(LiquidityPool pool, float bar_high, float bar_low, int bar_time, int candle_index, bool reset) =>
+    if reset or bar_high > pool.current_high
+        pool.current_high := bar_high
+        pool.current_high_time := bar_time
+        pool.current_high_index := candle_index
+    if reset or bar_low < pool.current_low
+        pool.current_low := bar_low
+        pool.current_low_time := bar_time
+        pool.current_low_index := candle_index
 
 pool_store_session(pool) =>
     if not na(pool.current_high)
@@ -1138,23 +1148,11 @@ track_intraday_session(pool, sessionString, skipSunday) =>
 
     if not skipSunday
         if sessionJustStarted
-            pool.current_high := high
-            pool.current_low := low
-            pool.current_high_time := time
-            pool.current_low_time := time
-            pool.current_high_index := bar_index
-            pool.current_low_index := bar_index
+            pool_track_extremes(pool, high, low, time, bar_index, true)
             pool.current_session_start_time := time
 
         if inSession
-            if high > pool.current_high
-                pool.current_high := high
-                pool.current_high_time := time
-                pool.current_high_index := bar_index
-            if low < pool.current_low
-                pool.current_low := low
-                pool.current_low_time := time
-                pool.current_low_index := bar_index
+            pool_track_extremes(pool, high, low, time, bar_index, false)
 
 track_range_session(rangeBox, sessionString) =>
     inSession = not na(time(timeframe.period, sessionString, NY_TIMEZONE))
@@ -1214,12 +1212,6 @@ is_new_daily_bar = use_exchange_session ? is_new_exchange_daily_session() : is_n
 is_new_weekly_bar = ta.change(weekofyear(time, NY_TIMEZONE)) != 0
 is_new_monthly_bar = ta.change(month(time, NY_TIMEZONE)) != 0
 
-// Standard charts use their visible feed; synthetic charts request standard OHLC.
-htf_ticker_id = chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid)
-[sec_daily_high, sec_daily_low] = request.security(htf_ticker_id, "D", [high, low])
-[sec_weekly_high, sec_weekly_low] = request.security(htf_ticker_id, "W", [high, low])
-[sec_monthly_high, sec_monthly_low] = request.security(htf_ticker_id, "M", [high, low])
-
 // Trading week starts Sunday at 18:00 ET.
 is_new_trading_week = false
 if not is247Asset  // Only for traditional assets
@@ -1259,105 +1251,34 @@ skip_sunday_liquidity = should_skip_sunday_liquidity(time)
 skip_sunday_overnight = false  // Overnight never skips Sunday - session starts at 18:00
 
 if barstate.isfirst
-    daily_pool.current_high := high
-    daily_pool.current_low := low
-    daily_pool.current_high_time := time
-    daily_pool.current_low_time := time
-    daily_pool.current_high_index := bar_index
-    daily_pool.current_low_index := bar_index
-
-    weekly_pool.current_high := high
-    weekly_pool.current_low := low
-    weekly_pool.current_high_time := time
-    weekly_pool.current_low_time := time
-    weekly_pool.current_high_index := bar_index
-    weekly_pool.current_low_index := bar_index
-
-    monthly_pool.current_high := high
-    monthly_pool.current_low := low
-    monthly_pool.current_high_time := time
-    monthly_pool.current_low_time := time
-    monthly_pool.current_high_index := bar_index
-    monthly_pool.current_low_index := bar_index
+    pool_track_extremes(daily_pool, high, low, time, bar_index, true)
+    pool_track_extremes(weekly_pool, high, low, time, bar_index, true)
+    pool_track_extremes(monthly_pool, high, low, time, bar_index, true)
 else
     if is_new_daily_bar
         // Calendar mode can fire again after the Sunday continuation.
         coming_from_sunday_evening = not use_exchange_session and timeframe.in_seconds() < 86400 and not is247Asset and dayofweek(time[1], NY_TIMEZONE) == dayofweek.sunday and hour(time[1], NY_TIMEZONE) >= EXCHANGE_SESSION_START_HOUR
         if not coming_from_sunday_evening
-            if (use_exchange_session or is247Asset) and not na(sec_daily_high[1]) and not na(sec_daily_low[1])
-                daily_pool.current_high := sec_daily_high[1]
-                daily_pool.current_low := sec_daily_low[1]
             pool_store_session(daily_pool)
 
         if timeframe.in_seconds() >= 86400 or not skip_sunday_liquidity
-            daily_pool.current_high := high
-            daily_pool.current_low := low
-            daily_pool.current_high_time := time
-            daily_pool.current_low_time := time
-            daily_pool.current_high_index := bar_index
-            daily_pool.current_low_index := bar_index
-    else if not skip_sunday_liquidity
-        if high > daily_pool.current_high
-            daily_pool.current_high := high
-            daily_pool.current_high_time := time
-            daily_pool.current_high_index := bar_index
-        if low < daily_pool.current_low
-            daily_pool.current_low := low
-            daily_pool.current_low_time := time
-            daily_pool.current_low_index := bar_index
+            pool_track_extremes(daily_pool, high, low, time, bar_index, true)
     else
-        if high > daily_pool.current_high
-            daily_pool.current_high := high
-            daily_pool.current_high_time := time
-            daily_pool.current_high_index := bar_index
-        if low < daily_pool.current_low
-            daily_pool.current_low := low
-            daily_pool.current_low_time := time
-            daily_pool.current_low_index := bar_index
+        pool_track_extremes(daily_pool, high, low, time, bar_index, false)
 
     // Weekly
     weekly_reset_trigger = includeSundayEvening ? is_new_trading_week : is_new_weekly_bar
     if weekly_reset_trigger
-        if not na(sec_weekly_high[1]) and not na(sec_weekly_low[1])
-            weekly_pool.current_high := sec_weekly_high[1]
-            weekly_pool.current_low := sec_weekly_low[1]
         pool_store_session(weekly_pool)
-        weekly_pool.current_high := high
-        weekly_pool.current_low := low
-        weekly_pool.current_high_time := time
-        weekly_pool.current_low_time := time
-        weekly_pool.current_high_index := bar_index
-        weekly_pool.current_low_index := bar_index
+        pool_track_extremes(weekly_pool, high, low, time, bar_index, true)
     else
-        if high > weekly_pool.current_high
-            weekly_pool.current_high := high
-            weekly_pool.current_high_time := time
-            weekly_pool.current_high_index := bar_index
-        if low < weekly_pool.current_low
-            weekly_pool.current_low := low
-            weekly_pool.current_low_time := time
-            weekly_pool.current_low_index := bar_index
+        pool_track_extremes(weekly_pool, high, low, time, bar_index, false)
 
     if is_new_monthly_bar
-        if not na(sec_monthly_high[1]) and not na(sec_monthly_low[1])
-            monthly_pool.current_high := sec_monthly_high[1]
-            monthly_pool.current_low := sec_monthly_low[1]
         pool_store_session(monthly_pool)
-        monthly_pool.current_high := high
-        monthly_pool.current_low := low
-        monthly_pool.current_high_time := time
-        monthly_pool.current_low_time := time
-        monthly_pool.current_high_index := bar_index
-        monthly_pool.current_low_index := bar_index
+        pool_track_extremes(monthly_pool, high, low, time, bar_index, true)
     else
-        if high > monthly_pool.current_high
-            monthly_pool.current_high := high
-            monthly_pool.current_high_time := time
-            monthly_pool.current_high_index := bar_index
-        if low < monthly_pool.current_low
-            monthly_pool.current_low := low
-            monthly_pool.current_low_time := time
-            monthly_pool.current_low_index := bar_index
+        pool_track_extremes(monthly_pool, high, low, time, bar_index, false)
 // Premarket skips Sunday evening; Overnight includes the Sunday reopen.
 if timeframe.in_seconds() <= INTRADAY_SESSION_MAX_TIMEFRAME
     if showPremarketFiltered or showPremarketBackgroundFiltered
@@ -1394,10 +1315,10 @@ if not use_exchange_session and not is247Asset and timeframe.in_seconds() < 8640
             daily_pool.current_low_index := bar_index
 
         // Keep Friday's levels authoritative through the continuation.
-        daily_pool.current_high := last_high
+        daily_pool.current_high := array.get(daily_pool.highs, last_index)
         daily_pool.current_high_time := array.get(daily_pool.high_times, last_index)
         daily_pool.current_high_index := array.get(daily_pool.high_indices, last_index)
-        daily_pool.current_low := last_low
+        daily_pool.current_low := array.get(daily_pool.lows, last_index)
         daily_pool.current_low_time := array.get(daily_pool.low_times, last_index)
         daily_pool.current_low_index := array.get(daily_pool.low_indices, last_index)
 
