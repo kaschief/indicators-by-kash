@@ -30,6 +30,23 @@ indicator("deviations • development", overlay=true, ...)
 indicator("deviations •", overlay=true, ...)
 ```
 
+## Pine Identifier Safety — Required Before Every Handoff
+
+Never use Pine reserved words, type keywords, or built-in namespace names as custom identifiers. This includes variables (typed or inferred), function/method names and parameters, tuple/loop bindings, UDT/enum names and fields, and import aliases. Examples to avoid: `session`, `text`, `range`, `line`, `box`, `label`, `table`, `position`, `ta`, and `strategy`. Use descriptive names such as `sessionState`, `labelText`, `rangeState`, and `placementRatio`.
+
+This repository deliberately prohibits namespace shadowing even where Pine permits a scalar, type, field, or method with that name. Legitimate built-in references and call arguments such as `session.ismarket`, `text.align_left`, `text=`, and `color=` remain valid.
+
+After every Pine source edit, and before delivering code to the user, run both commands for **every touched Pine file**, including libraries:
+
+```sh
+node scripts/check-pine-identifiers.mjs <file.pine> [more-files.pine ...]
+node scripts/check-pine-indicator-titles.mjs <file.pine> [more-files.pine ...]
+```
+
+Any failure blocks handoff. Fix the declaration and every reference; do not suppress the finding or weaken the name list to pass.
+
+When changing the checker, run `node --test scripts/check-pine-identifiers.test.mjs`. Research newly introduced Pine namespaces in TradingView's official documentation and update the checker and regression tests together. See [Pine identifier rules and sources](scripts/PINE-IDENTIFIER-RULES.md). This declaration check does not establish TradingView compilation, Replay, or visual correctness.
+
 ## Never Take Shortcuts - Always Refactor Properly
 
 **CORE PRINCIPLE: Be an expert developer who values clean code. NEVER take shortcuts.**
