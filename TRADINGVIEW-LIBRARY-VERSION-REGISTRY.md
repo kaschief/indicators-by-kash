@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-07
+Updated: 2026-09-09
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -104,6 +104,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensProfileLibrary | 4 | Published · tested · approved | Extracts pure row-strength, LVN/cliff, outlier peak, clustering, ranking, and selected-row-mask analytics | `d0fb6868335b8322a436443ee5ec76bba66688b4b5d240be0099e868702f1239` |
 | LegilimensProfileOrchestrationLibrary | 1 | Published · host compile missing function reference | Extracts anchor state, boundary calculations, profile retention, and selection lifecycle into compact orchestration types | `6580a8976ad93eb9c5d5531a8b92522de4277b9c6ef99092cfb8e0e0ee76b37b` |
 | LegilimensProfileOrchestrationLibrary | 2 | Published · host compiled · runtime validation pending | Exports the NY cutoff boundary used by the reorganized host | `560b8ae0a37c38f15eb033ccef2eb7a6926cb55c52b5d85c47493158ad32b68e` |
+| LegilimensProfileOrchestrationLibrary | 3 | Discarded before publication | Unpublished maturity extraction withdrawn at user request on 2026-09-09; maturity feature subsequently removed at user request; version remains retired | `d967382236ede8896bc6d5482a1450a058e4f5a8bf4cc453721cd5732f9f288b` |
 
 ## Publication-instruction log
 
@@ -193,12 +194,13 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-07-02 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the revised secondary-label source privately as `/27`, then compile the canonical host; verify Merged Line Labels On/Off, size 6, Shorten Labels On/Off, unchanged combined labels and merging, swept lines, time/Range charts, Replay, and label pressure | `PUBLISHED_USER_CONFIRMED` |
 | PUB-2026-09-07-03 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the adjustable secondary-label fade source privately as `/27`, then compile the canonical host; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged combined labels and merging on time and Range charts | `WITHDRAWN_ALREADY_PUBLISHED` |
 | PUB-2026-09-07-04 | 2026-09-07 | RevelioInteractionsLibrary | 28 | Publish the adjustable secondary-label fade source privately as `/28`, then compile the canonical host importing `/28`; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged merged labels on time and Range charts | `PUBLISHED_DEPLOYED_USER_CONFIRMED` |
+| PUB-2026-09-09-01 | 2026-09-09 | LegilimensProfileOrchestrationLibrary | 3 | Publish the extracted maturity engine privately as `/3` from `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine`, then compile the Legilimens development host importing Profile `/4` and Orchestration `/3`; verify all seven developing sessions, Off/Auto/On, coverage gaps, sticky visibility, Extended NY opening, Replay/reload, time and Range charts, and loading performance | `WITHDRAWN_USER_REQUESTED_HOST_ONLY` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
 - Published chain: Core `/11`, Gaps `/12`, Interactions `/28`, Profile Orchestration `/9`.
-- Pending: none. Host-only finalization uses size 6 and 65% additional fading directly and removes both tuning inputs; recompile the host.
+- Revelio pending: none. Host-only finalization uses size 6 and 65% additional fading directly and removes both tuning inputs; recompile the host.
 - Discarded: Interactions `/20`; it remains permanently retired.
 - Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/11`, Gaps `/12`, Interactions `/28`, and Profile Orchestration `/9`.
 - Interactions `/27`: user confirmed publication of the preceding fixed-fade secondary-label source. `/28` was subsequently tested and the user selected size 6 and 65% fading; its library source is unchanged by the host-only UI cleanup.
@@ -208,11 +210,23 @@ Entries before this registry was created are reconstructed from the task history
 - Current Quarterly performance change: the deep Quarterly calculation runs in 60-minute outer batches instead of 15-minute batches while retaining every underlying 5-minute price and volume sample. Developing Quarterly results can therefore refresh once per hour; completed profile levels are intended to remain unchanged.
 - Legilimens: Profile Library `/4` is published, tested, and approved. Development imports `/4`.
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
-- Legilimens: Profile Orchestration Library `/2` is published and development imports `/2`. The reorganized host compiles live against Profile `/4` and Orchestration `/2`; runtime and visual validation remain pending.
+- Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
+- Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
+- Legilimens current handoff: compile the host against existing Profile `/4` and Orchestration `/2`; no library publication is needed. Automatic maturity controls, state, calculations, and coverage-only sample tracking are removed. Original developing-content checkboxes are restored, defaulting off. Centered midpoint labels use lowercase session names followed by `0.5`, size 5, and fixed 45% text transparency with no transparency input. Host compile, Replay and visual validation remain pending.
 
 ## Pending release notes
 
-None. No new library version is required for the host-only removal of Size and Fade controls.
+None. The user withdrew the unpublished Legilimens `/3` extraction. Do not publish it.
+
+Legilimens host testing uses `midnightpaws87/LegilimensProfileLibrary/4` and `midnightpaws87/LegilimensProfileOrchestrationLibrary/2`.
+
+Copy-ready host notes:
+
+```text
+Removes automatic developing-profile maturity and restores manual session visibility checkboxes. Adds centered lowercase session midpoint labels, such as globex 0.5, at size 5 with fixed 45% text transparency.
+```
+
+Test Globex and the other six developing-session checkboxes on NQ 5-minute and 180R/360R charts. With each checkbox off, contents stay hidden until completion; with it on, developing contents appear immediately. Check the optional inner frames/titles, session boundaries, completed profiles, and centered midpoint text. Compare reload/Replay and confirm no Auto or text-transparency control remains.
 
 ## Current host validation
 
