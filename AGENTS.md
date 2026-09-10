@@ -1,3 +1,11 @@
+# Single Checkout Workflow — No Worktrees
+
+- Always work in the project's existing primary local checkout (the user's home checkout), using one shared local workspace.
+- Never create or use additional Git worktrees, isolated checkouts, clones, or containers for development unless the user explicitly reverses this rule.
+- Create any requested new Codex task with the local environment targeting the existing project checkout. A new task or a request to start from a commit does not authorize a worktree.
+- If a task starts in a worktree, stop development there and transfer its changes and task back to the home checkout, preserving all existing work before continuing.
+- For indicators-by-kash, the home checkout is `/Users/kaschief/Code/indicators-by-kash`.
+
 # Code Quality Rules
 
 ## Development Naming Rule
