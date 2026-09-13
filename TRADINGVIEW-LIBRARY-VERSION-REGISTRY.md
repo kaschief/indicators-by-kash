@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-09
+Updated: 2026-09-13
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -27,6 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 9 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 1 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -105,6 +106,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensProfileOrchestrationLibrary | 1 | Published · host compile missing function reference | Extracts anchor state, boundary calculations, profile retention, and selection lifecycle into compact orchestration types | `6580a8976ad93eb9c5d5531a8b92522de4277b9c6ef99092cfb8e0e0ee76b37b` |
 | LegilimensProfileOrchestrationLibrary | 2 | Published · host compiled · runtime validation pending | Exports the NY cutoff boundary used by the reorganized host | `560b8ae0a37c38f15eb033ccef2eb7a6926cb55c52b5d85c47493158ad32b68e` |
 | LegilimensProfileOrchestrationLibrary | 3 | Discarded before publication | Unpublished maturity extraction withdrawn at user request on 2026-09-09; maturity feature subsequently removed at user request; version remains retired | `d967382236ede8896bc6d5482a1450a058e4f5a8bf4cc453721cd5732f9f288b` |
+| LegilimensPresentationLibrary | 1 | Published · host compiled · user confirmed working | Extracts presentation, drawing, object-budget, merging, mitigation, and role-reversal ownership from the Legilimens host without intended behavior changes | `28219d081d6ec34fd82de9c481f09553db5ec50e0c69d00d2e558dd76727de11` |
 
 ## Publication-instruction log
 
@@ -195,6 +197,7 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-07-03 | 2026-09-07 | RevelioInteractionsLibrary | 27 | Publish the adjustable secondary-label fade source privately as `/27`, then compile the canonical host; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged combined labels and merging on time and Range charts | `WITHDRAWN_ALREADY_PUBLISHED` |
 | PUB-2026-09-07-04 | 2026-09-07 | RevelioInteractionsLibrary | 28 | Publish the adjustable secondary-label fade source privately as `/28`, then compile the canonical host importing `/28`; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged merged labels on time and Range charts | `PUBLISHED_DEPLOYED_USER_CONFIRMED` |
 | PUB-2026-09-09-01 | 2026-09-09 | LegilimensProfileOrchestrationLibrary | 3 | Publish the extracted maturity engine privately as `/3` from `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine`, then compile the Legilimens development host importing Profile `/4` and Orchestration `/3`; verify all seven developing sessions, Off/Auto/On, coverage gaps, sticky visibility, Extended NY opening, Replay/reload, time and Range charts, and loading performance | `WITHDRAWN_USER_REQUESTED_HOST_ONLY` |
+| PUB-2026-09-13-01 | 2026-09-13 | LegilimensPresentationLibrary | 1 | Publish the extracted Legilimens presentation and interactions source privately as `/1`, then compile the development host against Profile `/4`, Orchestration `/2`, and Presentation `/1`; verify every profile mode, developing/history behavior, Delta/FIB/LVN rendering, merging, mitigation, role reversal, object budgets, Replay, realtime, standard time charts, and Range charts | `PUBLISHED_HOST_LOADED_USER_CONFIRMED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -212,13 +215,11 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
 - Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
 - Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
-- Legilimens current handoff: compile the host against existing Profile `/4` and Orchestration `/2`; no library publication is needed. Automatic maturity controls, state, calculations, and coverage-only sample tracking are removed. Original developing-content checkboxes are restored, defaulting off. Centered midpoint labels use lowercase session names followed by `0.5`, size 5, and fixed 45% text transparency with no transparency input. Host compile, Replay and visual validation remain pending.
+- Legilimens current handoff: Presentation `/1` is published and the host compiles against Profile `/4`, Orchestration `/2`, and Presentation `/1`; the user confirmed it works. The host retains inputs, requests, sampling, anchor lifecycle, chart visibility, and execution sequencing; the presentation library owns drawings, object budgeting, merging, mitigation, and role reversal. Broader Replay, realtime, Range-chart, object-budget, interaction, performance, and visual-parity coverage remains separately unconfirmed.
 
 ## Pending release notes
 
-None. The user withdrew the unpublished Legilimens `/3` extraction. Do not publish it.
-
-Legilimens host testing uses `midnightpaws87/LegilimensProfileLibrary/4` and `midnightpaws87/LegilimensProfileOrchestrationLibrary/2`.
+None. Legilimens Presentation `/1` is published and host-loaded.
 
 Copy-ready host notes:
 
