@@ -144,3 +144,24 @@ test('timeframe, history state and drawing budgets share centralized gates', () 
   assert.match(functionBody('allocate_history_liquidity_depth_caps'), /LIQUIDITY_DEPTH_LABELS_PER_SESSION/);
   assert.match(source, /allocate_history_liquidity_depth_caps\(availableHistoryLinesBeforeDepth, availableHistoryLabelsBeforeDepth/);
 });
+
+test('scheduled profile requests scale to configured lookback and history', () => {
+  const body = functionBody('scheduled_profile_request_bars');
+  assert.match(body, /sampleLookback \+ historyLimit \+ SCHEDULED_PROFILE_REQUEST_SESSION_BUFFER/);
+  assert.match(body, /math\.min\(SCHEDULED_PROFILE_REQUEST_BARS, requestedSourceBars\)/);
+  assert.match(body, /DISABLED_SCHEDULED_PROFILE_REQUEST_BARS/);
+  assert.equal(source.match(/calc_bars_count=scheduled_profile_request_bars\([^\n]+\)/g)?.length, 6);
+});
+
+test('history budget allocators stop at the deepest requested layer', () => {
+  assert.match(functionBody('max_requested_history_layers'), /math\.min\(historyLimit, requestedLayers\)/);
+  assert.match(functionBody('allocate_history_zone_caps'), /for layer = 1 to requestedLayers/);
+  assert.doesNotMatch(functionBody('allocate_history_zone_caps'), /for layer = 1 to maxHistoryZones/);
+  assert.match(functionBody('allocate_history_liquidity_depth_caps'), /for layer = 1 to requestedLayers/);
+  assert.doesNotMatch(functionBody('allocate_history_liquidity_depth_caps'), /for layer = 1 to SLOT_HISTORY_MAX/);
+
+  const fibAllocator = source.match(/^allocate_history_fib_caps[\s\S]*?^    \[fibCaps, labelCaps\]$/m)?.[0];
+  assert.ok(fibAllocator, 'allocate_history_fib_caps must exist');
+  assert.match(fibAllocator, /for layer = 1 to requestedLayers/);
+  assert.doesNotMatch(fibAllocator, /for layer = 1 to maxHistoryZones/);
+});
