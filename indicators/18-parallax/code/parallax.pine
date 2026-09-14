@@ -13,10 +13,11 @@ const string GROUP_GENERAL    = "General"
 const string GROUP_LOOKBACK   = "Lookback"
 const string GROUP_HTF_PROFILES = "HTF Profiles"
 const string GROUP_INTRADAY_PROFILES = "Intraday Profiles"
+const string GROUP_LIQUIDITY_DEPTH = "Liquidity Depth"
 const string GROUP_FORECAST   = "Forecast"
 const string GROUP_FIB          = "Fibonacci"
-const string GROUP_FIB_LEVELS      = "Fibonacci Levels"
-const string GROUP_FIB_ALTERNATIVE = "Fibonacci Alternative"
+const string GROUP_FIB_DEFAULT_LEVELS = "Fibonacci Default Levels"
+const string GROUP_FIB_ALTERNATIVE_LEVELS = "Fibonacci Alternative Levels"
 const string GROUP_FIB_PALETTE  = "Fibonacci Colors & Key Labels"
 const string GROUP_FIB_LABELS   = "Fibonacci Labels"
 const string GROUP_ADVANCED   = "Advanced"
@@ -44,6 +45,8 @@ const int NATIVE_SHIFT_MS = 6 * SECS_HOUR * MS_PER_SEC
 const int TIME_HISTORY_BUFFER_SIZE = 5000
 const int BAR_INDEX_DRAWING_LOOKBACK = TIME_HISTORY_BUFFER_SIZE - 1
 const int BAR_INDEX_DRAWING_LOOKAHEAD = 500
+const int INTRADAY_LIQUIDITY_DEPTH_MAX_TIMEFRAME = 30 * SECS_MIN
+const int MARKET_CLOSE_HOUR = 16
 
 // QUICK FILTER WINDOWS
 
@@ -81,6 +84,9 @@ const color DEFAULT_FIB_295_COLOR = color.new(color.rgb(129, 199, 132), 40)
 const color DEFAULT_FIB_214_COLOR = color.new(color.rgb(76,  175, 80),  50)
 const color DEFAULT_FIB_0_COLOR   = color.new(color.rgb(74,  74,  74),  65)
 const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 25)
+const color DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR = color.new(color.rgb(247, 82, 95), 32)
+const color DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND = color.new(color.rgb(255, 255, 255), 50)
+const color DEFAULT_LIQUIDITY_DEPTH_LABEL_TEXT = color.new(color.rgb(156, 156, 156), 0)
 
 // Grayscale tier palette: dark = closest, light = farthest.
 const color SLOT1_COLOR = color.rgb(74,  74,  74)
@@ -136,6 +142,11 @@ const string POS_RIGHT = "Right"
 const string POS_BOTH = "Both"
 const int FIB_LABEL_OFFSET_MIN = 0
 const int FIB_LABEL_OFFSET_MAX = 500
+const int NUM_LIQUIDITY_DEPTH_LEVELS = 3
+const int LIQUIDITY_DEPTH_LINES_PER_SIDE = NUM_LIQUIDITY_DEPTH_LEVELS * 2
+const int LIQUIDITY_DEPTH_LABELS_PER_SIDE = NUM_LIQUIDITY_DEPTH_LEVELS
+const int LIQUIDITY_DEPTH_LINES_PER_SESSION = LIQUIDITY_DEPTH_LINES_PER_SIDE * 2
+const int LIQUIDITY_DEPTH_LABELS_PER_SESSION = LIQUIDITY_DEPTH_LABELS_PER_SIDE * 2
 
 // SCHEDULED PROFILE DEFINITIONS
 
@@ -201,12 +212,14 @@ const float FIB_LABEL_TRANSPARENCY_MAX = 12.0
 
 // INPUT TOOLTIPS
 
-const string OVERNIGHT_SLOT_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative.\n\nWindow\n00:00–07:00 NY."
-const string NY_EARLY_SLOT_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative.\n\nWindow\n06:00–09:00 NY."
-const string NY_AM_SLOT_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative.\n\nWindow\n08:00–12:00 NY."
-const string IVB_SLOT_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative.\n\nWindow\n09:00–10:00 NY."
-const string IVB_PLUS_SLOT_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative.\n\nWindow\n09:00–10:30 NY."
+const string INTRADAY_PROFILE_CONTROLS_TOOLTIP = "Controls\nColor • History • Fib preset.\n\nFib\nOff, Default or Alternative."
+const string OVERNIGHT_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n00:00–07:00 NY."
+const string NY_EARLY_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n06:00–09:00 NY."
+const string NY_AM_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n08:00–12:00 NY."
+const string IVB_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:00 NY."
+const string IVB_PLUS_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:30 NY."
 const string FORECAST_SLOT_TOOLTIP = "Show\nProjects selected next envelopes.\n\nProfiles\nSelect any enabled HTF, Daily or Intraday profile."
+const string LIQUIDITY_DEPTH_TOOLTIP = "Forecast LD\nProjects depth before a selected profile edge is breached.\n\nProfiles\nNormal LD appears only after an in-window outer-edge breach. Through 30m and on Range charts."
 const string FIB_HISTORY_TOOLTIP = "History\nSaved zones.\n\nTrailing\nExpands to extremes."
 const string FIB_PRESET_ROW_TOOLTIP = "Each value selects Off or line width 1–5."
 const string FIB_PALETTE_ROW_TOOLTIP = "Shared color and Key-label flag."
@@ -229,6 +242,33 @@ type FibPalette
     array<color> levelColors
     array<bool> keyLevels
 
+type AssetFamily
+    array<string> identifiers
+    float dailyLiquidityDepthDistance
+
+type LiquidityDepthSideState
+    bool activated
+    int activationTime
+    int activationIndex
+    array<bool> mitigated
+    array<int> endTimes
+    array<int> endIndices
+
+type LiquidityDepthSessionState
+    int sessionStartTime
+    int sessionStartIndex
+    float highAnchor
+    float lowAnchor
+    int cutoffTime
+    int lastEligibleTime
+    int lastEligibleIndex
+    LiquidityDepthSideState highSide
+    LiquidityDepthSideState lowSide
+
+type LiquidityDepthProfileState
+    LiquidityDepthSessionState currentSession
+    array<LiquidityDepthSessionState> history
+
 type ScheduledProfileConfig
     string sourceLabel
     int startMinute
@@ -241,6 +281,7 @@ type ScheduledProfileConfig
     color slotColor
     int sampleLookback
     int historyLimit
+    bool liquidityDepthEnabled
     FibLevelSet fibLevelSet
     bool forecastEnabled
     bool fibLabelsEnabled
@@ -272,6 +313,8 @@ type SlotState
     array<line> histFibLines
     array<label> fibLabels
     array<label> histFibLabels
+    array<line> liquidityDepthLines
+    array<label> liquidityDepthLabels
 
 type ScheduledProfileRuntime
     bool valid
@@ -297,6 +340,7 @@ type ScheduledProfile
     ScheduledProfileConfig config
     ScheduledProfileRuntime runtimeState
     SlotState drawingState
+    LiquidityDepthProfileState liquidityDepthState
     string identifierText
 
 fib_width_value(string widthSetting) =>
@@ -454,6 +498,17 @@ ivbPlusFibPreset = input.string(FIB_PRESET_DEFAULT, SLOT_LABEL_FIB, inline="ivb_
 
 bool fibInputsActive = (slot1Show and slot1FibPreset != FIB_PRESET_OFF) or (slot2Show and slot2FibPreset != FIB_PRESET_OFF) or (weeklyProfileShow and weeklyProfileFibPreset != FIB_PRESET_OFF) or (monthlyProfileShow and monthlyProfileFibPreset != FIB_PRESET_OFF) or (dailyProfileShow and dailyProfileFibPreset != FIB_PRESET_OFF) or (overnightShow and overnightFibPreset != FIB_PRESET_OFF) or (nyEarlyShow and nyEarlyFibPreset != FIB_PRESET_OFF) or (nyAmShow and nyAmFibPreset != FIB_PRESET_OFF) or (ivbShow and ivbFibPreset != FIB_PRESET_OFF) or (ivbPlusShow and ivbPlusFibPreset != FIB_PRESET_OFF)
 
+// LIQUIDITY DEPTH
+
+forecastLiquidityDepth = input.bool(false, "Forecast LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH)
+showLiquidityDepthProfileNames = input.bool(true, "Profile Names on LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH)
+dailyLiquidityDepth = input.bool(false, DAILY_PROFILE_NAME, group=GROUP_LIQUIDITY_DEPTH, active=dailyProfileShow)
+overnightLiquidityDepth = input.bool(false, OVERNIGHT_SLOT_NAME, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=overnightShow)
+nyEarlyLiquidityDepth = input.bool(false, NY_EARLY_SLOT_NAME, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=nyEarlyShow)
+nyAmLiquidityDepth = input.bool(false, NY_AM_SLOT_NAME, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=nyAmShow)
+ivbLiquidityDepth = input.bool(false, IVB_SLOT_NAME, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=ivbShow)
+ivbPlusLiquidityDepth = input.bool(false, IVB_PLUS_SLOT_NAME, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=ivbPlusShow, tooltip=LIQUIDITY_DEPTH_TOOLTIP)
+
 // FORECAST
 
 showNextRangeForecast = input.bool(false, "Show", inline="forecast_slots", group=GROUP_FORECAST)
@@ -475,25 +530,25 @@ fibTrailing = input.bool(false, "Trailing", inline="fib_h", group=GROUP_FIB, act
 
 // FIBONACCI LEVEL WIDTHS
 
-fibDefault100 = input.string(FIB_WIDTH_2, "1.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault786 = input.string(FIB_WIDTH_2, "0.786", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault705 = input.string(FIB_WIDTH_2, "0.705", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
-fibDefault618 = input.string(FIB_WIDTH_2, "0.618", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault50  = input.string(FIB_WIDTH_2, "0.500", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault382 = input.string(FIB_WIDTH_2, "0.382", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
-fibDefault295 = input.string(FIB_WIDTH_2, "0.295", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault214 = input.string(FIB_WIDTH_2, "0.214", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_LEVELS, active=fibInputsActive)
-fibDefault0   = input.string(FIB_WIDTH_2, "0.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibDefault100 = input.string(FIB_WIDTH_2, "1.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault786 = input.string(FIB_WIDTH_2, "0.786", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault705 = input.string(FIB_WIDTH_2, "0.705", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_high", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibDefault618 = input.string(FIB_WIDTH_2, "0.618", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault50  = input.string(FIB_WIDTH_2, "0.500", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault382 = input.string(FIB_WIDTH_2, "0.382", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_mid", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibDefault295 = input.string(FIB_WIDTH_2, "0.295", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault214 = input.string(FIB_WIDTH_2, "0.214", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive)
+fibDefault0   = input.string(FIB_WIDTH_2, "0.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_default_low", group=GROUP_FIB_DEFAULT_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
 
-fibAlternative100 = input.string(FIB_WIDTH_2, "1.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative786 = input.string(FIB_WIDTH_3, "0.786", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative705 = input.string(FIB_WIDTH_3, "0.705", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
-fibAlternative618 = input.string(FIB_WIDTH_2, "0.618", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative50  = input.string(FIB_WIDTH_2, "0.500", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative382 = input.string(FIB_WIDTH_2, "0.382", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
-fibAlternative295 = input.string(FIB_WIDTH_3, "0.295", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative214 = input.string(FIB_WIDTH_3, "0.214", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive)
-fibAlternative0   = input.string(FIB_WIDTH_2, "0.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibAlternative100 = input.string(FIB_WIDTH_2, "1.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative786 = input.string(FIB_WIDTH_3, "0.786", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative705 = input.string(FIB_WIDTH_3, "0.705", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_high", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibAlternative618 = input.string(FIB_WIDTH_2, "0.618", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative50  = input.string(FIB_WIDTH_2, "0.500", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative382 = input.string(FIB_WIDTH_2, "0.382", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_mid", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
+fibAlternative295 = input.string(FIB_WIDTH_3, "0.295", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative214 = input.string(FIB_WIDTH_3, "0.214", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive)
+fibAlternative0   = input.string(FIB_WIDTH_2, "0.000", options=[FIB_WIDTH_OFF, FIB_WIDTH_1, FIB_WIDTH_2, FIB_WIDTH_3, FIB_WIDTH_4, FIB_WIDTH_5], inline="fib_alternative_low", group=GROUP_FIB_ALTERNATIVE_LEVELS, active=fibInputsActive, tooltip=FIB_PRESET_ROW_TOOLTIP)
 
 // FIBONACCI COLORS AND KEY LABELS
 
@@ -624,6 +679,47 @@ if not assetClassificationReady
 int dailyProfileStartMinute = useMidnight ? MIDNIGHT_START_MINUTE : GLOBEX_START_MINUTE
 string dailyProfileLabel = useMidnight ? MIDNIGHT_CHART_LABEL : GLOBEX_CHART_LABEL
 string effectiveDailySchedule = isTwentyFourSevenAsset ? SCHEDULED_PROFILE_SCHEDULE_ALL_DAYS : useMidnight ? SCHEDULED_PROFILE_SCHEDULE_WEEKDAYS : SCHEDULED_PROFILE_SCHEDULE_GLOBEX
+bool intradayLiquidityDepthTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= INTRADAY_LIQUIDITY_DEPTH_MAX_TIMEFRAME
+
+// LIQUIDITY DEPTH ASSETS
+
+var array<AssetFamily> assetFamilies = array.new<AssetFamily>()
+if barstate.isfirst
+    array.push(assetFamilies, AssetFamily.new(array.from("NQ", "MNQ"), 27))
+    array.push(assetFamilies, AssetFamily.new(array.from("ES", "MES"), 9))
+    array.push(assetFamilies, AssetFamily.new(array.from("YM", "MYM"), 27))
+    array.push(assetFamilies, AssetFamily.new(array.from("RTY", "M2K"), 4))
+    array.push(assetFamilies, AssetFamily.new(array.from("GC", "MGC"), 3))
+    array.push(assetFamilies, AssetFamily.new(array.from("CL", "MCL", "QM"), 0.125))
+    array.push(assetFamilies, AssetFamily.new(array.from("BTC", "MBT"), 100))
+    array.push(assetFamilies, AssetFamily.new(array.from("ETH", "MET"), 10))
+
+symbol_matches_asset_family(string symbolRoot, array<string> identifiers) =>
+    bool matched = false
+    for identifier in identifiers
+        if str.contains(symbolRoot, identifier)
+            matched := true
+            break
+    matched
+
+find_asset_family() =>
+    string symbolRoot = syminfo.root != "" ? syminfo.root : syminfo.ticker
+    AssetFamily matchedAssetFamily = na
+    for assetFamily in assetFamilies
+        if symbol_matches_asset_family(symbolRoot, assetFamily.identifiers)
+            matchedAssetFamily := assetFamily
+            break
+    matchedAssetFamily
+
+var AssetFamily cachedAssetFamily = na
+if barstate.isfirst
+    cachedAssetFamily := find_asset_family()
+
+get_daily_liquidity_depth_distance() =>
+    na(cachedAssetFamily) ? 0.0 : cachedAssetFamily.dailyLiquidityDepthDistance
+
+float dailyLiquidityDepthDistance = get_daily_liquidity_depth_distance()
+bool liquidityDepthAssetSupported = dailyLiquidityDepthDistance > 0
 
 // SCHEDULED PROFILE CONFIGURATION
 
@@ -631,7 +727,7 @@ var ScheduledProfileConfig dailyProfileConfig = ScheduledProfileConfig.new(
      sourceLabel=dailyProfileLabel,
      startMinute=dailyProfileStartMinute, endMinute=dailyProfileStartMinute, fullPeriod=true,
      forecastLeadMinutes=DAILY_PROFILE_DURATION_MINUTES, samplingSchedule=effectiveDailySchedule, forecastSchedule=effectiveDailySchedule,
-     enabled=dailyProfileShow, slotColor=dailyProfileColor, sampleLookback=htfSlotLookback, historyLimit=dailyProfileHistory,
+     enabled=dailyProfileShow, slotColor=dailyProfileColor, sampleLookback=htfSlotLookback, historyLimit=dailyProfileHistory, liquidityDepthEnabled=dailyLiquidityDepth,
      fibLevelSet=dailyProfileFibLevelSet, forecastEnabled=forecastDaily,
      fibLabelsEnabled=fibLabelDaily, fibLabelSize=fibLabelSizeDaily,
      fibLabelPosition=fibLabelPosDaily, fibLabelOffset=fibLabelOffDaily,
@@ -643,7 +739,7 @@ var ScheduledProfileConfig overnightConfig = ScheduledProfileConfig.new(
      sourceLabel=OVERNIGHT_CHART_LABEL,
      startMinute=OVERNIGHT_START_MINUTE, endMinute=OVERNIGHT_END_MINUTE, fullPeriod=false,
      forecastLeadMinutes=OVERNIGHT_DURATION_MINUTES, samplingSchedule=INTRADAY_SAMPLING_SCHEDULE, forecastSchedule=INTRADAY_FORECAST_SCHEDULE,
-     enabled=overnightShow, slotColor=overnightColor, sampleLookback=intradayProfileLookback, historyLimit=overnightHistory,
+     enabled=overnightShow, slotColor=overnightColor, sampleLookback=intradayProfileLookback, historyLimit=overnightHistory, liquidityDepthEnabled=overnightLiquidityDepth,
      fibLevelSet=overnightFibLevelSet, forecastEnabled=forecastOvernight,
      fibLabelsEnabled=fibLabelOvernight, fibLabelSize=fibLabelSizeOvernight,
      fibLabelPosition=fibLabelPosOvernight, fibLabelOffset=fibLabelOffOvernight,
@@ -653,7 +749,7 @@ var ScheduledProfileConfig nyEarlyConfig = ScheduledProfileConfig.new(
      sourceLabel=NY_EARLY_SLOT_NAME,
      startMinute=NY_EARLY_START_MINUTE, endMinute=NY_EARLY_END_MINUTE, fullPeriod=false,
      forecastLeadMinutes=NY_EARLY_DURATION_MINUTES, samplingSchedule=INTRADAY_SAMPLING_SCHEDULE, forecastSchedule=INTRADAY_FORECAST_SCHEDULE,
-     enabled=nyEarlyShow, slotColor=nyEarlyColor, sampleLookback=intradayProfileLookback, historyLimit=nyEarlyHistory,
+     enabled=nyEarlyShow, slotColor=nyEarlyColor, sampleLookback=intradayProfileLookback, historyLimit=nyEarlyHistory, liquidityDepthEnabled=nyEarlyLiquidityDepth,
      fibLevelSet=nyEarlyFibLevelSet, forecastEnabled=forecastNyEarly,
      fibLabelsEnabled=fibLabelNyEarly, fibLabelSize=fibLabelSizeNyEarly,
      fibLabelPosition=fibLabelPosNyEarly, fibLabelOffset=fibLabelOffNyEarly,
@@ -663,7 +759,7 @@ var ScheduledProfileConfig nyAmConfig = ScheduledProfileConfig.new(
      sourceLabel=NY_AM_SLOT_NAME,
      startMinute=NY_AM_START_MINUTE, endMinute=NY_AM_END_MINUTE, fullPeriod=false,
      forecastLeadMinutes=NY_AM_DURATION_MINUTES, samplingSchedule=INTRADAY_SAMPLING_SCHEDULE, forecastSchedule=INTRADAY_FORECAST_SCHEDULE,
-     enabled=nyAmShow, slotColor=nyAmColor, sampleLookback=intradayProfileLookback, historyLimit=nyAmHistory,
+     enabled=nyAmShow, slotColor=nyAmColor, sampleLookback=intradayProfileLookback, historyLimit=nyAmHistory, liquidityDepthEnabled=nyAmLiquidityDepth,
      fibLevelSet=nyAmFibLevelSet, forecastEnabled=forecastNyAm,
      fibLabelsEnabled=fibLabelNyAm, fibLabelSize=fibLabelSizeNyAm,
      fibLabelPosition=fibLabelPosNyAm, fibLabelOffset=fibLabelOffNyAm,
@@ -673,7 +769,7 @@ var ScheduledProfileConfig ivbConfig = ScheduledProfileConfig.new(
      sourceLabel=IVB_SLOT_NAME,
      startMinute=IVB_START_MINUTE, endMinute=IVB_END_MINUTE, fullPeriod=false,
      forecastLeadMinutes=IVB_DURATION_MINUTES, samplingSchedule=INTRADAY_SAMPLING_SCHEDULE, forecastSchedule=INTRADAY_FORECAST_SCHEDULE,
-     enabled=ivbShow, slotColor=ivbColor, sampleLookback=intradayProfileLookback, historyLimit=ivbHistory,
+     enabled=ivbShow, slotColor=ivbColor, sampleLookback=intradayProfileLookback, historyLimit=ivbHistory, liquidityDepthEnabled=ivbLiquidityDepth,
      fibLevelSet=ivbFibLevelSet, forecastEnabled=forecastIvb,
      fibLabelsEnabled=fibLabelIvb, fibLabelSize=fibLabelSizeIvb,
      fibLabelPosition=fibLabelPosIvb, fibLabelOffset=fibLabelOffIvb,
@@ -683,7 +779,7 @@ var ScheduledProfileConfig ivbPlusConfig = ScheduledProfileConfig.new(
      sourceLabel=IVB_PLUS_SLOT_NAME,
      startMinute=IVB_PLUS_START_MINUTE, endMinute=IVB_PLUS_END_MINUTE, fullPeriod=false,
      forecastLeadMinutes=IVB_PLUS_DURATION_MINUTES, samplingSchedule=INTRADAY_SAMPLING_SCHEDULE, forecastSchedule=INTRADAY_FORECAST_SCHEDULE,
-     enabled=ivbPlusShow, slotColor=ivbPlusColor, sampleLookback=intradayProfileLookback, historyLimit=ivbPlusHistory,
+     enabled=ivbPlusShow, slotColor=ivbPlusColor, sampleLookback=intradayProfileLookback, historyLimit=ivbPlusHistory, liquidityDepthEnabled=ivbPlusLiquidityDepth,
      fibLevelSet=ivbPlusFibLevelSet, forecastEnabled=forecastIvbPlus,
      fibLabelsEnabled=fibLabelIvbPlus, fibLabelSize=fibLabelSizeIvbPlus,
      fibLabelPosition=fibLabelPosIvbPlus, fibLabelOffset=fibLabelOffIvbPlus,
@@ -754,6 +850,9 @@ next_scheduled_profile_bounds(int referenceTime, ScheduledProfileConfig config) 
 scheduled_profile_valid(ScheduledProfileConfig config) =>
     int durationSeconds = scheduled_profile_duration_minutes(config) * SECS_MIN
     config.enabled and (chart.is_range or timeframe.in_seconds(timeframe.period) < durationSeconds)
+
+scheduled_profile_liquidity_depth_active(ScheduledProfileConfig config, ScheduledProfileRuntime profileRuntime) =>
+    config.liquidityDepthEnabled and profileRuntime.valid and intradayLiquidityDepthTimeframeAllowed and liquidityDepthAssetSupported
 
 scheduled_profile_forecast_visible(ScheduledProfileConfig config, bool valid, int referenceTime, int forecastStart) =>
     int leadMilliseconds = config.forecastLeadMinutes * SECS_MIN * MS_PER_SEC
@@ -1097,7 +1196,13 @@ else
 // SLOT STATE INSTANCES
 
 new_slot() =>
-    SlotState.new(histBoxes=array.new<box>(), fibLines=array.new<line>(), histFibLines=array.new<line>(), fibLabels=array.new<label>(), histFibLabels=array.new<label>())
+    SlotState.new(histBoxes=array.new<box>(), fibLines=array.new<line>(), histFibLines=array.new<line>(), fibLabels=array.new<label>(), histFibLabels=array.new<label>(), liquidityDepthLines=array.new<line>(), liquidityDepthLabels=array.new<label>())
+
+new_liquidity_depth_side() =>
+    LiquidityDepthSideState.new(activated=false, mitigated=array.new_bool(NUM_LIQUIDITY_DEPTH_LEVELS, false), endTimes=array.new_int(NUM_LIQUIDITY_DEPTH_LEVELS, na), endIndices=array.new_int(NUM_LIQUIDITY_DEPTH_LEVELS, na))
+
+new_liquidity_depth_profile() =>
+    LiquidityDepthProfileState.new(history=array.new<LiquidityDepthSessionState>())
 
 var SlotState slot1 = new_slot()
 var SlotState slot2 = new_slot()
@@ -1109,6 +1214,12 @@ var SlotState nyEarlySlot = new_slot()
 var SlotState nyAmSlot = new_slot()
 var SlotState ivbSlot = new_slot()
 var SlotState ivbPlusSlot = new_slot()
+var LiquidityDepthProfileState dailyProfileLiquidityDepthState = new_liquidity_depth_profile()
+var LiquidityDepthProfileState overnightLiquidityDepthState = new_liquidity_depth_profile()
+var LiquidityDepthProfileState nyEarlyLiquidityDepthState = new_liquidity_depth_profile()
+var LiquidityDepthProfileState nyAmLiquidityDepthState = new_liquidity_depth_profile()
+var LiquidityDepthProfileState ivbLiquidityDepthState = new_liquidity_depth_profile()
+var LiquidityDepthProfileState ivbPlusLiquidityDepthState = new_liquidity_depth_profile()
 
 // DRAWING HELPERS
 
@@ -1171,6 +1282,154 @@ offset_fib_label_time(int anchorT, int anchorIndex, int direction, int offsetBar
 compute_levels(float htfO, float medHO, float meanHO, float medOL, float meanOL) =>
     [htfO + medHO, htfO + meanHO,
      htfO - medOL, htfO - meanOL]
+
+// LIQUIDITY DEPTH CALCULATION
+
+liquidity_depth_anchors(float profileOpen, float medianHighOpen, float meanHighOpen, float medianOpenLow, float meanOpenLow) =>
+    float medianUpper = profileOpen + medianHighOpen
+    float meanUpper = profileOpen + meanHighOpen
+    float medianLower = profileOpen - medianOpenLow
+    float meanLower = profileOpen - meanOpenLow
+    [math.max(medianUpper, meanUpper), math.min(medianLower, meanLower)]
+
+liquidity_depth_price(float anchorPrice, bool isHigh, int levelIndex, float depthStep) =>
+    float depthOffset = (levelIndex + 1) * depthStep
+    isHigh ? anchorPrice + depthOffset : anchorPrice - depthOffset
+
+liquidity_depth_cutoff_time(int sessionStartTime) =>
+    int cutoffDayOffset = hour(sessionStartTime, NY_TIMEZONE) >= MARKET_CLOSE_HOUR ? 1 : 0
+    timestamp(NY_TIMEZONE, year(sessionStartTime, NY_TIMEZONE), month(sessionStartTime, NY_TIMEZONE), dayofmonth(sessionStartTime, NY_TIMEZONE) + cutoffDayOffset, MARKET_CLOSE_HOUR, 0, 0)
+
+// LIQUIDITY DEPTH STATE
+
+new_liquidity_depth_session(int sessionStartTime, int sessionStartIndex, float highAnchor, float lowAnchor) =>
+    LiquidityDepthSessionState.new(
+         sessionStartTime=sessionStartTime,
+         sessionStartIndex=sessionStartIndex,
+         highAnchor=highAnchor,
+         lowAnchor=lowAnchor,
+         cutoffTime=liquidity_depth_cutoff_time(sessionStartTime),
+         highSide=new_liquidity_depth_side(),
+         lowSide=new_liquidity_depth_side())
+
+update_liquidity_depth_side(LiquidityDepthSideState sideState, float anchorPrice, bool isHigh, float barExtreme, bool activationAllowed, int eventTime, int eventIndex, float depthStep) =>
+    bool boundaryReached = isHigh ? barExtreme >= anchorPrice : barExtreme <= anchorPrice
+    if activationAllowed and not sideState.activated and boundaryReached
+        sideState.activated := true
+        sideState.activationTime := eventTime
+        sideState.activationIndex := eventIndex
+    if sideState.activated
+        for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
+            if not array.get(sideState.mitigated, levelIndex)
+                float levelPrice = liquidity_depth_price(anchorPrice, isHigh, levelIndex, depthStep)
+                bool levelReached = isHigh ? barExtreme >= levelPrice : barExtreme <= levelPrice
+                if levelReached
+                    array.set(sideState.mitigated, levelIndex, true)
+                    array.set(sideState.endTimes, levelIndex, eventTime)
+                    array.set(sideState.endIndices, levelIndex, eventIndex)
+
+finalize_liquidity_depth_side(LiquidityDepthSideState sideState, LiquidityDepthSessionState sessionState) =>
+    if sideState.activated
+        int finalTime = chart.is_range ? nz(sessionState.lastEligibleTime, sideState.activationTime) : sessionState.cutoffTime
+        int finalIndex = nz(sessionState.lastEligibleIndex, sideState.activationIndex)
+        for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
+            if na(array.get(sideState.endTimes, levelIndex))
+                array.set(sideState.endTimes, levelIndex, finalTime)
+                array.set(sideState.endIndices, levelIndex, finalIndex)
+
+finalize_liquidity_depth_session(LiquidityDepthSessionState sessionState) =>
+    finalize_liquidity_depth_side(sessionState.highSide, sessionState)
+    finalize_liquidity_depth_side(sessionState.lowSide, sessionState)
+
+update_liquidity_depth_profile(LiquidityDepthProfileState profileState, ScheduledProfileRuntime profileRuntime, int historyLimit, bool depthActive, float depthStep) =>
+    bool anchorsReady = not na(profileRuntime.sessionOpen) and not na(profileRuntime.medianHighOpen) and not na(profileRuntime.meanHighOpen) and not na(profileRuntime.medianOpenLow) and not na(profileRuntime.meanOpenLow)
+    if depthActive and anchorsReady and not na(profileRuntime.startTime)
+        bool newSession = na(profileState.currentSession) or profileState.currentSession.sessionStartTime != profileRuntime.startTime
+        if newSession
+            if not na(profileState.currentSession)
+                finalize_liquidity_depth_session(profileState.currentSession)
+                array.push(profileState.history, profileState.currentSession)
+            [highAnchor, lowAnchor] = liquidity_depth_anchors(profileRuntime.sessionOpen, profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow)
+            profileState.currentSession := new_liquidity_depth_session(profileRuntime.startTime, profileRuntime.startIndex, highAnchor, lowAnchor)
+            while array.size(profileState.history) > math.max(0, historyLimit - 1)
+                array.shift(profileState.history)
+
+        LiquidityDepthSessionState currentSession = profileState.currentSession
+        if time <= currentSession.cutoffTime
+            currentSession.lastEligibleTime := time
+            currentSession.lastEligibleIndex := bar_index
+        bool profileStarted = time >= currentSession.sessionStartTime or (chart.is_range and not na(time_close) and time_close > currentSession.sessionStartTime)
+        bool trackingWindowOpen = profileStarted and time < currentSession.cutoffTime
+        bool activationWindowOpen = trackingWindowOpen and time < profileRuntime.endTime
+        if trackingWindowOpen
+            update_liquidity_depth_side(currentSession.highSide, currentSession.highAnchor, true, high, activationWindowOpen, time, bar_index, depthStep)
+            update_liquidity_depth_side(currentSession.lowSide, currentSession.lowAnchor, false, low, activationWindowOpen, time, bar_index, depthStep)
+        if time >= currentSession.cutoffTime
+            finalize_liquidity_depth_session(currentSession)
+
+liquidity_depth_level_color(int levelIndex, color profileColor) =>
+    levelIndex == 0 ? profileColor : DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR
+
+liquidity_depth_level_width(int levelIndex) =>
+    levelIndex == 0 ? 2 : levelIndex == 2 ? 3 : 1
+
+liquidity_depth_level_style(int levelIndex) =>
+    levelIndex == 0 ? line.style_dashed : line.style_dotted
+
+// LIQUIDITY DEPTH RENDERING
+
+liquidity_depth_label_text(int levelIndex, string profileName) =>
+    string levelText = "L" + str.tostring(levelIndex + 1)
+    showLiquidityDepthProfileNames ? levelText + " " + profileName : levelText
+
+liquidity_depth_profile_name(string sourceLabel) =>
+    sourceLabel == OVERNIGHT_CHART_LABEL ? OVERNIGHT_SLOT_NAME : sourceLabel
+
+make_liquidity_depth_connector(int anchorTime, int anchorIndex, float anchorPrice, float levelPrice, color profileColor) =>
+    int safeIndex = math.max(anchorIndex, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
+    line.new(drawing_x(anchorTime, safeIndex, false), anchorPrice, drawing_x(anchorTime, safeIndex, false), levelPrice,
+         xloc=drawing_xloc(false), color=color.new(profileColor, 80), width=1, style=line.style_dashed)
+
+make_liquidity_depth_label(int startTime, int startIndex, int endTime, int endIndex, float levelPrice, string labelText) =>
+    int labelTime = startTime + int((endTime - startTime) / 2)
+    int labelIndex = startIndex + int((endIndex - startIndex) / 2)
+    label.new(drawing_x(labelTime, labelIndex, false), levelPrice, labelText,
+         xloc=drawing_xloc(false), yloc=yloc.price, style=label.style_label_center,
+         textcolor=DEFAULT_LIQUIDITY_DEPTH_LABEL_TEXT, size=6, color=DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND)
+
+draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessionState, LiquidityDepthSideState sideState, bool isHigh, float depthStep, color profileColor, string profileName, bool forecastEnabled) =>
+    if sideState.activated or forecastEnabled
+        int startTime = sessionState.sessionStartTime
+        int startIndex = sessionState.sessionStartIndex
+        float anchorPrice = isHigh ? sessionState.highAnchor : sessionState.lowAnchor
+        for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
+            int storedEndTime = array.get(sideState.endTimes, levelIndex)
+            int storedEndIndex = array.get(sideState.endIndices, levelIndex)
+            int endTime = na(storedEndTime) ? math.min(time, sessionState.cutoffTime) : storedEndTime
+            int liveEndIndex = sessionState.cutoffTime <= time ? nz(sessionState.lastEligibleIndex, bar_index) : bar_index
+            int endIndex = na(storedEndIndex) ? liveEndIndex : storedEndIndex
+            float levelPrice = liquidity_depth_price(anchorPrice, isHigh, levelIndex, depthStep)
+            color levelColor = liquidity_depth_level_color(levelIndex, profileColor)
+            array.push(slotState.liquidityDepthLines, make_horizontal_line(false, startTime, startIndex, endTime, endIndex, levelPrice, levelColor, liquidity_depth_level_style(levelIndex), liquidity_depth_level_width(levelIndex)))
+            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(startTime, startIndex, anchorPrice, levelPrice, profileColor))
+            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(startTime, startIndex, endTime, endIndex, levelPrice, liquidity_depth_label_text(levelIndex, profileName)))
+
+draw_liquidity_depth_profile(SlotState slotState, LiquidityDepthProfileState profileState, ScheduledProfileConfig profileConfig, bool depthActive, float depthStep, int historyCap, bool forecastEnabled) =>
+    while array.size(slotState.liquidityDepthLines) > 0
+        line.delete(array.pop(slotState.liquidityDepthLines))
+    while array.size(slotState.liquidityDepthLabels) > 0
+        label.delete(array.pop(slotState.liquidityDepthLabels))
+    if depthActive and not na(profileState.currentSession)
+        string profileName = liquidity_depth_profile_name(profileConfig.sourceLabel)
+        draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
+        draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
+        int count = math.min(historyCap, array.size(profileState.history))
+        if count > 0
+            for historyOffset = 0 to count - 1
+                int historyIndex = array.size(profileState.history) - 1 - historyOffset
+                LiquidityDepthSessionState historySession = array.get(profileState.history, historyIndex)
+                draw_liquidity_depth_side(slotState, historySession, historySession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
+                draw_liquidity_depth_side(slotState, historySession, historySession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
 
 format_fib_ratio(string ratioText, bool superscript) =>
     string formatted = ratioText
@@ -1316,6 +1575,20 @@ allocate_history_fib_caps(int availableLines, int availableLabels, array<bool> v
                         array.set(labelCaps, slotIndex, array.get(labelCaps, slotIndex) + zoneLabels)
                         remainingLabels -= zoneLabels
     [fibCaps, labelCaps]
+
+allocate_history_liquidity_depth_caps(int availableLines, int availableLabels, array<bool> depthValids, array<int> historyRequests) =>
+    int profileCount = array.size(depthValids)
+    array<int> historyCaps = array.new<int>(profileCount, 0)
+    int remainingLines = availableLines
+    int remainingLabels = availableLabels
+    for layer = 1 to SLOT_HISTORY_MAX
+        for profileIndex = 0 to profileCount - 1
+            bool canAllocate = array.get(depthValids, profileIndex) and layer <= array.get(historyRequests, profileIndex) and remainingLines >= LIQUIDITY_DEPTH_LINES_PER_SESSION and remainingLabels >= LIQUIDITY_DEPTH_LABELS_PER_SESSION
+            if canAllocate
+                array.set(historyCaps, profileIndex, array.get(historyCaps, profileIndex) + 1)
+                remainingLines -= LIQUIDITY_DEPTH_LINES_PER_SESSION
+                remainingLabels -= LIQUIDITY_DEPTH_LABELS_PER_SESSION
+    [historyCaps, availableLines - remainingLines, availableLabels - remainingLabels]
 
 // On transition, [1] reads give us the just-closed period values used for its live projection.
 update_slot(SlotState s, bool valid, bool transitionNow, int zoneStartT, int zoneStartIndex, bool fixedEnd, int zoneEndT, int zoneEndIndex,
@@ -1530,7 +1803,7 @@ dailyProfileRuntime.meanOpenLow := dailyProfileMeanOL
 dailyProfileRuntime.forecastStartTime := dailyProfileForecastStartT
 dailyProfileRuntime.forecastEndTime := dailyProfileForecastEndT
 dailyProfileRuntime.forecastVisible := dailyProfileForecastVisible
-var ScheduledProfile dailyScheduledProfile = ScheduledProfile.new(config=dailyProfileConfig, runtimeState=dailyProfileRuntime, drawingState=dailyProfileSlot, identifierText=dailyProfileIdentifierText)
+var ScheduledProfile dailyScheduledProfile = ScheduledProfile.new(config=dailyProfileConfig, runtimeState=dailyProfileRuntime, drawingState=dailyProfileSlot, liquidityDepthState=dailyProfileLiquidityDepthState, identifierText=dailyProfileIdentifierText)
 
 [overnightForecastStartT, overnightForecastEndT] = next_scheduled_profile_bounds(time, overnightConfig)
 bool overnightForecastVisible = scheduled_profile_forecast_visible(overnightConfig, overnightValid, time, overnightForecastStartT)
@@ -1553,7 +1826,7 @@ overnightRuntime.meanOpenLow := overnightMeanOL
 overnightRuntime.forecastStartTime := overnightForecastStartT
 overnightRuntime.forecastEndTime := overnightForecastEndT
 overnightRuntime.forecastVisible := overnightForecastVisible
-var ScheduledProfile overnightScheduledProfile = ScheduledProfile.new(config=overnightConfig, runtimeState=overnightRuntime, drawingState=overnightSlot, identifierText=overnightIdentifierText)
+var ScheduledProfile overnightScheduledProfile = ScheduledProfile.new(config=overnightConfig, runtimeState=overnightRuntime, drawingState=overnightSlot, liquidityDepthState=overnightLiquidityDepthState, identifierText=overnightIdentifierText)
 
 [nyEarlyForecastStartT, nyEarlyForecastEndT] = next_scheduled_profile_bounds(time, nyEarlyConfig)
 bool nyEarlyForecastVisible = scheduled_profile_forecast_visible(nyEarlyConfig, nyEarlyValid, time, nyEarlyForecastStartT)
@@ -1576,7 +1849,7 @@ nyEarlyRuntime.meanOpenLow := nyEarlyMeanOL
 nyEarlyRuntime.forecastStartTime := nyEarlyForecastStartT
 nyEarlyRuntime.forecastEndTime := nyEarlyForecastEndT
 nyEarlyRuntime.forecastVisible := nyEarlyForecastVisible
-var ScheduledProfile nyEarlyScheduledProfile = ScheduledProfile.new(config=nyEarlyConfig, runtimeState=nyEarlyRuntime, drawingState=nyEarlySlot, identifierText=nyEarlyIdentifierText)
+var ScheduledProfile nyEarlyScheduledProfile = ScheduledProfile.new(config=nyEarlyConfig, runtimeState=nyEarlyRuntime, drawingState=nyEarlySlot, liquidityDepthState=nyEarlyLiquidityDepthState, identifierText=nyEarlyIdentifierText)
 
 [nyAmForecastStartT, nyAmForecastEndT] = next_scheduled_profile_bounds(time, nyAmConfig)
 bool nyAmForecastVisible = scheduled_profile_forecast_visible(nyAmConfig, nyAmValid, time, nyAmForecastStartT)
@@ -1599,7 +1872,7 @@ nyAmRuntime.meanOpenLow := nyAmMeanOL
 nyAmRuntime.forecastStartTime := nyAmForecastStartT
 nyAmRuntime.forecastEndTime := nyAmForecastEndT
 nyAmRuntime.forecastVisible := nyAmForecastVisible
-var ScheduledProfile nyAmScheduledProfile = ScheduledProfile.new(config=nyAmConfig, runtimeState=nyAmRuntime, drawingState=nyAmSlot, identifierText=nyAmIdentifierText)
+var ScheduledProfile nyAmScheduledProfile = ScheduledProfile.new(config=nyAmConfig, runtimeState=nyAmRuntime, drawingState=nyAmSlot, liquidityDepthState=nyAmLiquidityDepthState, identifierText=nyAmIdentifierText)
 
 [ivbForecastStartT, ivbForecastEndT] = next_scheduled_profile_bounds(time, ivbConfig)
 bool ivbForecastVisible = scheduled_profile_forecast_visible(ivbConfig, ivbValid, time, ivbForecastStartT)
@@ -1622,7 +1895,7 @@ ivbRuntime.meanOpenLow := ivbMeanOL
 ivbRuntime.forecastStartTime := ivbForecastStartT
 ivbRuntime.forecastEndTime := ivbForecastEndT
 ivbRuntime.forecastVisible := ivbForecastVisible
-var ScheduledProfile ivbScheduledProfile = ScheduledProfile.new(config=ivbConfig, runtimeState=ivbRuntime, drawingState=ivbSlot, identifierText=ivbIdentifierText)
+var ScheduledProfile ivbScheduledProfile = ScheduledProfile.new(config=ivbConfig, runtimeState=ivbRuntime, drawingState=ivbSlot, liquidityDepthState=ivbLiquidityDepthState, identifierText=ivbIdentifierText)
 
 [ivbPlusForecastStartT, ivbPlusForecastEndT] = next_scheduled_profile_bounds(time, ivbPlusConfig)
 bool ivbPlusForecastVisible = scheduled_profile_forecast_visible(ivbPlusConfig, ivbPlusValid, time, ivbPlusForecastStartT)
@@ -1645,8 +1918,13 @@ ivbPlusRuntime.meanOpenLow := ivbPlusMeanOL
 ivbPlusRuntime.forecastStartTime := ivbPlusForecastStartT
 ivbPlusRuntime.forecastEndTime := ivbPlusForecastEndT
 ivbPlusRuntime.forecastVisible := ivbPlusForecastVisible
-var ScheduledProfile ivbPlusScheduledProfile = ScheduledProfile.new(config=ivbPlusConfig, runtimeState=ivbPlusRuntime, drawingState=ivbPlusSlot, identifierText=ivbPlusIdentifierText)
+var ScheduledProfile ivbPlusScheduledProfile = ScheduledProfile.new(config=ivbPlusConfig, runtimeState=ivbPlusRuntime, drawingState=ivbPlusSlot, liquidityDepthState=ivbPlusLiquidityDepthState, identifierText=ivbPlusIdentifierText)
 array<ScheduledProfile> scheduledProfiles = array.from(dailyScheduledProfile, overnightScheduledProfile, nyEarlyScheduledProfile, nyAmScheduledProfile, ivbScheduledProfile, ivbPlusScheduledProfile)
+
+for profileIndex = 0 to array.size(scheduledProfiles) - 1
+    ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
+    bool depthActive = scheduled_profile_liquidity_depth_active(profile.config, profile.runtimeState)
+    update_liquidity_depth_profile(profile.liquidityDepthState, profile.runtimeState, profile.config.historyLimit, depthActive, dailyLiquidityDepthDistance)
 
 bool fibLabelsOn = fibLabelLevels != FL_OFF
 bool fibLabel1On = fibLabelsOn and fibLabelSlot1
@@ -1671,6 +1949,7 @@ array<bool> historyBudgetValids = array.from(s1Valid, s2Valid, weeklyProfileVali
 array<int> boxHistoryZoneRequests = array.from(s1HistoryZoneRequest, s2HistoryZoneRequest, weeklyProfileHistoryZoneRequest, monthlyProfileHistoryZoneRequest)
 array<int> scheduledProfileHistoryRequests = array.new<int>()
 array<int> scheduledProfileLabelsPerZone = array.new<int>()
+array<bool> scheduledProfileDepthValids = array.new<bool>()
 
 int currentBoxZoneCount = (s1BudgetVisible ? 1 : 0) + (s2BudgetVisible ? 1 : 0) + (weeklyProfileBudgetVisible ? 1 : 0) + (monthlyProfileBudgetVisible ? 1 : 0)
 int forecastZoneCount = (s1ForecastVisible ? 1 : 0) + (s2ForecastVisible ? 1 : 0) + (weeklyProfileForecastVisible ? 1 : 0) + (monthlyProfileForecastVisible ? 1 : 0)
@@ -1683,15 +1962,19 @@ for profileIndex = 0 to array.size(scheduledProfiles) - 1
     ScheduledProfileRuntime profileRuntime = profile.runtimeState
     int historyRequest = latestOnly ? 0 : profileConfig.historyLimit - 1
     bool labelEnabled = fibLabelsOn and profileConfig.fibLabelsEnabled
+    bool depthActive = scheduled_profile_liquidity_depth_active(profileConfig, profileRuntime)
     int labelsPerZone = fib_label_count_per_zone(profileConfig.fibLevelSet, fibPalette, labelEnabled, profileConfig.fibLabelPosition)
     array.push(scheduledProfileHistoryRequests, historyRequest)
     array.push(scheduledProfileLabelsPerZone, labelsPerZone)
+    array.push(scheduledProfileDepthValids, depthActive)
     array.push(historyBudgetValids, profileRuntime.valid)
     array.push(boxHistoryZoneRequests, historyRequest)
     currentBoxZoneCount += profileRuntime.valid ? 1 : 0
     forecastZoneCount += profileRuntime.forecastVisible ? 1 : 0
     scheduledProfileCurrentLineReserve += current_line_request(true, profileConfig.fibLevelSet.lineCount)
+    scheduledProfileCurrentLineReserve += depthActive ? LIQUIDITY_DEPTH_LINES_PER_SESSION : 0
     scheduledProfileCurrentLabelReserve += profileRuntime.valid ? labelsPerZone : 0
+    scheduledProfileCurrentLabelReserve += depthActive ? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0
 int currentBoxReserve = (currentBoxZoneCount + forecastZoneCount) * 2
 int availableHistoryBoxZones = int(math.max(0, INDICATOR_MAX_BOXES - currentBoxReserve) / 2)
 array<int> boxHistZoneCaps = allocate_history_zone_caps(availableHistoryBoxZones, historyBudgetValids, boxHistoryZoneRequests, HTF_PROFILE_COUNT, SLOT_HISTORY_MAX)
@@ -1707,12 +1990,21 @@ int monthlyProfileRetainedHistoryZoneCap = monthlyProfileBoxHistZoneCap
 int htfCurrentLineReserve = current_line_request(s1BudgetVisible, slot1FibLevelSet.lineCount) + current_line_request(s2BudgetVisible, slot2FibLevelSet.lineCount) + current_line_request(weeklyProfileBudgetVisible, weeklyProfileFibLevelSet.lineCount) + current_line_request(monthlyProfileBudgetVisible, monthlyProfileFibLevelSet.lineCount)
 int forecastLineReserve = forecastZoneCount * 4
 int currentLineReserve = htfCurrentLineReserve + scheduledProfileCurrentLineReserve + forecastLineReserve
-int availableHistoryLines = math.max(0, INDICATOR_MAX_LINES - currentLineReserve)
+int availableHistoryLinesBeforeDepth = math.max(0, INDICATOR_MAX_LINES - currentLineReserve)
 
 // Standard charts convert bar offsets to time; Range charts use the offsets directly.
 int chartBarMs = chart.is_range ? 0 : int(timeframe.in_seconds(timeframe.period) * MS_PER_SEC)
 int currentLabelReserve = (s1BudgetVisible ? s1LabelsPerZone : 0) + (s2BudgetVisible ? s2LabelsPerZone : 0) + (weeklyProfileBudgetVisible ? weeklyProfileLabelsPerZone : 0) + (monthlyProfileBudgetVisible ? monthlyProfileLabelsPerZone : 0) + scheduledProfileCurrentLabelReserve
-int availableHistoryLabels = math.max(0, INDICATOR_MAX_LABELS - currentLabelReserve)
+int availableHistoryLabelsBeforeDepth = math.max(0, INDICATOR_MAX_LABELS - currentLabelReserve)
+array<int> scheduledProfileDepthHistoryRequests = array.new<int>()
+for profileIndex = 0 to array.size(scheduledProfiles) - 1
+    int budgetIndex = HTF_PROFILE_COUNT + profileIndex
+    int retainedHistory = array.get(boxHistZoneCaps, budgetIndex)
+    int depthHistoryRequest = array.get(scheduledProfileDepthValids, profileIndex) ? math.min(array.get(scheduledProfileHistoryRequests, profileIndex), retainedHistory) : 0
+    array.push(scheduledProfileDepthHistoryRequests, depthHistoryRequest)
+[scheduledProfileDepthHistoryCaps, depthHistoryLinesUsed, depthHistoryLabelsUsed] = allocate_history_liquidity_depth_caps(availableHistoryLinesBeforeDepth, availableHistoryLabelsBeforeDepth, scheduledProfileDepthValids, scheduledProfileDepthHistoryRequests)
+int availableHistoryLines = availableHistoryLinesBeforeDepth - depthHistoryLinesUsed
+int availableHistoryLabels = availableHistoryLabelsBeforeDepth - depthHistoryLabelsUsed
 array<int> historyLabelsPerZone = array.from(s1LabelsPerZone, s2LabelsPerZone, weeklyProfileLabelsPerZone, monthlyProfileLabelsPerZone)
 array<bool> historyLabelSlots = array.from(fibLabelHistory and fibLabel1On, fibLabelHistory and fibLabel2On, fibLabelHistory and fibLabelWeeklyOn, fibLabelHistory and fibLabelMonthlyOn)
 array<int> fibHistoryZoneRequests = array.from(math.min(s1FibHistoryZoneRequest, s1RetainedHistoryZoneCap), math.min(s2FibHistoryZoneRequest, s2RetainedHistoryZoneCap), math.min(weeklyProfileFibHistoryZoneRequest, weeklyProfileRetainedHistoryZoneCap), math.min(monthlyProfileFibHistoryZoneRequest, monthlyProfileRetainedHistoryZoneCap))
@@ -1793,9 +2085,11 @@ if barstate.islast
         ScheduledProfileRuntime profileRuntime = profile.runtimeState
         SlotState slotState = profile.drawingState
         bool fibLabelsEnabled = fibLabelsOn and profileConfig.fibLabelsEnabled
+        bool depthActive = scheduled_profile_liquidity_depth_active(profileConfig, profileRuntime)
         int labelOffsetBars = profileConfig.fibLabelOffset
         draw_scheduled_profile_current(slotState, profileConfig, profileRuntime, profile.identifierText, currentRightIndex,
              fibPalette, fibLabelsEnabled, labelOffsetBars * chartBarMs, labelOffsetBars)
+        draw_liquidity_depth_profile(slotState, profile.liquidityDepthState, profileConfig, depthActive, dailyLiquidityDepthDistance, array.get(scheduledProfileDepthHistoryCaps, profileIndex), forecastLiquidityDepth)
     draw_slot_forecast(slot1, s1ForecastVisible, s1CurRightT, slot_forecast_right_time(s1Safe, s1CurRightT), s1OEff, s1RHi, s1RLo, slot1Color, s1ForecastIdentifierText, SLOT1_LABEL_SIZE, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL)
     draw_slot_forecast(slot2, s2ForecastVisible, s2CurRightT, slot_forecast_right_time(s2Safe, s2CurRightT), s2OEff, s2RHi, s2RLo, slot2Color, s2ForecastIdentifierText, SLOT2_LABEL_SIZE, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL)
     draw_slot_forecast(weeklyProfileSlot, weeklyProfileForecastVisible, weeklyProfileRightTime, slot_forecast_right_time(WEEKLY_TIMEFRAME, weeklyProfileRightTime), weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, WEEKLY_PROFILE_NAME, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL)
