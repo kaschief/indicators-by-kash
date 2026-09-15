@@ -261,6 +261,7 @@ type LiquidityDepthSideState
 type LiquidityDepthSessionState
     int sessionStartTime
     int sessionStartIndex
+    int sessionEndTime
     float highAnchor
     float lowAnchor
     int cutoffTime
@@ -1378,12 +1379,16 @@ liquidity_depth_cutoff_time(int sessionStartTime) =>
     int cutoffDayOffset = hour(sessionStartTime, NY_TIMEZONE) >= MARKET_CLOSE_HOUR ? 1 : 0
     timestamp(NY_TIMEZONE, year(sessionStartTime, NY_TIMEZONE), month(sessionStartTime, NY_TIMEZONE), dayofmonth(sessionStartTime, NY_TIMEZONE) + cutoffDayOffset, MARKET_CLOSE_HOUR, 0, 0)
 
+liquidity_depth_end_time(int sessionEndTime, int storedEndTime) =>
+    na(storedEndTime) ? sessionEndTime : storedEndTime
+
 // LIQUIDITY DEPTH STATE
 
-new_liquidity_depth_session(int sessionStartTime, int sessionStartIndex, float highAnchor, float lowAnchor) =>
+new_liquidity_depth_session(int sessionStartTime, int sessionStartIndex, int sessionEndTime, float highAnchor, float lowAnchor) =>
     LiquidityDepthSessionState.new(
          sessionStartTime=sessionStartTime,
          sessionStartIndex=sessionStartIndex,
+         sessionEndTime=sessionEndTime,
          highAnchor=highAnchor,
          lowAnchor=lowAnchor,
          cutoffTime=liquidity_depth_cutoff_time(sessionStartTime),
@@ -1428,7 +1433,7 @@ update_liquidity_depth_profile(LiquidityDepthProfileState profileState, Schedule
                 finalize_liquidity_depth_session(profileState.currentSession)
                 array.push(profileState.history, profileState.currentSession)
             [highAnchor, lowAnchor] = liquidity_depth_anchors(profileRuntime.sessionOpen, profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow)
-            profileState.currentSession := new_liquidity_depth_session(profileRuntime.startTime, profileRuntime.startIndex, highAnchor, lowAnchor)
+            profileState.currentSession := new_liquidity_depth_session(profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, highAnchor, lowAnchor)
             while array.size(profileState.history) > math.max(0, historyLimit - 1)
                 array.shift(profileState.history)
 
@@ -1463,16 +1468,16 @@ liquidity_depth_label_text(int levelIndex, string profileName) =>
 liquidity_depth_profile_name(string sourceLabel) =>
     sourceLabel == OVERNIGHT_CHART_LABEL ? OVERNIGHT_SLOT_NAME : sourceLabel
 
-make_liquidity_depth_connector(int anchorTime, int anchorIndex, float anchorPrice, float levelPrice, color profileColor) =>
+make_liquidity_depth_connector(bool timeBased, int anchorTime, int anchorIndex, float anchorPrice, float levelPrice, color profileColor) =>
     int safeIndex = math.max(anchorIndex, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
-    line.new(drawing_x(anchorTime, safeIndex, false), anchorPrice, drawing_x(anchorTime, safeIndex, false), levelPrice,
-         xloc=drawing_xloc(false), color=color.new(profileColor, 80), width=1, style=line.style_dashed)
+    line.new(drawing_x(anchorTime, safeIndex, timeBased), anchorPrice, drawing_x(anchorTime, safeIndex, timeBased), levelPrice,
+         xloc=drawing_xloc(timeBased), color=color.new(profileColor, 80), width=1, style=line.style_dashed)
 
-make_liquidity_depth_label(int startTime, int startIndex, int endTime, int endIndex, float levelPrice, string labelText) =>
+make_liquidity_depth_label(bool timeBased, int startTime, int startIndex, int endTime, int endIndex, float levelPrice, string labelText) =>
     int labelTime = startTime + int((endTime - startTime) / 2)
     int labelIndex = startIndex + int((endIndex - startIndex) / 2)
-    label.new(drawing_x(labelTime, labelIndex, false), levelPrice, labelText,
-         xloc=drawing_xloc(false), yloc=yloc.price, style=label.style_label_center,
+    label.new(drawing_x(labelTime, labelIndex, timeBased), levelPrice, labelText,
+         xloc=drawing_xloc(timeBased), yloc=yloc.price, style=label.style_label_center,
          textcolor=DEFAULT_LIQUIDITY_DEPTH_LABEL_TEXT, size=6, color=DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND)
 
 draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessionState, LiquidityDepthSideState sideState, bool isHigh, float depthStep, color profileColor, string profileName, bool forecastEnabled) =>
@@ -1483,14 +1488,15 @@ draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessio
         for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
             int storedEndTime = array.get(sideState.endTimes, levelIndex)
             int storedEndIndex = array.get(sideState.endIndices, levelIndex)
-            int endTime = na(storedEndTime) ? math.min(time, sessionState.cutoffTime) : storedEndTime
+            bool projectToSessionEnd = na(storedEndTime)
+            int endTime = liquidity_depth_end_time(sessionState.sessionEndTime, storedEndTime)
             int liveEndIndex = sessionState.cutoffTime <= time ? nz(sessionState.lastEligibleIndex, bar_index) : bar_index
             int endIndex = na(storedEndIndex) ? liveEndIndex : storedEndIndex
             float levelPrice = liquidity_depth_price(anchorPrice, isHigh, levelIndex, depthStep)
             color levelColor = liquidity_depth_level_color(levelIndex, profileColor)
-            array.push(slotState.liquidityDepthLines, make_horizontal_line(false, startTime, startIndex, endTime, endIndex, levelPrice, levelColor, liquidity_depth_level_style(levelIndex), liquidity_depth_level_width(levelIndex)))
-            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(startTime, startIndex, anchorPrice, levelPrice, profileColor))
-            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(startTime, startIndex, endTime, endIndex, levelPrice, liquidity_depth_label_text(levelIndex, profileName)))
+            array.push(slotState.liquidityDepthLines, make_horizontal_line(projectToSessionEnd, startTime, startIndex, endTime, endIndex, levelPrice, levelColor, liquidity_depth_level_style(levelIndex), liquidity_depth_level_width(levelIndex)))
+            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(projectToSessionEnd, startTime, startIndex, anchorPrice, levelPrice, profileColor))
+            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(projectToSessionEnd, startTime, startIndex, endTime, endIndex, levelPrice, liquidity_depth_label_text(levelIndex, profileName)))
 
 draw_liquidity_depth_profile(SlotState slotState, LiquidityDepthProfileState profileState, ScheduledProfileConfig profileConfig, bool depthActive, float depthStep, int historyCap, bool forecastEnabled) =>
     while array.size(slotState.liquidityDepthLines) > 0

@@ -9,7 +9,7 @@ const functionBody = name => {
   return body.trim();
 };
 
-// These checks validate source contracts. They do not compile Pine or prove chart behavior.
+// These checks validate source contracts and translated pure calculations, not Pine compilation or chart behavior.
 test('Daily replaces the 4-hour slot as the default enabled profile', () => {
   assert.match(source, /^dailyProfileShow = input\.bool\(true, DAILY_PROFILE_NAME,/m);
   assert.match(source, /^slot2Show\s+= input\.bool\(false, "2",/m);
@@ -56,6 +56,51 @@ test('normal LD requires a breach while Forecast LD projects unbreached sides', 
   assert.match(source, /draw_liquidity_depth_profile\([^\n]+forecastLiquidityDepth\)/);
 });
 
+test('every open LD level reaches its session end while stopped levels retain their own endpoint', () => {
+  const expression = functionBody('liquidity_depth_end_time')
+    .replace(/na\((\w+)\)/g, '($1 == null)');
+  const endTime = new Function('sessionEndTime', 'storedEndTime', `return ${expression};`);
+
+  assert.equal(endTime(12, null), 12, 'open NYAM levels reach noon');
+  assert.equal(endTime(42, null), 42, 'open Globex levels reach the next-day 18:00 profile edge');
+  assert.equal(endTime(12, 10), 10, 'mitigated LD retains its first-touch endpoint');
+  assert.equal(endTime(42, 40), 40, 'finalized LD retains the existing cutoff endpoint');
+  assert.equal(endTime(12, 16), 16, 'stored endpoints beyond the profile window remain unchanged');
+  assert.deepEqual([10, null, null].map(stoppedAt => endTime(12, stoppedAt)), [10, 12, 12],
+    'after L1 is mitigated, L2 and L3 still project to the session end');
+  assert.deepEqual([10, 11, null].map(stoppedAt => endTime(12, stoppedAt)), [10, 11, 12],
+    'mitigation of another level does not shorten the remaining open level');
+
+  const body = functionBody('draw_liquidity_depth_side');
+  assert.match(body, /liquidity_depth_end_time\(sessionState\.sessionEndTime, storedEndTime\)/);
+  assert.match(body, /bool projectToSessionEnd = na\(storedEndTime\)/);
+  assert.doesNotMatch(source, /forecastOnly/);
+});
+
+test('LD visibility depends on activation or Forecast LD but projection is per level in both modes', () => {
+  const body = functionBody('draw_liquidity_depth_side');
+  const visibilityExpression = body.match(/^if ([^\n]+)/)?.[1].replaceAll(' or ', ' || ');
+  assert.ok(visibilityExpression);
+  const visible = new Function('sideState', 'forecastEnabled', `return ${visibilityExpression};`);
+  assert.equal(visible({ activated: false }, false), false);
+  assert.equal(visible({ activated: false }, true), true);
+  assert.equal(visible({ activated: true }, false), true);
+  assert.equal(visible({ activated: true }, true), true);
+  assert.match(body, /for levelIndex[^\n]+\n[\s\S]*bool projectToSessionEnd = na\(storedEndTime\)/);
+  assert.doesNotMatch(body, /projectToSessionEnd = [^\n]*(?:forecastEnabled|activated)/);
+});
+
+test('open LD lines, connectors and labels share the profile time coordinates on Range charts', () => {
+  const body = functionBody('draw_liquidity_depth_side');
+  assert.match(body, /make_horizontal_line\(projectToSessionEnd, startTime, startIndex, endTime, endIndex,/);
+  assert.match(body, /make_liquidity_depth_connector\(projectToSessionEnd, startTime, startIndex,/);
+  assert.match(body, /make_liquidity_depth_label\(projectToSessionEnd, startTime, startIndex, endTime, endIndex,/);
+  for (const helper of ['make_liquidity_depth_connector', 'make_liquidity_depth_label']) {
+    assert.match(functionBody(helper), /xloc=drawing_xloc\(timeBased\)/);
+    assert.doesNotMatch(functionBody(helper), /drawing_x(?:loc)?\([^\n]*false\)/);
+  }
+});
+
 test('asset registry mirrors Pulse Daily fixed point steps', () => {
   for (const [symbols, step] of [
     ['"NQ", "MNQ"', '27'],
@@ -100,7 +145,8 @@ test('activated depth draws retrospectively from the matching profile edge', () 
   const constructorBody = functionBody('new_liquidity_depth_session');
   assert.match(constructorBody, /sessionStartTime=sessionStartTime/);
   assert.match(constructorBody, /sessionStartIndex=sessionStartIndex/);
-  assert.match(functionBody('update_liquidity_depth_profile'), /new_liquidity_depth_session\(profileRuntime\.startTime, profileRuntime\.startIndex, highAnchor, lowAnchor\)/);
+  assert.match(constructorBody, /sessionEndTime=sessionEndTime/);
+  assert.match(functionBody('update_liquidity_depth_profile'), /new_liquidity_depth_session\(profileRuntime\.startTime, profileRuntime\.startIndex, profileRuntime\.endTime, highAnchor, lowAnchor\)/);
 
   const drawBody = functionBody('draw_liquidity_depth_side');
   assert.match(drawBody, /int startTime = sessionState\.sessionStartTime/);
@@ -133,8 +179,8 @@ test('presentation follows Pulse Today tiers and dual chart coordinates', () => 
   assert.match(functionBody('liquidity_depth_level_style'), /levelIndex == 0 \? line\.style_dashed : line\.style_dotted/);
   assert.match(functionBody('liquidity_depth_profile_name'), /sourceLabel == OVERNIGHT_CHART_LABEL \? OVERNIGHT_SLOT_NAME : sourceLabel/);
   assert.match(functionBody('make_liquidity_depth_connector'), /color\.new\(profileColor, 80\).*width=1, style=line\.style_dashed/s);
-  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(false,/);
-  assert.match(functionBody('make_liquidity_depth_label'), /drawing_x\(labelTime, labelIndex, false\)/);
+  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(projectToSessionEnd,/);
+  assert.match(functionBody('make_liquidity_depth_label'), /drawing_x\(labelTime, labelIndex, timeBased\)/);
 });
 
 test('timeframe, history state and drawing budgets share centralized gates', () => {
