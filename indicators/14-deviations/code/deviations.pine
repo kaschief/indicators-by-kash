@@ -27,7 +27,7 @@ type SessionConfig
     string chartLabel
     color mitigationColor
     bool delayedMitigation
-    string extend            // EXTEND_OFF, EXTEND_6H, etc.
+    string extensionPreset   // EXTEND_OFF, EXTEND_6H, etc.
     bool isKeySession
     color retraceLabelTextColor
     color retraceLabelBgColor
@@ -107,6 +107,7 @@ type SessionData
     bool retraceOriginProvisional
     int retraceLegStartBar
     bool retraceTraversalCompleted
+    int retraceCompletionTime
     bool retraceFadeApplied
     int ivbBreakTime
     int ivbBreakSide  // 1 = IVB high broke first, -1 = IVB low broke first
@@ -261,8 +262,9 @@ TOOLTIP_KEEP_PAST_GLOW = "Keep earned historical glows; only current sessions re
 TOOLTIP_MAX_SESSIONS = "Max sessions shown per opening type, including the developing session."
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
-TOOLTIP_FADE_RETRACE = "Fade completed 0.5 / 0.618 traversals. IVB-Based completes at the later opposite NY Early boundary."
-TOOLTIP_FADE_MITIGATION = "Fade completed boundaries after price moves the Distance Threshold away; the fade stays applied."
+TOOLTIP_FADE_RETRACE = "Fade NY Early and IVB retracements at 16:00 NY. Other completed 0.5 / 0.618 traversals fade after Duration."
+TOOLTIP_FADE_MITIGATION = "Fade each completed boundary after Duration; the fade stays applied."
+TOOLTIP_FADE_DURATION = "Delay for mitigation and non-NY Early/IVB retracement fades."
 
 TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
 TOOLTIP_FOCUS_COUNT = "Per session type."
@@ -424,8 +426,8 @@ globalLabelSize = priceAndSizeQuickBoost ? size.small : labelTextSize == LABEL_S
 fadeCompletedRetracements = input.bool(true, "Fade Completed Retracement Levels", inline="fade", group=GROUP_DISPLAY, tooltip=TOOLTIP_FADE_RETRACE)
 completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fade", group=GROUP_DISPLAY, active=fadeCompletedRetracements, tooltip="Completed retracement transparency.")
 fadeCompletedMitigationLevels = input.bool(true, "Fade Completed Mitigation Levels", inline="mitigation_fade", group=GROUP_DISPLAY)
-completedMitigationFadeOpacity = input.int(85, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels)
-completedMitigationDistanceThreshold = input.float(0.2, "Distance Threshold %", minval=0.0, maxval=100.0, step=0.1, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
+completedMitigationFadeOpacity = input.int(85, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
+completedFadeDurationHours = input.float(6.0, "Duration", minval=0.5, maxval=24.0, step=0.5, inline="fade_duration", group=GROUP_DISPLAY, active=fadeCompletedRetracements or fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_DURATION)
 nyEarlyIvbCoreVisibility = input.string(CORE_VISIBILITY_AUTO, "NY Early + IVB Cores", options=[CORE_VISIBILITY_AUTO, CORE_VISIBILITY_HIDDEN, CORE_VISIBILITY_SHOWN], inline="ny_early_ivb_cores", group=GROUP_DISPLAY)
 includePastNyEarlyIvbCores = input.bool(false, "Include Past Cores", inline="ny_early_ivb_cores", group=GROUP_DISPLAY, active=nyEarlyIvbCoreVisibility != CORE_VISIBILITY_SHOWN, tooltip="Auto — Hide today's cores 06:00–10:00 NY.\nHidden — Hide today's cores all day.\nShown — Show all cores.\n\nInclude Past Cores — Extend Auto or Hidden to retained prior-day cores.")
 currentNyMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
@@ -822,6 +824,7 @@ clearRetracementLeg(SessionData sess) =>
     sess.retrace618Bar := na
     sess.retrace618Armed := false
     sess.retraceTraversalCompleted := false
+    sess.retraceCompletionTime := na
     sess.retraceFadeApplied := false
     true
 
@@ -955,13 +958,15 @@ fadeRetraceElements(line ln, array<label> lbls, color baseLineColor, color baseT
         label.set_textcolor(lbl, fadeToward100(baseTextColor, completedRetraceFade))
         label.set_color(lbl, fadeToward100(baseBgColor, completedRetraceFade))
 
+completedFadeDurationElapsed(int completionTime) =>
+    not na(completionTime) and time >= completionTime + int(completedFadeDurationHours * 60 * 60 * 1000)
+
 completedMitigationShouldFade(SessionData sess, bool isHigh) =>
     bool isMitigated = isHigh ? sess.highMitigated : sess.lowMitigated
     bool fadeApplied = isHigh ? sess.highMitigationFadeApplied : sess.lowMitigationFadeApplied
-    float level = isHigh ? sess.dominantHigh : sess.dominantLow
-    float distancePct = not na(level) ? math.abs(close - level) / math.max(math.abs(level), syminfo.mintick) * 100.0 : 0.0
-    bool thresholdReached = distancePct >= completedMitigationDistanceThreshold
-    if fadeCompletedMitigationLevels and isMitigated and thresholdReached and not fadeApplied
+    int mitigationTime = isHigh ? sess.highMitigationTime : sess.lowMitigationTime
+    bool durationElapsed = completedFadeDurationElapsed(mitigationTime)
+    if fadeCompletedMitigationLevels and isMitigated and durationElapsed and not fadeApplied
         if isHigh
             sess.highMitigationFadeApplied := true
         else
@@ -1015,6 +1020,21 @@ isRetraceTraversalComplete(SessionData sess) =>
         sess.retraceTraversalCompleted
     else
         sess.highMitigated and sess.lowMitigated
+
+retracementFadesAtMarketClose(SessionData sess) =>
+    sess.sessionIndex == IDX_NY_EARLY or sess.sessionIndex == IDX_IVB
+
+completedRetracementShouldFade(SessionData sess) =>
+    bool hasCompletedLevel = sess.midMitigated or sess.retrace618Mitigated
+    bool fadesAtMarketClose = retracementFadesAtMarketClose(sess)
+    int marketCloseTime = timestamp(NY_TIMEZONE, year(sess.startTime, NY_TIMEZONE), month(sess.startTime, NY_TIMEZONE), dayofmonth(sess.startTime, NY_TIMEZONE), 16, 0)
+    bool marketCloseReached = time >= marketCloseTime
+    bool durationElapsed = completedFadeDurationElapsed(sess.retraceCompletionTime)
+    fadeCompletedRetracements and hasCompletedLevel and (fadesAtMarketClose ? marketCloseReached : isRetraceTraversalComplete(sess) and durationElapsed)
+
+completedRetracementFadePending(SessionData sess) =>
+    bool fadeTriggerPending = retracementFadesAtMarketClose(sess) or isRetraceTraversalComplete(sess)
+    fadeCompletedRetracements and fadeTriggerPending and (sess.midMitigated or sess.retrace618Mitigated) and not sess.retraceFadeApplied
 
 // Monotone once true — Phase 4 stops walking the session. na retraceLevel618 with both extremes
 // taken counts as complete: the 0.618 anchor can no longer be established.
@@ -1689,7 +1709,7 @@ renderFocusSession(SessionData sess, bool selected) =>
             sess.lowUnmitigatedLabel := lowOpenLabel
             sess.lowPendingLabel := lowProvisionalLabel
 
-            bool retracementsFaded = fadeCompletedRetracements and isRetraceTraversalComplete(sess)
+            bool retracementsFaded = completedRetracementShouldFade(sess)
             bool refreshRetracementStyle = retracementsFaded != sess.retraceFadeApplied
             sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.actualEndBar, sess.midMitigationBar, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
             sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.actualEndBar, sess.retrace618Bar, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.retrace618Line, sess.retrace618Labels)
@@ -2005,6 +2025,7 @@ if validChartContext
                      retraceOriginProvisional=false,
                      retraceLegStartBar=na,
                      retraceTraversalCompleted=false,
+                     retraceCompletionTime=na,
                      retraceFadeApplied=false,
                      ivbBreakTime=na,
                      ivbBreakSide=0,
@@ -2319,7 +2340,13 @@ if validChartContext and array.size(lifecycleSessions) > 0
             if lifecycleExpired
                 completedMitigationShouldFade(sess, true)
                 completedMitigationShouldFade(sess, false)
-                if not completedMitigationFadePending(sess)
+                if na(sess.retraceCompletionTime) and isRetraceTraversalComplete(sess)
+                    sess.retraceCompletionTime := time
+                if eagerDraw and completedRetracementShouldFade(sess) and not sess.retraceFadeApplied
+                    fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                    fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                    sess.retraceFadeApplied := true
+                if not completedMitigationFadePending(sess) and not completedRetracementFadePending(sess)
                     array.push(completedLifecycleIndices, lifecycleIndex)
                 continue
             shouldTrackMitigation = alwaysTrackMitigation(sess.sessionIndex) or isOnActualSessionDay
@@ -2704,7 +2731,10 @@ if validChartContext and array.size(lifecycleSessions) > 0
                 if reachedOppositeBoundary
                     sess.retraceTraversalCompleted := true
 
-            if eagerDraw and fadeCompletedRetracements and not sess.retraceFadeApplied and isRetraceTraversalComplete(sess) and (sess.midMitigated or sess.retrace618Mitigated)
+            if na(sess.retraceCompletionTime) and isRetraceTraversalComplete(sess)
+                sess.retraceCompletionTime := time
+
+            if eagerDraw and completedRetracementShouldFade(sess) and not sess.retraceFadeApplied
                 fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                 fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
                 sess.retraceFadeApplied := true
@@ -2712,7 +2742,8 @@ if validChartContext and array.size(lifecycleSessions) > 0
             completedMitigationShouldFade(sess, true)
             completedMitigationShouldFade(sess, false)
             bool mitigationFadePending = completedMitigationFadePending(sess)
-            if sessionLifecycleComplete(sess) and not mitigationFadePending
+            bool retracementFadePending = completedRetracementFadePending(sess)
+            if sessionLifecycleComplete(sess) and not mitigationFadePending and not retracementFadePending
                 array.push(completedLifecycleIndices, lifecycleIndex)
 
     if array.size(completedLifecycleIndices) > 0
