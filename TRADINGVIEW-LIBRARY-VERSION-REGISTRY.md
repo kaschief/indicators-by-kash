@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 1 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 5 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -111,6 +111,10 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensProfileOrchestrationLibrary | 2 | Published · host compiled · runtime validation pending | Exports the NY cutoff boundary used by the reorganized host | `560b8ae0a37c38f15eb033ccef2eb7a6926cb55c52b5d85c47493158ad32b68e` |
 | LegilimensProfileOrchestrationLibrary | 3 | Discarded before publication | Unpublished maturity extraction withdrawn at user request on 2026-09-09; maturity feature subsequently removed at user request; version remains retired | `d967382236ede8896bc6d5482a1450a058e4f5a8bf4cc453721cd5732f9f288b` |
 | LegilimensPresentationLibrary | 1 | Published · host compiled · user confirmed working | Extracts presentation, drawing, object-budget, merging, mitigation, and role-reversal ownership from the Legilimens host without intended behavior changes | `28219d081d6ec34fd82de9c481f09553db5ec50e0c69d00d2e558dd76727de11` |
+| LegilimensPresentationLibrary | 2 | Published · host loaded · tested · approved | Applies profile-Fib qualification to LVN zone borders and markers while preserving the neutral LVN fill and cliff styling | `525201bbce26d5d94a38b80dcd65bac6dd764b8f4627142f6a4e40080cc26b19` |
+| LegilimensPresentationLibrary | 3 | Published · deployed | Adds optional one-pixel hollow context boxes for each profile's strongest positive and negative Delta rows when no currently visible Delta tier zone includes the row | `5d6ba4ecd9a154b9c78c5d2e24e90cec3f1d67a6cf02cece738a295f5c9a1134` |
+| LegilimensPresentationLibrary | 4 | Published · deployed | Expands strongest-Delta context boxes to their tier-style row-series and adds independently optional, subdued LVN Fib styling | `528dd9982a19d380e146904cec6159f7f2dc3d535f09df951c3d705ade741d36` |
+| LegilimensPresentationLibrary | 5 | Published · deployed · tested · approved | Adds independent host-controlled transparency for Fib-qualified LVN borders and markers | `d2ff5bf7488bd483adac2081310864b10efa67a42133fc0087659cd496d403e9` |
 
 ## Publication-instruction log
 
@@ -206,6 +210,10 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-14-02 | 2026-09-14 | RevelioGapsLibrary | 13 | After Core `/12`, publish the dependency-aligned Value Gaps source privately as `/13` | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-14-03 | 2026-09-14 | RevelioInteractionsLibrary | 29 | Publish the generalized inline line-reminder compositor privately as `/29` | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-14-04 | 2026-09-14 | RevelioProfileOrchestrationLibrary | 10 | After Core `/12`, publish exact developing and Quarterly manual-composite count transport privately as `/10`, then compile the Revelio host against the complete pending chain | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-15-01 | 2026-09-15 | LegilimensPresentationLibrary | 2 | Publish the LVN Fib-qualification presentation source privately as `/2`, then compile the Legilimens host against Profile `/4`, Orchestration `/2`, and Presentation `/2`; verify LVN borders and markers are green below the profile midpoint and red above it while LVN fills and cliff styling remain unchanged | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-15-02 | 2026-09-15 | LegilimensPresentationLibrary | 3 | Publish the strongest-Delta context-box presentation source privately as `/3`, then compile the Legilimens host against Profile `/4`, Orchestration `/2`, and Presentation `/3`; verify each profile shows at most one hollow one-pixel box for its strongest positive row and one for its strongest negative row, using the existing corresponding Delta-zone color, and that a currently visible tier zone suppresses the matching context box | `PUBLISHED_DEPLOYED` |
+| PUB-2026-09-15-03 | 2026-09-15 | LegilimensPresentationLibrary | 4 | Publish the grouped strongest-Delta and optional subdued-LVN-Fib presentation source privately as `/4`, then compile the Legilimens host against Profile `/4`, Orchestration `/2`, and Presentation `/4`; verify strongest-Delta outlines span their tier-style row-series and respond to their host Width setting, while Apply to LVNs independently enables or disables fixed one-pixel, 65%-transparent directional LVN borders and Fib markers without changing gray fills or normal Delta tiers | `PUBLISHED_DEPLOYED` |
+| PUB-2026-09-15-04 | 2026-09-15 | LegilimensPresentationLibrary | 5 | Publish the LVN Fib-transparency presentation source privately as `/5`, then compile the Legilimens host against Profile `/4`, Orchestration `/2`, and Presentation `/5`; verify LVN Border Fade % and Marker Fade % independently adjust only Fib-qualified LVN colors while border width stays one pixel, gray fills remain unchanged, and Highest Delta Levels and normal Delta tiers remain unaffected | `PUBLISHED_DEPLOYED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -223,13 +231,22 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
 - Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
 - Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
-- Legilimens current handoff: Presentation `/1` is published and the host compiles against Profile `/4`, Orchestration `/2`, and Presentation `/1`; the user confirmed it works. The host retains inputs, requests, sampling, anchor lifecycle, chart visibility, and execution sequencing; the presentation library owns drawings, object budgeting, merging, mitigation, and role reversal. Broader Replay, realtime, Range-chart, object-budget, interaction, performance, and visual-parity coverage remains separately unconfirmed.
+- Legilimens current handoff: Presentation `/2` and `/5` are published, deployed, tested, and approved; `/3` and `/4` are published and deployed as the intermediate releases in that chain. The host imports Profile `/4`, Orchestration `/2`, and Presentation `/5`. `/4` expands Highest Delta Levels to the containing tier-style row-series and adds Apply to LVNs. The settled host presentation fixes Highest Delta Levels width at 3, LVN border fade at 90%, and LVN marker fade at 50%; those three tuning controls are removed. Existing directional hues, gray LVN fill, one-pixel LVN border, and normal Delta tiers remain unchanged.
 
 ## Pending release notes
 
-None. Revelio Core `/12`, Gaps `/13`, Interactions `/29`, and Profile Orchestration `/10` are published and loading for testing.
+None. Legilimens Presentation `/5` is published, deployed, tested, and approved.
 
 ## Current host validation
+
+- User confirmed `indicators/21-legilimens/code/legilimens.pine` complete after testing against Profile `/4`, Orchestration `/2`, and Presentation `/5`.
+- Highest Delta Levels On shows no more than one hollow positive and one hollow negative context box per profile, and Off removes both.
+- A context box spans the full tier-style row-series containing the strongest row when one exists and remains one row high when no such series exists.
+- Dominant through Weak+ filters suppress a context box whenever the strongest row belongs to a currently visible same-side tier zone, while lowering the visible tier count restores the fallback when that zone is filtered out.
+- Highest Delta Levels uses fixed width 3 with no Width control; the boxes retain no fill, marker, label, mitigation, or role-reversal behavior while reusing the existing corresponding Delta-zone color in standard and alternate profile palettes.
+- Fib-qualified LVNs use fixed 90% border fade and 50% marker fade with no fade controls; the border remains one pixel, the gray LVN fill remains visually dominant, and the Fib marker shape remains unchanged.
+- Apply to LVNs Off restores neutral LVN presentation without disabling Fib qualification on normal Delta tiers, and On restores the directional LVN border and Fib marker.
+- Highest Delta Levels and normal Delta-tier zone widths, colors, fills, and markers remain unchanged.
 
 - Publish Core `/12`, then Gaps `/13` and Profile Orchestration `/10`; publish Interactions `/29`; compile `indicators/20-revelio/code/indicator/revelio.pine` against that pending chain.
 - Confirm frame-edge labels sit inline on both horizontal frame lines and read, for example, `Weekly Composite (4) Aug 12–Aug 15`, with no comma or bullet.

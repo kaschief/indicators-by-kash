@@ -119,11 +119,16 @@ export type DeltaSettings
     int visibleTierCount
     string visibleTierSides
     string tierLineStyle
+    bool showHighestDeltaLevels
+    int highestDeltaBorderWidth
     bool showLvnTiers
     int visibleLvnTierCount
     bool showDots
     bool showDotLabels
-    bool qualifyByFib
+    bool qualifyDeltaTiersByFib
+    bool qualifyLvnByFib
+    int lvnFibBorderTransparency
+    int lvnFibMarkerTransparency
     bool showHistogram
     int histogramWidthPercent
 
@@ -413,13 +418,14 @@ maximumCoreObjectCostsPerProfile(PresentationConfig config) =>
     int deltaTierSides = visibleDeltaTierSideCount(config)
     int lvnTierCount = config.delta.showLvnTiers ? config.delta.visibleLvnTierCount : 0
     int deltaTierCount = deltaTierSides * config.delta.visibleTierCount
+    int highestDeltaBoxCount = config.delta.showHighestDeltaLevels ? 2 : 0
     int referenceLineCount = (config.levels.showValueArea ? 2 : 0) + (config.levels.showPoc ? 1 : 0) + (config.levels.showMidpoint ? 1 : 0)
     int rightLineCount = lvnTierCount + deltaTierSides * math.min(2, config.delta.visibleTierCount)
     int pocLabelCount = config.levels.showPoc ? 1 : 0
     int midpointLabelCount = config.levels.showMidpoint ? 1 : 0
     int lvnMarkerLabelCount = config.delta.showDots ? lvnTierCount + (config.delta.showDotLabels and lvnTierCount > 0 ? 1 : 0) : 0
     int deltaMarkerLabelCount = config.delta.showDots ? deltaTierCount + (config.delta.showDotLabels ? deltaTierSides : 0) : 0
-    int zoneBoxCount = lvnTierCount + deltaTierCount
+    int zoneBoxCount = lvnTierCount + deltaTierCount + highestDeltaBoxCount
     [referenceLineCount + rightLineCount, PROFILE_HEADING_LABEL_COUNT + pocLabelCount + midpointLabelCount + lvnMarkerLabelCount + deltaMarkerLabelCount, PROFILE_FRAME_BOX_COUNT + zoneBoxCount]
 
 profileCapacityForObjectLimit(int objectLimit, int objectsPerProfile, int fallbackCapacity) =>
@@ -722,6 +728,10 @@ deltaTierFibLocationGrade(bool buySide, float tierPrice, float rangeLow, float r
 
 fibLocationMarkerGlyph(int grade) =>
     grade == FIB_LOCATION_VERY_STRONG ? FIB_LOCATION_VERY_STRONG_MARKER_GLYPH : grade == FIB_LOCATION_PREFERRED ? FIB_LOCATION_PREFERRED_MARKER_GLYPH : LEVEL_MARKER_GLYPH
+
+fibLocationBorderWidth(int grade, bool buySide, float price, float midpointPrice) =>
+    bool borderedQualified = grade == FIB_LOCATION_QUALIFIED and (buySide ? price < midpointPrice : price > midpointPrice)
+    grade == FIB_LOCATION_VERY_STRONG ? 2 : grade == FIB_LOCATION_PREFERRED or borderedQualified ? 1 : 0
 
 contrastChannel(float channel, float ratio, bool darken) =>
     darken ? channel * (1.0 - ratio) : channel + (255.0 - channel) * ratio
@@ -1136,16 +1146,16 @@ renderHistogram(RenderState state, legilimensOrchestration.Profile profile, int 
                     polylinesUsed += 1
     polylinesUsed
 
-renderLowVolumeZone(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, float price, float zoneLow, float zoneHigh, int levelEndTime, int levelRank, int sessionTradingDayKey, bool historical, string markerLabel, color markerColor, int markerSize, bool registrationOnly, array<SourceSpec> sources, PresentationConfig config) =>
+renderLowVolumeZone(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, float price, float zoneLow, float zoneHigh, int levelEndTime, int levelRank, int sessionTradingDayKey, bool historical, int borderWidth, color borderColor, color markerColor, string markerGlyph, string markerLabel, int markerSize, bool registrationOnly, array<SourceSpec> sources, PresentationConfig config) =>
     color zoneColor = color.new(color.rgb(74, 74, 74), 95)
     bool markerDeferred = mitigationEnabled(sources, source.key, config)
     if registrationOnly
         if markerDeferred
             registerMitigatedZone(state, source.key, profile.startTime, levelEndTime, price, config)
     else if markerDeferred
-        array.push(state.pendingMitigatedZones, PendingMitigatedZone.new(price, zoneLow, zoneHigh, profile.startTime, profile.endTime, levelEndTime, zoneColor, 0, markerColor, false, markerColor, LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, source.key, sessionTradingDayKey, historical, 0, LEVEL_MARKER_GLYPH, markerLabel, markerColor, markerSize))
+        array.push(state.pendingMitigatedZones, PendingMitigatedZone.new(price, zoneLow, zoneHigh, profile.startTime, profile.endTime, levelEndTime, zoneColor, borderWidth, borderColor, false, markerColor, LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, source.key, sessionTradingDayKey, historical, 0, markerGlyph, markerLabel, markerColor, markerSize))
     else
-        renderZoneFill(state, profile.endTime, levelEndTime, zoneLow, zoneHigh, zoneColor, 0, markerColor, config)
+        renderZoneFill(state, profile.endTime, levelEndTime, zoneLow, zoneHigh, zoneColor, borderWidth, borderColor, config)
     markerDeferred
 
 renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool registrationOnly, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
@@ -1160,24 +1170,37 @@ renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile pro
                 float labelPrice = candidate.isLvn ? (candidate.zoneLow + candidate.zoneHigh) * 0.5 : candidate.price
                 string markerLabel = config.delta.showDotLabels and structureRank == 1 ? displayNameOverride != "" ? displayNameOverride : source.labelName : ""
                 color markerColor = color.new(color.rgb(15, 15, 15), 75)
+                color borderColor = markerColor
+                string markerGlyph = LEVEL_MARKER_GLYPH
+                int fibBorderWidth = 0
+                if candidate.isLvn and config.delta.qualifyLvnByFib
+                    float fibMidpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
+                    bool buySide = labelPrice < fibMidpointPrice
+                    bool sellSide = labelPrice > fibMidpointPrice
+                    if buySide or sellSide
+                        int fibGrade = deltaTierFibLocationGrade(buySide, labelPrice, profile.data.rangeLow, profile.data.rangeHigh)
+                        color directionalColor = buySide ? profileDeltaPlusPlusColor(source) : profileDeltaMinusMinusColor(source)
+                        markerColor := color.new(fibQualificationColor(directionalColor, fibGrade >= FIB_LOCATION_QUALIFIED), config.delta.lvnFibMarkerTransparency)
+                        borderColor := color.new(directionalColor, config.delta.lvnFibBorderTransparency)
+                        markerGlyph := fibLocationMarkerGlyph(fibGrade)
+                        fibBorderWidth := 1
                 bool markerDeferred = false
                 if candidate.isLvn
-                    markerDeferred := renderLowVolumeZone(state, profile, source, labelPrice, candidate.zoneLow, candidate.zoneHigh, levelEndTime, levelRank, sessionTradingDayKey, historical, markerLabel, markerColor, tierMarkerSize(6 - structureRank), registrationOnly, sources, config)
+                    markerDeferred := renderLowVolumeZone(state, profile, source, labelPrice, candidate.zoneLow, candidate.zoneHigh, levelEndTime, levelRank, sessionTradingDayKey, historical, fibBorderWidth, borderColor, markerColor, markerGlyph, markerLabel, tierMarkerSize(6 - structureRank), registrationOnly, sources, config)
                 else if not registrationOnly
                     queueRightLine(state, candidate.price, profile.endTime, levelEndTime, markerColor, LOW_VOLUME_LINE_WIDTH, STYLE_DOTTED, levelRank, source.key, sessionTradingDayKey, historical, 0, context)
                 if not registrationOnly and not markerDeferred
-                    queueLevelMarker(state, labelPrice, levelMarkerTime(levelEndTime), LEVEL_MARKER_GLYPH, markerLabel, markerColor, tierMarkerSize(6 - structureRank), config)
+                    queueLevelMarker(state, labelPrice, levelMarkerTime(levelEndTime), markerGlyph, markerLabel, markerColor, tierMarkerSize(6 - structureRank), config)
 
-collectOutlierPeaks(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<float> strengths, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, PresentationConfig config) =>
+queueOutlierPeaks(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<legilimensProfile.OutlierPeak> peaks, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, PresentationConfig config) =>
     if config.delta.showTiers
         int markerTime = levelMarkerTime(levelEndTime)
-        array<legilimensProfile.OutlierPeak> peaks = legilimensProfile.collectOutlierPeaks(profile.data, strengths)
         int count = array.size(peaks)
         if count > 0
             for peakIndex = 0 to count - 1
                 legilimensProfile.OutlierPeak peak = array.get(peaks, peakIndex)
-                int fibGrade = config.delta.qualifyByFib ? deltaTierFibLocationGrade(peak.buySide, peak.price, profile.data.rangeLow, profile.data.rangeHigh) : FIB_LOCATION_UNKNOWN
-                float fibMidpoint = config.delta.qualifyByFib ? (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT : na
+                int fibGrade = config.delta.qualifyDeltaTiersByFib ? deltaTierFibLocationGrade(peak.buySide, peak.price, profile.data.rangeLow, profile.data.rangeHigh) : FIB_LOCATION_UNKNOWN
+                float fibMidpoint = config.delta.qualifyDeltaTiersByFib ? (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT : na
                 array.push(state.pendingOutlierLevels, PendingOutlierLevel.new(peak.price, peak.zoneLow, peak.zoneHigh, peak.delta, peak.strength, peak.buySide, profile.startTime, profile.endTime, levelEndTime, markerTime, source.key, displayNameOverride, sessionTradingDayKey, historical, peak.firstRow, peak.lastRow, fibGrade, fibMidpoint))
 
 rankPendingOutlierLevels(RenderState state, BarContext context, PresentationConfig config) =>
@@ -1219,13 +1242,12 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             bool extendPriorityZone = ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
             int direction = ranked.buySide ? 1 : -1
             string markerLabel = config.delta.showDotLabels and ranked.strengthRank == 1 ? ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName : ""
-            bool borderedQualified = config.delta.qualifyByFib and ranked.fibLocationGrade == FIB_LOCATION_QUALIFIED and (ranked.buySide ? ranked.price < ranked.fibMidpointPrice : ranked.price > ranked.fibMidpointPrice)
-            int fibBorderWidth = config.delta.qualifyByFib ? ranked.fibLocationGrade == FIB_LOCATION_VERY_STRONG ? 2 : ranked.fibLocationGrade == FIB_LOCATION_PREFERRED or borderedQualified ? 1 : 0 : 0
-            bool qualified = config.delta.qualifyByFib and ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
-            color zoneColor = config.delta.qualifyByFib ? fibQualificationColor(appearanceZoneColor(appearance), qualified) : appearanceZoneColor(appearance)
-            color lineColor = config.delta.qualifyByFib ? fibQualificationColor(appearanceLineColor(appearance), qualified) : appearanceLineColor(appearance)
-            color markerColor = config.delta.qualifyByFib ? fibQualificationColor(appearanceTextColor(appearance), qualified) : appearanceTextColor(appearance)
-            string markerGlyph = config.delta.qualifyByFib ? fibLocationMarkerGlyph(ranked.fibLocationGrade) : LEVEL_MARKER_GLYPH
+            int fibBorderWidth = config.delta.qualifyDeltaTiersByFib ? fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice) : 0
+            bool qualified = config.delta.qualifyDeltaTiersByFib and ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
+            color zoneColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceZoneColor(appearance), qualified) : appearanceZoneColor(appearance)
+            color lineColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceLineColor(appearance), qualified) : appearanceLineColor(appearance)
+            color markerColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceTextColor(appearance), qualified) : appearanceTextColor(appearance)
+            string markerGlyph = config.delta.qualifyDeltaTiersByFib ? fibLocationMarkerGlyph(ranked.fibLocationGrade) : LEVEL_MARKER_GLYPH
             bool roleReversed = config.interactions.showRoleReversal and roleReversalZoneIsReversed(state, ranked.sourceName, ranked.profileStartTime, ranked.price, direction)
             color borderColor = markerColor
             if roleReversed
@@ -1246,6 +1268,55 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
                     if appearanceHasLine(appearance)
                         queueRightLine(state, ranked.price, ranked.lineStartTime, ranked.rightTime, lineColor, appearanceLineWidth(appearance), config.delta.tierLineStyle == STYLE_DOTTED ? STYLE_DOTTED : appearanceLineStyle(appearance), levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction, context)
                     queueLevelMarker(state, ranked.price, ranked.markerTime, markerGlyph, markerLabel, markerColor, tierMarkerSize(tier), config)
+
+rowIncludedInVisibleOutlier(int rowIndex, bool buySide, int profileStartTime, array<legilimensProfile.RankedOutlierSelection> selections, PresentationConfig config) =>
+    bool included = false
+    if config.delta.showTiers and deltaTierSideVisible(buySide, config)
+        int selectionCount = array.size(selections)
+        if selectionCount > 0
+            for selectionIndex = 0 to selectionCount - 1
+                legilimensProfile.RankedOutlierSelection selection = array.get(selections, selectionIndex)
+                if selection.profileKey == profileStartTime and selection.buySide == buySide and rowIndex >= selection.firstRow and rowIndex <= selection.lastRow
+                    included := true
+                    break
+    included
+
+highestDeltaRow(legilimensOrchestration.Profile profile, bool buySide) =>
+    int strongestRow = -1
+    float strongestMagnitude = 0.0
+    for rowIndex = 0 to profile.data.rowCount - 1
+        float rowDelta = array.get(profile.data.rowDeltas, rowIndex)
+        bool correctSide = buySide ? rowDelta > 0 : rowDelta < 0
+        float magnitude = math.abs(rowDelta)
+        if correctSide and magnitude > strongestMagnitude
+            strongestMagnitude := magnitude
+            strongestRow := rowIndex
+    strongestRow
+
+strongestDeltaZone(legilimensOrchestration.Profile profile, bool buySide, array<legilimensProfile.OutlierPeak> peaks) =>
+    int rowIndex = highestDeltaRow(profile, buySide)
+    float rowHeight = (profile.data.priceHigh - profile.data.priceLow) / profile.data.rowCount
+    float zoneLow = rowIndex >= 0 ? profile.data.priceLow + rowIndex * rowHeight : na
+    float zoneHigh = rowIndex >= 0 ? zoneLow + rowHeight : na
+    int peakCount = array.size(peaks)
+    if rowIndex >= 0 and peakCount > 0
+        for peakIndex = 0 to peakCount - 1
+            legilimensProfile.OutlierPeak peak = array.get(peaks, peakIndex)
+            if peak.buySide == buySide and rowIndex >= peak.firstRow and rowIndex <= peak.lastRow
+                zoneLow := peak.zoneLow
+                zoneHigh := peak.zoneHigh
+                break
+    [rowIndex, zoneLow, zoneHigh]
+
+renderHighestDeltaLevels(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, int levelEndTime, array<legilimensProfile.OutlierPeak> peaks, array<legilimensProfile.RankedOutlierSelection> rankedSelections, PresentationConfig config) =>
+    if config.delta.showHighestDeltaLevels
+        for sideIndex = 0 to 1
+            bool buySide = sideIndex == 0
+            [rowIndex, zoneLow, zoneHigh] = strongestDeltaZone(profile, buySide, peaks)
+            if rowIndex >= 0 and not rowIncludedInVisibleOutlier(rowIndex, buySide, profile.startTime, rankedSelections, config) and canDrawBox(state, config)
+                DeltaTierAppearance appearance = deltaTierAppearance(buySide, 5, source)
+                color outlineColor = appearanceZoneColor(appearance)
+                array.push(state.drawnBoxes, box.new(left=profile.endTime, top=zoneHigh, right=levelEndTime, bottom=zoneLow, xloc=xloc.bar_time, border_color=outlineColor, border_width=config.delta.highestDeltaBorderWidth, border_style=line.style_solid, bgcolor=color.new(outlineColor, 100)))
 
 renderProfileBox(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, PresentationConfig config) =>
     if canDrawBox(state, config)
@@ -1315,7 +1386,10 @@ renderSelectedProfile(RenderState state, legilimensOrchestration.Profile profile
             renderHistogram(state, profile, valueAreaLowRow, valueAreaHighRow, histogramLayersPerProfile, chartTimes, startScaleIndex, endScaleIndex, config)
         renderProfileMidpointLine(state, profile, source, levelEndTime, chartTimes, config)
         array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
-        collectOutlierPeaks(state, profile, source, strengths, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, config)
+        array<legilimensProfile.OutlierPeak> outlierPeaks = array.new<legilimensProfile.OutlierPeak>()
+        if config.delta.showTiers or config.delta.showHighestDeltaLevels
+            outlierPeaks := legilimensProfile.collectOutlierPeaks(profile.data, strengths)
+        queueOutlierPeaks(state, profile, source, outlierPeaks, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, config)
         [rankedOutlierLevels, rankedOutlierSelections] = rankPendingOutlierLevels(state, context, config)
         array<bool> selectedRows = selectedOutlierRowMask(profile, strengths, rankedOutlierSelections, config)
         renderDeltaPolylines(state, profile, source, strengths, selectedRows, chartTimes, startScaleIndex, endScaleIndex, config)
@@ -1327,6 +1401,7 @@ renderSelectedProfile(RenderState state, legilimensOrchestration.Profile profile
             renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, pocPrice, LEVEL_POC, color.rgb(49, 27, 146), config)
         renderLowVolumeStructures(state, profile, source, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false, sources, context, config)
         renderRankedOutlierLevels(state, rankedOutlierLevels, false, sources, context, config)
+        renderHighestDeltaLevels(state, profile, source, levelEndTime, outlierPeaks, rankedOutlierSelections, config)
 
 renderDecision(legilimensOrchestration.Profile profile, SourceSpec source, legilimensOrchestration.ProfileSelection comparisonSelection, BarContext context, PresentationConfig config) =>
     legilimensOrchestration.renderDecision(profile, source.key, comparisonSelection, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, config.extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, context.tickSize)
@@ -1415,10 +1490,12 @@ export registerProfileZones(RenderState state, legilimensOrchestration.Profile p
         int sessionTradingDayKey = legilimensOrchestration.tradingDayKey(sessionCloseTime)
         if mitigationEnabled(sources, source.key, config)
             renderLowVolumeStructures(state, profile, source, "", levelEndTime, sessionTradingDayKey, true, true, sources, context, config)
-        array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
-        collectOutlierPeaks(state, profile, source, strengths, "", levelEndTime, sessionTradingDayKey, true, config)
-        [rankedLevels, _] = rankPendingOutlierLevels(state, context, config)
-        renderRankedOutlierLevels(state, rankedLevels, true, sources, context, config)
+        if config.delta.showTiers
+            array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
+            array<legilimensProfile.OutlierPeak> outlierPeaks = legilimensProfile.collectOutlierPeaks(profile.data, strengths)
+            queueOutlierPeaks(state, profile, source, outlierPeaks, "", levelEndTime, sessionTradingDayKey, true, config)
+            [rankedLevels, _] = rankPendingOutlierLevels(state, context, config)
+            renderRankedOutlierLevels(state, rankedLevels, true, sources, context, config)
     true
 
 export registerFinalizedProfiles(RenderState state, legilimensOrchestration.AnchorState anchor, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
