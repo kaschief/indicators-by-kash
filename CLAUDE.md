@@ -252,65 +252,11 @@ if show_color_table and barstate.islast
 
 # Git Command Rules
 
-## Core Rule
+Follow the canonical [Git Command Rules in AGENTS.md](AGENTS.md#git-command-rules), including authorization, scoped staging, validation, and commit-message requirements.
 
-**NEVER execute ANY git command without EXPLICIT permission for EACH specific command.**
+For TradingView commit requests, the user-facing order is **publication notes → commit → commit confirmation**. Send concise, copy-ready notes to the user before staging or committing; an internal draft or notes deferred to the final response do not satisfy this requirement. Keep library/version and validation details outside the copy-ready release text. After committing, report the result without repeating the notes unless requested or corrected.
 
-## What This Means
-
-- Do NOT run git commands proactively
-- Do NOT assume permission from previous commands
-- Do NOT batch git commands without asking
-- ALWAYS wait for explicit approval for each git operation
-
-## Examples
-
-### ❌ WRONG
-
-```
-User: "the changes look good"
-Assistant: *runs git add && git commit*
-```
-
-### ✅ CORRECT
-
-```
-User: "the changes look good"
-Assistant: "Would you like me to stage and commit these changes?"
-User: "yes"
-Assistant: *asks* "Should I run 'git add' now?"
-```
-
-## Exceptions
-
-None. This rule applies to ALL git commands including but not limited to:
-
-- git add
-- git commit
-- git push
-- git pull
-- git checkout
-- git branch
-- git merge
-- git rebase
-- git stash
-- git reset
-- git restore
-- git status (even read-only commands require permission)
-- git diff (even read-only commands require permission)
-- git log (even read-only commands require permission)
-
-## When User Says "commit"
-
-This is explicit permission ONLY for that specific commit operation. You must still:
-
-1. Ask before running `git add` if files aren't staged
-2. Ask before running `git status` to check current state
-3. Only run `git commit` after receiving permission for each preceding command
-
-## Enforcement
-
-If you execute a git command without explicit permission, the user will interrupt and remind you of this rule. Always acknowledge and apologize when this occurs.
+A direct commit request authorizes the scoped local workflow described in AGENTS.md, but never an unrelated change or a push. Pause after the notes only if the user asks to review or approve them first.
 
 # Principal Engineer Delegation Rules
 

@@ -39,7 +39,7 @@ const int MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR
 const string NY_TIMEZONE = "America/New_York"
 const string SESSION_SOURCE_TIMEFRAME = "30"
 const int SCHEDULED_PROFILE_REQUEST_BARS = 30000
-const int DISABLED_SCHEDULED_PROFILE_REQUEST_BARS = 1
+const int DISABLED_PROFILE_REQUEST_BARS = 1
 const int SCHEDULED_PROFILE_REQUEST_SESSION_BUFFER = 10
 const int SESSION_SOURCE_BARS_PER_DAY = MINUTES_PER_DAY / 30
 const int CALENDAR_DAYS_PER_WEEK = 7
@@ -450,7 +450,7 @@ slot1Color   = input.color(SLOT1_COLOR, "", inline="s1", group=GROUP_HTF_PROFILE
 slot1History = input.int(SLOT_HISTORY_DEFAULT, "", inline="s1", group=GROUP_HTF_PROFILES, active=slot1Show, minval=SLOT_HISTORY_MIN, maxval=SLOT_HISTORY_MAX)
 slot1FibPreset = input.string(FIB_PRESET_OFF, "", inline="s1", group=GROUP_HTF_PROFILES, active=slot1Show, options=[FIB_PRESET_OFF, FIB_PRESET_DEFAULT, FIB_PRESET_ALTERNATIVE])
 
-slot2Show    = input.bool(true, "2", inline="s2", group=GROUP_HTF_PROFILES)
+slot2Show    = input.bool(false, "2", inline="s2", group=GROUP_HTF_PROFILES)
 slot2Manual  = input.bool(true, "", inline="s2", group=GROUP_HTF_PROFILES, active=slot2Show)
 slot2TFIn    = input.timeframe("240", "", inline="s2", group=GROUP_HTF_PROFILES, active=slot2Show)
 slot2Color   = input.color(SLOT2_COLOR, "", inline="s2", group=GROUP_HTF_PROFILES, active=slot2Show)
@@ -467,7 +467,7 @@ monthlyProfileColor = input.color(MONTHLY_PROFILE_COLOR, "", inline="monthly_pro
 monthlyProfileHistory = input.int(SLOT_HISTORY_DEFAULT, "", inline="monthly_profile", group=GROUP_HTF_PROFILES, active=monthlyProfileShow, minval=SLOT_HISTORY_MIN, maxval=SLOT_HISTORY_MAX)
 monthlyProfileFibPreset = input.string(FIB_PRESET_ALTERNATIVE, "", inline="monthly_profile", group=GROUP_HTF_PROFILES, active=monthlyProfileShow, options=[FIB_PRESET_OFF, FIB_PRESET_DEFAULT, FIB_PRESET_ALTERNATIVE])
 
-dailyProfileShow = input.bool(false, DAILY_PROFILE_NAME, inline="daily_profile", group=GROUP_HTF_PROFILES)
+dailyProfileShow = input.bool(true, DAILY_PROFILE_NAME, inline="daily_profile", group=GROUP_HTF_PROFILES)
 useMidnight = input.bool(false, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow)
 dailyProfileColor = input.color(DAILY_PROFILE_COLOR, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow)
 dailyProfileHistory = input.int(DAILY_PROFILE_HISTORY_DEFAULT, "", inline="daily_profile", group=GROUP_HTF_PROFILES, minval=SLOT_HISTORY_MIN, maxval=SLOT_HISTORY_MAX, active=dailyProfileShow)
@@ -917,28 +917,46 @@ next_forecast_visible(bool slotEnabled, bool valid) =>
 scheduled_profile_request_bars(simple bool enabled, simple int sampleLookback, simple int historyLimit) =>
     int requestedSessions = sampleLookback + historyLimit + SCHEDULED_PROFILE_REQUEST_SESSION_BUFFER
     int requestedSourceBars = int(math.ceil(requestedSessions * SESSION_SOURCE_BARS_PER_DAY * CALENDAR_DAYS_PER_WEEK / float(TRADING_DAYS_PER_WEEK)))
-    enabled ? math.min(SCHEDULED_PROFILE_REQUEST_BARS, requestedSourceBars) : DISABLED_SCHEDULED_PROFILE_REQUEST_BARS
+    enabled ? math.min(SCHEDULED_PROFILE_REQUEST_BARS, requestedSourceBars) : DISABLED_PROFILE_REQUEST_BARS
+
+scheduled_intraday_request_bars(simple int overnightRequestBars, simple int nyEarlyRequestBars,
+                                simple int nyAmRequestBars, simple int ivbRequestBars,
+                                simple int ivbPlusRequestBars) =>
+    int requestBars = overnightRequestBars
+    requestBars := math.max(requestBars, nyEarlyRequestBars)
+    requestBars := math.max(requestBars, nyAmRequestBars)
+    requestBars := math.max(requestBars, ivbRequestBars)
+    requestBars := math.max(requestBars, ivbPlusRequestBars)
+    requestBars
+
+profile_request_history_limit(simple bool latestOnlyEnabled, simple int historyLimit) =>
+    latestOnlyEnabled ? 1 : historyLimit
+
+scheduled_profile_tail_enabled(bool enabled, simple int requestBars) =>
+    enabled and bar_index >= last_bar_index - requestBars + 1
 
 // HTF DATA — normal running high/low are tracked chart-side. Wall-clock sessions use
 // a 30-minute context so their boundaries remain independent of chart bars.
 string htfTickerId = chart.is_range ? ticker.standard(syminfo.tickerid) : syminfo.tickerid
 
-fetch_htf_open(string tickerId, string tf) =>
-    request.security(tickerId, tf, open, lookahead=barmerge.lookahead_on)
+fetch_htf_open(string tickerId, string tf, simple bool enabled, simple int historyLimit) =>
+    if enabled
+        request.security(tickerId, tf, open, lookahead=barmerge.lookahead_on, calc_bars_count=historyLimit + 2)
 
 calculate_htf_stats(int historyOffset, int sampleLookback) =>
     [ta.median(high - open, sampleLookback)[historyOffset], ta.sma(high - open, sampleLookback)[historyOffset],
      ta.median(open - low, sampleLookback)[historyOffset], ta.sma(open - low, sampleLookback)[historyOffset]]
 
-fetch_htf_stats(string tickerId, string tf, int sampleLookback) =>
+fetch_htf_stats(string tickerId, string tf, simple bool enabled, simple int sampleLookback) =>
     bool useConfirmedWeeklyStats = timeframe.in_seconds(tf) == SECS_WEEK
-    if useConfirmedWeeklyStats
+    if enabled and useConfirmedWeeklyStats
         request.security(tickerId, tf,
              calculate_htf_stats(1, sampleLookback), lookahead=barmerge.lookahead_on,
-             calc_bars_count=sampleLookback + SLOT_HISTORY_MAX + 1)
-    else
+             calc_bars_count=sampleLookback + SLOT_HISTORY_MAX + 2)
+    else if enabled
         request.security(tickerId, tf,
-             calculate_htf_stats(0, sampleLookback), lookahead=barmerge.lookahead_off)
+             calculate_htf_stats(0, sampleLookback), lookahead=barmerge.lookahead_off,
+             calc_bars_count=sampleLookback + SLOT_HISTORY_MAX + 2)
 
 sample_stats(array<float> samples) =>
     int sampleCount = array.size(samples)
@@ -1026,6 +1044,34 @@ fetch_scheduled_profile_data(bool enabled, int sampleLimit, int startMinute, int
      projectedMedHO, projectedMeanHO,
      projectedMedOL, projectedMeanOL]
 
+fetch_intraday_profiles_data(bool overnightEnabled, simple int overnightRequestBars,
+                             bool nyEarlyEnabled, simple int nyEarlyRequestBars,
+                             bool nyAmEnabled, simple int nyAmRequestBars,
+                             bool ivbEnabled, simple int ivbRequestBars,
+                             bool ivbPlusEnabled, simple int ivbPlusRequestBars,
+                             int intradaySampleLimit) =>
+    [overnightStartTime, overnightEndTime, overnightOpenValue, overnightHigh, overnightLow,
+     overnightMedHOValue, overnightMeanHOValue, overnightMedOLValue, overnightMeanOLValue] = fetch_scheduled_profile_data(
+         scheduled_profile_tail_enabled(overnightEnabled, overnightRequestBars), intradaySampleLimit, OVERNIGHT_START_MINUTE, OVERNIGHT_END_MINUTE, INTRADAY_SAMPLING_SCHEDULE, false)
+    [nyEarlyStartTime, nyEarlyEndTime, nyEarlyOpenValue, nyEarlyHigh, nyEarlyLow,
+     nyEarlyMedHOValue, nyEarlyMeanHOValue, nyEarlyMedOLValue, nyEarlyMeanOLValue] = fetch_scheduled_profile_data(
+         scheduled_profile_tail_enabled(nyEarlyEnabled, nyEarlyRequestBars), intradaySampleLimit, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, INTRADAY_SAMPLING_SCHEDULE, false)
+    [nyAmStartTime, nyAmEndTime, nyAmOpenValue, nyAmHigh, nyAmLow,
+     nyAmMedHOValue, nyAmMeanHOValue, nyAmMedOLValue, nyAmMeanOLValue] = fetch_scheduled_profile_data(
+         scheduled_profile_tail_enabled(nyAmEnabled, nyAmRequestBars), intradaySampleLimit, NY_AM_START_MINUTE, NY_AM_END_MINUTE, INTRADAY_SAMPLING_SCHEDULE, false)
+    [ivbStartTime, ivbEndTime, ivbOpenValue, ivbHigh, ivbLow,
+     ivbMedHOValue, ivbMeanHOValue, ivbMedOLValue, ivbMeanOLValue] = fetch_scheduled_profile_data(
+         scheduled_profile_tail_enabled(ivbEnabled, ivbRequestBars), intradaySampleLimit, IVB_START_MINUTE, IVB_END_MINUTE, INTRADAY_SAMPLING_SCHEDULE, false)
+    [ivbPlusStartTime, ivbPlusEndTime, ivbPlusOpenValue, ivbPlusHigh, ivbPlusLow,
+     ivbPlusMedHOValue, ivbPlusMeanHOValue, ivbPlusMedOLValue, ivbPlusMeanOLValue] = fetch_scheduled_profile_data(
+         scheduled_profile_tail_enabled(ivbPlusEnabled, ivbPlusRequestBars), intradaySampleLimit, IVB_PLUS_START_MINUTE, IVB_PLUS_END_MINUTE, INTRADAY_SAMPLING_SCHEDULE, false)
+
+    [overnightStartTime, overnightEndTime, overnightOpenValue, overnightHigh, overnightLow, overnightMedHOValue, overnightMeanHOValue, overnightMedOLValue, overnightMeanOLValue,
+     nyEarlyStartTime, nyEarlyEndTime, nyEarlyOpenValue, nyEarlyHigh, nyEarlyLow, nyEarlyMedHOValue, nyEarlyMeanHOValue, nyEarlyMedOLValue, nyEarlyMeanOLValue,
+     nyAmStartTime, nyAmEndTime, nyAmOpenValue, nyAmHigh, nyAmLow, nyAmMedHOValue, nyAmMeanHOValue, nyAmMedOLValue, nyAmMeanOLValue,
+     ivbStartTime, ivbEndTime, ivbOpenValue, ivbHigh, ivbLow, ivbMedHOValue, ivbMeanHOValue, ivbMedOLValue, ivbMeanOLValue,
+     ivbPlusStartTime, ivbPlusEndTime, ivbPlusOpenValue, ivbPlusHigh, ivbPlusLow, ivbPlusMedHOValue, ivbPlusMeanHOValue, ivbPlusMedOLValue, ivbPlusMeanOLValue]
+
 resolve_scheduled_profile_chart_state(ScheduledProfileChartState chartState, bool trackOnChart,
                                   int sessionStartTime, int sessionEndTime,
                                   float requestedRunHigh, float requestedRunLow) =>
@@ -1052,22 +1098,44 @@ resolve_scheduled_profile_chart_state(ScheduledProfileChartState chartState, boo
     float effectiveRunLow = trackOnChart ? chartState.runLow : requestedRunLow
     [transition, startIndex, endIndex, effectiveRunHigh, effectiveRunLow]
 
-s1O = fetch_htf_open(htfTickerId, s1Safe)
-s2O = fetch_htf_open(htfTickerId, s2Safe)
-weeklyProfileOpen = fetch_htf_open(htfTickerId, weeklyProfileSafe)
-monthlyProfileOpen = fetch_htf_open(htfTickerId, monthlyProfileSafe)
+simple int slot1RequestHistory = profile_request_history_limit(latestOnly, slot1History)
+simple int slot2RequestHistory = profile_request_history_limit(latestOnly, slot2History)
+simple int weeklyProfileRequestHistory = profile_request_history_limit(latestOnly, weeklyProfileHistory)
+simple int monthlyProfileRequestHistory = profile_request_history_limit(latestOnly, monthlyProfileHistory)
+// Identical request contexts reuse the first call's bar count, so enabled slots share the deepest open history.
+simple int htfOpenRequestHistory = math.max(slot1Show ? slot1RequestHistory : 0, slot2Show ? slot2RequestHistory : 0,
+     weeklyProfileShow ? weeklyProfileRequestHistory : 0, monthlyProfileShow ? monthlyProfileRequestHistory : 0)
+simple int dailyProfileRequestHistory = profile_request_history_limit(latestOnly, dailyProfileHistory)
+simple int overnightRequestHistory = profile_request_history_limit(latestOnly, overnightHistory)
+simple int nyEarlyRequestHistory = profile_request_history_limit(latestOnly, nyEarlyHistory)
+simple int nyAmRequestHistory = profile_request_history_limit(latestOnly, nyAmHistory)
+simple int ivbRequestHistory = profile_request_history_limit(latestOnly, ivbHistory)
+simple int ivbPlusRequestHistory = profile_request_history_limit(latestOnly, ivbPlusHistory)
+simple int overnightSourceRequestBars = scheduled_profile_request_bars(overnightShow, intradayProfileLookback, overnightRequestHistory)
+simple int nyEarlySourceRequestBars = scheduled_profile_request_bars(nyEarlyShow, intradayProfileLookback, nyEarlyRequestHistory)
+simple int nyAmSourceRequestBars = scheduled_profile_request_bars(nyAmShow, intradayProfileLookback, nyAmRequestHistory)
+simple int ivbSourceRequestBars = scheduled_profile_request_bars(ivbShow, intradayProfileLookback, ivbRequestHistory)
+simple int ivbPlusSourceRequestBars = scheduled_profile_request_bars(ivbPlusShow, intradayProfileLookback, ivbPlusRequestHistory)
 
-[s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL] = fetch_htf_stats(htfTickerId, s1Safe, htfSlotLookback)
-[s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL] = fetch_htf_stats(htfTickerId, s2Safe, htfSlotLookback)
-[weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL] = fetch_htf_stats(htfTickerId, weeklyProfileSafe, htfSlotLookback)
-[monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL] = fetch_htf_stats(htfTickerId, monthlyProfileSafe, htfSlotLookback)
-[dailyNativeMedHO, dailyNativeMeanHO, dailyNativeMedOL, dailyNativeMeanOL] = fetch_htf_stats(htfTickerId, "D", htfSlotLookback)
+s1O = fetch_htf_open(htfTickerId, s1Safe, slot1Show, htfOpenRequestHistory)
+s2O = fetch_htf_open(htfTickerId, s2Safe, slot2Show, htfOpenRequestHistory)
+weeklyProfileOpen = fetch_htf_open(htfTickerId, weeklyProfileSafe, weeklyProfileShow, htfOpenRequestHistory)
+monthlyProfileOpen = fetch_htf_open(htfTickerId, monthlyProfileSafe, monthlyProfileShow, htfOpenRequestHistory)
+
+[s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL] = fetch_htf_stats(htfTickerId, s1Safe, slot1Show, htfSlotLookback)
+[s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL] = fetch_htf_stats(htfTickerId, s2Safe, slot2Show, htfSlotLookback)
+[weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL] = fetch_htf_stats(htfTickerId, weeklyProfileSafe, weeklyProfileShow, htfSlotLookback)
+[monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL] = fetch_htf_stats(htfTickerId, monthlyProfileSafe, monthlyProfileShow, htfSlotLookback)
+[dailyNativeMedHO, dailyNativeMeanHO, dailyNativeMedOL, dailyNativeMeanOL] = fetch_htf_stats(htfTickerId, "D", dailyProfileShow and not useMidnight, htfSlotLookback)
 
 bool scheduledProfileTrackOnChart = chart.is_range or timeframe.in_seconds(timeframe.period) <= timeframe.in_seconds(SESSION_SOURCE_TIMEFRAME)
 [dailyProfileStartT, dailyProfileEndT, dailyProfileOpen, dailyProfileRunHigh, dailyProfileRunLow,
  dailyProfileSessionMedHO, dailyProfileSessionMeanHO,
- dailyProfileSessionMedOL, dailyProfileSessionMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(dailyProfileValid, htfSlotLookback, dailyProfileConfig.startMinute, dailyProfileConfig.endMinute, dailyProfileConfig.samplingSchedule, dailyProfileConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(dailyProfileShow, htfSlotLookback, dailyProfileHistory))
+ dailyProfileSessionMedOL, dailyProfileSessionMeanOL] = request.security(
+     htfTickerId, SESSION_SOURCE_TIMEFRAME,
+     fetch_scheduled_profile_data(dailyProfileValid, htfSlotLookback, dailyProfileConfig.startMinute, dailyProfileConfig.endMinute, dailyProfileConfig.samplingSchedule, dailyProfileConfig.fullPeriod),
+     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off,
+     calc_bars_count=scheduled_profile_request_bars(dailyProfileShow, htfSlotLookback, dailyProfileRequestHistory))
 var ScheduledProfileChartState dailyProfileChartState = ScheduledProfileChartState.new()
 [dailyProfileTransition, dailyProfileStartIndex, dailyProfileEndIndex, dailyProfileEffectiveRunHigh, dailyProfileEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      dailyProfileChartState, scheduledProfileTrackOnChart, dailyProfileStartT, dailyProfileEndT, dailyProfileRunHigh, dailyProfileRunLow)
@@ -1077,41 +1145,45 @@ float dailyProfileMedOL = useMidnight ? dailyProfileSessionMedOL : dailyNativeMe
 float dailyProfileMeanOL = useMidnight ? dailyProfileSessionMeanOL : dailyNativeMeanOL
 
 [overnightStartT, overnightEndT, overnightOpen, overnightRunHigh, overnightRunLow,
- overnightMedHO, overnightMeanHO,
- overnightMedOL, overnightMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(overnightValid, overnightConfig.sampleLookback, overnightConfig.startMinute, overnightConfig.endMinute, overnightConfig.samplingSchedule, overnightConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(overnightShow, intradayProfileLookback, overnightHistory))
+ overnightMedHO, overnightMeanHO, overnightMedOL, overnightMeanOL,
+ nyEarlyStartT, nyEarlyEndT, nyEarlyOpen, nyEarlyRunHigh, nyEarlyRunLow,
+ nyEarlyMedHO, nyEarlyMeanHO, nyEarlyMedOL, nyEarlyMeanOL,
+ nyAmStartT, nyAmEndT, nyAmOpen, nyAmRunHigh, nyAmRunLow,
+ nyAmMedHO, nyAmMeanHO, nyAmMedOL, nyAmMeanOL,
+ ivbStartT, ivbEndT, ivbOpen, ivbRunHigh, ivbRunLow,
+ ivbMedHO, ivbMeanHO, ivbMedOL, ivbMeanOL,
+ ivbPlusStartT, ivbPlusEndT, ivbPlusOpen, ivbPlusRunHigh, ivbPlusRunLow,
+ ivbPlusMedHO, ivbPlusMeanHO, ivbPlusMedOL, ivbPlusMeanOL] = request.security(
+     htfTickerId, SESSION_SOURCE_TIMEFRAME,
+     fetch_intraday_profiles_data(
+         overnightValid, overnightSourceRequestBars,
+         nyEarlyValid, nyEarlySourceRequestBars,
+         nyAmValid, nyAmSourceRequestBars,
+         ivbValid, ivbSourceRequestBars,
+         ivbPlusValid, ivbPlusSourceRequestBars,
+         intradayProfileLookback),
+     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off,
+     calc_bars_count=scheduled_intraday_request_bars(
+         overnightSourceRequestBars, nyEarlySourceRequestBars,
+         nyAmSourceRequestBars, ivbSourceRequestBars,
+         ivbPlusSourceRequestBars))
+
 var ScheduledProfileChartState overnightChartState = ScheduledProfileChartState.new()
 [overnightTransition, overnightStartIndex, overnightEndIndex, overnightEffectiveRunHigh, overnightEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      overnightChartState, scheduledProfileTrackOnChart, overnightStartT, overnightEndT, overnightRunHigh, overnightRunLow)
 
-[nyEarlyStartT, nyEarlyEndT, nyEarlyOpen, nyEarlyRunHigh, nyEarlyRunLow,
- nyEarlyMedHO, nyEarlyMeanHO,
- nyEarlyMedOL, nyEarlyMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(nyEarlyValid, nyEarlyConfig.sampleLookback, nyEarlyConfig.startMinute, nyEarlyConfig.endMinute, nyEarlyConfig.samplingSchedule, nyEarlyConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(nyEarlyShow, intradayProfileLookback, nyEarlyHistory))
 var ScheduledProfileChartState nyEarlyChartState = ScheduledProfileChartState.new()
 [nyEarlyTransition, nyEarlyStartIndex, nyEarlyEndIndex, nyEarlyEffectiveRunHigh, nyEarlyEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      nyEarlyChartState, scheduledProfileTrackOnChart, nyEarlyStartT, nyEarlyEndT, nyEarlyRunHigh, nyEarlyRunLow)
 
-[nyAmStartT, nyAmEndT, nyAmOpen, nyAmRunHigh, nyAmRunLow,
- nyAmMedHO, nyAmMeanHO,
- nyAmMedOL, nyAmMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(nyAmValid, nyAmConfig.sampleLookback, nyAmConfig.startMinute, nyAmConfig.endMinute, nyAmConfig.samplingSchedule, nyAmConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(nyAmShow, intradayProfileLookback, nyAmHistory))
 var ScheduledProfileChartState nyAmChartState = ScheduledProfileChartState.new()
 [nyAmTransition, nyAmStartIndex, nyAmEndIndex, nyAmEffectiveRunHigh, nyAmEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      nyAmChartState, scheduledProfileTrackOnChart, nyAmStartT, nyAmEndT, nyAmRunHigh, nyAmRunLow)
 
-[ivbStartT, ivbEndT, ivbOpen, ivbRunHigh, ivbRunLow,
- ivbMedHO, ivbMeanHO,
- ivbMedOL, ivbMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(ivbValid, ivbConfig.sampleLookback, ivbConfig.startMinute, ivbConfig.endMinute, ivbConfig.samplingSchedule, ivbConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(ivbShow, intradayProfileLookback, ivbHistory))
 var ScheduledProfileChartState ivbChartState = ScheduledProfileChartState.new()
 [ivbTransition, ivbStartIndex, ivbEndIndex, ivbEffectiveRunHigh, ivbEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      ivbChartState, scheduledProfileTrackOnChart, ivbStartT, ivbEndT, ivbRunHigh, ivbRunLow)
 
-[ivbPlusStartT, ivbPlusEndT, ivbPlusOpen, ivbPlusRunHigh, ivbPlusRunLow,
- ivbPlusMedHO, ivbPlusMeanHO,
- ivbPlusMedOL, ivbPlusMeanOL] = request.security(htfTickerId, SESSION_SOURCE_TIMEFRAME, fetch_scheduled_profile_data(ivbPlusValid, ivbPlusConfig.sampleLookback, ivbPlusConfig.startMinute, ivbPlusConfig.endMinute, ivbPlusConfig.samplingSchedule, ivbPlusConfig.fullPeriod),
-     lookahead=scheduledProfileTrackOnChart ? barmerge.lookahead_on : barmerge.lookahead_off, calc_bars_count=scheduled_profile_request_bars(ivbPlusShow, intradayProfileLookback, ivbPlusHistory))
 var ScheduledProfileChartState ivbPlusChartState = ScheduledProfileChartState.new()
 [ivbPlusTransition, ivbPlusStartIndex, ivbPlusEndIndex, ivbPlusEffectiveRunHigh, ivbPlusEffectiveRunLow] = resolve_scheduled_profile_chart_state(
      ivbPlusChartState, scheduledProfileTrackOnChart, ivbPlusStartT, ivbPlusEndT, ivbPlusRunHigh, ivbPlusRunLow)

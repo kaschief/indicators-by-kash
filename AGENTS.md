@@ -393,12 +393,14 @@ This authorizes the complete local workflow needed for that specific commit:
 
 For TradingView work, `commit` means the user confirms that publication, host loading, testing, and approval are complete unless they explicitly state a partial or failed state.
 
-1. Run `git status` and scoped `git diff` commands to verify the requested files
-2. Run a path-scoped `git add` for the requested files when needed
-3. Before committing TradingView work, draft the final `Publication Notes` block. Do not run the commit until it contains the exact publication order and library versions/imports, final publication and validation status, concise copy-ready TradingView notes, and an explicit statement when no new library publication is required.
-4. Run the requested `git commit` with a useful subject and body
-5. Verify the commit result with `git status`
-6. Include the drafted `Publication Notes` block in the final commit handoff. A TradingView commit workflow without this block is incomplete, even when publication is already complete or no library version changed.
+1. Run `git status` and scoped `git diff` commands to verify the requested files.
+2. For TradingView work, **send the user the concise, copy-ready `Publication Notes` first, before staging or committing**. Use a user-visible commentary message; drafting the notes internally or saving them for the final response does not satisfy this requirement. Include the exact library versions/imports and publication order when applicable, publication and validation status, and an explicit statement when no new library publication is required. Keep operational details outside the copy-ready release text.
+3. Run a path-scoped `git add` for the requested files when needed and complete the required pre-commit checks.
+4. Run the requested `git commit` with a useful subject and body.
+5. Verify the commit result with `git status`.
+6. After the commit, report the commit ID, scope, and validation result. Do not defer publication notes to this final handoff or repeat them unless the user asks or they need correction.
+
+The user-facing order is **publication notes → commit → commit confirmation**. This applies even when publication is already complete or no library version changed. A commit request authorizes continuing after sending the notes; no additional approval is needed unless the user asks to pause or approve the notes first.
 
 Do not include unrelated files, and do not push unless the user separately requests it.
 

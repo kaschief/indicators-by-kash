@@ -4,12 +4,18 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../indicators/18-parallax/code/parallax.pine', import.meta.url), 'utf8');
 const functionBody = name => {
-  const body = source.match(new RegExp(`^${name}\\([^\\n]+\\) =>\\n([\\s\\S]*?)(?=^\\S)`, 'm'))?.[1];
+  const body = source.match(new RegExp(`^${name}\\([\\s\\S]*?\\) =>\\n([\\s\\S]*?)(?=^\\S)`, 'm'))?.[1];
   assert.ok(body, `${name} must exist`);
   return body.trim();
 };
 
 // These checks validate source contracts. They do not compile Pine or prove chart behavior.
+test('Daily replaces the 4-hour slot as the default enabled profile', () => {
+  assert.match(source, /^dailyProfileShow = input\.bool\(true, DAILY_PROFILE_NAME,/m);
+  assert.match(source, /^slot2Show\s+= input\.bool\(false, "2",/m);
+  assert.match(source, /^slot2TFIn\s+= input\.timeframe\("240",/m);
+});
+
 test('LD controls are centralized and retain independent profile selections', () => {
   assert.match(source, /^const string GROUP_LIQUIDITY_DEPTH = "Liquidity Depth"/m);
   assert.match(source, /^forecastLiquidityDepth = input\.bool\(false, "Forecast LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH\)/m);
@@ -149,8 +155,39 @@ test('scheduled profile requests scale to configured lookback and history', () =
   const body = functionBody('scheduled_profile_request_bars');
   assert.match(body, /sampleLookback \+ historyLimit \+ SCHEDULED_PROFILE_REQUEST_SESSION_BUFFER/);
   assert.match(body, /math\.min\(SCHEDULED_PROFILE_REQUEST_BARS, requestedSourceBars\)/);
-  assert.match(body, /DISABLED_SCHEDULED_PROFILE_REQUEST_BARS/);
-  assert.equal(source.match(/calc_bars_count=scheduled_profile_request_bars\([^\n]+\)/g)?.length, 6);
+  assert.match(body, /DISABLED_PROFILE_REQUEST_BARS/);
+  assert.equal(source.match(/calc_bars_count=scheduled_profile_request_bars\(/g)?.length, 1);
+  assert.equal(source.match(/calc_bars_count=scheduled_intraday_request_bars\(/g)?.length, 1);
+  assert.match(source, /request\.security\(\n     htfTickerId, SESSION_SOURCE_TIMEFRAME,\n     fetch_intraday_profiles_data\(/);
+  assert.equal(source.match(/fetch_scheduled_profile_data\(/g)?.length, 7);
+  const combinedBody = functionBody('scheduled_intraday_request_bars');
+  assert.equal(combinedBody.match(/math\.max\(/g)?.length, 4);
+  assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : historyLimit/);
+  assert.equal(source.match(/profile_request_history_limit\(latestOnly,/g)?.length, 10);
+  assert.equal(source.match(/SourceRequestBars = scheduled_profile_request_bars\(/g)?.length, 5);
+  assert.match(functionBody('scheduled_profile_tail_enabled'), /bar_index >= last_bar_index - requestBars \+ 1/);
+  assert.equal(functionBody('fetch_intraday_profiles_data').match(/scheduled_profile_tail_enabled\(/g)?.length, 5);
+});
+
+test('disabled HTF profiles cannot seed a one-bar Daily request', () => {
+  const openBody = functionBody('fetch_htf_open');
+  const statsBody = functionBody('fetch_htf_stats');
+  assert.match(openBody, /^if enabled\n        request\.security/);
+  assert.match(statsBody, /if enabled and useConfirmedWeeklyStats\n        request\.security/);
+  assert.match(statsBody, /else if enabled\n        request\.security/);
+  assert.doesNotMatch(openBody + statsBody, /DISABLED_PROFILE_REQUEST_BARS|htf_(?:open|stats)_request_bars/);
+  assert.equal(statsBody.match(/calc_bars_count=sampleLookback \+ SLOT_HISTORY_MAX \+ 2/g)?.length, 2);
+  for (const enabledInput of ['slot1Show', 'slot2Show', 'weeklyProfileShow', 'monthlyProfileShow']) {
+    assert.match(source, new RegExp(`fetch_htf_open\\([^\\n]+${enabledInput}`));
+    assert.match(source, new RegExp(`fetch_htf_stats\\([^\\n]+${enabledInput}`));
+  }
+  assert.match(source, /fetch_htf_stats\(htfTickerId, "D", dailyProfileShow and not useMidnight, htfSlotLookback\)/);
+});
+
+test('HTF open requests share the deepest enabled history when timeframes overlap', () => {
+  assert.match(source, /htfOpenRequestHistory = math\.max\(slot1Show \? slot1RequestHistory : 0, slot2Show \? slot2RequestHistory : 0,\n     weeklyProfileShow \? weeklyProfileRequestHistory : 0, monthlyProfileShow \? monthlyProfileRequestHistory : 0\)/);
+  assert.equal(source.match(/fetch_htf_open\(htfTickerId, [^\n]+, htfOpenRequestHistory\)/g)?.length, 4);
+  assert.match(functionBody('fetch_htf_open'), /calc_bars_count=historyLimit \+ 2/);
 });
 
 test('history budget allocators stop at the deepest requested layer', () => {
