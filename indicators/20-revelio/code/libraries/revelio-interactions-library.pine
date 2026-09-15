@@ -80,16 +80,16 @@ export type PendingReminder
     int rank
     int effectiveLineWidth
 
-//@type Buffered active-anchor reminder awaiting cluster composition.
-export type PendingAnchorReminder
+//@type Buffered line reminder awaiting cluster composition.
+export type PendingLineReminder
     float price
-    int anchorEndTime
+    int runStartTime
     int runEndTime
+    float placementPhase
     LabelIdentity labelIdentity
     color textColor
     color bgColor
     int textSize
-    string levelName
     int rank
     int effectiveLineWidth
 
@@ -217,7 +217,9 @@ shortenedGroupKey(LabelIdentity identity, int identityIndex) =>
     identity.datedProfile and identity.levelName != "" and identity.anchorName != "" ? "D|" + identity.levelName + "|" + identity.anchorName : "S|" + str.tostring(identityIndex)
 
 labelIdentityText(LabelIdentity identity, bool shorten) =>
-    shorten ? identity.compactProfilePrefix + " " + identity.levelName + (identity.datedProfile ? " " + identity.periodText : "") + identity.compactSuffix : identity.fullText
+    string levelText = identity.levelName == "" ? "" : " " + identity.levelName
+    string periodText = identity.datedProfile and identity.periodText != "" ? " " + identity.periodText : ""
+    shorten ? identity.compactProfilePrefix + levelText + periodText + identity.compactSuffix : identity.fullText
 
 shortenedGroupText(int groupIndex, array<int> orderedIndices, array<int> orderedGroups, array<LabelIdentity> identities) =>
     int firstIdentityIndex = -1
@@ -238,7 +240,7 @@ shortenedGroupText(int groupIndex, array<int> orderedIndices, array<int> ordered
     LabelIdentity first = array.get(identities, firstIdentityIndex)
     string body = ""
     if first.datedProfile
-        body := first.compactProfilePrefix + " " + first.levelName + " "
+        body := first.compactProfilePrefix + (first.levelName == "" ? "" : " " + first.levelName) + " "
         if groupMemberCount == 1
             body := labelIdentityText(first, true)
         else if sharedContext
@@ -487,17 +489,17 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
         array.clear(pendingLabels)
     true
 
-//@function Composes active-anchor reminder labels.
-export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders, bool dedupe, bool shortenLabels, array<label> drawnLabels, PresentationConfig config) =>
+//@function Composes labels distributed within explicit line spans.
+export flushPendingLineReminders(array<PendingLineReminder> pendingReminders, bool dedupe, bool shortenLabels, array<label> drawnLabels, PresentationConfig config) =>
     int pendingCount = array.size(pendingReminders)
     if pendingCount > 0
         array<float> clusterPrice = array.new<float>()
-        array<int> clusterAnchorEndTime = array.new<int>()
+        array<int> clusterRunStartTime = array.new<int>()
         array<int> clusterRunEndTime = array.new<int>()
+        array<float> clusterPlacementPhase = array.new<float>()
         array<color> clusterColor = array.new<color>()
         array<color> clusterBg = array.new<color>()
         array<int> clusterSize = array.new<int>()
-        array<string> clusterLevelName = array.new<string>()
         array<int> clusterDominantWidth = array.new<int>()
         array<int> clusterDominantRank = array.new<int>()
         array<int> clusterDominantOrder = array.new<int>()
@@ -509,28 +511,28 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
         array<int> identityRank = array.new<int>()
         array<int> identityOrder = array.new<int>()
         for reminderIndex = 0 to pendingCount - 1
-            PendingAnchorReminder pending = array.get(pendingReminders, reminderIndex)
+            PendingLineReminder pending = array.get(pendingReminders, reminderIndex)
             int foundIndex = nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
             if foundIndex >= 0
                 array.set(clusterSize, foundIndex, largerTextSize(array.get(clusterSize, foundIndex), pending.textSize))
                 if identityPrecedes(pending.effectiveLineWidth, pending.rank, reminderIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex))
                     array.set(clusterPrice, foundIndex, pending.price)
-                    array.set(clusterAnchorEndTime, foundIndex, pending.anchorEndTime)
+                    array.set(clusterRunStartTime, foundIndex, pending.runStartTime)
                     array.set(clusterRunEndTime, foundIndex, pending.runEndTime)
+                    array.set(clusterPlacementPhase, foundIndex, pending.placementPhase)
                     array.set(clusterColor, foundIndex, pending.textColor)
                     array.set(clusterBg, foundIndex, pending.bgColor)
-                    array.set(clusterLevelName, foundIndex, pending.levelName)
                     array.set(clusterDominantWidth, foundIndex, pending.effectiveLineWidth)
                     array.set(clusterDominantRank, foundIndex, pending.rank)
                     array.set(clusterDominantOrder, foundIndex, reminderIndex)
             else
                 array.push(clusterPrice, pending.price)
-                array.push(clusterAnchorEndTime, pending.anchorEndTime)
+                array.push(clusterRunStartTime, pending.runStartTime)
                 array.push(clusterRunEndTime, pending.runEndTime)
+                array.push(clusterPlacementPhase, pending.placementPhase)
                 array.push(clusterColor, pending.textColor)
                 array.push(clusterBg, pending.bgColor)
                 array.push(clusterSize, pending.textSize)
-                array.push(clusterLevelName, pending.levelName)
                 array.push(clusterDominantWidth, pending.effectiveLineWidth)
                 array.push(clusterDominantRank, pending.rank)
                 array.push(clusterDominantOrder, reminderIndex)
@@ -543,16 +545,15 @@ export flushPendingAnchorReminders(array<PendingAnchorReminder> pendingReminders
             array.push(identityRank, pending.rank)
             array.push(identityOrder, reminderIndex)
         for clusterIndex = 0 to array.size(clusterPrice) - 1
-            int reminderRunStart = array.get(clusterAnchorEndTime, clusterIndex) + config.anchorReminderSpacingMs
-            int reminderRunEnd = math.min(array.get(clusterRunEndTime, clusterIndex), config.currentTime - config.anchorReminderSpacingMs)
+            int reminderRunStart = array.get(clusterRunStartTime, clusterIndex)
+            int reminderRunEnd = array.get(clusterRunEndTime, clusterIndex)
             int eligibleRunMs = reminderRunEnd - reminderRunStart
             if eligibleRunMs > 0
                 int reminderCount = reminderPlacements(eligibleRunMs, config.anchorReminderSpacingMs, config.anchorReminderMaxPerLevel)
-                string levelName = array.get(clusterLevelName, clusterIndex)
-                float levelFrac = levelName == config.valueAreaHighName ? 0.5 : levelName == config.valueAreaLowName ? 0.85 : 0.15
+                float placementPhase = math.max(0.0, math.min(1.0, array.get(clusterPlacementPhase, clusterIndex)))
                 string reminderText = composedClusterIdentities(shortenLabels, clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 for placement = 1 to reminderCount
-                    int reminderTime = reminderRunStart + int(eligibleRunMs * (placement - 1 + levelFrac) / reminderCount)
+                    int reminderTime = reminderRunStart + int(eligibleRunMs * (placement - 1 + placementPhase) / reminderCount)
                     trackLabel(drawnLabels, config.maxLabels, label.new(reminderTime, array.get(clusterPrice, clusterIndex), reminderText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=array.get(clusterColor, clusterIndex), size=array.get(clusterSize, clusterIndex), color=array.get(clusterBg, clusterIndex)))
         array.clear(pendingReminders)
     true

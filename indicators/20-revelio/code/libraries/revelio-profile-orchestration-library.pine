@@ -3,7 +3,7 @@
 //@description Private Revelio profile orchestration library.
 library("RevelioProfileOrchestrationLibrary", overlay=true)
 
-import midnightpaws87/RevelioCoreLibrary/11 as revelioCore
+import midnightpaws87/RevelioCoreLibrary/12 as revelioCore
 
 export const string NY_TIMEZONE = "America/New_York"
 export const string UTC_TIMEZONE = "GMT+0"
@@ -121,7 +121,7 @@ export newMergedAnchorProcessPolicy(int keepProfiles, MergeMode mergeMode, float
 export newCalendarAnchorProcessPolicy(int keepProfiles, bool prepareHistogram, bool requireObservedBoundary) =>
     revelioCore.newAnchorProcessPolicy(keepProfiles, 0, false, false, 1.0, true, prepareHistogram, requireObservedBoundary)
 
-export buildDevelopingProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
+buildDevelopingProfileResult(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
     int originalSize = array.size(barVolumes)
     if not na(fallbackVolume)
         array.push(barHighs, fallbackHigh)
@@ -129,11 +129,16 @@ export buildDevelopingProfile(array<float> barHighs, array<float> barLows, array
         array.push(barVolumes, fallbackVolume)
     if not confirmed
         revelioCore.appendBarVolume(barHighs, barLows, barVolumes, intrabarHighs, intrabarLows, intrabarVolumes, currentHigh, currentLow, currentVolume, false)
+    bool samplesAppended = array.size(barVolumes) > originalSize
     revelioCore.Profile profile = revelioCore.buildProfile(barHighs, barLows, barVolumes, rowCount, valueAreaPercent, startTime, currentTime, prepareHistogram)
     while array.size(barVolumes) > originalSize
         array.pop(barHighs)
         array.pop(barLows)
         array.pop(barVolumes)
+    [profile, samplesAppended]
+
+export buildDevelopingProfile(array<float> barHighs, array<float> barLows, array<float> barVolumes, int startTime, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
+    [profile, _] = buildDevelopingProfileResult(barHighs, barLows, barVolumes, startTime, intrabarHighs, intrabarLows, intrabarVolumes, fallbackHigh, fallbackLow, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume, prepareHistogram, rowCount, valueAreaPercent, currentTime)
     profile
 
 export buildDevelopingAnchorProfile(revelioCore.AnchorState state, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
@@ -155,26 +160,31 @@ manualCompositeSampleCopies(revelioCore.AnchorState state, revelioCore.ManualCom
     int compositeStartTime = compositeState.active ? compositeState.startTime : state.startTime
     [compositeHighs, compositeLows, compositeVolumes, compositeStartTime]
 
+stampManualCompositeProfile(revelioCore.Profile profile, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, bool currentMemberIncluded) =>
+    profile.manualComposite := true
+    profile.manualCompositeStartKey := compositeRange.startKey
+    profile.manualCompositeEndKey := compositeRange.endKey
+    profile.manualCompositeMemberCount := compositeState.memberCount + (currentMemberIncluded ? 1 : 0)
+    true
+
 export buildConfirmedManualCompositeProfile(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, int periodKey, int endTime, bool prepareHistogram, int rowCount, float valueAreaPercent) =>
     revelioCore.Profile profile = na
     if manualCompositeDevelopingReady(state, compositeState, compositeRange, periodKey)
         [compositeHighs, compositeLows, compositeVolumes, compositeStartTime] = manualCompositeSampleCopies(state, compositeState)
         profile := revelioCore.buildProfile(compositeHighs, compositeLows, compositeVolumes, rowCount, valueAreaPercent, compositeStartTime, endTime, prepareHistogram)
         if profile.isValid
-            profile.manualComposite := true
-            profile.manualCompositeStartKey := compositeRange.startKey
-            profile.manualCompositeEndKey := compositeRange.endKey
+            stampManualCompositeProfile(profile, compositeState, compositeRange, array.size(state.barVolumes) > 0)
     profile
 
 export buildDevelopingManualCompositeProfile(revelioCore.AnchorState state, revelioCore.ManualCompositeState compositeState, revelioCore.ManualCompositeRange compositeRange, int periodKey, array<float> intrabarHighs, array<float> intrabarLows, array<float> intrabarVolumes, float fallbackHigh, float fallbackLow, float fallbackVolume, bool confirmed, float currentHigh, float currentLow, float currentVolume, bool prepareHistogram, int rowCount, float valueAreaPercent, int currentTime) =>
     revelioCore.Profile profile = na
     if manualCompositeDevelopingReady(state, compositeState, compositeRange, periodKey)
         [compositeHighs, compositeLows, compositeVolumes, compositeStartTime] = manualCompositeSampleCopies(state, compositeState)
-        profile := buildDevelopingProfile(compositeHighs, compositeLows, compositeVolumes, compositeStartTime, intrabarHighs, intrabarLows, intrabarVolumes, fallbackHigh, fallbackLow, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume, prepareHistogram, rowCount, valueAreaPercent, currentTime)
+        [builtProfile, appendedSamples] = buildDevelopingProfileResult(compositeHighs, compositeLows, compositeVolumes, compositeStartTime, intrabarHighs, intrabarLows, intrabarVolumes, fallbackHigh, fallbackLow, fallbackVolume, confirmed, currentHigh, currentLow, currentVolume, prepareHistogram, rowCount, valueAreaPercent, currentTime)
+        profile := builtProfile
         if profile.isValid
-            profile.manualComposite := true
-            profile.manualCompositeStartKey := compositeRange.startKey
-            profile.manualCompositeEndKey := compositeRange.endKey
+            bool currentMemberIncluded = array.size(state.barVolumes) > 0 or appendedSamples
+            stampManualCompositeProfile(profile, compositeState, compositeRange, currentMemberIncluded)
     profile
 
 export calendarDateSerial(int eventTime, string timezone) =>
@@ -565,7 +575,7 @@ export emptyRemoteProfileResult(int unsetTime) =>
     float unavailablePrice = na
     revelioCore.Profile histogramSnapshot = na
     revelioCore.Profile developingSnapshot = na
-    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unsetTime, unsetTime, histogramSnapshot, developingSnapshot, 0, 0]
+    [unsetTime, unsetTime, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, unavailablePrice, false, unsetTime, unsetTime, 0, histogramSnapshot, developingSnapshot, 0, 0]
 
 export newDailyMaturityState() =>
     DailyMaturityState.new(array.new<float>(), array.new<int>(), array.new<bool>(), 0, false, false)
@@ -720,7 +730,7 @@ export quarterlyContext(array<float> fixedHighs, array<float> fixedLows, array<f
     revelioCore.Profile developingSnapshot = not na(developingCompositeSnapshot) ? developingCompositeSnapshot : developingEnabled and state.startTime != unsetTime and array.size(state.barVolumes) > 0 and barstate.islast ? revelioCore.buildProfile(state.barHighs, state.barLows, state.barVolumes, rowCount, valueAreaPercent, state.startTime, time, prepareHistogram) : na
     bool showDeveloping = showsDeveloping(maturityState, state, ANCHOR_QUARTERLY, developingEnabled and calculationReady, currentMode, maturityUsesUtcCalendar, barstate.islast)
     bool compositeReady = manualCompositeStored(state.profiles, compositeRange) or not na(developingCompositeSnapshot)
-    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0, compositeReady ? 1 : 0]
+    [latestAvailable ? latestProfile.startTime : unsetTime, latestAvailable ? latestProfile.endTime : unsetTime, latestAvailable ? latestProfile.priceLow : na, latestAvailable ? latestProfile.priceHigh : na, latestAvailable ? latestProfile.pocPrice : na, latestAvailable ? latestProfile.valueAreaHighPrice : na, latestAvailable ? latestProfile.valueAreaLowPrice : na, latestAvailable ? latestProfile.manualComposite : false, latestAvailable ? latestProfile.manualCompositeStartKey : unsetTime, latestAvailable ? latestProfile.manualCompositeEndKey : unsetTime, latestAvailable ? latestProfile.manualCompositeMemberCount : 0, histogramSnapshot, developingSnapshot, showDeveloping ? 1 : 0, compositeReady ? 1 : 0]
 
 focusDirectionMatches(float levelPrice, float focusPrice, FocusDirection focusDirection) =>
     focusDirection == FocusDirection.below ? levelPrice <= focusPrice : focusDirection == FocusDirection.above ? levelPrice >= focusPrice : focusDirection == FocusDirection.around

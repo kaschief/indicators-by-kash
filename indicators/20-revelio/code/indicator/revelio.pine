@@ -1,9 +1,9 @@
 //@version=6
 
-import midnightpaws87/RevelioCoreLibrary/11 as revelioCore
-import midnightpaws87/RevelioGapsLibrary/12 as revelioGaps
-import midnightpaws87/RevelioInteractionsLibrary/28 as revelioInteractions
-import midnightpaws87/RevelioProfileOrchestrationLibrary/9 as revelioProfiles
+import midnightpaws87/RevelioCoreLibrary/12 as revelioCore
+import midnightpaws87/RevelioGapsLibrary/13 as revelioGaps
+import midnightpaws87/RevelioInteractionsLibrary/29 as revelioInteractions
+import midnightpaws87/RevelioProfileOrchestrationLibrary/10 as revelioProfiles
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INDICATOR SETUP
@@ -89,8 +89,8 @@ QUARTERLY_INTRABAR_TIMEFRAME = str.tostring(QUARTERLY_INTRABAR_MINUTES)
 QUARTERLY_CALCULATION_BARS = int(QUARTERLY_LOOKBACK_DAYS * revelioProfiles.MINUTES_PER_DAY / QUARTERLY_CALCULATION_MINUTES)
 QUARTERLY_INTRABAR_BARS = int(QUARTERLY_CALCULATION_BARS * QUARTERLY_CALCULATION_MINUTES / QUARTERLY_INTRABAR_MINUTES)
 
-DEFAULT_RTH_PROFILES = 10
-DEFAULT_GLOBEX_PROFILES = 10
+DEFAULT_RTH_PROFILES = 30
+DEFAULT_GLOBEX_PROFILES = 30
 DEFAULT_WEEKLY_PROFILES = 5
 DEFAULT_MONTHLY_PROFILES = 2
 DEFAULT_QUARTERLY_PROFILES = 2
@@ -727,7 +727,7 @@ var array<polyline> drawnPolylines = array.new<polyline>()
 var array<label> drawnLabels = array.new<label>()
 var array<revelioInteractions.PendingLabel> pendingLabels = array.new<revelioInteractions.PendingLabel>()
 var array<revelioInteractions.PendingReminder> pendingReminders = array.new<revelioInteractions.PendingReminder>()
-var array<revelioInteractions.PendingAnchorReminder> pendingAnchorReminders = array.new<revelioInteractions.PendingAnchorReminder>()
+var array<revelioInteractions.PendingLineReminder> pendingLineReminders = array.new<revelioInteractions.PendingLineReminder>()
 
 // Preserve earlier render priorities; discard new drawings after a global cap is reached.
 trackBox(box drawing) =>
@@ -773,7 +773,7 @@ clearDrawings() =>
         array.clear(drawnLabels)
     array.clear(pendingLabels)
     array.clear(pendingReminders)
-    array.clear(pendingAnchorReminders)
+    array.clear(pendingLineReminders)
 
 valueGapLabelText(revelioGaps.ValueGap gap, bool useUtcTimezone) =>
     bool isFilled = not na(gap.fillTime)
@@ -911,10 +911,10 @@ renderValueGaps(array<revelioGaps.ValueGap> valueGaps, bool enabled, array<int> 
                 int rightTime = isFilled ? gap.fillTime : time + liveRightPadding
                 renderStyledValueGap(gap, gap.leftTime, rightTime, xloc.bar_time, style, valueGapLabelText(gap, useUtcTimezone), gapIndex == boldGapIndex)
 
-// Trailing margin keeps a repeat off the right-edge label, which already names the level there.
-anchorReminderRun(int anchorEndTime, int runEndTime) =>
-    int runStart = anchorEndTime + ANCHOR_REMINDER_MIN_SPACING_MS
-    int runEnd = math.min(runEndTime, time - ANCHOR_REMINDER_MIN_SPACING_MS)
+// End margins keep repeated labels clear of line boundaries and the right-edge label column.
+lineReminderRun(int lineStartTime, int lineEndTime) =>
+    int runStart = lineStartTime + ANCHOR_REMINDER_MIN_SPACING_MS
+    int runEnd = math.min(lineEndTime, time - ANCHOR_REMINDER_MIN_SPACING_MS)
     [runStart, runEnd - runStart]
 
 // Declared before retention helpers because the calendar policy depends on asset classification.
@@ -990,18 +990,6 @@ matchingManualCompositeProfile(array<revelioCore.Profile> profiles, revelioCore.
                 break
     matchingProfile
 
-renderManualCompositeFrame(array<revelioCore.Profile> profiles, revelioCore.Profile liveProfile, int startKey, int endKey, int fromTime, int throughTime, color guideColor, color labelBackgroundColor) =>
-    revelioCore.Profile profile = matchingManualCompositeProfile(profiles, liveProfile, startKey, endKey)
-    if not na(profile) and profile.isValid and profile.endTime > profile.startTime and profile.priceHigh > profile.priceLow
-        float pricePerRow = (profile.priceHigh - profile.priceLow) / math.max(1, profile.rowCount)
-        float frameClearance = pricePerRow * (6.0 + COMPOSITE_FRAME_PADDING_ROWS)
-        color frameColor = color.new(guideColor, COMPOSITE_FRAME_TRANSPARENCY)
-        trackBox(box.new(left=profile.startTime, top=profile.priceHigh + frameClearance, right=profile.endTime, bottom=profile.priceLow - frameClearance, xloc=xloc.bar_time, border_color=frameColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(frameColor, 100)))
-        if showFullText
-            revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(fromTime, profile.priceHigh, "From", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=guideColor, size=6, color=labelBackgroundColor))
-            revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(throughTime, profile.priceHigh, "Through", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=guideColor, size=6, color=labelBackgroundColor))
-    true
-
 levelHitReferenceDateSerial() =>
     int currentDateSerial = revelioProfiles.calendarDateSerial(time, revelioProfiles.NY_TIMEZONE)
     int currentMinute = hour(time, revelioProfiles.NY_TIMEZONE) * 60 + minute(time, revelioProfiles.NY_TIMEZONE)
@@ -1046,11 +1034,17 @@ profileAnchorName(bool manualComposite, SessionStyle style) =>
     string anchorName = manualComposite ? style.labelAnchor + " Composite" : style.labelAnchor
     anchorName + calendarRthIdentitySuffix(style)
 
-levelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, bool plainPrevious) =>
+manualCompositeAnchorName(int memberCount, SessionStyle style) =>
+    style.labelAnchor + " Composite" + (memberCount > 0 ? " (" + str.tostring(memberCount) + ")" : "") + calendarRthIdentitySuffix(style)
+
+manualCompositeIdentityText(int startKey, int endKey, int memberCount, SessionStyle style, string levelName) =>
+    manualCompositeAnchorName(memberCount, style) + (levelName == "" ? "" : " " + levelName) + " " + manualCompositeRangeText(startKey, endKey, style)
+
+levelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, bool plainPrevious) =>
     string dateText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
     string sourceSuffix = calendarRthIdentitySuffix(style)
     string previousText = (plainPrevious and isLast ? plainPreviousLabel(style.labelLast) : style.labelLast) + sourceSuffix
-    string nameText = manualComposite ? profileAnchorName(manualComposite, style) + " " + levelName + " " + dateText : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? previousText + " " + levelName : profileAnchorName(false, style) + " " + levelName + " " + dateText
+    string nameText = manualComposite ? manualCompositeIdentityText(manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, levelName) : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? previousText + " " + levelName : profileAnchorName(false, style) + " " + levelName + " " + dateText
     nameText + (sweptDenote ? " " + SWEPT_CHECKMARK : "")
 
 compactProfileToken(string anchorName) =>
@@ -1063,20 +1057,20 @@ compactProfilePrefix(SessionStyle style, bool isLive, bool isLast) =>
     string token = compactProfileToken(style.labelAnchor)
     isLive ? "★ " + token : isLast ? shortenedPreviousProfilePrefix(style.labelAnchor) : token
 
-profileCompactPrefix(bool manualComposite, SessionStyle style, bool isLive, bool isLast) =>
-    manualComposite ? profileAnchorName(true, style) : compactProfilePrefix(style, isLive, isLast) + calendarRthIdentitySuffix(style)
+profileCompactPrefix(bool manualComposite, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast) =>
+    manualComposite ? manualCompositeAnchorName(manualCompositeMemberCount, style) : compactProfilePrefix(style, isLive, isLast) + calendarRthIdentitySuffix(style)
 
-levelLabelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, string displaySuffix, bool archived, bool unselectedAnchor) =>
+levelLabelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, string displaySuffix, bool archived, bool unselectedAnchor) =>
     string periodText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
     string periodContext = manualComposite ? "" : revelioProfiles.periodContextText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
     string periodMember = manualComposite ? "" : revelioProfiles.periodMemberText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
-    string anchorName = profileAnchorName(manualComposite, style)
+    string anchorName = manualComposite ? manualCompositeAnchorName(manualCompositeMemberCount, style) : profileAnchorName(false, style)
     string sourceSuffix = calendarRthIdentitySuffix(style)
-    string baseText = manualComposite ? anchorName + " " + levelName + " " + periodText : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? style.labelLast + sourceSuffix + " " + levelName : anchorName + " " + levelName + " " + periodText
+    string baseText = manualComposite ? manualCompositeIdentityText(manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, levelName) : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? style.labelLast + sourceSuffix + " " + levelName : anchorName + " " + levelName + " " + periodText
     string fullSuffix = (sweptDenote ? " " + SWEPT_CHECKMARK : "") + displaySuffix + (unselectedAnchor ? LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL : "") + (archived ? LEVEL_HIT_ARCHIVED_SYMBOL : "")
     string compactDisplaySuffix = str.replace_all(displaySuffix, " ", "")
     string compactSuffix = (sweptDenote ? SWEPT_CHECKMARK : "") + compactDisplaySuffix + (unselectedAnchor ? LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL : "") + (archived ? LEVEL_HIT_ARCHIVED_SYMBOL : "")
-    revelioInteractions.LabelIdentity.new(baseText + fullSuffix, anchorName, profileCompactPrefix(manualComposite, style, isLive, isLast), levelName, periodText, periodContext, periodMember, not manualComposite and style.periodLabelMode != revelioProfiles.PERIOD_LABEL_DAY, compactSuffix, manualComposite or not isLive and not isLast)
+    revelioInteractions.LabelIdentity.new(baseText + fullSuffix, anchorName, profileCompactPrefix(manualComposite, manualCompositeMemberCount, style, isLive, isLast), levelName, periodText, periodContext, periodMember, not manualComposite and style.periodLabelMode != revelioProfiles.PERIOD_LABEL_DAY, compactSuffix, manualComposite or not isLive and not isLast)
 
 levelLabelRank(string levelName, SessionStyle style, bool isLive, bool isLast) =>
     int levelWeight = levelName == LABEL_POC ? 3 : 2
@@ -1084,8 +1078,42 @@ levelLabelRank(string levelName, SessionStyle style, bool isLive, bool isLast) =
     int recencyWeight = isLive ? 2 : isLast ? 1 : 0
     levelWeight * 100 + anchorWeight * 10 + recencyWeight
 
+lineReminderPlacementPhase(string levelName) =>
+    levelName == LABEL_VAH ? 0.5 : levelName == LABEL_VAL ? 0.85 : levelName == LABEL_POC ? 0.15 : 0.5
+
+queueLineReminder(float price, int runStartTime, int runEndTime, float placementPhase, revelioInteractions.LabelIdentity labelIdentity, color textColor, color bgColor, int textSize, int rank, int effectiveLineWidth) =>
+    if runEndTime > runStartTime
+        array.push(pendingLineReminders, revelioInteractions.PendingLineReminder.new(price, runStartTime, runEndTime, placementPhase, labelIdentity, textColor, bgColor, textSize, rank, effectiveLineWidth))
+    true
+
+queueBoundedLineReminder(float price, int lineStartTime, int lineEndTime, float placementPhase, revelioInteractions.LabelIdentity labelIdentity, color textColor, color bgColor, int textSize, int rank, int effectiveLineWidth) =>
+    [runStartTime, runMs] = lineReminderRun(lineStartTime, lineEndTime)
+    if runMs > 0
+        queueLineReminder(price, runStartTime, runStartTime + runMs, placementPhase, labelIdentity, textColor, bgColor, textSize, rank, effectiveLineWidth)
+    true
+
+renderManualCompositeFrame(array<revelioCore.Profile> profiles, revelioCore.Profile liveProfile, int startKey, int endKey, int fromTime, int throughTime, SessionStyle style) =>
+    revelioCore.Profile profile = matchingManualCompositeProfile(profiles, liveProfile, startKey, endKey)
+    if not na(profile) and profile.isValid and profile.endTime > profile.startTime and profile.priceHigh > profile.priceLow
+        float pricePerRow = (profile.priceHigh - profile.priceLow) / math.max(1, profile.rowCount)
+        float frameClearance = pricePerRow * (6.0 + COMPOSITE_FRAME_PADDING_ROWS)
+        float frameTop = profile.priceHigh + frameClearance
+        float frameBottom = profile.priceLow - frameClearance
+        color frameColor = color.new(style.valueAreaLastColor, COMPOSITE_FRAME_TRANSPARENCY)
+        trackBox(box.new(left=profile.startTime, top=frameTop, right=profile.endTime, bottom=frameBottom, xloc=xloc.bar_time, border_color=frameColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(frameColor, 100)))
+        if showFullText
+            revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(fromTime, profile.priceHigh, "From", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=style.valueAreaLastColor, size=6, color=style.levelLabelBgColor))
+            revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(throughTime, profile.priceHigh, "Through", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=style.valueAreaLastColor, size=6, color=style.levelLabelBgColor))
+            revelioInteractions.LabelIdentity frameIdentity = levelLabelIdentity(profile.startTime, profile.endTime, true, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, false, "", false, "", false, false)
+            color reminderTextColor = revelioInteractions.fadeColor(style.valueAreaLastColor, ANCHOR_REMINDER_FADE_PERCENT / 100.0)
+            float placementPhase = lineReminderPlacementPhase("")
+            int frameRank = levelLabelRank("", style, false, false)
+            queueLineReminder(frameTop, profile.startTime, profile.endTime, placementPhase, frameIdentity, reminderTextColor, style.levelLabelBgColor, style.levelLabelSize, frameRank, 1)
+            queueLineReminder(frameBottom, profile.startTime, profile.endTime, placementPhase, frameIdentity, reminderTextColor, style.levelLabelBgColor, style.levelLabelSize, frameRank, 1)
+    true
+
 // sweptDenote adds a faded continuation that preserves the level's original style and width.
-drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidth, string styleName, bool extendRight, color labelColor, string levelName, SessionStyle style, bool sweptDenote, color sweptContinuationColor, bool hitTraceActive, bool archivedTouch, bool isLive, bool isLast, int anchorEndTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, string displaySuffix) =>
+drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidth, string styleName, bool extendRight, color labelColor, string levelName, SessionStyle style, bool sweptDenote, color sweptContinuationColor, bool hitTraceActive, bool archivedTouch, bool isLive, bool isLast, int anchorEndTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, string displaySuffix) =>
     int primaryEndTime = stopLevelLinesAtOffset and extendRight ? time : endTime
     line primaryLine = line.new(x1=startTime, y1=price, x2=primaryEndTime, y2=price, xloc=xloc.bar_time, extend=extendRight and not stopLevelLinesAtOffset ? extend.right : extend.none, color=lineColor, width=lineWidth, style=toLineStyle(styleName))
     bool primaryLineRetained = trackLine(primaryLine)
@@ -1101,11 +1129,9 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     // Swept levels are tagged by the swept-line reminders below, never here, or they draw the same name twice.
     if showFullText and not isLive and not sweptDenote
         int visibleEndTime = extendRight ? time : endTime
-        revelioInteractions.LabelIdentity anchorLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, style, false, isLast, levelName, false, "", false, false)
+        revelioInteractions.LabelIdentity anchorLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, false, isLast, levelName, false, "", false, false)
         color anchorReminderTextColor = revelioInteractions.fadeColor(labelTextColor, ANCHOR_REMINDER_FADE_PERCENT / 100.0)
-        [_, anchorRunMs] = anchorReminderRun(anchorEndTime, visibleEndTime)
-        if anchorRunMs > 0
-            array.push(pendingAnchorReminders, revelioInteractions.PendingAnchorReminder.new(price, anchorEndTime, visibleEndTime, anchorLabelIdentity, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank, effectiveLineWidth))
+        queueBoundedLineReminder(price, anchorEndTime, visibleEndTime, lineReminderPlacementPhase(levelName), anchorLabelIdentity, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth)
     if sweptDenote
         line sweptContinuationLine = line.new(x1=endTime, y1=price, x2=time, y2=price, xloc=xloc.bar_time, extend=stopLevelLinesAtOffset ? extend.none : extend.right, color=sweptContinuationColor, width=lineWidth, style=toLineStyle(styleName))
         bool sweptContinuationRetained = trackLine(sweptContinuationLine)
@@ -1126,13 +1152,13 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     if extendRight or sweptDenote or hitTraceActive
         if showLevelText
             string priceText = str.tostring(price, format.mintick)
-            revelioInteractions.LabelIdentity labelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, style, isLive, isLast, levelName, sweptDenote, displaySuffix, hitTraceActive and archivedTouch, false)
+            revelioInteractions.LabelIdentity labelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, sweptDenote, displaySuffix, hitTraceActive and archivedTouch, false)
             string touchKey = isLive ? "" : levelHitKey(levelHitSourceProfileKey(startTime, anchorEndTime, style), levelName)
             // Buffer the right-edge label instead of drawing it; flushPendingLabels merges coincident prices.
             array.push(pendingLabels, revelioInteractions.PendingLabel.new(price, bar_index + style.levelLabelOffset, anchorEndTime, touchKey, labelIdentity, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth, activeLine, primaryLineRetained ? primaryLine : na, primaryLineRetained ? lineColor : na, continuationLine, continuationLineColor, carrierLine, carrierLineColor))
         // Last and live profiles are self-evident, so only older completed profiles carry a date.
         if showFullText and sweptDenote
-            revelioInteractions.LabelIdentity reminderLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, style, isLive, isLast, levelName, false, displaySuffix, false, false)
+            revelioInteractions.LabelIdentity reminderLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, false, displaySuffix, false, false)
             array.push(pendingReminders, revelioInteractions.PendingReminder.new(price, endTime, reminderLabelIdentity, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank, effectiveLineWidth))
 
 // Scale visible opacity so fading respects the base transparency.
@@ -1461,7 +1487,7 @@ profileLevelHitPresentation(revelioCore.Profile profile, int profileIndex, int p
     color baseLabelColor = levelName == LABEL_POC ? style.pocLabelColor : style.valueAreaLabelColor
     color labelColor = sweptDenote ? revelioInteractions.fadeColor(baseLabelColor, SWEPT_LABEL_TEXT_FADE_PERCENT / 100.0) : baseLabelColor
     int lineWidth = levelName == LABEL_POC ? style.pocWidth : style.valueAreaWidth
-    revelioInteractions.LevelHitPresentation.new(levelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, style, false, isMostRecentCompleted, levelName, sweptDenote, true), levelLabelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, style, false, isMostRecentCompleted, levelName, sweptDenote, "", false, false), lineColor, labelColor, style.levelLabelBgColor, style.showPrice, levelHitCircleSizeForAnchor(style.labelAnchor), style.levelLabelSize, style.levelLabelOffset, lineWidth, levelLabelRank(levelName, style, false, isMostRecentCompleted), levelHitAnchorPriority(style.labelAnchor), extendsRight or sweptDenote)
+    revelioInteractions.LevelHitPresentation.new(levelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, true), levelLabelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, "", false, false), lineColor, labelColor, style.levelLabelBgColor, style.showPrice, levelHitCircleSizeForAnchor(style.labelAnchor), style.levelLabelSize, style.levelLabelOffset, lineWidth, levelLabelRank(levelName, style, false, isMostRecentCompleted), levelHitAnchorPriority(style.labelAnchor), extendsRight or sweptDenote)
 
 registerProfileLevelHitPresentations(map<string, revelioInteractions.LevelHitPresentation> presentations, revelioCore.Profile profile, int profileIndex, int profileCount, RenderBudgetAnchor anchor, bool surfaceSweptLevels) =>
     if profile.isValid and time > profile.endTime
@@ -1520,7 +1546,7 @@ renderProfile(revelioCore.Profile profile, RenderBudgetAnchor anchor, bool isMos
             bool pocHitTrace = touchLabelsActive and not na(profile.pocHitTime) and sameNyDate(profile.pocHitTime, time)
             bool pocArchivedTouch = not isLive and map.contains(archivedLevelHitKeys, levelHitKey(profileHitSourceKey, LABEL_POC))
             string pocAuditSuffix = autoSweptLevelAuditSuffix(anchor.autoSweptState, profile, sweptProtectedVisibilityMask, revelioCore.AutoSweptLevel.poc, pocSweptDenote)
-            drawLevel(profile.startTime, pocRight, profile.pocPrice, pocColor, style.pocWidth, style.pocStyle, pocExtend, style.pocLabelColor, LABEL_POC, style, pocSweptDenote, pocContinuation, pocHitTrace, pocArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, pocAuditSuffix)
+            drawLevel(profile.startTime, pocRight, profile.pocPrice, pocColor, style.pocWidth, style.pocStyle, pocExtend, style.pocLabelColor, LABEL_POC, style, pocSweptDenote, pocContinuation, pocHitTrace, pocArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, pocAuditSuffix)
             registerRenderedLevelHitKey(renderedLevelHitKeys, profile, style, LABEL_POC, isLive)
         if levelsAllowed and style.showValueArea
             [valueAreaHighRight, valueAreaHighExtend] = levelEndpoint(profile.endTime, profile.valueAreaHighBreachTime, style.extensionMode)
@@ -1533,7 +1559,7 @@ renderProfile(revelioCore.Profile profile, RenderBudgetAnchor anchor, bool isMos
                 bool vahHitTrace = touchLabelsActive and not na(profile.valueAreaHighHitTime) and sameNyDate(profile.valueAreaHighHitTime, time)
                 bool vahArchivedTouch = not isLive and map.contains(archivedLevelHitKeys, levelHitKey(profileHitSourceKey, LABEL_VAH))
                 string vahAuditSuffix = autoSweptLevelAuditSuffix(anchor.autoSweptState, profile, sweptProtectedVisibilityMask, revelioCore.AutoSweptLevel.valueAreaHigh, vahSweptDenote)
-                drawLevel(profile.startTime, valueAreaHighRight, profile.valueAreaHighPrice, vahColor, valueAreaLineWidth, style.valueAreaStyle, valueAreaHighExtend, style.valueAreaLabelColor, LABEL_VAH, style, vahSweptDenote, vahContinuation, vahHitTrace, vahArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, vahAuditSuffix)
+                drawLevel(profile.startTime, valueAreaHighRight, profile.valueAreaHighPrice, vahColor, valueAreaLineWidth, style.valueAreaStyle, valueAreaHighExtend, style.valueAreaLabelColor, LABEL_VAH, style, vahSweptDenote, vahContinuation, vahHitTrace, vahArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, vahAuditSuffix)
                 registerRenderedLevelHitKey(renderedLevelHitKeys, profile, style, LABEL_VAH, isLive)
             [valueAreaLowRight, valueAreaLowExtend] = levelEndpoint(profile.endTime, profile.valueAreaLowBreachTime, style.extensionMode)
             bool valSweptDenote = valSweptVisible and not na(profile.valueAreaLowBreachTime)
@@ -1543,7 +1569,7 @@ renderProfile(revelioCore.Profile profile, RenderBudgetAnchor anchor, bool isMos
                 bool valHitTrace = touchLabelsActive and not na(profile.valueAreaLowHitTime) and sameNyDate(profile.valueAreaLowHitTime, time)
                 bool valArchivedTouch = not isLive and map.contains(archivedLevelHitKeys, levelHitKey(profileHitSourceKey, LABEL_VAL))
                 string valAuditSuffix = autoSweptLevelAuditSuffix(anchor.autoSweptState, profile, sweptProtectedVisibilityMask, revelioCore.AutoSweptLevel.valueAreaLow, valSweptDenote)
-                drawLevel(profile.startTime, valueAreaLowRight, profile.valueAreaLowPrice, valColor, valueAreaLineWidth, style.valueAreaStyle, valueAreaLowExtend, style.valueAreaLabelColor, LABEL_VAL, style, valSweptDenote, valContinuation, valHitTrace, valArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, valAuditSuffix)
+                drawLevel(profile.startTime, valueAreaLowRight, profile.valueAreaLowPrice, valColor, valueAreaLineWidth, style.valueAreaStyle, valueAreaLowExtend, style.valueAreaLabelColor, LABEL_VAL, style, valSweptDenote, valContinuation, valHitTrace, valArchivedTouch, isLive, isMostRecentCompleted, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, valAuditSuffix)
                 registerRenderedLevelHitKey(renderedLevelHitKeys, profile, style, LABEL_VAL, isLive)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2141,7 +2167,7 @@ monthlyStyle.useUtcLabelTimezone := useUtcCalendarAnchors
 quarterlyStyle.useUtcLabelTimezone := useUtcCalendarAnchors
 
 // Carry the latest hourly developing snapshot onto each lower-timeframe host bar.
-[quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotManualComposite, quarterlySnapshotManualCompositeStartKey, quarterlySnapshotManualCompositeEndKey, quarterlyHistogramSnapshot, quarterlyDevelopingSnapshot, requestedQuarterlyShowDeveloping, requestedQuarterlyCompositeReady] = if quarterlyCalculationEnabled
+[quarterlySnapshotStartTime, quarterlySnapshotEndTime, quarterlySnapshotPriceLow, quarterlySnapshotPriceHigh, quarterlySnapshotPocPrice, quarterlySnapshotValueAreaHighPrice, quarterlySnapshotValueAreaLowPrice, quarterlySnapshotManualComposite, quarterlySnapshotManualCompositeStartKey, quarterlySnapshotManualCompositeEndKey, quarterlySnapshotManualCompositeMemberCount, quarterlyHistogramSnapshot, quarterlyDevelopingSnapshot, requestedQuarterlyShowDeveloping, requestedQuarterlyCompositeReady] = if quarterlyCalculationEnabled
     request.security(syminfo.tickerid, QUARTERLY_CALCULATION_TIMEFRAME, fixedQuarterlyContext(quarterlyFilterEnabled, useUtcCalendarAnchors, rthDataOnly, quarterlyFilterEnabled and quarterlyShowHistogram, candidateQuarterlyManualCompositeRange.valid, candidateQuarterlyManualCompositeRange.startKey, candidateQuarterlyManualCompositeRange.endKey), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=QUARTERLY_CALCULATION_BARS)
 else
     revelioProfiles.emptyRemoteProfileResult(START_TIME_UNSET)
@@ -2175,6 +2201,7 @@ if quarterlySnapshotStartTime != START_TIME_UNSET and quarterlySnapshotMatchesRa
         quarterlyProfile.manualComposite := quarterlySnapshotManualComposite
         quarterlyProfile.manualCompositeStartKey := quarterlySnapshotManualCompositeStartKey
         quarterlyProfile.manualCompositeEndKey := quarterlySnapshotManualCompositeEndKey
+        quarterlyProfile.manualCompositeMemberCount := quarterlySnapshotManualCompositeMemberCount
         quarterlyProfileIndex := revelioCore.storeProfile(quarterlyState, quarterlyProfile, quarterlyProfilesToShow, time)
     revelioCore.Profile quarterlyStoredProfile = array.get(quarterlyState.profiles, quarterlyProfileIndex)
     if not na(quarterlyHistogramSnapshot) and quarterlyHistogramSnapshot.maxHistogramVolume > 0 and quarterlyStoredProfile.maxHistogramVolume <= 0
@@ -2604,15 +2631,15 @@ if barstate.islast
     if quarterlyFilterEnabled and quarterlyShowDeveloping and not na(quarterlyDevelopingCache)
         quarterlyLiveProfile := quarterlyDevelopingCache
     if rthManualCompositeRange.valid
-        renderManualCompositeFrame(rthState.profiles, rthLiveProfile, rthManualCompositeRange.startKey, rthManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, rthStyle.valueAreaLastColor, rthStyle.levelLabelBgColor)
+        renderManualCompositeFrame(rthState.profiles, rthLiveProfile, rthManualCompositeRange.startKey, rthManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, rthStyle)
     if globexManualCompositeRange.valid
-        renderManualCompositeFrame(globexState.profiles, globexLiveProfile, globexManualCompositeRange.startKey, globexManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, globexStyle.valueAreaLastColor, globexStyle.levelLabelBgColor)
+        renderManualCompositeFrame(globexState.profiles, globexLiveProfile, globexManualCompositeRange.startKey, globexManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, globexStyle)
     if weeklyManualCompositeRange.valid
-        renderManualCompositeFrame(weeklyState.profiles, weeklyLiveProfile, weeklyManualCompositeRange.startKey, weeklyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, weeklyStyle.valueAreaLastColor, weeklyStyle.levelLabelBgColor)
+        renderManualCompositeFrame(weeklyState.profiles, weeklyLiveProfile, weeklyManualCompositeRange.startKey, weeklyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, weeklyStyle)
     if monthlyManualCompositeRange.valid
-        renderManualCompositeFrame(monthlyState.profiles, monthlyLiveProfile, monthlyManualCompositeRange.startKey, monthlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, monthlyStyle.valueAreaLastColor, monthlyStyle.levelLabelBgColor)
+        renderManualCompositeFrame(monthlyState.profiles, monthlyLiveProfile, monthlyManualCompositeRange.startKey, monthlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, monthlyStyle)
     if quarterlyManualCompositeRange.valid
-        renderManualCompositeFrame(quarterlyState.profiles, quarterlyLiveProfile, quarterlyManualCompositeRange.startKey, quarterlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, quarterlyStyle.valueAreaLastColor, quarterlyStyle.levelLabelBgColor)
+        renderManualCompositeFrame(quarterlyState.profiles, quarterlyLiveProfile, quarterlyManualCompositeRange.startKey, quarterlyManualCompositeRange.endKey, manualCompositeFrom, manualCompositeThrough, quarterlyStyle)
     array<int> floatingValueGapIndices = revelioGaps.selectFloats(valueGapState.records, valueGapFloatingActive, valueGapNearestFloats, close)
     int historicalGapLimit = valueGapDisplayMode == VALUE_GAP_DISPLAY_RECENT_FLOATING ? 1 : valueGapsToShow
     renderValueGaps(valueGapState.records, valueGapHistoricalActive, floatingValueGapIndices, historicalGapLimit, useUtcValueGapLabels)
@@ -2694,7 +2721,7 @@ if barstate.islast
     revelioInteractions.flushPendingLabels(pendingLabels, dedupeLabels, shortenLabels, levelHitLabelClusters, levelHitGroupPresentations, levelHitFirstDirections, drawnLabels, interactionConfig)
     if showTouchMarkers
         revelioInteractions.renderLevelHitCircles(levelHitEvents, levelHitGroupIndices, levelHitPresentations, levelHitGroupPresentations, levelHitFirstDirections, drawnLabels, interactionConfig)
-    revelioInteractions.flushPendingAnchorReminders(pendingAnchorReminders, dedupeLabels, shortenLabels, drawnLabels, interactionConfig)
+    revelioInteractions.flushPendingLineReminders(pendingLineReminders, dedupeLabels, shortenLabels, drawnLabels, interactionConfig)
     revelioInteractions.flushPendingReminders(pendingReminders, dedupeLabels, shortenLabels, drawnLabels, interactionConfig)
 
 // revelio

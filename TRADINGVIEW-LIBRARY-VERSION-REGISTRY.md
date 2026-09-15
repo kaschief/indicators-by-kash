@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-13
+Updated: 2026-09-15
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -21,10 +21,10 @@ This is the repository's single source of truth for TradingView library versions
 <!-- VERSION_REGISTRY_CURRENT_START -->
 | Library | Source | Host | Published | Pending |
 |---|---|---|---:|---:|
-| RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 11 | — |
-| RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 12 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 28 | — |
-| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 9 | — |
+| RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 12 | — |
+| RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 13 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 29 | — |
+| RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
 | LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 1 | — |
@@ -49,6 +49,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioCoreLibrary | 9 | Published · host compile token limit | Recoverable Manual Composite consolidation constrained to actual Show Last chronology | `e3edfa118791544c61d5e7360acebba89f92b6520d2b24b28909dc3d898deda6` |
 | RevelioCoreLibrary | 10 | Published · runtime performance regression | Exports the canonical profile row-count invariant for the complete Revelio chain | `ec6e2995c5dc906437dd7b5628a372745f4ed6cbe2d40dd70c1822f9b4c1c142` |
 | RevelioCoreLibrary | 11 | Published · host loaded · testing | Removes Alternate POC calculation, profile state, mitigation, touch, and Auto Swept contracts | `3c66c7c7964decd3e58f61f924f189532584b10c351cb7be89f5409b6215b2bb` |
+| RevelioCoreLibrary | 12 | Published · loaded · tested · approved | Stores the exact manual-composite member count in canonical completed, developing, and Auto Swept profile state | `d5e83a2b6a77652e38adab3ef3c3c6acf70472ad9e0016f928480129d8cb4a6d` |
 | RevelioGapsLibrary | 1 | Published · superseded | Initial library-backed Revelio production release | Not captured before registry creation |
 | RevelioGapsLibrary | 2 | Published · production · approved | Core `/2` dependency alignment with unchanged Value Gap logic | `a2aa61d0246c2434c2e80563135f465baa9aa54a8f47978baa022f65fbed409e` |
 | RevelioGapsLibrary | 3 | Published · superseded before host compile | Core `/3` dependency alignment for the superseded contract | `beea413d4a62daaac0d0a5eef8422c7a84069e0ffc7fac8b9912c6efb32a37c4` |
@@ -61,6 +62,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioGapsLibrary | 10 | Published · runtime performance regression | Core `/10` dependency alignment with unchanged Value Gap behavior | `373337c6f1a3fd90db2e909bd9dfc3ec55b1bcafa16af4c542037ef5aafb6633` |
 | RevelioGapsLibrary | 11 | Published · host loaded · testing | Removes filled Value Gaps from the per-bar fill scan while preserving retained historical records | `0f8344c9837dea494c4fa4f83773a376760e3920ce59b3b24394dbcc07c4e524` |
 | RevelioGapsLibrary | 12 | Published · host loaded · testing | Core `/11` dependency alignment with unchanged Value Gap behavior | `ab413a3ce6dc9c8b0bfbc206c1c68bb3c8f2f2e8574bc18ab003a0b2142b4185` |
+| RevelioGapsLibrary | 13 | Published · loaded · tested · approved | Core `/12` dependency alignment with unchanged Value Gap behavior | `d88ef84df7fd3933f0838a17d63d1c10f5ddb1c63ad4da4712cec4043a432b6f` |
 | RevelioInteractionsLibrary | 1 | Published · superseded | Initial interaction compositor production release | Not captured before registry creation |
 | RevelioInteractionsLibrary | 2 | Published · superseded | Mature appearance-input cleanup and obsolete Anchor Label contract removal | Not captured before registry creation |
 | RevelioInteractionsLibrary | 3 | Published · superseded | First-hit context candidate before final principal-remediation library changes | Not captured before registry creation |
@@ -89,6 +91,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioInteractionsLibrary | 26 | Published · host loaded · testing | Converts Touch Marker circles from coarse size presets to independently adjustable numeric point sizes | `ee5abc9c6083460d8106298b1d62c1873176b2381117a7d128f394610d46440e` |
 | RevelioInteractionsLibrary | 27 | Published · user confirmed | Adds optional small, muted native identities to secondary merged lines; defaults On at size 6 with fixed 50% additional text fading; preserves combined labels, merging, and line fading | `a63cffc890a6c0e41f245c659e79373990db356dbe8c403492ada41287d28c63` |
 | RevelioInteractionsLibrary | 28 | Published · deployed · user approved | Exposes additional secondary-label fading as Fade %, default 50, range 0–100; preserves merging and combined labels | `34424722e266711b4a997fbff5b86635a38bf7dad60497235785aab9e2d8de34` |
+| RevelioInteractionsLibrary | 29 | Published · loaded · tested · approved | Generalizes inline line reminders to explicit spans and placement phases so composite frame edges share shortening, dedupe, merging, fading, and label budgets | `87f0439c46b3a3d504f6e5ac17878dc057e8cabcb76eb255ba930ddf6d53d13f` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
 | RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
@@ -99,6 +102,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioProfileOrchestrationLibrary | 7 | Published · superseded · principal review rejected Quarterly eligibility | Preserves RTH-only calendar profiles and aligns Manual Composite eligibility with post-composite retention, merge resets, and source coverage | `8722770985e7818f729c9ee31e960f6dc921b4e8c47f678b8a724ba6c1abadf1` |
 | RevelioProfileOrchestrationLibrary | 8 | Published · tested · approved | Validates Quarterly Manual Composite eligibility inside its deep remote history instead of requiring the selected boundary in host-chart history | `14283772373ecb96390d3f1f0f964f6ec813a3b0542d38fafe7863c22ee1609d` |
 | RevelioProfileOrchestrationLibrary | 9 | Published · host loaded · testing | Removes Alternate POC Quarterly transport and focus inputs while preserving weekly histogram snapshots under hourly Quarterly batching | `3a0e494a8433cfffb71091bc5312261a509bc5f04c575a6ad355b2474e1a5a60` |
+| RevelioProfileOrchestrationLibrary | 10 | Published · loaded · tested · approved | Stamps exact member counts on developing manual composites and transports the count through Quarterly snapshots | `b68543bc74e621d96b186dadf6a720a001302281b60c0be788c7fc13af1b1fb7` |
 | LegilimensProfileLibrary | 1 | Published · host compile return-type defect | Extracts profile sample storage, histogram construction, and value-area calculations from the Legilimens host | `a3d05564b9ce62240a4ce15e0f2022e2fd24e9b896d5076553b4ab9af58739da` |
 | LegilimensProfileLibrary | 2 | Published · tested · approved | Restores void return contracts for mutation helpers used inside host control-flow branches | `d65e604bcc817f621311729db8f733437e7d86199f1cc16c5287eaa4630241c3` |
 | LegilimensProfileLibrary | 3 | Published · tested · approved | Extracts rolling sample storage, compaction, pruning, window selection, and profile calculation while preserving host lifecycle and presentation ownership | `5e3cd93d7621d8e793d546f6d13fbd0863a2e90c43bb2dfec973dca403bff227` |
@@ -198,16 +202,20 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-07-04 | 2026-09-07 | RevelioInteractionsLibrary | 28 | Publish the adjustable secondary-label fade source privately as `/28`, then compile the canonical host importing `/28`; verify Fade 0/50/100%, size 6, toggle On/Off, and unchanged merged labels on time and Range charts | `PUBLISHED_DEPLOYED_USER_CONFIRMED` |
 | PUB-2026-09-09-01 | 2026-09-09 | LegilimensProfileOrchestrationLibrary | 3 | Publish the extracted maturity engine privately as `/3` from `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine`, then compile the Legilimens development host importing Profile `/4` and Orchestration `/3`; verify all seven developing sessions, Off/Auto/On, coverage gaps, sticky visibility, Extended NY opening, Replay/reload, time and Range charts, and loading performance | `WITHDRAWN_USER_REQUESTED_HOST_ONLY` |
 | PUB-2026-09-13-01 | 2026-09-13 | LegilimensPresentationLibrary | 1 | Publish the extracted Legilimens presentation and interactions source privately as `/1`, then compile the development host against Profile `/4`, Orchestration `/2`, and Presentation `/1`; verify every profile mode, developing/history behavior, Delta/FIB/LVN rendering, merging, mitigation, role reversal, object budgets, Replay, realtime, standard time charts, and Range charts | `PUBLISHED_HOST_LOADED_USER_CONFIRMED` |
+| PUB-2026-09-14-01 | 2026-09-14 | RevelioCoreLibrary | 12 | Publish the canonical manual-composite member-count contract privately as `/12` before its dependent libraries | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-14-02 | 2026-09-14 | RevelioGapsLibrary | 13 | After Core `/12`, publish the dependency-aligned Value Gaps source privately as `/13` | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-14-03 | 2026-09-14 | RevelioInteractionsLibrary | 29 | Publish the generalized inline line-reminder compositor privately as `/29` | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-14-04 | 2026-09-14 | RevelioProfileOrchestrationLibrary | 10 | After Core `/12`, publish exact developing and Quarterly manual-composite count transport privately as `/10`, then compile the Revelio host against the complete pending chain | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
 
-- Published chain: Core `/11`, Gaps `/12`, Interactions `/28`, Profile Orchestration `/9`.
-- Revelio pending: none. Host-only finalization uses size 6 and 65% additional fading directly and removes both tuning inputs; recompile the host.
+- Published chain: Core `/12`, Gaps `/13`, Interactions `/29`, Profile Orchestration `/10`.
+- Revelio pending: none.
 - Discarded: Interactions `/20`; it remains permanently retired.
-- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/11`, Gaps `/12`, Interactions `/28`, and Profile Orchestration `/9`.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/12`, Gaps `/13`, Interactions `/29`, and Profile Orchestration `/10`.
 - Interactions `/27`: user confirmed publication of the preceding fixed-fade secondary-label source. `/28` was subsequently tested and the user selected size 6 and 65% fading; its library source is unchanged by the host-only UI cleanup.
-- Runtime status: Core `/11`, Gaps `/12`, Interactions `/28`, and Profile Orchestration `/9` are published and host-loaded for testing. The current host-only removal of the temporary size controls still requires recompilation.
+- Runtime status: all four libraries are published; the host is loading for testing. Host compile, Replay, Range, and visual approval are not yet confirmed.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
 - Current host presentation changes: fixed profile label-text and Touch Marker sizes are RTH 8/10, Globex 8/10, Weekly 8/14, Monthly 9/17, and Quarterly 9/19, with the temporary size controls removed from the UI; Value Gap text remains 8 and Guides/Repeats remain 6; Interactions `/28` adds optional small, muted native secondary labels (On, fixed size 6, fixed additional Fade 65%) after combined labels and before optional markers/reminders; secondary merged levels use at least 85% transparency across their full primary, swept-continuation, and carrier paths while the dominant line remains unchanged; original swept line styles; no newest value-area width boost; every regular profile POC, VAH, and VAL uses width 2 except Globex POC, which remains width 1; and Until Swept mitigation uses a 70% faded pre-sweep segment plus an 85% faded continuation when Fade Mitigated Levels is on, while Off preserves the native pre-sweep segment and standard 75% continuation.
 - Current Quarterly performance change: the deep Quarterly calculation runs in 60-minute outer batches instead of 15-minute batches while retaining every underlying 5-minute price and volume sample. Developing Quarterly results can therefore refresh once per hour; completed profile levels are intended to remain unchanged.
@@ -219,21 +227,13 @@ Entries before this registry was created are reconstructed from the task history
 
 ## Pending release notes
 
-None. Legilimens Presentation `/1` is published and host-loaded.
-
-Copy-ready host notes:
-
-```text
-Removes automatic developing-profile maturity and restores manual session visibility checkboxes. Adds centered lowercase session midpoint labels, such as globex 0.5, at size 5 with fixed 45% text transparency.
-```
-
-Test Globex and the other six developing-session checkboxes on NQ 5-minute and 180R/360R charts. With each checkbox off, contents stay hidden until completion; with it on, developing contents appear immediately. Check the optional inner frames/titles, session boundaries, completed profiles, and centered midpoint text. Compare reload/Replay and confirm no Auto or text-transparency control remains.
+None. Revelio Core `/12`, Gaps `/13`, Interactions `/29`, and Profile Orchestration `/10` are published and loading for testing.
 
 ## Current host validation
 
-- Import remains `midnightpaws87/RevelioInteractionsLibrary/28`; source fingerprint unchanged.
-- Recompile `indicators/20-revelio/code/indicator/revelio.pine` and confirm the Merged Line Labels toggle remains while Size and Fade % are removed.
-- On NQ 5m and 180R/360R, compare secondary-label appearance with the selected size 6 and 65% additional fading; combined labels and merge behavior must remain unchanged.
+- Publish Core `/12`, then Gaps `/13` and Profile Orchestration `/10`; publish Interactions `/29`; compile `indicators/20-revelio/code/indicator/revelio.pine` against that pending chain.
+- Confirm frame-edge labels sit inline on both horizontal frame lines and read, for example, `Weekly Composite (4) Aug 12–Aug 15`, with no comma or bullet.
+- Confirm the same `(4)` member count appears wherever that composite identity is shown: POC/VAH/VAL reminders, right-edge and merged labels, and Touch Marker identities, with Shorten Labels and Dedupe Labels both On and Off.
 
 ## Invariants
 

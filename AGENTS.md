@@ -391,11 +391,14 @@ Except for the routine commands authorized by a direct commit request, explicit 
 
 This authorizes the complete local workflow needed for that specific commit:
 
+For TradingView work, `commit` means the user confirms that publication, host loading, testing, and approval are complete unless they explicitly state a partial or failed state.
+
 1. Run `git status` and scoped `git diff` commands to verify the requested files
 2. Run a path-scoped `git add` for the requested files when needed
-3. Run the requested `git commit` with a useful subject and body
-4. Verify the commit result with `git status`
-5. For TradingView work, include clearly labeled, concise, copy-ready publication notes in the final commit handoff. Give these notes after every TradingView commit, even when publication is already complete or no library version changed. State the exact library version/import when applicable and explicitly say when no new library version is required.
+3. Before committing TradingView work, draft the final `Publication Notes` block. Do not run the commit until it contains the exact publication order and library versions/imports, final publication and validation status, concise copy-ready TradingView notes, and an explicit statement when no new library publication is required.
+4. Run the requested `git commit` with a useful subject and body
+5. Verify the commit result with `git status`
+6. Include the drafted `Publication Notes` block in the final commit handoff. A TradingView commit workflow without this block is incomplete, even when publication is already complete or no library version changed.
 
 Do not include unrelated files, and do not push unless the user separately requests it.
 
