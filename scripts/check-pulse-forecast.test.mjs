@@ -45,9 +45,10 @@ test('Forecast applies to every selected pool, not only pools with LD enabled', 
 
 for (const period of ['Daily', 'Weekly', 'Monthly', 'Overnight', 'Premarket', 'AsiaOpen', 'Rafael']) {
   const intraday = !['Daily', 'Weekly', 'Monthly'].includes(period);
+  const delayedMitigation = ['AsiaOpen', 'Rafael'].includes(period);
   const flag = `${period[0].toLowerCase()}${period.slice(1)}DepthActive`;
   const pool = period === 'AsiaOpen' ? 'asia_open' : period.toLowerCase();
-  const nativeFlag = `${['AsiaOpen', 'Rafael'].includes(period) ? 'enable' : 'effectiveEnable'}${period}LiquidityDepth`;
+  const nativeFlag = `effectiveEnable${period}LiquidityDepth`;
 
   test(`${period}: Forecast overrides LD only inside normal eligibility`, () => {
     for (const enabled of [false, true]) {
@@ -76,15 +77,38 @@ for (const period of ['Daily', 'Weekly', 'Monthly', 'Overnight', 'Premarket', 'A
   });
 
   test(`${period}: drawing and touch tracking share the resolved eligibility`, () => {
-    assert.match(source, new RegExp(`pool_detect_breaches\\(${pool}_pool, [^,]+, ${flag}, ${intraday}`));
+    assert.match(source, new RegExp(`pool_detect_breaches\\(${pool}_pool, [^,]+, ${flag}, ${intraday}, ${delayedMitigation}`));
     const spec = source.split('\n').find(line => line.includes(`PoolRenderSpec.new(${pool}_pool,`));
     assert.ok(spec);
     const distance = `${intraday ? 'daily' : pool}LiquidityDepthDistance`;
     assert.ok(spec.includes(`${nativeFlag}, ${flag}, ${intraday}, ${distance}`));
     const scans = source.split('\n').filter(line => line.includes(`pool_detect_breaches(${pool}_pool,`));
-    assert.ok(scans.every(line => line.includes(`${flag}, ${intraday}, ${distance}, high, low, time, bar_index)`)));
+    assert.ok(scans.every(line => line.includes(`${flag}, ${intraday}, ${delayedMitigation}, ${distance}, high, low, time, bar_index)`)));
   });
 }
+
+test('Asia Open and Rafael defer confirmed mitigation and LD consumption until the next 05:00 NY boundary', () => {
+  const detectionBody = functionBody('pool_detect_breaches');
+  const confirmationBody = functionBody('delayed_mitigation_confirmation_start');
+
+  assert.match(confirmationBody, /timestamp\(NY_TIMEZONE, year\(sessionStartTime, NY_TIMEZONE\), month\(sessionStartTime, NY_TIMEZONE\), dayofmonth\(sessionStartTime, NY_TIMEZONE\) \+ 1, MITIGATION_START_HOUR, 0\)/);
+  assert.match(detectionBody, /bool canConfirmMitigation = not delayedMitigation or eventTime >= delayed_mitigation_confirmation_start\(array\.get\(pool\.session_start_times, poolIndex\)\)/);
+  for (const side of ['high', 'low']) {
+    assert.match(detectionBody, new RegExp(`else if not array\\.get\\(pool\\.${side}_provisional_breached, poolIndex\\)\\n\\s+array\\.set\\(pool\\.${side}_provisional_breached, poolIndex, true\\)`));
+    assert.match(detectionBody, new RegExp(`if ${side}Breached\\n\\s+pool_detect_depth_breaches`));
+  }
+  assert.match(functionBody('pool_store_session'), /array\.push\(pool\.high_provisional_breached, false\)/);
+  assert.match(functionBody('pool_store_session'), /array\.push\(pool\.low_provisional_breached, false\)/);
+  assert.match(functionBody('prune_pool'), /array\.shift\(pool\.high_provisional_breached\)/);
+  assert.match(functionBody('prune_pool'), /array\.shift\(pool\.low_provisional_breached\)/);
+});
+
+test('Forecast LD remains visible while a delayed parent breach is still provisional', () => {
+  assert.equal(drawDepth(false, false, true), true);
+  assert.equal(drawDepth(true, false, true), true);
+  assert.equal(drawDepth(true, false, false), false);
+  assert.equal(drawDepth(true, true, false), true);
+});
 
 test('all seven pools share drawing, visibility and price calculation', () => {
   assert.equal((source.match(/PoolRenderSpec\.new\(/g) || []).length, 7);
@@ -92,10 +116,30 @@ test('all seven pools share drawing, visibility and price calculation', () => {
   for (const side of ['high', 'low']) {
     assert.ok(source.includes(`should_draw_liquidity_depth(renderSpec.depthEnabled, ${side}_breached, forecastLiquidityDepth)`));
   }
-  assert.match(functionBody('draw_liquidity_pool'), /if renderSpec\.depthActive/);
+  assert.match(functionBody('draw_liquidity_pool'), /renderSpec\.depthActive and should_draw_liquidity_depth/);
   for (const name of ['draw_pool_depths', 'pool_detect_depth_breaches']) {
     assert.match(functionBody(name), /liquidity_depth_price\(/);
   }
+});
+
+test('Unmitigated Only preserves faded breached context only for a partly active ladder', () => {
+  assert.doesNotMatch(functionBody('draw_liquidity_pool'), /showUnmitigatedOnly and high_breached and low_breached/);
+  const body = functionBody('draw_pool_depths');
+  assert.match(body, /bool hasUnmitigatedLevel = depth_has_unmitigated_level\(depthState\)/);
+  assert.match(body, /bool mitigatedContext = showUnmitigatedOnly and hasUnmitigatedLevel and levelBreached/);
+  assert.match(body, /color\.new\(levelColor, mitigatedContextTransparency\)/);
+  assert.match(body, /buffer_liq_depth_labels\([^\n]+mitigatedContext\)/);
+  assert.match(body, /create_liq_depth_connector\([^\n]+connectorTransparency\)/);
+  assert.match(source, /mitigatedContextTransparency = input\.int\(85, "Mitigated Context Transparency", minval=0, maxval=100, step=5/);
+  const poolBody = functionBody('draw_liquidity_pool');
+  for (const side of ['high', 'low']) {
+    const title = `${side[0].toUpperCase()}${side.slice(1)}`;
+    assert.match(poolBody, new RegExp(`bool ${side}MitigatedContext = showUnmitigatedOnly and ${side}_breached and ${side}DepthVisible and depth_has_unmitigated_level\\(${side}DepthState\\)`));
+    assert.match(poolBody, new RegExp(`color ${side}LineColor = ${side}MitigatedContext \\? color\\.new\\(renderSpec\\.lineColor, mitigatedContextTransparency\\)`));
+    assert.match(poolBody, new RegExp(`buffer_pool_label\\([^\\n]+${side}MitigatedContext\\)`));
+    assert.match(poolBody, new RegExp(`bool show${title}Pool = not showUnmitigatedOnly or not ${side}_breached or ${side}MitigatedContext`));
+  }
+  assert.match(functionBody('flush_label_events'), /component_mitigated_context/);
 });
 
 test('fixed projections keep the instrument distances at every base price', () => {
@@ -160,6 +204,26 @@ test('Today additions default to None and do not change dedicated session prefer
     }
   }
 });
+
+for (const name of ['AsiaOpen', 'Rafael']) {
+  test(`${name}: Today forces LD on while dedicated mode respects its toggle`, () => {
+    const nativeFlag = `enable${name}LiquidityDepth`;
+    const effectiveFlag = `effectiveEnable${name}LiquidityDepth`;
+    for (const enabled of [false, true]) {
+      assert.equal(evaluate(assignment(effectiveFlag), {
+        isTodayFilter: true,
+        [nativeFlag]: enabled,
+      }), true);
+      assert.equal(evaluate(assignment(effectiveFlag), {
+        isTodayFilter: false,
+        [nativeFlag]: enabled,
+      }), enabled);
+    }
+    const pool = name === 'AsiaOpen' ? 'asia_open' : 'rafael';
+    const spec = source.split('\n').find(line => line.includes(`PoolRenderSpec.new(${pool}_pool,`));
+    assert.ok(spec?.includes(`${effectiveFlag}, ${name[0].toLowerCase()}${name.slice(1)}DepthActive`));
+  });
+}
 
 test('line and merged-label priority share Monthly through Rafael ranking', () => {
   const order = ['RAFAEL', 'ASIA_OPEN', 'PREMARKET', 'OVERNIGHT', 'DAILY', 'WEEKLY', 'MONTHLY'];
