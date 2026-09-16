@@ -107,8 +107,8 @@ type SessionData
     bool retraceOriginProvisional
     int retraceLegStartBar
     bool retraceTraversalCompleted
-    int retraceCompletionTime
-    bool retraceFadeApplied
+    bool midRetraceFadeApplied
+    bool retrace618FadeApplied
     int ivbBreakTime
     int ivbBreakSide  // 1 = IVB high broke first, -1 = IVB low broke first
     int ivbRetraceBar
@@ -150,6 +150,8 @@ type SessionData
     bool extLowProcessed
     int extHighTime
     int extLowTime
+    float extHighMax
+    float extLowMin
     bool extHighConfirmed
     bool extLowConfirmed
     array<line> extLines
@@ -170,6 +172,7 @@ GROUP_QUICK_FILTER = "⚡ Quick Filter"
 GROUP_QUICK_FILTER_PRICES = "⚡ Quick Filter: Prices"
 GROUP_MITIGATION = "🛡️ Mitigation"
 GROUP_DISPLAY = "👁️ Display"
+GROUP_FADE = "🌫️ Fade"
 GROUP_GLOW = "✨ Glow"
 GROUP_2130_0129 = "🌙 Key Session: Rafael (21:30–01:29)"
 GROUP_0500_0915 = "🌅 Extended Opening: Premarket (05:00–09:15)"
@@ -262,9 +265,9 @@ TOOLTIP_KEEP_PAST_GLOW = "Keep earned historical glows; only current sessions re
 TOOLTIP_MAX_SESSIONS = "Max sessions shown per opening type, including the developing session."
 TOOLTIP_RETRACE_TEXT_COLOR = "Text color for this session's 0.5 and 0.618 retracement labels."
 TOOLTIP_RETRACE_BG_COLOR = "Background for this session's 0.5 and 0.618 retracement labels."
-TOOLTIP_FADE_RETRACE = "Fade NY Early and IVB retracements at 16:00 NY. Other completed 0.5 / 0.618 traversals fade after Duration."
-TOOLTIP_FADE_MITIGATION = "Fade each completed boundary after Duration; the fade stays applied."
-TOOLTIP_FADE_DURATION = "Delay for mitigation and non-NY Early/IVB retracement fades."
+TOOLTIP_FADE_RETRACE = "Controls reached retracement levels and used IVB extension levels. Extensions fade after glow, or immediately when glow is unavailable. Rafael and Asia Open fade at full traversal or after each level's Duration, whichever comes first. NY Early and IVB retracements fade at 16:00 NY."
+TOOLTIP_FADE_MITIGATION = "Fade each completed boundary after Duration. Discarded provisional IVB boundaries fade at 16:00 NY."
+TOOLTIP_FADE_DURATION = "Delay for mitigation and individual Rafael/Asia Open retracement fades."
 
 TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
 TOOLTIP_FOCUS_COUNT = "Per session type."
@@ -423,11 +426,11 @@ labelTextSize = input.string(LABEL_SIZE_TINY, "", options=[LABEL_SIZE_TINY, LABE
 priceAndSizeQuickBoost = input.bool(false, "Price & Size Quick Boost", inline="labels_master", group=GROUP_DISPLAY, active=showAllLabels, tooltip=TOOLTIP_LABEL_MASTER)
 showAllLines = input.bool(true, "Show All Lines", group=GROUP_DISPLAY, tooltip="Master switch for every line. Boxes and calculations remain active.")
 globalLabelSize = priceAndSizeQuickBoost ? size.small : labelTextSize == LABEL_SIZE_TINY ? size.tiny : labelTextSize == LABEL_SIZE_NORMAL ? size.normal : labelTextSize == LABEL_SIZE_LARGE ? size.large : labelTextSize == LABEL_SIZE_HUGE ? size.huge : size.small
-fadeCompletedRetracements = input.bool(true, "Fade Completed Retracement Levels", inline="fade", group=GROUP_DISPLAY, tooltip=TOOLTIP_FADE_RETRACE)
-completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fade", group=GROUP_DISPLAY, active=fadeCompletedRetracements, tooltip="Completed retracement transparency.")
-fadeCompletedMitigationLevels = input.bool(true, "Fade Completed Mitigation Levels", inline="mitigation_fade", group=GROUP_DISPLAY)
-completedMitigationFadeOpacity = input.int(85, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_DISPLAY, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
-completedFadeDurationHours = input.float(6.0, "Duration", minval=0.5, maxval=24.0, step=0.5, inline="fade_duration", group=GROUP_DISPLAY, active=fadeCompletedRetracements or fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_DURATION)
+fadeCompletedRetracements = input.bool(true, "Fade Retracement Levels", inline="fade", group=GROUP_FADE)
+completedRetraceFade = input.int(65, "Fade %", minval=0, maxval=100, inline="fade", group=GROUP_FADE, active=fadeCompletedRetracements, tooltip=TOOLTIP_FADE_RETRACE)
+fadeCompletedMitigationLevels = input.bool(true, "Fade Mitigation Levels", inline="mitigation_fade", group=GROUP_FADE)
+completedMitigationFadeOpacity = input.int(85, "Fade %", minval=0, maxval=100, inline="mitigation_fade", group=GROUP_FADE, active=fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_MITIGATION)
+completedFadeDurationHours = input.float(6.0, "Duration", minval=0.5, maxval=24.0, step=0.5, inline="fade_duration", group=GROUP_FADE, active=fadeCompletedRetracements or fadeCompletedMitigationLevels, tooltip=TOOLTIP_FADE_DURATION)
 nyEarlyIvbCoreVisibility = input.string(CORE_VISIBILITY_AUTO, "NY Early + IVB Cores", options=[CORE_VISIBILITY_AUTO, CORE_VISIBILITY_HIDDEN, CORE_VISIBILITY_SHOWN], inline="ny_early_ivb_cores", group=GROUP_DISPLAY)
 includePastNyEarlyIvbCores = input.bool(false, "Include Past Cores", inline="ny_early_ivb_cores", group=GROUP_DISPLAY, active=nyEarlyIvbCoreVisibility != CORE_VISIBILITY_SHOWN, tooltip="Auto — Hide today's cores 06:00–10:00 NY.\nHidden — Hide today's cores all day.\nShown — Show all cores.\n\nInclude Past Cores — Extend Auto or Hidden to retained prior-day cores.")
 currentNyMinutes = validChartContext ? hour(time, NY_TIMEZONE) * 60 + minute(time, NY_TIMEZONE) : 0
@@ -556,7 +559,7 @@ var array<DeviationZone> cachedDeviations_asia_open = na
 // Glow state keyed by deviation box / IVB extension line.
 var map<string, int> glowTouchTimes = map.new<string, int>()
 var map<string, color> glowOriginalColors = map.new<string, color>()
-var map<string, int> ivbExtensionGlowTouchTimes = map.new<string, int>()  // lineKey -> touch timestamp
+var map<string, int> ivbExtensionUseTimes = map.new<string, int>()  // positive = active glow, negative = finalized use
 var map<int, float> ivbHighByDay = map.new<int, float>()
 var map<int, float> ivbLowByDay = map.new<int, float>()
 var map<int, int> ivbBreakTimeByDay = map.new<int, int>()
@@ -682,7 +685,7 @@ getGlowBoxKey(int sessionIndex, int sessionStartTime, int boxIndex) =>
     str.tostring(sessionIndex) + "_" + str.tostring(sessionStartTime) + "_" + str.tostring(boxIndex)
 
 // Generate a unique key for an IVB extension line.
-getIvbExtensionGlowKey(int sessionStartTime, int lineIndex) =>
+getIvbExtensionKey(int sessionStartTime, int lineIndex) =>
     "ivb_ext_" + str.tostring(sessionStartTime) + "_" + str.tostring(lineIndex)
 
 // Restore a deviation box and clear its completed glow state.
@@ -693,11 +696,34 @@ resetGlowBox(box devBox, string boxKey) =>
     if map.contains(glowTouchTimes, boxKey)
         map.remove(glowTouchTimes, boxKey)
 
-// Restore an IVB extension only when it has active glow state.
-resetIvbExtensionGlow(line extLine, string lineKey, int normalWidth) =>
-    if map.contains(ivbExtensionGlowTouchTimes, lineKey)
-        line.set_width(extLine, normalWidth)
-        map.remove(ivbExtensionGlowTouchTimes, lineKey)
+// Push a color's transparency toward fully invisible by pct (0 = unchanged, 100 = invisible).
+fadeToward100(color c, float pct) =>
+    color.new(c, color.t(c) + (100.0 - color.t(c)) * pct / 100.0)
+
+ivbExtensionReached(SessionData sess, line extLine, int currentTime, float currentHigh, float currentLow) =>
+    float extensionLevel = line.get_y1(extLine)
+    bool projectsUp = extensionLevel > sess.wickHigh
+    bool projectsDown = extensionLevel < sess.wickLow
+    currentTime >= line.get_x1(extLine) and (projectsUp ? currentHigh >= extensionLevel : projectsDown and currentLow <= extensionLevel)
+
+completeIvbExtensionUse(SessionData sess, int lineIndex) =>
+    line extLine = array.get(sess.extLines, lineIndex)
+    string lineKey = getIvbExtensionKey(sess.startTime, lineIndex)
+    if map.contains(ivbExtensionUseTimes, lineKey)
+        int useTime = map.get(ivbExtensionUseTimes, lineKey)
+        line.set_width(extLine, opening_0930_1000_extWidth)
+        if useTime > 0
+            if fadeCompletedRetracements
+                line.set_color(extLine, fadeToward100(opening_0930_1000_extColor, completedRetraceFade))
+                if lineIndex < array.size(sess.extLabels)
+                    label extLabel = array.get(sess.extLabels, lineIndex)
+                    label.set_textcolor(extLabel, fadeToward100(opening_0930_1000_extColor, completedRetraceFade))
+                    label.set_color(extLabel, fadeToward100(color.new(color.rgb(255, 255, 255), 50), completedRetraceFade))
+            map.put(ivbExtensionUseTimes, lineKey, -useTime)
+
+finalizeIvbExtensionUse(SessionData sess, int lineIndex, int useTime) =>
+    map.put(ivbExtensionUseTimes, getIvbExtensionKey(sess.startTime, lineIndex), useTime)
+    completeIvbExtensionUse(sess, lineIndex)
 
 resetSessionDeviationGlow(SessionData sess) =>
     int boxCount = array.size(sess.deviationBoxes)
@@ -705,11 +731,11 @@ resetSessionDeviationGlow(SessionData sess) =>
         for i = 0 to boxCount - 1
             resetGlowBox(array.get(sess.deviationBoxes, i), getGlowBoxKey(sess.sessionIndex, sess.startTime, i))
 
-resetSessionIvbExtensionGlow(SessionData sess) =>
+completeSessionIvbExtensionUses(SessionData sess) =>
     int extensionCount = array.size(sess.extLines)
     if extensionCount > 0
         for i = 0 to extensionCount - 1
-            resetIvbExtensionGlow(array.get(sess.extLines, i), getIvbExtensionGlowKey(sess.startTime, i), opening_0930_1000_extWidth)
+            completeIvbExtensionUse(sess, i)
 
 setLatestGlowSession(int sessionIndex, SessionData candidate) =>
     SessionData previous = array.get(latestGlowSessions, sessionIndex)
@@ -722,7 +748,7 @@ setLatestGlowSession(int sessionIndex, SessionData candidate) =>
 registerLatestCompletedSession(SessionData sess) =>
     SessionData previous = array.get(latestCompletedSessions, sess.sessionIndex)
     if not na(previous) and previous.startTime != sess.startTime and sess.sessionIndex == IDX_IVB
-        resetSessionIvbExtensionGlow(previous)
+        completeSessionIvbExtensionUses(previous)
     array.set(latestCompletedSessions, sess.sessionIndex, sess)
     if sess.sessionIndex != IDX_0129 and sess.sessionIndex != IDX_ASIA_OPEN
         setLatestGlowSession(sess.sessionIndex, sess)
@@ -824,8 +850,8 @@ clearRetracementLeg(SessionData sess) =>
     sess.retrace618Bar := na
     sess.retrace618Armed := false
     sess.retraceTraversalCompleted := false
-    sess.retraceCompletionTime := na
-    sess.retraceFadeApplied := false
+    sess.midRetraceFadeApplied := false
+    sess.retrace618FadeApplied := false
     true
 
 replaceProvisionalWithConfirmedOrigin(SessionData sess, int replacementBar) =>
@@ -888,11 +914,14 @@ draw_provisional_breach_lines(bool enabled, int origin_time, float level, color 
         pending_line := line.new(time, level, time, level, color=mit_color, style=line.style_dashed, width=MITIGATION_PENDING_LINE_WIDTH, xloc=xloc.bar_time)
     [solid_line, pending_line]
 
+pendingLabelTextColor(color lineClr) =>
+    color.new(lineClr, math.min(PENDING_LABEL_TRANSPARENCY_MAX, math.max(0.0, color.t(lineClr) - PENDING_LABEL_TRANSPARENCY_REDUCTION)))
+
 // Label a dashed pending line at its right edge while it's still open; remove it once mitigated
 resolve_pending_label(bool keep, label lbl, line pending, float level, string txt, int sessionIndex, color lineClr) =>
     label result = lbl
     if keep and not na(pending)
-        color txtClr = color.new(lineClr, math.min(PENDING_LABEL_TRANSPARENCY_MAX, math.max(0.0, color.t(lineClr) - PENDING_LABEL_TRANSPARENCY_REDUCTION)))
+        color txtClr = pendingLabelTextColor(lineClr)
         string renderedText = levelLabelText(txt, level, openLevelShowsPrice(sessionIndex))
         if na(result)
             result := label.new(line.get_x2(pending), level, renderedText, style=label.style_label_left, textcolor=txtClr, size=globalLabelSize, color=color.new(color.white, 100), xloc=xloc.bar_time)
@@ -945,10 +974,6 @@ resolve_open_level_reminders(bool keep, array<label> reminders, line levelLine, 
         for lbl in tile_line_labels(startIndex, endIndex, level, txt, color.rgb(120, 123, 134), color.new(color.rgb(255, 255, 255), 50))
             array.push(reminders, lbl)
 
-// Push a color's transparency toward fully invisible by pct (0 = unchanged, 100 = invisible).
-fadeToward100(color c, float pct) =>
-    color.new(c, color.t(c) + (100.0 - color.t(c)) * pct / 100.0)
-
 // Fade a completed retracement's line + tiled labels toward invisible so they read as inactive. Base
 // colors are passed in because Pine can't read a line's current color back.
 fadeRetraceElements(line ln, array<label> lbls, color baseLineColor, color baseTextColor, color baseBgColor) =>
@@ -979,18 +1004,43 @@ completedMitigationFadePending(SessionData sess) =>
     bool lowPending = sess.lowMitigated and not sess.lowMitigationFadeApplied
     mitigationMode == SESSION_MITIGATED and fadeCompletedMitigationLevels and (highPending or lowPending)
 
+sessionMarketCloseTime(SessionData sess) =>
+    timestamp(NY_TIMEZONE, year(sess.startTime, NY_TIMEZONE), month(sess.startTime, NY_TIMEZONE), dayofmonth(sess.startTime, NY_TIMEZONE), 16, 0)
+
+discardedIvbProvisionalShouldFade(SessionData sess, bool isHigh) =>
+    bool provisional = isHigh ? sess.provisionalHighMitigated : sess.provisionalLowMitigated
+    bool confirmed = isHigh ? sess.highMitigated : sess.lowMitigated
+    fadeCompletedMitigationLevels and sess.sessionIndex == IDX_IVB and provisional and not confirmed and time >= sessionMarketCloseTime(sess)
+
 styleCompletedMitigationBoundary(SessionData sess, bool isHigh) =>
-    bool faded = completedMitigationShouldFade(sess, isHigh)
-    color renderedLineColor = faded ? color.new(sess.mitigationColor, math.max(color.t(sess.mitigationColor), completedMitigationFadeOpacity)) : sess.mitigationColor
-    color renderedTextColor = faded ? color.new(color.rgb(120, 123, 134), completedMitigationFadeOpacity) : color.rgb(120, 123, 134)
-    color renderedBgColor = faded ? color.new(color.rgb(255, 255, 255), math.max(50, completedMitigationFadeOpacity)) : color.new(color.rgb(255, 255, 255), 50)
+    bool mitigationFaded = completedMitigationShouldFade(sess, isHigh)
+    bool discardedProvisionalFaded = discardedIvbProvisionalShouldFade(sess, isHigh)
+    bool boundaryFaded = mitigationFaded or discardedProvisionalFaded
+    color renderedLineColor = boundaryFaded ? color.new(sess.mitigationColor, math.max(color.t(sess.mitigationColor), completedMitigationFadeOpacity)) : sess.mitigationColor
+    color renderedTextColor = boundaryFaded ? color.new(color.rgb(120, 123, 134), completedMitigationFadeOpacity) : color.rgb(120, 123, 134)
+    color renderedBgColor = boundaryFaded ? color.new(color.rgb(255, 255, 255), math.max(50, completedMitigationFadeOpacity)) : color.new(color.rgb(255, 255, 255), 50)
     line solidLine = isHigh ? sess.highMitigationLine : sess.lowMitigationLine
     line pendingLine = isHigh ? sess.highPendingLine : sess.lowPendingLine
+    label pendingLabel = isHigh ? sess.highPendingLabel : sess.lowPendingLabel
     array<label> reminders = isHigh ? sess.highMitigationReminders : sess.lowMitigationReminders
+    line openLine = isHigh ? sess.highUnmitigatedLine : sess.lowUnmitigatedLine
+    label openLabel = isHigh ? sess.highUnmitigatedLabel : sess.lowUnmitigatedLabel
+    array<label> openReminders = isHigh ? sess.highUnmitigatedReminders : sess.lowUnmitigatedReminders
     if not na(solidLine)
         line.set_color(solidLine, renderedLineColor)
     if not na(pendingLine)
         line.set_color(pendingLine, renderedLineColor)
+    if not na(pendingLabel) and discardedProvisionalFaded
+        color pendingTextColor = pendingLabelTextColor(sess.mitigationColor)
+        label.set_textcolor(pendingLabel, color.new(pendingTextColor, math.max(color.t(pendingTextColor), completedMitigationFadeOpacity)))
+    if discardedProvisionalFaded
+        if not na(openLine)
+            line.set_color(openLine, renderedLineColor)
+        if not na(openLabel)
+            label.set_textcolor(openLabel, renderedTextColor)
+        for lbl in openReminders
+            label.set_textcolor(lbl, renderedTextColor)
+            label.set_color(lbl, renderedBgColor)
     for lbl in reminders
         label.set_textcolor(lbl, renderedTextColor)
         label.set_color(lbl, renderedBgColor)
@@ -1024,17 +1074,31 @@ isRetraceTraversalComplete(SessionData sess) =>
 retracementFadesAtMarketClose(SessionData sess) =>
     sess.sessionIndex == IDX_NY_EARLY or sess.sessionIndex == IDX_IVB
 
-completedRetracementShouldFade(SessionData sess) =>
-    bool hasCompletedLevel = sess.midMitigated or sess.retrace618Mitigated
+completedRetracementLevelShouldFade(SessionData sess, bool isMidLevel) =>
+    bool levelMitigated = isMidLevel ? sess.midMitigated : sess.retrace618Mitigated
+    int levelMitigationTime = isMidLevel ? sess.midMitigationTime : sess.retrace618Time
     bool fadesAtMarketClose = retracementFadesAtMarketClose(sess)
-    int marketCloseTime = timestamp(NY_TIMEZONE, year(sess.startTime, NY_TIMEZONE), month(sess.startTime, NY_TIMEZONE), dayofmonth(sess.startTime, NY_TIMEZONE), 16, 0)
+    int marketCloseTime = sessionMarketCloseTime(sess)
     bool marketCloseReached = time >= marketCloseTime
-    bool durationElapsed = completedFadeDurationElapsed(sess.retraceCompletionTime)
-    fadeCompletedRetracements and hasCompletedLevel and (fadesAtMarketClose ? marketCloseReached : isRetraceTraversalComplete(sess) and durationElapsed)
+    bool durationElapsed = completedFadeDurationElapsed(levelMitigationTime)
+    bool fadeTriggerReached = fadesAtMarketClose ? marketCloseReached : isRetraceTraversalComplete(sess) or durationElapsed
+    fadeCompletedRetracements and levelMitigated and fadeTriggerReached
+
+applyCompletedRetracementLevelFade(SessionData sess, bool isMidLevel) =>
+    bool fadeApplied = isMidLevel ? sess.midRetraceFadeApplied : sess.retrace618FadeApplied
+    if completedRetracementLevelShouldFade(sess, isMidLevel) and not fadeApplied
+        if isMidLevel
+            fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+            sess.midRetraceFadeApplied := true
+        else
+            fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+            sess.retrace618FadeApplied := true
+    true
 
 completedRetracementFadePending(SessionData sess) =>
-    bool fadeTriggerPending = retracementFadesAtMarketClose(sess) or isRetraceTraversalComplete(sess)
-    fadeCompletedRetracements and fadeTriggerPending and (sess.midMitigated or sess.retrace618Mitigated) and not sess.retraceFadeApplied
+    bool midPending = sess.midMitigated and not sess.midRetraceFadeApplied
+    bool retrace618Pending = sess.retrace618Mitigated and not sess.retrace618FadeApplied
+    fadeCompletedRetracements and (midPending or retrace618Pending)
 
 // Monotone once true — Phase 4 stops walking the session. na retraceLevel618 with both extremes
 // taken counts as complete: the 0.618 anchor can no longer be established.
@@ -1361,9 +1425,9 @@ deleteSession(SessionData sess) =>
     if extensionLineCount > 0
         for i = 0 to extensionLineCount - 1
             line.delete(array.get(sess.extLines, i))
-            lineKey = getIvbExtensionGlowKey(sess.startTime, i)
-            if map.contains(ivbExtensionGlowTouchTimes, lineKey)
-                map.remove(ivbExtensionGlowTouchTimes, lineKey)
+            lineKey = getIvbExtensionKey(sess.startTime, i)
+            if map.contains(ivbExtensionUseTimes, lineKey)
+                map.remove(ivbExtensionUseTimes, lineKey)
     array.clear(sess.extLines)
     deleteLabels(sess.extLabels)
     if not na(sess.highUnmitigatedLine)
@@ -1709,11 +1773,15 @@ renderFocusSession(SessionData sess, bool selected) =>
             sess.lowUnmitigatedLabel := lowOpenLabel
             sess.lowPendingLabel := lowProvisionalLabel
 
-            bool retracementsFaded = completedRetracementShouldFade(sess)
-            bool refreshRetracementStyle = retracementsFaded != sess.retraceFadeApplied
-            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.actualEndBar, sess.midMitigationBar, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
-            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.actualEndBar, sess.retrace618Bar, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retracementsFaded, refreshRetracementStyle, sess.retrace618Line, sess.retrace618Labels)
-            sess.retraceFadeApplied := retracementsFaded
+            bool midRetracementFaded = completedRetracementLevelShouldFade(sess, true)
+            bool refreshMidRetracementStyle = midRetracementFaded != sess.midRetraceFadeApplied
+            sess.midMitigationLine := renderFocusRetracement(sess.midMitigated, sess.actualEndTime, sess.midMitigationTime, sess.actualEndBar, sess.midMitigationBar, sess.midLevel, LABEL_RETRACE_50, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, midRetracementFaded, refreshMidRetracementStyle, sess.midMitigationLine, sess.midMitigationLabels)
+            sess.midRetraceFadeApplied := midRetracementFaded
+
+            bool retrace618Faded = completedRetracementLevelShouldFade(sess, false)
+            bool refreshRetrace618Style = retrace618Faded != sess.retrace618FadeApplied
+            sess.retrace618Line := renderFocusRetracement(sess.retrace618Mitigated, sess.actualEndTime, sess.retrace618Time, sess.actualEndBar, sess.retrace618Bar, sess.retraceLevel618, LABEL_RETRACE_618, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor, retrace618Faded, refreshRetrace618Style, sess.retrace618Line, sess.retrace618Labels)
+            sess.retrace618FadeApplied := retrace618Faded
 
 // Clear live drawings from active session (keeps session data, just removes visuals for redraw)
 clearLiveDrawings(SessionData sess) =>
@@ -1948,7 +2016,7 @@ if validChartContext
                 if i == IDX_IVB
                     SessionData previousIvb = array.get(latestCompletedSessions, IDX_IVB)
                     if not na(previousIvb)
-                        resetSessionIvbExtensionGlow(previousIvb)
+                        completeSessionIvbExtensionUses(previousIvb)
                 bool usesStandardAsia = chart.is_range and i == IDX_ASIA_OPEN
                 initBodyHigh = usesStandardAsia ? standardAsiaBodyHigh : math.max(open, close)
                 initBodyLow = usesStandardAsia ? standardAsiaBodyLow : math.min(open, close)
@@ -2025,8 +2093,8 @@ if validChartContext
                      retraceOriginProvisional=false,
                      retraceLegStartBar=na,
                      retraceTraversalCompleted=false,
-                     retraceCompletionTime=na,
-                     retraceFadeApplied=false,
+                     midRetraceFadeApplied=false,
+                     retrace618FadeApplied=false,
                      ivbBreakTime=na,
                      ivbBreakSide=0,
                      ivbRetraceBar=na,
@@ -2062,6 +2130,8 @@ if validChartContext
                      extLowProcessed=false,
                      extHighTime=na,
                      extLowTime=na,
+                     extHighMax=na,
+                     extLowMin=na,
                      extHighConfirmed=false,
                      extLowConfirmed=false,
                      extLines=array.new<line>(),
@@ -2276,12 +2346,21 @@ drawIvbExtensions(SessionData sess, bool brokeHigh) =>
         int projectionEndTime = math.max(scheduledEndTime, projectionStartTime + IVB_EXT_MIN_VISIBLE_MS)
         line avgLine = line.new(projectionStartTime, avgLevel, projectionEndTime, avgLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
         line stdLine = line.new(projectionStartTime, stdLevel, projectionEndTime, stdLevel, color=opening_0930_1000_extColor, style=line.style_dashed, width=opening_0930_1000_extWidth, xloc=xloc.bar_time)
+        int avgLineIndex = array.size(sess.extLines)
+        int stdLineIndex = avgLineIndex + 1
         array.push(sess.extLines, avgLine)
         array.push(sess.extLines, stdLine)
         if showAllLabels
             bool includePrice = priceModeShows(ivbProjectionShowPrice)
             array.push(sess.extLabels, newIvbProjectionLabel(avgLine, avgLevel, LABEL_EXT_AVG, includePrice, opening_0930_1000_extColor, color.new(color.rgb(255, 255, 255), 50)))
             array.push(sess.extLabels, newIvbProjectionLabel(stdLine, stdLevel, LABEL_EXT_STD, includePrice, opening_0930_1000_extColor, color.new(color.rgb(255, 255, 255), 50)))
+        float preConfirmationExtreme = brokeHigh ? sess.extHighMax : sess.extLowMin
+        bool averageAlreadyUsed = not na(preConfirmationExtreme) and (brokeHigh ? preConfirmationExtreme >= avgLevel : preConfirmationExtreme <= avgLevel)
+        bool stdAlreadyUsed = not na(preConfirmationExtreme) and (brokeHigh ? preConfirmationExtreme >= stdLevel : preConfirmationExtreme <= stdLevel)
+        if averageAlreadyUsed
+            finalizeIvbExtensionUse(sess, avgLineIndex, time)
+        if stdAlreadyUsed
+            finalizeIvbExtensionUse(sess, stdLineIndex, time)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PHASE 3.5: ASIA + RAFAEL FOCUS ANCHOR - Manual anchor line and margin label
@@ -2340,12 +2419,9 @@ if validChartContext and array.size(lifecycleSessions) > 0
             if lifecycleExpired
                 completedMitigationShouldFade(sess, true)
                 completedMitigationShouldFade(sess, false)
-                if na(sess.retraceCompletionTime) and isRetraceTraversalComplete(sess)
-                    sess.retraceCompletionTime := time
-                if eagerDraw and completedRetracementShouldFade(sess) and not sess.retraceFadeApplied
-                    fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                    fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                    sess.retraceFadeApplied := true
+                if eagerDraw
+                    applyCompletedRetracementLevelFade(sess, true)
+                    applyCompletedRetracementLevelFade(sess, false)
                 if not completedMitigationFadePending(sess) and not completedRetracementFadePending(sess)
                     array.push(completedLifecycleIndices, lifecycleIndex)
                 continue
@@ -2361,17 +2437,25 @@ if validChartContext and array.size(lifecycleSessions) > 0
             // Record the first strict wick break per side for NY Early's IVB-based direction.
             // Projection drawing waits for the separate 30-minute close confirmation below.
             if sess.sessionIndex == IDX_IVB and canEvaluateMitigation and barMinutes < CLOSE_1600_MIN
+                bool highExtensionConfirmationReady = not sess.extHighConfirmed and not na(htf30mClose) and htf30mClose > sess.wickHigh and sess.startDayKey == htf30mDayKey
+                bool lowExtensionConfirmationReady = not sess.extLowConfirmed and not na(htf30mClose) and htf30mClose < sess.wickLow and sess.startDayKey == htf30mDayKey
                 if not sess.extHighProcessed and high > sess.wickHigh
                     sess.extHighProcessed := true
                     sess.extHighTime := time
+                    sess.extHighMax := highExtensionConfirmationReady ? na : high
                 if not sess.extLowProcessed and low < sess.wickLow
                     sess.extLowProcessed := true
                     sess.extLowTime := time
-                if not sess.extHighConfirmed and not na(htf30mClose) and htf30mClose > sess.wickHigh and sess.startDayKey == htf30mDayKey
+                    sess.extLowMin := lowExtensionConfirmationReady ? na : low
+                if sess.extHighProcessed and not sess.extHighConfirmed and not highExtensionConfirmationReady
+                    sess.extHighMax := na(sess.extHighMax) ? high : math.max(sess.extHighMax, high)
+                if sess.extLowProcessed and not sess.extLowConfirmed and not lowExtensionConfirmationReady
+                    sess.extLowMin := na(sess.extLowMin) ? low : math.min(sess.extLowMin, low)
+                if highExtensionConfirmationReady
                     sess.extHighConfirmed := true
                     if eagerDraw
                         drawIvbExtensions(sess, true)
-                if not sess.extLowConfirmed and not na(htf30mClose) and htf30mClose < sess.wickLow and sess.startDayKey == htf30mDayKey
+                if lowExtensionConfirmationReady
                     sess.extLowConfirmed := true
                     if eagerDraw
                         drawIvbExtensions(sess, false)
@@ -2731,13 +2815,9 @@ if validChartContext and array.size(lifecycleSessions) > 0
                 if reachedOppositeBoundary
                     sess.retraceTraversalCompleted := true
 
-            if na(sess.retraceCompletionTime) and isRetraceTraversalComplete(sess)
-                sess.retraceCompletionTime := time
-
-            if eagerDraw and completedRetracementShouldFade(sess) and not sess.retraceFadeApplied
-                fadeRetraceElements(sess.midMitigationLine, sess.midMitigationLabels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                fadeRetraceElements(sess.retrace618Line, sess.retrace618Labels, sess.mitigationColor, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
-                sess.retraceFadeApplied := true
+            if eagerDraw
+                applyCompletedRetracementLevelFade(sess, true)
+                applyCompletedRetracementLevelFade(sess, false)
 
             completedMitigationShouldFade(sess, true)
             completedMitigationShouldFade(sess, false)
@@ -2897,38 +2977,37 @@ if validChartContext and enableAsiaOpenDeviationGlow
         trackAsiaDeviationSample(time, high, low)
 
 // ═══════════════════════════════════════════════════════════════════════════
-// IVB EXTENSION GLOW - Hold each latest-IVB projection wide after its first hit
+// IVB EXTENSION USE - Track directional reaches independently from the optional glow
 // ═══════════════════════════════════════════════════════════════════════════
 
-if validChartContext and enableIvbExtensionGlow
+if validChartContext and (enableIvbExtensionGlow or fadeCompletedRetracements)
     ivbGlowWindowMs = int(ivbExtensionGlowWindowHours * 60 * 60 * 1000)
     ivbGlowWidth = math.max(opening_0930_1000_extWidth, glowIvbExtensionWidth)
-    canWidenIvbExtension = ivbGlowWidth > opening_0930_1000_extWidth
+    canGlowIvbExtension = enableIvbExtensionGlow and ivbGlowWidth > opening_0930_1000_extWidth
     bool nextIvbActive = false
     for activeSess in activeSessions
         if activeSess.sessionIndex == IDX_IVB
             nextIvbActive := true
-    SessionData sess = array.get(latestCompletedSessions, IDX_IVB)
-    if not na(sess)
-        extensionCount = array.size(sess.extLines)
-        if extensionCount > 0
-            for i = 0 to extensionCount - 1
-                extLine = array.get(sess.extLines, i)
-                lineKey = getIvbExtensionGlowKey(sess.startTime, i)
-                if nextIvbActive or not canWidenIvbExtension
-                    resetIvbExtensionGlow(extLine, lineKey, opening_0930_1000_extWidth)
-                else if map.contains(ivbExtensionGlowTouchTimes, lineKey)
-                    touchTime = map.get(ivbExtensionGlowTouchTimes, lineKey)
-                    if touchTime > 0 and time >= touchTime + ivbGlowWindowMs
-                        // Keep the recorded first hit so an expired line cannot reactivate.
-                        line.set_width(extLine, opening_0930_1000_extWidth)
-                        map.put(ivbExtensionGlowTouchTimes, lineKey, -touchTime)
-                else
-                    extensionLevel = line.get_y1(extLine)
-                    touched = time >= line.get_x1(extLine) and high >= extensionLevel and low <= extensionLevel
-                    if touched
-                        map.put(ivbExtensionGlowTouchTimes, lineKey, time)
-                        line.set_width(extLine, ivbGlowWidth)
+    SessionData latestIvb = array.get(latestCompletedSessions, IDX_IVB)
+    for sess in sessions
+        if sess.sessionIndex == IDX_IVB
+            extensionCount = array.size(sess.extLines)
+            bool canGlowSession = canGlowIvbExtension and not nextIvbActive and not na(latestIvb) and sess.startTime == latestIvb.startTime
+            if extensionCount > 0
+                for i = 0 to extensionCount - 1
+                    extLine = array.get(sess.extLines, i)
+                    lineKey = getIvbExtensionKey(sess.startTime, i)
+                    bool hasUseState = map.contains(ivbExtensionUseTimes, lineKey)
+                    if not hasUseState and ivbExtensionReached(sess, extLine, time, high, low)
+                        map.put(ivbExtensionUseTimes, lineKey, time)
+                        if canGlowSession
+                            line.set_width(extLine, ivbGlowWidth)
+                        else
+                            completeIvbExtensionUse(sess, i)
+                    else if hasUseState
+                        useTime = map.get(ivbExtensionUseTimes, lineKey)
+                        if useTime > 0 and (not canGlowSession or time >= useTime + ivbGlowWindowMs)
+                            completeIvbExtensionUse(sess, i)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE - Dynamic display based on active sessions

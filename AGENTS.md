@@ -394,7 +394,7 @@ This authorizes the complete local workflow needed for that specific commit:
 For TradingView work, `commit` means the user confirms that publication, host loading, testing, and approval are complete unless they explicitly state a partial or failed state.
 
 1. Run `git status` and scoped `git diff` commands to verify the requested files.
-2. For TradingView work, **send the user the concise, copy-ready `Publication Notes` first, before staging or committing**. Use a user-visible commentary message; drafting the notes internally or saving them for the final response does not satisfy this requirement. Include the exact library versions/imports and publication order when applicable, publication and validation status, and an explicit statement when no new library publication is required. Keep operational details outside the copy-ready release text.
+2. For TradingView work, **send the user the concise, copy-ready `Publication Notes` first, before staging or committing**. Write the notes as concise prose, never as bullets or a checklist. Use a user-visible commentary message; drafting the notes internally or saving them for the final response does not satisfy this requirement. Include the exact library versions/imports and publication order when applicable, publication and validation status, and an explicit statement when no new library publication is required. Keep operational details outside the copy-ready release text.
 3. Run a path-scoped `git add` for the requested files when needed and complete the required pre-commit checks.
 4. Run the requested `git commit` with a useful subject and body.
 5. Verify the commit result with `git status`.
