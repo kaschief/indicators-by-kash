@@ -17,6 +17,8 @@ test('Daily replaces the 4-hour slot as the default enabled profile', () => {
 });
 
 test('NYPM is the four-hour New York block after NYAM', () => {
+  assert.match(source, /^const color NY_AM_COLOR = color\.rgb\(247, 82, 95\)$/m);
+  assert.match(source, /^const color NY_PM_COLOR = color\.rgb\(198, 40, 40\)$/m);
   assert.match(source, /^const int NY_PM_START_MINUTE = NY_AM_END_MINUTE$/m);
   assert.match(source, /^const int NY_PM_DURATION_MINUTES = 4 \* MINUTES_PER_HOUR$/m);
   assert.match(source, /^const int NY_PM_END_MINUTE = NY_PM_START_MINUTE \+ NY_PM_DURATION_MINUTES$/m);
