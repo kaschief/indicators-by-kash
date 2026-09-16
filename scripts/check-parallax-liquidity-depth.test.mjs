@@ -16,6 +16,124 @@ test('Daily replaces the 4-hour slot as the default enabled profile', () => {
   assert.match(source, /^slot2TFIn\s+= input\.timeframe\("240",/m);
 });
 
+test('NYPM is the four-hour New York block after NYAM', () => {
+  assert.match(source, /^const int NY_PM_START_MINUTE = NY_AM_END_MINUTE$/m);
+  assert.match(source, /^const int NY_PM_DURATION_MINUTES = 4 \* MINUTES_PER_HOUR$/m);
+  assert.match(source, /^const int NY_PM_END_MINUTE = NY_PM_START_MINUTE \+ NY_PM_DURATION_MINUTES$/m);
+  assert.match(source, /^const string NY_PM_SLOT_TOOLTIP = .+12:00–16:00 NY\."$/m);
+  assert.match(source, /sourceLabel=NY_PM_SLOT_NAME,\n     startMinute=NY_PM_START_MINUTE, endMinute=NY_PM_END_MINUTE, fullPeriod=false/);
+});
+
+test('intraday forecasts use a live duration-matched pre-session range', () => {
+  const collectorBody = functionBody('collect_scheduled_profile_data');
+  assert.match(collectorBody, /scheduleAnchorTime = scheduleFromEnd \? currentSessionEnd : currentSessionStart/);
+  assert.match(collectorBody, /scheduled_profile_start_allowed\(scheduleAnchorTime, scheduleMode\)/);
+
+  const fetchBody = functionBody('fetch_intraday_profile_data');
+  assert.match(fetchBody, /referenceStartMinute = \(startMinute - forecastLeadMinutes \+ MINUTES_PER_DAY\) % MINUTES_PER_DAY/);
+  assert.match(fetchBody, /collect_scheduled_profile_data\(\n         tailEnabled, referenceStartMinute, startMinute, forecastSchedule, false, true, false\)/);
+  assert.doesNotMatch(source, /collect_forecast_reference_data/);
+  for (const [prefix, duration] of [
+    ['OVERNIGHT', 'OVERNIGHT_DURATION_MINUTES'],
+    ['NY_EARLY', 'NY_EARLY_DURATION_MINUTES'],
+    ['NY_AM', 'NY_AM_DURATION_MINUTES'],
+    ['NY_PM', 'NY_PM_DURATION_MINUTES'],
+    ['IVB', 'IVB_DURATION_MINUTES'],
+    ['IVB_PLUS', 'IVB_PLUS_DURATION_MINUTES'],
+  ]) {
+    assert.match(source, new RegExp(`${prefix}_START_MINUTE, ${prefix}_END_MINUTE, ${duration}, INTRADAY_SAMPLING_SCHEDULE, INTRADAY_FORECAST_SCHEDULE`));
+  }
+  const forecastBody = functionBody('draw_scheduled_profile_forecast');
+  assert.match(forecastBody, /forecastData\.referenceOpen, forecastData\.referenceHigh, forecastData\.referenceLow/);
+  assert.doesNotMatch(forecastBody, /profileRuntime\.sessionOpen|profileRuntime\.currentHigh|profileRuntime\.currentLow/);
+});
+
+test('live forecast references start on the first tradable bar inside the lead window', () => {
+  const collectorBody = functionBody('collect_scheduled_profile_data');
+  assert.match(collectorBody, /fullPeriod or not requireExactStart or time == currentSessionStart/);
+
+  const profileBody = functionBody('fetch_scheduled_profile_data');
+  assert.match(profileBody, /samplingSchedule, fullPeriod, false, true\)/);
+
+  const forecastBody = functionBody('fetch_intraday_profile_data');
+  assert.match(forecastBody, /forecastSchedule, false, true, false\)/);
+});
+
+test('Overnight remains 00:00–07:00 while its forecast survives the 17:00 maintenance gap', () => {
+  assert.match(source, /^const int OVERNIGHT_START_MINUTE = 0$/m);
+  assert.match(source, /^const int OVERNIGHT_DURATION_MINUTES = 7 \* MINUTES_PER_HOUR$/m);
+  assert.match(source, /^const int OVERNIGHT_END_MINUTE = OVERNIGHT_START_MINUTE \+ OVERNIGHT_DURATION_MINUTES$/m);
+  assert.match(source, /^const string OVERNIGHT_SLOT_TOOLTIP = .+00:00–07:00 NY\."$/m);
+
+  const startsNow = ({ collectThisBar, collecting, fullPeriod, requireExactStart, barTime, scheduledStart }) =>
+    collectThisBar && !collecting && (fullPeriod || !requireExactStart || barTime === scheduledStart);
+  const firstTradableBar = { collectThisBar: true, collecting: false, fullPeriod: false, barTime: 18 * 60, scheduledStart: 17 * 60 };
+  assert.equal(startsNow({ ...firstTradableBar, requireExactStart: false }), true,
+    'the 18:00 reopen starts the live reference even though the lead window began at 17:00');
+  assert.equal(startsNow({ ...firstTradableBar, requireExactStart: true }), false,
+    'an exact-start requirement reproduces the missing Overnight forecast');
+});
+
+test('each intraday forecast lead maps to its intended New York reference window', () => {
+  const referenceStart = (profileStart, leadMinutes) => (profileStart - leadMinutes + 24 * 60) % (24 * 60);
+  assert.deepEqual([
+    referenceStart(0, 7 * 60),
+    referenceStart(6 * 60, 3 * 60),
+    referenceStart(8 * 60, 4 * 60),
+    referenceStart(12 * 60, 4 * 60),
+    referenceStart(9 * 60, 60),
+    referenceStart(9 * 60, 90),
+  ], [17 * 60, 3 * 60, 4 * 60, 8 * 60, 8 * 60, 7 * 60 + 30]);
+});
+
+test('intraday runtime wiring is shared across every recurring profile', () => {
+  const body = functionBody('update_intraday_profile_runtime');
+  assert.match(body, /next_scheduled_profile_bounds\(time, profileConfig\)/);
+  assert.match(body, /profileRuntime\.forecast := profileData\.forecast/);
+  assert.match(body, /scheduled_profile_forecast_visible\(profileConfig, valid, time, forecastStartTime\)/);
+  for (const prefix of ['overnight', 'nyEarly', 'nyAm', 'nyPm', 'ivb', 'ivbPlus']) {
+    assert.match(source, new RegExp(`update_intraday_profile_runtime\\(${prefix}Runtime, ${prefix}Config, ${prefix}Data, ${prefix}Valid, ${prefix}Transition,`));
+    assert.doesNotMatch(source, new RegExp(`^${prefix}Runtime\\.forecast\\.`, 'm'));
+  }
+});
+
+test('forecast values travel as one shared data object', () => {
+  const forecastType = source.match(/^type ScheduledProfileForecastData\n((?:    .+\n)+)/m)?.[1];
+  assert.ok(forecastType);
+  for (const field of [
+    'referenceOpen', 'referenceHigh', 'referenceLow',
+    'medianHighOpen', 'meanHighOpen', 'medianOpenLow', 'meanOpenLow',
+  ]) {
+    assert.match(forecastType, new RegExp(`^    float ${field}$`, 'm'));
+  }
+  assert.match(source, /^type ScheduledProfileData[\s\S]*?^    ScheduledProfileForecastData forecast$/m);
+  assert.match(source, /^type ScheduledProfileRuntime[\s\S]*?^    ScheduledProfileForecastData forecast$/m);
+  assert.doesNotMatch(source, /^    float forecast(?:Open|High|Low|Median|Mean)/m);
+  assert.match(functionBody('new_scheduled_profile_runtime'), /ScheduledProfileRuntime\.new\(forecast=ScheduledProfileForecastData\.new\(\)\)/);
+});
+
+test('intraday request objects are normalized before their fields are read', () => {
+  const body = functionBody('scheduled_profile_data_or_empty');
+  assert.match(body, /if na\(safeProfileData\)\n        safeProfileData := ScheduledProfileData\.new\(forecast=ScheduledProfileForecastData\.new\(\)\)/);
+  assert.match(body, /else if na\(safeProfileData\.forecast\)\n        safeProfileData\.forecast := ScheduledProfileForecastData\.new\(\)/);
+
+  for (const prefix of ['overnight', 'nyEarly', 'nyAm', 'nyPm', 'ivb', 'ivbPlus']) {
+    assert.match(source, new RegExp(`^${prefix}Data := scheduled_profile_data_or_empty\\(${prefix}Data\\)$`, 'm'));
+  }
+
+  const requestIndex = source.indexOf('[overnightData, nyEarlyData, nyAmData, nyPmData, ivbData, ivbPlusData] = request.security(');
+  const normalizationIndex = source.indexOf('overnightData := scheduled_profile_data_or_empty(overnightData)');
+  const dereferenceIndex = source.indexOf('overnightChartState, scheduledProfileTrackOnChart, overnightData.startTime');
+  assert.ok(requestIndex >= 0 && requestIndex < normalizationIndex);
+  assert.ok(normalizationIndex < dereferenceIndex);
+});
+
+test('intraday forecast statistics include the latest completed occurrence', () => {
+  const body = functionBody('fetch_scheduled_profile_data');
+  assert.match(body, /if completedNow\n        record_excursion_sample[\s\S]*\[forecastMedHO, forecastMeanHO\] = sample_stats\(highOpenSamples\)/);
+  assert.match(body, /\[forecastMedOL, forecastMeanOL\] = sample_stats\(openLowSamples\)/);
+});
+
 test('LD controls are centralized and retain independent profile selections', () => {
   assert.match(source, /^const string GROUP_LIQUIDITY_DEPTH = "Liquidity Depth"/m);
   assert.match(source, /^forecastLiquidityDepth = input\.bool\(false, "Forecast LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH\)/m);
@@ -25,21 +143,23 @@ test('LD controls are centralized and retain independent profile selections', ()
     ['overnightLiquidityDepth', 'OVERNIGHT_SLOT_NAME', 'overnightShow'],
     ['nyEarlyLiquidityDepth', 'NY_EARLY_SLOT_NAME', 'nyEarlyShow'],
     ['nyAmLiquidityDepth', 'NY_AM_SLOT_NAME', 'nyAmShow'],
+    ['nyPmLiquidityDepth', 'NY_PM_SLOT_NAME', 'nyPmShow'],
     ['ivbLiquidityDepth', 'IVB_SLOT_NAME', 'ivbShow'],
     ['ivbPlusLiquidityDepth', 'IVB_PLUS_SLOT_NAME', 'ivbPlusShow'],
   ]) {
     assert.match(source, new RegExp(`^${name} = input\\.bool\\(false, ${label}, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=${active}`, 'm'));
   }
   assert.doesNotMatch(source, /UI_LD/);
-  assert.doesNotMatch(source, /inline="(?:overnight|ny_early|ny_am|ivb|ivb_plus)"[^\n]+liquidityDepth/);
+  assert.doesNotMatch(source, /inline="(?:overnight|ny_early|ny_am|ny_pm|ivb|ivb_plus)"[^\n]+liquidityDepth/);
 });
 
-test('LD is wired to Daily and the five intraday scheduled profiles only', () => {
+test('LD is wired to Daily and the six intraday scheduled profiles only', () => {
   assert.match(source, /dailyProfileShow[^\n]+liquidityDepthEnabled=dailyLiquidityDepth/);
   for (const [profile, control] of [
     ['overnightShow', 'overnightLiquidityDepth'],
     ['nyEarlyShow', 'nyEarlyLiquidityDepth'],
     ['nyAmShow', 'nyAmLiquidityDepth'],
+    ['nyPmShow', 'nyPmLiquidityDepth'],
     ['ivbShow', 'ivbLiquidityDepth'],
     ['ivbPlusShow', 'ivbPlusLiquidityDepth'],
   ]) {
@@ -88,6 +208,18 @@ test('LD visibility depends on activation or Forecast LD but projection is per l
   assert.equal(visible({ activated: true }, true), true);
   assert.match(body, /for levelIndex[^\n]+\n[\s\S]*bool projectToSessionEnd = na\(storedEndTime\)/);
   assert.doesNotMatch(body, /projectToSessionEnd = [^\n]*(?:forecastEnabled|activated)/);
+});
+
+test('Forecast LD for the next intraday occurrence uses upcoming bounds and forecast edges', () => {
+  const body = functionBody('draw_liquidity_depth_forecast');
+  assert.match(body, /forecastEnabled and depthActive and profileRuntime\.forecastVisible/);
+  assert.match(body, /compute_forecast_levels\(\n             forecastData\.referenceOpen, forecastData\.referenceHigh, forecastData\.referenceLow,/);
+  assert.match(body, /liquidity_depth_price\(forecastOuterHigh, true/);
+  assert.match(body, /liquidity_depth_price\(forecastOuterLow, false/);
+  assert.match(body, /make_horizontal_line\(true, profileRuntime\.forecastStartTime, na, profileRuntime\.forecastEndTime, na/);
+  assert.doesNotMatch(body, /profileState\.currentSession|sessionStartTime|sessionEndTime/);
+  assert.match(source, /forecastDepthVisible \? LIQUIDITY_DEPTH_LINES_PER_SESSION : 0/);
+  assert.match(source, /forecastDepthVisible \? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0/);
 });
 
 test('open LD lines, connectors and labels share the profile time coordinates on Range charts', () => {
@@ -205,14 +337,15 @@ test('scheduled profile requests scale to configured lookback and history', () =
   assert.equal(source.match(/calc_bars_count=scheduled_profile_request_bars\(/g)?.length, 1);
   assert.equal(source.match(/calc_bars_count=scheduled_intraday_request_bars\(/g)?.length, 1);
   assert.match(source, /request\.security\(\n     htfTickerId, SESSION_SOURCE_TIMEFRAME,\n     fetch_intraday_profiles_data\(/);
-  assert.equal(source.match(/fetch_scheduled_profile_data\(/g)?.length, 7);
+  assert.equal(source.match(/fetch_scheduled_profile_data\(/g)?.length, 3);
+  assert.equal(source.match(/fetch_intraday_profile_data\(/g)?.length, 7);
   const combinedBody = functionBody('scheduled_intraday_request_bars');
-  assert.equal(combinedBody.match(/math\.max\(/g)?.length, 4);
+  assert.equal(combinedBody.match(/math\.max\(/g)?.length, 5);
   assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : historyLimit/);
-  assert.equal(source.match(/profile_request_history_limit\(latestOnly,/g)?.length, 10);
-  assert.equal(source.match(/SourceRequestBars = scheduled_profile_request_bars\(/g)?.length, 5);
+  assert.equal(source.match(/profile_request_history_limit\(latestOnly,/g)?.length, 11);
+  assert.equal(source.match(/SourceRequestBars = scheduled_profile_request_bars\(/g)?.length, 6);
   assert.match(functionBody('scheduled_profile_tail_enabled'), /bar_index >= last_bar_index - requestBars \+ 1/);
-  assert.equal(functionBody('fetch_intraday_profiles_data').match(/scheduled_profile_tail_enabled\(/g)?.length, 5);
+  assert.equal(functionBody('fetch_intraday_profile_data').match(/scheduled_profile_tail_enabled\(/g)?.length, 1);
 });
 
 test('disabled HTF profiles cannot seed a one-bar Daily request', () => {
