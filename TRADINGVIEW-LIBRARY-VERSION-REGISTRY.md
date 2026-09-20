@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 8 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 9 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -118,6 +118,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 6 | Published · deployed · tested · approved | Adds an optional host-supplied frame-title prefix, used for the temple emoji on FOMC and FOMC Early inner frames | `e9dd5afa09a90090aaee459700fde5339114518bd7539dea68a858ee9619e139` |
 | LegilimensPresentationLibrary | 7 | Published · loaded · tested · approved | Exposes host-controlled profile-midpoint line width from 1–4, defaulting to 2 | `aeeb44bb402feb99ce4f834a118973b25c6cfcac00e77bbf84369f5f37c33910` |
 | LegilimensPresentationLibrary | 8 | Published · loaded · tested · approved | Fixes profile-midpoint line width at 3 and removes the midpointWidth field from LevelSettings | `a1e4a6f9b0c0ca6585975e78c909a88cdb7c0b90785baaca44304ff5094003b4` |
+| LegilimensPresentationLibrary | 9 | Published · loaded · tested · approved | Batches compatible delta/volume polylines and derives history capacity from drawing settings | `230aa22148bebc33f9daf376c2a9043b603ddb5688009842ccbca501b73dba09` |
 
 ## Publication-instruction log
 
@@ -221,6 +222,7 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-16-02 | 2026-09-16 | LegilimensPresentationLibrary | 6 | User confirmed `/6` is unpublished. Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/6`, then compile `indicators/21-legilimens/code/legilimens.pine` against Profile `/4`, Orchestration `/2`, and Presentation `/6`. The host supplies the optional frame-title prefix; verify upper/lower FOMC and FOMC Early frame titles with Extended Off/On on NQ 1-minute and Range charts, unchanged reference/marker labels, and no duplicate Fixed Range emoji | `PUBLISHED_DEPLOYED_TESTED_APPROVED` |
 | PUB-2026-09-20-01 | 2026-09-20 | LegilimensPresentationLibrary | 7 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/7`, then compile `indicators/21-legilimens/code/legilimens.pine` against Profile `/4`, Orchestration `/2`, and Presentation `/7`; verify the Midpoint Line Width picker accepts 1–4, defaults to 2, changes only profile-midpoint thickness, and works across session, rolling, fixed, Weekly, and Monthly profiles on time and Range charts | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-20-02 | 2026-09-20 | LegilimensPresentationLibrary | 8 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/8`, then compile `indicators/21-legilimens/code/legilimens.pine` against Profile `/4`, Orchestration `/2`, and Presentation `/8`; verify the removed Width picker, fixed midpoint width 3, and Midpoint Line On/Off across session, rolling, fixed, Weekly, and Monthly profiles on NQ time and Range charts, with other levels unchanged | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-20-03 | 2026-09-20 | LegilimensPresentationLibrary | 9 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/9`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/9`. Compare 24, 48, and 50 requested history on NQ 1-minute, 5-minute Replay, and Range charts; verify configured-budget trimming, current-profile priority, combined NY + IVB, both palettes, four placements, delta filters, Histogram On/Off, and no polygon bridges or missing tiers. Compare repeated Pine Profiler timings before accepting a practical maximum | `PUBLISHED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -238,13 +240,21 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
 - Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
 - Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
-- Legilimens current handoff: the user authorized committing all pending work on 2026-09-20, confirming publication, host loading, testing, and approval under the repository commit rule. Presentation `/8` is published and approved; the host imports Profile `/4`, Orchestration `/2`, and Presentation `/8`. FOMC uses previous 18:00–13:45 NY or 14:15 with Extended, with calendar filtering and Force On; Overnight + NY Early covers 18:00–09:00. Every profile has independent Use Alternate Styles controls. Midpoint drawing uses width 3 directly, with no width input or library property. No pending library publication remains.
+- Legilimens current handoff: Presentation `/9` is published, loaded, tested, and approved by the user; the development host imports Profile `/4`, Orchestration `/2`, and Presentation `/9`. Compatible completed profiles share delta/volume polylines, with one batching path used for reservation and rendering. The history dropdown offers every integer from 1–50 requested prior profiles; retention and initial admission follow the configured line/label/box budget, then shared-polyline cost can trim additional oldest history. Current profiles remain protected. Optional histograms require the complete selected set to fit after core drawings. Selected Tier Outliers reserves the outlier superset conservatively. Row strengths and value levels are reused only within the render pass; there is no persistent analytics cache. The user reports the current maximum works and approved this release for commit. No exhaustive configuration coverage or measured Pine Profiler speedup is claimed.
 
 ## Pending release notes
 
-None. Presentation `/8` and the final host are published, tested, and approved.
+None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/9`
+
+```text
+Shares compatible completed-profile delta and volume drawings to support more history. Expands the history dropdown to request up to 50 prior profiles, with the displayed count constrained by the active drawing settings and geometry. Preserves profile shapes, colors, placement, current-profile priority, and core-first histogram budgeting.
+```
+
+Presentation `/9` was published before loading the host importing Profile `/4`, Orchestration `/2`, and Presentation `/9`. The user confirmed working behavior and approved the release for commit. No new library publication is required.
 
 ### Legilimens host
 
@@ -275,6 +285,8 @@ Adds an optional host-supplied frame-title prefix. Legilimens uses it to show �
 ```
 
 ## Current host validation
+
+- Presentation `/9`: 17 local tests pass (10 batching/capacity tests and seven FOMC tests), along with Pine identifier/title, registry, and scoped whitespace checks. The tests execute source-translated batching functions with platform adapters, checking fill coverage, point counts, all placements and palettes, irregular chart times, selected-tier reservation, current/source/overlap separation, and heavy/light drawing capacities. They do not establish Pine compilation or runtime speed. The user confirmed publication, host loading, testing, and approval with the commit request. Exhaustive NQ time/Range, Replay, rollover, and repeated Pine Profiler comparison are not independently verified. Check requested versus displayed history, missing tiers or histograms, overlapping shapes, alternate colors, and object pressure; no new practical maximum is promised.
 
 - Presentation `/8` and the final host: publication, loading, testing, and approval confirmed by the user commit instruction on 2026-09-20 under the repository commit rule. Local identifier/title, registry, whitespace checks, and seven FOMC tests pass. TradingView validation is user-confirmed, not independently performed by the agent. The approved midpoint uses width 3 with its On/Off toggle retained; the temporary Width control and library field are removed.
 - User confirmed `indicators/21-legilimens/code/legilimens.pine` complete after testing against Profile `/4`, Orchestration `/2`, and Presentation `/5`.

@@ -51,8 +51,8 @@ const int DOT_LABEL_SIZE = 10
 const int SESSION_OUTLINE_WIDTH = 1
 const int LOW_VOLUME_LINE_WIDTH = 1
 const int LOW_VOLUME_LEVEL_RANK = 100
-const int DELTA_POLYLINE_LAYER_COUNT_PER_SIDE = 2
-const int HISTOGRAM_VALUE_AREA_POLYLINE_LAYER_COUNT = 3
+const int PROFILE_POLYLINE_LAYER_COUNT = 6
+const int PROFILE_POLYLINE_POINT_LIMIT = 9900
 const int PROFILE_FRAME_BOX_COUNT = 2
 const int PROFILE_HEADING_LABEL_COUNT = 2
 const int NY_HEADING_SEPARATION_BARS = 5
@@ -316,6 +316,49 @@ appearanceTextColor(DeltaTierAppearance config) =>
 appearanceZoneColor(DeltaTierAppearance config) =>
     config.zoneColor
 
+type ProfilePolylineLayout
+    legilimensOrchestration.Profile profile
+    SourceSpec source
+    array<float> strengths
+    array<int> pointCounts
+    int startScaleIndex
+    int endScaleIndex
+    int valueAreaLowRow
+    int valueAreaHighRow
+    float pocPrice
+    float valueAreaLowPrice
+    float valueAreaHighPrice
+    int deltaLeftTime
+    int deltaRightTime
+    int histogramLeftTime
+    int histogramRightTime
+
+type ProfilePolylineRegion
+    int layerIndex
+    array<chart.point> points
+
+type ProfilePolylineLayer
+    array<chart.point> points
+    int reservedPoints = 0
+    color fillColor = na
+
+type ProfilePolylineBatch
+    array<ProfilePolylineLayer> layers
+    int completedCount = 0
+    int leftTime = na
+    int rightTime = na
+    float spinePrice = na
+    string sourceKey = ""
+    bool shareable = false
+
+type ProfileRenderItem
+    ProfilePolylineLayout geometry
+    string displayNameOverride
+    bool pairedHeadings
+    bool historical
+    bool developing
+    bool contentVisible
+
 export type RenderState
     array<box> drawnBoxes
     array<line> drawnLines
@@ -407,40 +450,32 @@ export fixedRangeDisplayName(int firstTime, int secondTime, bool twentyFourSeven
     string durationText = quarterDurationValue(durationHours) >= 24.0 ? formatQuarterDuration(displayedDays) + "-Day" : durationHours >= 1.0 or quarterDurationValue(durationMinutes) >= 60.0 ? formatQuarterDuration(durationHours) + "-Hour" : formatQuarterDuration(durationMinutes) + "-Minute"
     "🎯 " + durationText + " Fixed Range"
 
-deltaPolylineLayersPerProfile(PresentationConfig config) =>
-    int visibleSides = config.delta.visibleRows == OPTION_OFF ? 0 : config.delta.visibleRows == OPTION_ALL ? 2 : 1
-    int layersPerSide = config.delta.rowFilter == OPTION_ALL ? DELTA_POLYLINE_LAYER_COUNT_PER_SIDE : 1
-    visibleSides * layersPerSide
+visibleDeltaTierSideCount(DeltaSettings delta) =>
+    delta.showTiers and delta.visibleTierSides != OPTION_OFF ? delta.visibleTierSides == OPTION_ALL ? 2 : 1 : 0
 
-visibleDeltaTierSideCount(PresentationConfig config) =>
-    config.delta.showTiers and config.delta.visibleTierSides != OPTION_OFF ? config.delta.visibleTierSides == OPTION_ALL ? 2 : 1 : 0
-
-maximumCoreObjectCostsPerProfile(PresentationConfig config) =>
-    int deltaTierSides = visibleDeltaTierSideCount(config)
-    int lvnTierCount = config.delta.showLvnTiers ? config.delta.visibleLvnTierCount : 0
-    int deltaTierCount = deltaTierSides * config.delta.visibleTierCount
-    int highestDeltaBoxCount = config.delta.showHighestDeltaLevels ? 2 : 0
-    int referenceLineCount = (config.levels.showValueArea ? 2 : 0) + (config.levels.showPoc ? 1 : 0) + (config.levels.showMidpoint ? 1 : 0)
-    int rightLineCount = lvnTierCount + deltaTierSides * math.min(2, config.delta.visibleTierCount)
-    int pocLabelCount = config.levels.showPoc ? 1 : 0
-    int midpointLabelCount = config.levels.showMidpoint ? 1 : 0
-    int lvnMarkerLabelCount = config.delta.showDots ? lvnTierCount + (config.delta.showDotLabels and lvnTierCount > 0 ? 1 : 0) : 0
-    int deltaMarkerLabelCount = config.delta.showDots ? deltaTierCount + (config.delta.showDotLabels ? deltaTierSides : 0) : 0
+maximumCoreObjectCostsPerProfile(DeltaSettings delta, LevelSettings levels) =>
+    int deltaTierSides = visibleDeltaTierSideCount(delta)
+    int lvnTierCount = delta.showLvnTiers ? delta.visibleLvnTierCount : 0
+    int deltaTierCount = deltaTierSides * delta.visibleTierCount
+    int highestDeltaBoxCount = delta.showHighestDeltaLevels ? 2 : 0
+    int referenceLineCount = (levels.showValueArea ? 2 : 0) + (levels.showPoc ? 1 : 0) + (levels.showMidpoint ? 1 : 0)
+    int rightLineCount = lvnTierCount + deltaTierSides * math.min(2, delta.visibleTierCount)
+    int pocLabelCount = levels.showPoc ? 1 : 0
+    int midpointLabelCount = levels.showMidpoint ? 1 : 0
+    int lvnMarkerLabelCount = delta.showDots ? lvnTierCount + (delta.showDotLabels and lvnTierCount > 0 ? 1 : 0) : 0
+    int deltaMarkerLabelCount = delta.showDots ? deltaTierCount + (delta.showDotLabels ? deltaTierSides : 0) : 0
     int zoneBoxCount = lvnTierCount + deltaTierCount + highestDeltaBoxCount
     [referenceLineCount + rightLineCount, PROFILE_HEADING_LABEL_COUNT + pocLabelCount + midpointLabelCount + lvnMarkerLabelCount + deltaMarkerLabelCount, PROFILE_FRAME_BOX_COUNT + zoneBoxCount]
 
 profileCapacityForObjectLimit(int objectLimit, int objectsPerProfile, int fallbackCapacity) =>
     objectsPerProfile > 0 ? int(math.floor(objectLimit / float(objectsPerProfile))) : fallbackCapacity
 
-profileCapacity(int sourceCount, PresentationConfig config) =>
-    int requestedCapacity = math.max(1, sourceCount) * config.interactions.retainedProfiles
-    int deltaLayers = deltaPolylineLayersPerProfile(config)
-    [linesPerProfile, labelsPerProfile, boxesPerProfile] = maximumCoreObjectCostsPerProfile(config)
-    int capacity = requestedCapacity
-    capacity := math.min(capacity, profileCapacityForObjectLimit(config.limits.polylines, deltaLayers, requestedCapacity))
-    capacity := math.min(capacity, profileCapacityForObjectLimit(config.limits.lines, linesPerProfile, requestedCapacity))
-    capacity := math.min(capacity, profileCapacityForObjectLimit(config.limits.labels, labelsPerProfile, requestedCapacity))
-    capacity := math.min(capacity, profileCapacityForObjectLimit(config.limits.boxes, boxesPerProfile, requestedCapacity))
+export maximumProfileCapacity(ObjectLimits limits, DeltaSettings delta, LevelSettings levels) =>
+    [linesPerProfile, labelsPerProfile, boxesPerProfile] = maximumCoreObjectCostsPerProfile(delta, levels)
+    int capacity = limits.boxes
+    capacity := math.min(capacity, profileCapacityForObjectLimit(limits.lines, linesPerProfile, limits.boxes))
+    capacity := math.min(capacity, profileCapacityForObjectLimit(limits.labels, labelsPerProfile, limits.boxes))
+    capacity := math.min(capacity, profileCapacityForObjectLimit(limits.boxes, boxesPerProfile, limits.boxes))
     capacity
 
 canDrawBox(RenderState state, PresentationConfig config) =>
@@ -1068,84 +1103,174 @@ appendDeltaRowPoints(array<chart.point> points, int baselineTime, int outerTime,
     array.push(points, chart.point.from_time(outerTime, rowTop))
     array.push(points, chart.point.from_time(baselineTime, rowTop))
 
-renderDeltaLayer(RenderState state, array<chart.point> points, color fillColor, PresentationConfig config) =>
-    if array.size(points) >= 4 and canDrawPolyline(state, config)
-        array.push(state.drawnPolylines, polyline.new(points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(fillColor, 100), fill_color=fillColor))
+deltaLayerIndex(float rowDelta, bool outlierRow) =>
+    outlierRow ? rowDelta >= 0 ? 4 : 5 : rowDelta >= 0 ? 2 : 3
 
-renderDeltaPolylines(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<float> strengths, array<bool> selectedRows, array<int> chartTimes, int startScaleIndex, int endScaleIndex, PresentationConfig config) =>
-    if profile.data.maxAbsRowDelta > 0
-        array<chart.point> buyPoints = array.new<chart.point>()
-        array<chart.point> sellPoints = array.new<chart.point>()
-        array<chart.point> deltaPlusPlusPoints = array.new<chart.point>()
-        array<chart.point> deltaMinusMinusPoints = array.new<chart.point>()
-        float rowHeight = (profile.data.priceHigh - profile.data.priceLow) / profile.data.rowCount
-        bool attachRight = source.profilePosition == PROFILE_POSITION_RIGHT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_RIGHT
-        bool faceLeft = source.profilePosition == PROFILE_POSITION_LEFT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_LEFT
-        int baselineIndex = attachRight ? endScaleIndex : startScaleIndex
-        int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, attachRight)
+histogramRegionRows(ProfilePolylineLayout geometry, int regionIndex) =>
+    int firstRow = regionIndex == 0 ? 0 : regionIndex == 1 ? geometry.valueAreaLowRow : geometry.valueAreaHighRow + 1
+    int lastRow = regionIndex == 0 ? geometry.valueAreaLowRow - 1 : regionIndex == 1 ? geometry.valueAreaHighRow : geometry.profile.data.rowCount - 1
+    [firstRow, lastRow]
+
+profilePolylineLayout(legilimensOrchestration.Profile profile, SourceSpec source, array<int> chartTimes, PresentationConfig config) =>
+    int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
+    int endScaleIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
+    [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = legilimensProfile.profileValueLevels(profile.data.rowVolumes, profile.data.rowCount, profile.data.priceLow, profile.data.priceHigh)
+    array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
+    ProfilePolylineLayout geometry = ProfilePolylineLayout.new(profile, source, strengths, array.new<int>(PROFILE_POLYLINE_LAYER_COUNT, 0), startScaleIndex, endScaleIndex, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice, na, na, na, na)
+    float maximumMagnitude = 0.0
+    if profile.data.maxAbsRowDelta > 0 and config.delta.visibleRows != OPTION_OFF
         for rowIndex = 0 to profile.data.rowCount - 1
-            float rowVolume = array.get(profile.data.rowVolumes, rowIndex)
-            if rowVolume > 0
-                float strength = array.get(strengths, rowIndex)
-                bool outlierRow = legilimensProfile.isOutlierStrength(strength)
-                float rowDelta = array.get(profile.data.rowDeltas, rowIndex)
-                float magnitude = math.abs(rowDelta)
-                bool selectedRow = rowIndex < array.size(selectedRows) and array.get(selectedRows, rowIndex)
-                if magnitude > 0 and rowPassesDeltaFilter(rowDelta, strength, selectedRow, config)
-                    float rowBottom = profile.data.priceLow + rowIndex * rowHeight
-                    int outerTime = deltaOuterTime(profile, chartTimes, startScaleIndex, endScaleIndex, baselineIndex, magnitude / profile.data.maxAbsRowDelta, source.deltaWidthBars, faceLeft, attachRight)
-                    if rowDelta >= 0 and outlierRow
-                        appendDeltaRowPoints(deltaPlusPlusPoints, baselineTime, outerTime, rowBottom, rowBottom + rowHeight)
-                    else if rowDelta >= 0
-                        appendDeltaRowPoints(buyPoints, baselineTime, outerTime, rowBottom, rowBottom + rowHeight)
-                    else if outlierRow
-                        appendDeltaRowPoints(deltaMinusMinusPoints, baselineTime, outerTime, rowBottom, rowBottom + rowHeight)
-                    else
-                        appendDeltaRowPoints(sellPoints, baselineTime, outerTime, rowBottom, rowBottom + rowHeight)
-        renderDeltaLayer(state, buyPoints, profileDeltaPlusColor(source), config)
-        renderDeltaLayer(state, sellPoints, profileDeltaMinusColor(source), config)
-        renderDeltaLayer(state, deltaPlusPlusPoints, profileDeltaPlusPlusColor(source), config)
-        renderDeltaLayer(state, deltaMinusMinusPoints, profileDeltaMinusMinusColor(source), config)
-
-pushHistogramRun(RenderState state, array<chart.point> points, color fillColor, PresentationConfig config) =>
-    if canDrawPolyline(state, config)
-        array.push(state.drawnPolylines, polyline.new(points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(fillColor, 100), fill_color=fillColor))
-
-renderHistogram(RenderState state, legilimensOrchestration.Profile profile, int valueAreaLowRow, int valueAreaHighRow, int maxPolylinesAllowed, array<int> chartTimes, int startScaleIndex, int endScaleIndex, PresentationConfig config) =>
-    int polylinesUsed = 0
-    if profile.data.maxRowVolume > 0 and maxPolylinesAllowed > 0
-        int rowCount = profile.data.rowCount
-        float rowHeight = (profile.data.priceHigh - profile.data.priceLow) / rowCount
+            float rowDelta = array.get(profile.data.rowDeltas, rowIndex)
+            float strength = array.get(strengths, rowIndex)
+            bool outlierRow = legilimensProfile.isOutlierStrength(strength)
+            // Selected-tier rows are a subset of outliers; reserve their superset without reranking.
+            if array.get(profile.data.rowVolumes, rowIndex) > 0 and math.abs(rowDelta) > 0 and rowPassesDeltaFilter(rowDelta, strength, outlierRow, config)
+                int layerIndex = deltaLayerIndex(rowDelta, outlierRow)
+                array.set(geometry.pointCounts, layerIndex, array.get(geometry.pointCounts, layerIndex) + 4)
+                maximumMagnitude := math.max(maximumMagnitude, math.abs(rowDelta))
+        for layerIndex = 2 to PROFILE_POLYLINE_LAYER_COUNT - 1
+            int pointCount = array.get(geometry.pointCounts, layerIndex)
+            if pointCount > 0
+                array.set(geometry.pointCounts, layerIndex, pointCount + 3)
+        if maximumMagnitude > 0
+            bool attachRight = source.profilePosition == PROFILE_POSITION_RIGHT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_RIGHT
+            bool faceLeft = source.profilePosition == PROFILE_POSITION_LEFT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_LEFT
+            int baselineIndex = attachRight ? endScaleIndex : startScaleIndex
+            int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, attachRight)
+            int outerTime = deltaOuterTime(profile, chartTimes, startScaleIndex, endScaleIndex, baselineIndex, maximumMagnitude / profile.data.maxAbsRowDelta, source.deltaWidthBars, faceLeft, attachRight)
+            geometry.deltaLeftTime := math.min(baselineTime, outerTime)
+            geometry.deltaRightTime := math.max(baselineTime, outerTime)
+    if config.delta.showHistogram and profile.data.maxRowVolume > 0
         bool completeScale = startScaleIndex >= 0 and endScaleIndex >= 0
         int baselineIndex = completeScale ? startScaleIndex : -1
         int rangeSteps = completeScale ? math.max(1, math.abs(endScaleIndex - startScaleIndex)) : 1
         int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, false)
-        array<chart.point> points = array.new<chart.point>()
-        bool runStarted = false
-        bool runInsideValueArea = false
-        for rowIndex = 0 to rowCount - 1
-            bool insideValueArea = rowIndex >= valueAreaLowRow and rowIndex <= valueAreaHighRow
-            float rowBottom = profile.data.priceLow + rowIndex * rowHeight
-            float rowVolume = array.get(profile.data.rowVolumes, rowIndex)
-            int outerTime = profileOuterTime(profile, chartTimes, baselineIndex, rangeSteps, rowVolume / profile.data.maxRowVolume, config.delta.histogramWidthPercent, false, false)
-            if runStarted and insideValueArea != runInsideValueArea
-                array.push(points, chart.point.from_time(baselineTime, rowBottom))
-                if polylinesUsed < maxPolylinesAllowed
-                    pushHistogramRun(state, points, runInsideValueArea ? color.new(color.rgb(187, 217, 251), 75) : color.new(color.rgb(184, 184, 184), 80), config)
-                    polylinesUsed += 1
-                points := array.new<chart.point>()
-                runStarted := false
-            if not runStarted
-                runStarted := true
-                runInsideValueArea := insideValueArea
-                array.push(points, chart.point.from_time(baselineTime, rowBottom))
-            array.push(points, chart.point.from_time(outerTime, rowBottom + rowHeight * 0.5))
-            if rowIndex == rowCount - 1
-                array.push(points, chart.point.from_time(baselineTime, rowBottom + rowHeight))
-                if polylinesUsed < maxPolylinesAllowed
-                    pushHistogramRun(state, points, runInsideValueArea ? color.new(color.rgb(187, 217, 251), 75) : color.new(color.rgb(184, 184, 184), 80), config)
-                    polylinesUsed += 1
-    polylinesUsed
+        int outerTime = profileOuterTime(profile, chartTimes, baselineIndex, rangeSteps, 1.0, config.delta.histogramWidthPercent, false, false)
+        geometry.histogramLeftTime := math.min(baselineTime, outerTime)
+        geometry.histogramRightTime := math.max(baselineTime, outerTime)
+        for regionIndex = 0 to 2
+            [firstRow, lastRow] = histogramRegionRows(geometry, regionIndex)
+            if firstRow <= lastRow
+                int layerIndex = regionIndex == 1 ? 1 : 0
+                array.set(geometry.pointCounts, layerIndex, array.get(geometry.pointCounts, layerIndex) + lastRow - firstRow + 6)
+    geometry
+
+profilePolylineRegions(ProfilePolylineLayout geometry, array<bool> selectedRows, bool includeHistogram, array<int> chartTimes, PresentationConfig config) =>
+    legilimensOrchestration.Profile profile = geometry.profile
+    SourceSpec source = geometry.source
+    array<ProfilePolylineRegion> regions = array.new<ProfilePolylineRegion>()
+    float rowHeight = (profile.data.priceHigh - profile.data.priceLow) / profile.data.rowCount
+    if includeHistogram and profile.data.maxRowVolume > 0
+        bool completeScale = geometry.startScaleIndex >= 0 and geometry.endScaleIndex >= 0
+        int baselineIndex = completeScale ? geometry.startScaleIndex : -1
+        int rangeSteps = completeScale ? math.max(1, math.abs(geometry.endScaleIndex - geometry.startScaleIndex)) : 1
+        int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, false)
+        for regionIndex = 0 to 2
+            [firstRow, lastRow] = histogramRegionRows(geometry, regionIndex)
+            if firstRow <= lastRow
+                array<chart.point> points = array.new<chart.point>()
+                array.push(points, chart.point.from_time(baselineTime, profile.data.priceLow + firstRow * rowHeight))
+                for rowIndex = firstRow to lastRow
+                    float rowVolume = array.get(profile.data.rowVolumes, rowIndex)
+                    int outerTime = profileOuterTime(profile, chartTimes, baselineIndex, rangeSteps, rowVolume / profile.data.maxRowVolume, config.delta.histogramWidthPercent, false, false)
+                    array.push(points, chart.point.from_time(outerTime, profile.data.priceLow + (rowIndex + 0.5) * rowHeight))
+                array.push(points, chart.point.from_time(baselineTime, profile.data.priceLow + (lastRow + 1) * rowHeight))
+                array.push(regions, ProfilePolylineRegion.new(regionIndex == 1 ? 1 : 0, points))
+    if profile.data.maxAbsRowDelta > 0 and config.delta.visibleRows != OPTION_OFF
+        array<ProfilePolylineRegion> deltaRegions = array.new<ProfilePolylineRegion>()
+        for layerIndex = 2 to PROFILE_POLYLINE_LAYER_COUNT - 1
+            array.push(deltaRegions, ProfilePolylineRegion.new(layerIndex, array.new<chart.point>()))
+        bool attachRight = source.profilePosition == PROFILE_POSITION_RIGHT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_RIGHT
+        bool faceLeft = source.profilePosition == PROFILE_POSITION_LEFT_LEFT or source.profilePosition == PROFILE_POSITION_RIGHT_LEFT
+        int baselineIndex = attachRight ? geometry.endScaleIndex : geometry.startScaleIndex
+        int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, attachRight)
+        for rowIndex = 0 to profile.data.rowCount - 1
+            float rowDelta = array.get(profile.data.rowDeltas, rowIndex)
+            float strength = array.get(geometry.strengths, rowIndex)
+            bool selectedRow = rowIndex < array.size(selectedRows) and array.get(selectedRows, rowIndex)
+            if array.get(profile.data.rowVolumes, rowIndex) > 0 and math.abs(rowDelta) > 0 and rowPassesDeltaFilter(rowDelta, strength, selectedRow, config)
+                int layerIndex = deltaLayerIndex(rowDelta, legilimensProfile.isOutlierStrength(strength))
+                ProfilePolylineRegion region = array.get(deltaRegions, layerIndex - 2)
+                int outerTime = deltaOuterTime(profile, chartTimes, geometry.startScaleIndex, geometry.endScaleIndex, baselineIndex, math.abs(rowDelta) / profile.data.maxAbsRowDelta, source.deltaWidthBars, faceLeft, attachRight)
+                float rowBottom = profile.data.priceLow + rowIndex * rowHeight
+                appendDeltaRowPoints(region.points, baselineTime, outerTime, rowBottom, rowBottom + rowHeight)
+        for region in deltaRegions
+            if array.size(region.points) > 0
+                array.push(regions, region)
+    regions
+
+newProfilePolylineBatch() =>
+    array<ProfilePolylineLayer> layers = array.new<ProfilePolylineLayer>()
+    for layerIndex = 0 to PROFILE_POLYLINE_LAYER_COUNT - 1
+        array.push(layers, ProfilePolylineLayer.new(array.new<chart.point>()))
+    ProfilePolylineBatch.new(layers)
+
+profilePolylineColor(SourceSpec source, int layerIndex) =>
+    layerIndex == 0 ? color.new(color.rgb(184, 184, 184), 80) : layerIndex == 1 ? color.new(color.rgb(187, 217, 251), 75) : layerIndex == 2 ? profileDeltaPlusColor(source) : layerIndex == 3 ? profileDeltaMinusColor(source) : layerIndex == 4 ? profileDeltaPlusPlusColor(source) : profileDeltaMinusMinusColor(source)
+
+flushProfilePolylineLayer(RenderState state, ProfilePolylineBatch batch, ProfilePolylineLayer layer, bool draw, PresentationConfig config) =>
+    if layer.reservedPoints > 0
+        if draw and array.size(layer.points) >= 3 and canDrawPolyline(state, config)
+            array.push(state.drawnPolylines, polyline.new(layer.points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new(layer.fillColor, 100), fill_color=layer.fillColor))
+        array.clear(layer.points)
+        layer.reservedPoints := 0
+        batch.completedCount += 1
+    true
+
+flushProfilePolylineBatch(RenderState state, ProfilePolylineBatch batch, bool draw, PresentationConfig config) =>
+    for layer in batch.layers
+        flushProfilePolylineLayer(state, batch, layer, draw, config)
+    batch.leftTime := na
+    batch.rightTime := na
+    batch.spinePrice := na
+    batch.sourceKey := ""
+    batch.shareable := false
+    true
+
+profilePolylineBounds(ProfilePolylineLayout geometry, bool includeHistogram) =>
+    int leftTime = geometry.deltaLeftTime
+    int rightTime = geometry.deltaRightTime
+    if includeHistogram and not na(geometry.histogramLeftTime)
+        leftTime := na(leftTime) ? geometry.histogramLeftTime : math.min(leftTime, geometry.histogramLeftTime)
+        rightTime := na(rightTime) ? geometry.histogramRightTime : math.max(rightTime, geometry.histogramRightTime)
+    [leftTime, rightTime]
+
+profilePolylineBatchCompatible(ProfilePolylineBatch batch, ProfilePolylineLayout geometry, bool shareable, int leftTime, int rightTime) =>
+    bool disjoint = rightTime < batch.leftTime or leftTime > batch.rightTime
+    bool commonPrice = batch.spinePrice >= geometry.profile.data.priceLow and batch.spinePrice <= geometry.profile.data.priceHigh
+    batch.shareable and shareable and batch.sourceKey == geometry.source.key and disjoint and commonPrice
+
+appendProfilePolylineRegion(array<chart.point> points, array<chart.point> regionPoints, float spinePrice) =>
+    chart.point firstPoint = array.first(regionPoints)
+    // Closed branches and the return along the shared spine add no filled area.
+    array.push(points, chart.point.from_time(firstPoint.time, spinePrice))
+    array.concat(points, regionPoints)
+    array.push(points, firstPoint)
+    array.push(points, chart.point.from_time(firstPoint.time, spinePrice))
+    true
+
+processProfilePolylineBatch(RenderState state, ProfilePolylineBatch batch, ProfilePolylineLayout geometry, bool shareable, bool includeHistogram, array<ProfilePolylineRegion> regions, bool draw, PresentationConfig config) =>
+    [leftTime, rightTime] = profilePolylineBounds(geometry, includeHistogram)
+    if not na(leftTime)
+        if not na(batch.leftTime) and not profilePolylineBatchCompatible(batch, geometry, shareable, leftTime, rightTime)
+            flushProfilePolylineBatch(state, batch, draw, config)
+        batch.leftTime := na(batch.leftTime) ? leftTime : math.min(batch.leftTime, leftTime)
+        batch.rightTime := na(batch.rightTime) ? rightTime : math.max(batch.rightTime, rightTime)
+        batch.spinePrice := na(batch.spinePrice) ? geometry.profile.data.priceLow : batch.spinePrice
+        batch.sourceKey := geometry.source.key
+        batch.shareable := shareable
+        for layerIndex = (includeHistogram ? 0 : 2) to PROFILE_POLYLINE_LAYER_COUNT - 1
+            ProfilePolylineLayer layer = array.get(batch.layers, layerIndex)
+            int addedPoints = array.get(geometry.pointCounts, layerIndex)
+            if layer.reservedPoints + addedPoints > PROFILE_POLYLINE_POINT_LIMIT
+                flushProfilePolylineLayer(state, batch, layer, draw, config)
+            layer.fillColor := profilePolylineColor(geometry.source, layerIndex)
+            layer.reservedPoints += addedPoints
+        if draw
+            for region in regions
+                ProfilePolylineLayer layer = array.get(batch.layers, region.layerIndex)
+                appendProfilePolylineRegion(layer.points, region.points, batch.spinePrice)
+    true
 
 renderLowVolumeZone(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, float price, float zoneLow, float zoneHigh, int levelEndTime, int levelRank, int sessionTradingDayKey, bool historical, int borderWidth, color borderColor, color markerColor, string markerGlyph, string markerLabel, int markerSize, bool registrationOnly, array<SourceSpec> sources, PresentationConfig config) =>
     color zoneColor = color.new(color.rgb(74, 74, 74), 95)
@@ -1371,9 +1496,11 @@ selectedOutlierRowMask(legilimensOrchestration.Profile profile, array<float> str
     bool enabled = config.delta.rowFilter == DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS and config.delta.showTiers and config.delta.visibleTierSides != OPTION_OFF
     legilimensProfile.selectedOutlierRowMask(profile.data, profile.startTime, strengths, selections, enabled, deltaTierSideVisible(true, config), deltaTierSideVisible(false, config))
 
-renderSelectedProfile(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, bool pairedNyHeadings, bool historical, bool developing, bool renderBudgetedHistogram, int histogramLayersPerProfile, array<int> chartTimes, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
-    int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
-    int endScaleIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
+renderSelectedProfile(RenderState state, ProfilePolylineLayout geometry, ProfilePolylineBatch batch, string displayNameOverride, bool pairedNyHeadings, bool historical, bool developing, bool renderBudgetedHistogram, array<int> chartTimes, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+    legilimensOrchestration.Profile profile = geometry.profile
+    SourceSpec source = geometry.source
+    int startScaleIndex = geometry.startScaleIndex
+    int endScaleIndex = geometry.endScaleIndex
     int sessionCloseTime = sessionOccurrenceClose(source, profile, developing, context)
     int levelEndTime = sessionLevelEndpoint(source, sessionCloseTime, context)
     int sessionTradingDayKey = legilimensOrchestration.tradingDayKey(sessionCloseTime)
@@ -1382,24 +1509,22 @@ renderSelectedProfile(RenderState state, legilimensOrchestration.Profile profile
     renderRangeLabels(state, profile, source, displayNameOverride, pairedNyHeadings, chartTimes, startScaleIndex, endScaleIndex, config)
     renderProfileBox(state, profile, source, config)
     if not developing or not developingControlled(source) or source.developingContentVisible
-        [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = legilimensProfile.profileValueLevels(profile.data.rowVolumes, profile.data.rowCount, profile.data.priceLow, profile.data.priceHigh)
-        if renderBudgetedHistogram
-            renderHistogram(state, profile, valueAreaLowRow, valueAreaHighRow, histogramLayersPerProfile, chartTimes, startScaleIndex, endScaleIndex, config)
         renderProfileMidpointLine(state, profile, source, levelEndTime, chartTimes, config)
-        array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
+        array<float> strengths = geometry.strengths
         array<legilimensProfile.OutlierPeak> outlierPeaks = array.new<legilimensProfile.OutlierPeak>()
         if config.delta.showTiers or config.delta.showHighestDeltaLevels
             outlierPeaks := legilimensProfile.collectOutlierPeaks(profile.data, strengths)
         queueOutlierPeaks(state, profile, source, outlierPeaks, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, config)
         [rankedOutlierLevels, rankedOutlierSelections] = rankPendingOutlierLevels(state, context, config)
         array<bool> selectedRows = selectedOutlierRowMask(profile, strengths, rankedOutlierSelections, config)
-        renderDeltaPolylines(state, profile, source, strengths, selectedRows, chartTimes, startScaleIndex, endScaleIndex, config)
+        array<ProfilePolylineRegion> regions = profilePolylineRegions(geometry, selectedRows, renderBudgetedHistogram, chartTimes, config)
+        processProfilePolylineBatch(state, batch, geometry, historical and not developing, renderBudgetedHistogram, regions, true, config)
         if config.levels.showValueArea
             color valueAreaColor = profileValueAreaLevelColor(source.key)
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, valueAreaHighPrice, LEVEL_VAH, valueAreaColor, config)
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, valueAreaLowPrice, LEVEL_VAL, valueAreaColor, config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.valueAreaHighPrice, LEVEL_VAH, valueAreaColor, config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.valueAreaLowPrice, LEVEL_VAL, valueAreaColor, config)
         if config.levels.showPoc
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, pocPrice, LEVEL_POC, color.rgb(49, 27, 146), config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.pocPrice, LEVEL_POC, color.rgb(49, 27, 146), config)
         renderLowVolumeStructures(state, profile, source, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false, sources, context, config)
         renderRankedOutlierLevels(state, rankedOutlierLevels, false, sources, context, config)
         renderHighestDeltaLevels(state, profile, source, levelEndTime, outlierPeaks, rankedOutlierSelections, config)
@@ -1419,69 +1544,89 @@ comparisonSelection(array<SelectionBinding> bindings, string sourceName) =>
                     comparison := binding.selection
     comparison
 
-renderableContentProfileCount(SelectionBinding binding, legilimensOrchestration.ProfileSelection comparison, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, BarContext context, PresentationConfig config) =>
-    int count = legilimensOrchestration.renderableProfileCount(binding.selection, binding.source.key, comparison, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, config.extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, context.tickSize)
-    if count > 0 and binding.selection.currentDeveloping and developingControlled(binding.source) and not binding.source.developingContentVisible and binding.selection.currentIndex >= 0
-        legilimensOrchestration.Profile currentProfile = array.get(binding.selection.profiles, binding.selection.currentIndex)
-        legilimensOrchestration.RenderDecision decision = renderDecision(currentProfile, binding.source, comparison, context, config)
-        if decision.shouldRender
-            count -= 1
-    count
-
-trimBindings(array<SelectionBinding> bindings, PresentationConfig config, BarContext context) =>
+trimBindings(array<SelectionBinding> bindings, int capacity, PresentationConfig config, BarContext context) =>
     array<legilimensOrchestration.ProfileSelection> selections = array.new<legilimensOrchestration.ProfileSelection>()
     array<string> sourceNames = array.new<string>()
-    int count = array.size(bindings)
-    if count > 0
-        for bindingIndex = 0 to count - 1
-            SelectionBinding binding = array.get(bindings, bindingIndex)
-            array.push(selections, binding.selection)
-            array.push(sourceNames, binding.source.key)
-    legilimensOrchestration.trimProfileSelectionsToCapacity(selections, sourceNames, profileCapacity(count, config), SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, config.extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, context.tickSize)
+    for binding in bindings
+        array.push(selections, binding.selection)
+        array.push(sourceNames, binding.source.key)
+    legilimensOrchestration.trimProfileSelectionsToCapacity(selections, sourceNames, capacity, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, config.extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, context.tickSize)
+
+findProfilePolylineLayout(array<ProfilePolylineLayout> layouts, legilimensOrchestration.Profile profile, SourceSpec source, array<int> chartTimes, PresentationConfig config) =>
+    ProfilePolylineLayout found = na
+    for geometry in layouts
+        if geometry.source.key == source.key and geometry.profile.startTime == profile.startTime and geometry.profile.endTime == profile.endTime
+            found := geometry
+            break
+    if na(found)
+        found := profilePolylineLayout(profile, source, chartTimes, config)
+        array.push(layouts, found)
+    found
+
+profileRenderItems(array<SelectionBinding> bindings, array<ProfilePolylineLayout> layouts, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<int> chartTimes, BarContext context, PresentationConfig config) =>
+    array<ProfileRenderItem> items = array.new<ProfileRenderItem>()
+    for renderPass = 0 to 1
+        bool currentPass = renderPass == 0
+        for binding in bindings
+            legilimensOrchestration.ProfileSelection comparison = comparisonSelection(bindings, binding.source.key)
+            int selectedCount = array.size(binding.selection.profiles)
+            if selectedCount > 0
+                for selectedIndex = 0 to selectedCount - 1
+                    bool currentProfile = selectedIndex == binding.selection.currentIndex
+                    if currentProfile == currentPass
+                        legilimensOrchestration.Profile profile = array.get(binding.selection.profiles, selectedIndex)
+                        legilimensOrchestration.RenderDecision decision = renderDecision(profile, binding.source, comparison, context, config)
+                        if decision.shouldRender
+                            bool hiddenCounterpart = binding.source.key == SOURCE_NY_EARLY and hideDevelopingExtendedCounterpart and profile.startTime == currentNyEarlyStartTime
+                            bool developing = currentProfile and binding.selection.currentDeveloping
+                            bool contentVisible = not developing or not developingControlled(binding.source) or binding.source.developingContentVisible
+                            ProfilePolylineLayout geometry = findProfilePolylineLayout(layouts, profile, binding.source, chartTimes, config)
+                            array.push(items, ProfileRenderItem.new(geometry, hiddenCounterpart ? "" : decision.displayNameOverride, hiddenCounterpart ? false : decision.pairedHeadings, not currentProfile, developing, contentVisible))
+    items
+
+profilePolylineCost(RenderState state, array<ProfileRenderItem> items, bool includeHistogram, PresentationConfig config) =>
+    ProfilePolylineBatch batch = newProfilePolylineBatch()
+    for item in items
+        if item.contentVisible
+            processProfilePolylineBatch(state, batch, item.geometry, item.historical and not item.developing, includeHistogram, na, false, config)
+    flushProfilePolylineBatch(state, batch, false, config)
+    batch.completedCount
+
+renderProfileItems(RenderState state, array<ProfileRenderItem> items, bool includeHistogram, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+    ProfilePolylineBatch batch = newProfilePolylineBatch()
+    for item in items
+        renderSelectedProfile(state, item.geometry, batch, item.displayNameOverride, item.pairedHeadings, item.historical, item.developing, includeHistogram, state.cachedChartTimes, sources, context, config)
+    flushProfilePolylineBatch(state, batch, true, config)
+    true
 
 export renderSelections(RenderState state, array<SelectionBinding> bindings, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
-    trimBindings(bindings, config, context)
+    trimBindings(bindings, maximumProfileCapacity(config.limits, config.delta, config.levels), config, context)
     if state.chartTimesBuiltAtBar != context.barIndex
         state.cachedChartTimes := recentChartTimes(context.barIndex)
         state.chartTimesBuiltAtBar := context.barIndex
-    int contentCount = 0
-    int count = array.size(bindings)
-    if count > 0
-        for bindingIndex = 0 to count - 1
-            SelectionBinding binding = array.get(bindings, bindingIndex)
-            contentCount += renderableContentProfileCount(binding, comparisonSelection(bindings, binding.source.key), hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, context, config)
-    int deltaLayers = deltaPolylineLayersPerProfile(config)
-    int histogramLayers = config.delta.showHistogram ? HISTOGRAM_VALUE_AREA_POLYLINE_LAYER_COUNT : 0
-    bool renderHistograms = config.delta.showHistogram and histogramLayers > 0 and contentCount > 0 and contentCount * (deltaLayers + histogramLayers) <= config.limits.polylines
-    if count > 0
-        for renderPass = 0 to 1
-            bool currentPass = renderPass == 0
-            for bindingIndex = 0 to count - 1
-                SelectionBinding binding = array.get(bindings, bindingIndex)
-                legilimensOrchestration.ProfileSelection comparison = comparisonSelection(bindings, binding.source.key)
-                int selectedCount = array.size(binding.selection.profiles)
-                if selectedCount > 0
-                    for selectedIndex = 0 to selectedCount - 1
-                        bool currentProfile = selectedIndex == binding.selection.currentIndex
-                        if currentProfile == currentPass
-                            legilimensOrchestration.Profile selectedProfile = array.get(binding.selection.profiles, selectedIndex)
-                            legilimensOrchestration.RenderDecision decision = renderDecision(selectedProfile, binding.source, comparison, context, config)
-                            bool hiddenCounterpart = binding.source.key == SOURCE_NY_EARLY and hideDevelopingExtendedCounterpart and selectedProfile.startTime == currentNyEarlyStartTime
-                            string displayNameOverride = hiddenCounterpart ? "" : decision.displayNameOverride
-                            bool pairedHeadings = hiddenCounterpart ? false : decision.pairedHeadings
-                            if decision.shouldRender
-                                bool developing = currentProfile and binding.selection.currentDeveloping
-                                renderSelectedProfile(state, selectedProfile, binding.source, displayNameOverride, pairedHeadings, not currentProfile, developing, renderHistograms, histogramLayers, state.cachedChartTimes, sources, context, config)
+    array<ProfilePolylineLayout> layouts = array.new<ProfilePolylineLayout>()
+    array<ProfileRenderItem> items = profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
+    int availablePolylines = config.limits.polylines - array.size(state.drawnPolylines)
+    while array.size(items) > 0 and profilePolylineCost(state, items, false, config) > availablePolylines
+        int previousCount = array.size(items)
+        trimBindings(bindings, previousCount - 1, config, context)
+        items := profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
+        if array.size(items) >= previousCount
+            break
+    bool renderHistograms = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
+    renderProfileItems(state, items, renderHistograms, sources, context, config)
     true
 
 export renderStandaloneProfile(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     if state.chartTimesBuiltAtBar != context.barIndex
         state.cachedChartTimes := recentChartTimes(context.barIndex)
         state.chartTimesBuiltAtBar := context.barIndex
-    int deltaLayers = deltaPolylineLayersPerProfile(config)
-    int histogramLayers = config.delta.showHistogram ? HISTOGRAM_VALUE_AREA_POLYLINE_LAYER_COUNT : 0
-    bool renderHistogramAllowed = config.delta.showHistogram and histogramLayers > 0 and deltaLayers + histogramLayers <= config.limits.polylines
-    renderSelectedProfile(state, profile, source, "", false, false, true, renderHistogramAllowed, histogramLayers, state.cachedChartTimes, sources, context, config)
+    ProfilePolylineLayout geometry = profilePolylineLayout(profile, source, state.cachedChartTimes, config)
+    bool contentVisible = not developingControlled(source) or source.developingContentVisible
+    array<ProfileRenderItem> items = array.from(ProfileRenderItem.new(geometry, "", false, false, true, contentVisible))
+    int availablePolylines = config.limits.polylines - array.size(state.drawnPolylines)
+    bool renderHistogramAllowed = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
+    renderProfileItems(state, items, renderHistogramAllowed, sources, context, config)
     true
 
 export registerProfileZones(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
