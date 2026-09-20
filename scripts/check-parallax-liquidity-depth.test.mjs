@@ -141,15 +141,15 @@ test('LD controls are centralized and retain independent profile selections', ()
   assert.match(source, /^forecastLiquidityDepth = input\.bool\(false, "Forecast LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH\)/m);
   assert.match(source, /^showLiquidityDepthProfileNames = input\.bool\(true, "Profile Names on LD", inline="liquidity_depth_options", group=GROUP_LIQUIDITY_DEPTH\)/m);
   assert.match(source, /^dailyLiquidityDepth = input\.bool\(false, DAILY_PROFILE_NAME, group=GROUP_LIQUIDITY_DEPTH, active=dailyProfileShow\)/m);
-  for (const [name, label, active] of [
-    ['overnightLiquidityDepth', 'OVERNIGHT_SLOT_NAME', 'overnightShow'],
-    ['nyEarlyLiquidityDepth', 'NY_EARLY_SLOT_NAME', 'nyEarlyShow'],
-    ['nyAmLiquidityDepth', 'NY_AM_SLOT_NAME', 'nyAmShow'],
-    ['nyPmLiquidityDepth', 'NY_PM_SLOT_NAME', 'nyPmShow'],
-    ['ivbLiquidityDepth', 'IVB_SLOT_NAME', 'ivbShow'],
-    ['ivbPlusLiquidityDepth', 'IVB_PLUS_SLOT_NAME', 'ivbPlusShow'],
+  for (const [name, enabledByDefault, label, active] of [
+    ['overnightLiquidityDepth', true, 'OVERNIGHT_SLOT_NAME', 'overnightShow'],
+    ['nyEarlyLiquidityDepth', true, 'NY_EARLY_SLOT_NAME', 'nyEarlyShow'],
+    ['nyAmLiquidityDepth', true, 'NY_AM_SLOT_NAME', 'nyAmShow'],
+    ['nyPmLiquidityDepth', true, 'NY_PM_SLOT_NAME', 'nyPmShow'],
+    ['ivbLiquidityDepth', false, 'IVB_SLOT_NAME', 'ivbShow'],
+    ['ivbPlusLiquidityDepth', false, 'IVB_PLUS_SLOT_NAME', 'ivbPlusShow'],
   ]) {
-    assert.match(source, new RegExp(`^${name} = input\\.bool\\(false, ${label}, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=${active}`, 'm'));
+    assert.match(source, new RegExp(`^${name} = input\\.bool\\(${enabledByDefault}, ${label}, inline="liquidity_depth_profiles", group=GROUP_LIQUIDITY_DEPTH, active=${active}`, 'm'));
   }
   assert.doesNotMatch(source, /UI_LD/);
   assert.doesNotMatch(source, /inline="(?:overnight|ny_early|ny_am|ny_pm|ivb|ivb_plus)"[^\n]+liquidityDepth/);
@@ -179,23 +179,24 @@ test('normal LD requires a breach while Forecast LD projects unbreached sides', 
 });
 
 test('every open LD level reaches its session end while stopped levels retain their own endpoint', () => {
-  const expression = functionBody('liquidity_depth_end_time')
-    .replace(/na\((\w+)\)/g, '($1 == null)');
-  const endTime = new Function('sessionEndTime', 'storedEndTime', `return ${expression};`);
+  const endTime = (sessionEndTime, storedEndTime) =>
+    storedEndTime == null || storedEndTime >= sessionEndTime ? sessionEndTime : storedEndTime;
 
   assert.equal(endTime(12, null), 12, 'open NYAM levels reach noon');
   assert.equal(endTime(42, null), 42, 'open Globex levels reach the next-day 18:00 profile edge');
   assert.equal(endTime(12, 10), 10, 'mitigated LD retains its first-touch endpoint');
-  assert.equal(endTime(42, 40), 40, 'finalized LD retains the existing cutoff endpoint');
-  assert.equal(endTime(12, 16), 16, 'stored endpoints beyond the profile window remain unchanged');
+  assert.equal(endTime(42, 40), 40, 'mitigation inside the profile retains its endpoint');
+  assert.equal(endTime(12, 12), 12, 'a touch at the profile boundary ends at the profile boundary');
+  assert.equal(endTime(12, 16), 12, 'an endpoint after the profile window is clamped to the profile boundary');
   assert.deepEqual([10, null, null].map(stoppedAt => endTime(12, stoppedAt)), [10, 12, 12],
     'after L1 is mitigated, L2 and L3 still project to the session end');
   assert.deepEqual([10, 11, null].map(stoppedAt => endTime(12, stoppedAt)), [10, 11, 12],
     'mitigation of another level does not shorten the remaining open level');
 
   const body = functionBody('draw_liquidity_depth_side');
+  assert.match(functionBody('liquidity_depth_end_time'), /na\(storedEndTime\) or storedEndTime >= sessionEndTime \? sessionEndTime : storedEndTime/);
   assert.match(body, /liquidity_depth_end_time\(sessionState\.sessionEndTime, storedEndTime\)/);
-  assert.match(body, /bool projectToSessionEnd = na\(storedEndTime\)/);
+  assert.match(body, /bool endAtSession = na\(storedEndTime\) or storedEndTime >= sessionState\.sessionEndTime/);
   assert.doesNotMatch(source, /forecastOnly/);
 });
 
@@ -208,8 +209,8 @@ test('LD visibility depends on activation or Forecast LD but projection is per l
   assert.equal(visible({ activated: false }, true), true);
   assert.equal(visible({ activated: true }, false), true);
   assert.equal(visible({ activated: true }, true), true);
-  assert.match(body, /for levelIndex[^\n]+\n[\s\S]*bool projectToSessionEnd = na\(storedEndTime\)/);
-  assert.doesNotMatch(body, /projectToSessionEnd = [^\n]*(?:forecastEnabled|activated)/);
+  assert.match(body, /for levelIndex[^\n]+\n[\s\S]*bool endAtSession = na\(storedEndTime\) or storedEndTime >= sessionState\.sessionEndTime/);
+  assert.doesNotMatch(body, /endAtSession = [^\n]*(?:forecastEnabled|activated)/);
 });
 
 test('Forecast LD for the next intraday occurrence uses upcoming bounds and forecast edges', () => {
@@ -226,9 +227,9 @@ test('Forecast LD for the next intraday occurrence uses upcoming bounds and fore
 
 test('open LD lines, connectors and labels share the profile time coordinates on Range charts', () => {
   const body = functionBody('draw_liquidity_depth_side');
-  assert.match(body, /make_horizontal_line\(projectToSessionEnd, startTime, startIndex, endTime, endIndex,/);
-  assert.match(body, /make_liquidity_depth_connector\(projectToSessionEnd, startTime, startIndex,/);
-  assert.match(body, /make_liquidity_depth_label\(projectToSessionEnd, startTime, startIndex, endTime, endIndex,/);
+  assert.match(body, /make_horizontal_line\(endAtSession, startTime, startIndex, endTime, endIndex,/);
+  assert.match(body, /make_liquidity_depth_connector\(endAtSession, startTime, startIndex,/);
+  assert.match(body, /make_liquidity_depth_label\(endAtSession, startTime, startIndex, endTime, endIndex,/);
   for (const helper of ['make_liquidity_depth_connector', 'make_liquidity_depth_label']) {
     assert.match(functionBody(helper), /xloc=drawing_xloc\(timeBased\)/);
     assert.doesNotMatch(functionBody(helper), /drawing_x(?:loc)?\([^\n]*false\)/);
@@ -290,18 +291,16 @@ test('activated depth draws retrospectively from the matching profile edge', () 
   assert.doesNotMatch(drawBody, /startIndex = sideState\.activationIndex/);
 });
 
-test('activation is session-bound while activated levels track through the NY 16:00 cutoff', () => {
-  const cutoffBody = functionBody('liquidity_depth_cutoff_time');
-  assert.match(cutoffBody, /hour\(sessionStartTime, NY_TIMEZONE\) >= MARKET_CLOSE_HOUR \? 1 : 0/);
-  assert.match(cutoffBody, /dayofmonth\(sessionStartTime, NY_TIMEZONE\) \+ cutoffDayOffset, MARKET_CLOSE_HOUR, 0, 0/);
+test('activation and mitigation are session-bound and open levels stop at the profile end', () => {
   const body = functionBody('finalize_liquidity_depth_side');
-  assert.match(body, /chart\.is_range \? nz\(sessionState\.lastEligibleTime, sideState\.activationTime\) : sessionState\.cutoffTime/);
+  assert.match(body, /int finalTime = sessionState\.sessionEndTime/);
   assert.match(body, /nz\(sessionState\.lastEligibleIndex, sideState\.activationIndex\)/);
   const updateBody = functionBody('update_liquidity_depth_profile');
-  assert.match(updateBody, /bool trackingWindowOpen = profileStarted and time < currentSession\.cutoffTime/);
-  assert.match(updateBody, /bool activationWindowOpen = trackingWindowOpen and time < profileRuntime\.endTime/);
-  assert.match(updateBody, /update_liquidity_depth_side\(currentSession\.highSide, currentSession\.highAnchor, true, high, activationWindowOpen,/);
-  assert.match(updateBody, /update_liquidity_depth_side\(currentSession\.lowSide, currentSession\.lowAnchor, false, low, activationWindowOpen,/);
+  assert.match(updateBody, /bool trackingWindowOpen = profileStarted and time < currentSession\.sessionEndTime/);
+  assert.match(updateBody, /update_liquidity_depth_side\(currentSession\.highSide, currentSession\.highAnchor, true, high, true,/);
+  assert.match(updateBody, /update_liquidity_depth_side\(currentSession\.lowSide, currentSession\.lowAnchor, false, low, true,/);
+  assert.match(updateBody, /if time >= currentSession\.sessionEndTime\n            finalize_liquidity_depth_session\(currentSession\)/);
+  assert.doesNotMatch(source, /liquidity_depth_cutoff_time|cutoffTime|MARKET_CLOSE_HOUR|lastEligibleTime/);
 });
 
 test('presentation follows Pulse Today tiers and dual chart coordinates', () => {
@@ -313,7 +312,7 @@ test('presentation follows Pulse Today tiers and dual chart coordinates', () => 
   assert.match(functionBody('liquidity_depth_level_style'), /levelIndex == 0 \? line\.style_dashed : line\.style_dotted/);
   assert.match(functionBody('liquidity_depth_profile_name'), /sourceLabel == OVERNIGHT_CHART_LABEL \? OVERNIGHT_SLOT_NAME : sourceLabel/);
   assert.match(functionBody('make_liquidity_depth_connector'), /color\.new\(profileColor, 80\).*width=1, style=line\.style_dashed/s);
-  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(projectToSessionEnd,/);
+  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(endAtSession,/);
   assert.match(functionBody('make_liquidity_depth_label'), /drawing_x\(labelTime, labelIndex, timeBased\)/);
 });
 
@@ -343,11 +342,45 @@ test('scheduled profile requests scale to configured lookback and history', () =
   assert.equal(source.match(/fetch_intraday_profile_data\(/g)?.length, 7);
   const combinedBody = functionBody('scheduled_intraday_request_bars');
   assert.equal(combinedBody.match(/math\.max\(/g)?.length, 5);
-  assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : historyLimit/);
+  assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : math\.max\(historyLimit, fibHistoryLimit \+ 1\)/);
   assert.equal(source.match(/profile_request_history_limit\(latestOnly,/g)?.length, 11);
   assert.equal(source.match(/SourceRequestBars = scheduled_profile_request_bars\(/g)?.length, 6);
   assert.match(functionBody('scheduled_profile_tail_enabled'), /bar_index >= last_bar_index - requestBars \+ 1/);
   assert.equal(functionBody('fetch_intraday_profile_data').match(/scheduled_profile_tail_enabled\(/g)?.length, 1);
+});
+
+test('Fibonacci history uses one shared amount with independent profile selections', () => {
+  assert.match(source, /GROUP_FIB_HISTORY\s+= "Fibonacci: History"/);
+  assert.match(source, /GROUP_FIB_DEFAULT_LEVELS = "Fibonacci: Default Levels"/);
+  assert.match(source, /GROUP_FIB_ALTERNATIVE_LEVELS = "Fibonacci: Alternative Levels"/);
+  assert.match(source, /GROUP_FIB_PALETTE\s+= "Fibonacci: Colors & Key Labels"/);
+  assert.match(source, /GROUP_FIB_LABELS\s+= "Fibonacci: Labels"/);
+
+  assert.match(source, /^fibHistoryAmount = input\.int\(1, "History", inline="fib_history_options", group=GROUP_FIB_HISTORY, active=fibInputsActive, minval=1, maxval=FIB_HISTORY_MAX\)$/m);
+  assert.match(source, /^fibTrailing = input\.bool\(false, "Trailing", inline="fib_history_options", group=GROUP_FIB_HISTORY/m);
+
+  for (const [profileName, inlineGroup] of [
+    ['slot1', 'fib_history_profiles'],
+    ['slot2', 'fib_history_profiles'],
+    ['weeklyProfile', 'fib_history_profiles'],
+    ['monthlyProfile', 'fib_history_profiles'],
+    ['dailyProfile', 'fib_history_profiles'],
+    ['overnight', 'fib_history_intraday_profiles'],
+    ['nyEarly', 'fib_history_intraday_profiles'],
+    ['nyAm', 'fib_history_intraday_profiles'],
+    ['nyPm', 'fib_history_intraday_profiles'],
+    ['ivb', 'fib_history_intraday_profiles'],
+    ['ivbPlus', 'fib_history_intraday_profiles'],
+  ]) {
+    assert.match(source, new RegExp(`^${profileName}FibHistory = input\\.bool\\(false,`, 'm'));
+    assert.match(source, new RegExp(`^${profileName}FibHistory = [^\\n]+inline="${inlineGroup}"`, 'm'));
+    assert.match(source, new RegExp(`^int ${profileName}FibHistoryLimit = ${profileName}FibHistory \\? fibHistoryAmount : 0$`, 'm'));
+  }
+
+  assert.doesNotMatch(source, /(?:slot1|slot2|weeklyProfile|monthlyProfile|dailyProfile|overnight|nyEarly|nyAm|nyPm|ivb|ivbPlus)FibHistoryAmount/);
+  assert.match(functionBody('fib_history_zone_request'), /latestOnlyEnabled \? 0 : fibHistoryN/);
+  assert.equal(source.match(/fibHistoryLimit=/g)?.length, 7);
+  assert.doesNotMatch(source, /fibHistoryInput|FIB_HISTORY_OFF/);
 });
 
 test('disabled HTF profiles cannot seed a one-bar Daily request', () => {
