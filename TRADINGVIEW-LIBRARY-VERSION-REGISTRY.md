@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-20
+Updated: 2026-09-21
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 9 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 10 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -119,6 +119,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 7 | Published · loaded · tested · approved | Exposes host-controlled profile-midpoint line width from 1–4, defaulting to 2 | `aeeb44bb402feb99ce4f834a118973b25c6cfcac00e77bbf84369f5f37c33910` |
 | LegilimensPresentationLibrary | 8 | Published · loaded · tested · approved | Fixes profile-midpoint line width at 3 and removes the midpointWidth field from LevelSettings | `a1e4a6f9b0c0ca6585975e78c909a88cdb7c0b90785baaca44304ff5094003b4` |
 | LegilimensPresentationLibrary | 9 | Published · loaded · tested · approved | Batches compatible delta/volume polylines and derives history capacity from drawing settings | `230aa22148bebc33f9daf376c2a9043b603ddb5688009842ccbca501b73dba09` |
+
+| LegilimensPresentationLibrary | 10 | Published · loaded · tested · approved | Adds developing visibility controls, dotted tiers with Extend Unmitigated, and highest-delta group superscripts | `1267395a9732a97a0a0d76025f79da4c56090bd1287ee87416026cda9fd6749f` |
 
 ## Publication-instruction log
 
@@ -223,6 +225,10 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-20-01 | 2026-09-20 | LegilimensPresentationLibrary | 7 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/7`, then compile `indicators/21-legilimens/code/legilimens.pine` against Profile `/4`, Orchestration `/2`, and Presentation `/7`; verify the Midpoint Line Width picker accepts 1–4, defaults to 2, changes only profile-midpoint thickness, and works across session, rolling, fixed, Weekly, and Monthly profiles on time and Range charts | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-20-02 | 2026-09-20 | LegilimensPresentationLibrary | 8 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/8`, then compile `indicators/21-legilimens/code/legilimens.pine` against Profile `/4`, Orchestration `/2`, and Presentation `/8`; verify the removed Width picker, fixed midpoint width 3, and Midpoint Line On/Off across session, rolling, fixed, Weekly, and Monthly profiles on NQ time and Range charts, with other levels unchanged | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-20-03 | 2026-09-20 | LegilimensPresentationLibrary | 9 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/9`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/9`. Compare 24, 48, and 50 requested history on NQ 1-minute, 5-minute Replay, and Range charts; verify configured-budget trimming, current-profile priority, combined NY + IVB, both palettes, four placements, delta filters, Histogram On/Off, and no polygon bridges or missing tiers. Compare repeated Pine Profiler timings before accepting a practical maximum | `PUBLISHED_TESTED_APPROVED` |
+| PUB-2026-09-21-01 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/10`. On NQ 5-minute Replay and Range charts, test FOMC (Extended Off/On, scheduled dates and Force On) and Overnight + NY Early with developing contents On/Off and inner frames/titles On/Off; verify completed profiles remain visible after the cutoff | `SUPERSEDED_BEFORE_PUBLICATION` |
+| PUB-2026-09-21-02 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. Test developing visibility for FOMC and Overnight + NY Early on NQ 5-minute Replay/Range; verify FOMC Extended On forces dotted delta-tier lines, Off restores the chosen style, and other sources including a Fixed Range overlay retain their own style | `WITHDRAWN_USER_CORRECTION` |
+| PUB-2026-09-21-03 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the corrected `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. On NQ 5-minute Replay/Range, test FOMC and Overnight developing visibility, then verify Extend Unmitigated On forces dotted delta-tier lines across profiles regardless of the selected tier style; Off restores that style. Check regular and extended tier lines, mitigation, and a simultaneous Fixed Range overlay | `SUPERSEDED_BEFORE_PUBLICATION` |
+| PUB-2026-09-21-04 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. Test NQ 5-minute Replay/Range with Highest Delta Levels and dots On: groups containing the widest positive/negative row receive a superscript plus/minus on their existing marker, including merged and extended groups. Check Fib glyphs, hidden sides, tied extremes, Highest Delta Levels Off, and ungrouped highest-delta outlines. Also verify FOMC/Overnight developing visibility and Extend Unmitigated dotted tiers | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -240,13 +246,21 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
 - Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
 - Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
-- Legilimens current handoff: Presentation `/9` is published, loaded, tested, and approved by the user; the development host imports Profile `/4`, Orchestration `/2`, and Presentation `/9`. Compatible completed profiles share delta/volume polylines, with one batching path used for reservation and rendering. The history dropdown offers every integer from 1–50 requested prior profiles; retention and initial admission follow the configured line/label/box budget, then shared-polyline cost can trim additional oldest history. Current profiles remain protected. Optional histograms require the complete selected set to fit after core drawings. Selected Tier Outliers reserves the outlier superset conservatively. Row strengths and value levels are reused only within the render pass; there is no persistent analytics cache. The user reports the current maximum works and approved this release for commit. No exhaustive configuration coverage or measured Pine Profiler speedup is claimed.
+- Legilimens current handoff: Presentation `/10` is published, loaded, tested, and approved by the user on 2026-09-21, with the host importing Profile `/4`, Orchestration `/2`, and Presentation `/10`. FOMC and Overnight + NY Early now have independent developing-content toggles, both default On, and participate in the shared inner-frame/title option. Host profile selection and library drawing visibility use the same setting. Hidden developing profiles continue accumulating data and completed profiles retain normal rendering. Extend Unmitigated On forces dotted delta-tier lines across all sources regardless of the selected tier style. Off restores the selected style. FOMC Extended does not affect styling; the mistaken source override was removed. When Highest Delta Levels is On, a visible delta-tier group containing the profile's strongest positive or negative row appends a superscript plus or minus to its existing marker. Membership survives grouping and extended-zone drawing; ties retain the existing first-row choice. Dots Off still hides all markers. Ungrouped highest-delta outlines remain unchanged. The 1–50 history dropdown and batching behavior are unchanged. Publication, host loading, testing, and approval are user-confirmed by the commit instruction; no independent TradingView validation is claimed.
 
 ## Pending release notes
 
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/10`
+
+```text
+Adds developing-profile visibility controls for FOMC and Overnight + NY Early. Each can show its contents, show only its inner frame and titles, or stay hidden until completion. Both new content toggles default On. Extend Unmitigated automatically uses dotted delta-tier lines across profiles; disabling it restores the selected style. With Highest Delta Levels enabled, tier groups containing the largest positive or negative delta row receive a small ⁺ or ⁻ beside their existing marker.
+```
+
+Presentation `/10` was published before loading the host with Profile `/4`, Orchestration `/2`, and Presentation `/10`. Publication, loading, testing, and approval are user-confirmed. No new library publication is required.
 
 ### LegilimensPresentationLibrary `/9`
 
@@ -285,6 +299,8 @@ Adds an optional host-supplied frame-title prefix. Legilimens uses it to show �
 ```
 
 ## Current host validation
+
+- Presentation `/10`: all 23 local tests pass, including content/shell/hidden visibility cases, host wiring for both new controls, and the global Extend Unmitigated dotted tier-style override and its regular/extended rendering paths. Highest-delta checks cover raw magnitude, ties, absent sides, disabled visibility, nonrepresentative merged members, all three marker glyphs, and regular/extended propagation. Pine identifier/title, registry, and whitespace checks pass. These checks do not establish TradingView compilation or visual behavior. The user confirmed publication, host loading, testing, and approval with the 2026-09-21 commit instruction; chart validation was user-performed, not independently verified by Codex.
 
 - Presentation `/9`: 17 local tests pass (10 batching/capacity tests and seven FOMC tests), along with Pine identifier/title, registry, and scoped whitespace checks. The tests execute source-translated batching functions with platform adapters, checking fill coverage, point counts, all placements and palettes, irregular chart times, selected-tier reservation, current/source/overlap separation, and heavy/light drawing capacities. They do not establish Pine compilation or runtime speed. The user confirmed publication, host loading, testing, and approval with the commit request. Exhaustive NQ time/Range, Replay, rollover, and repeated Pine Profiler comparison are not independently verified. Check requested versus displayed history, missing tiers or histograms, overlapping shapes, alternate colors, and object pressure; no new practical maximum is promised.
 

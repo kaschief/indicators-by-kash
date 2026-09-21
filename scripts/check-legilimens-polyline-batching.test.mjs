@@ -27,7 +27,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -37,12 +37,12 @@ for (const name of ['profileDeltaPlusColor', 'profileDeltaMinusColor', 'profileD
 }
 const expression = value => value.replace(/array\.new<[^>]+>/g, 'array.new')
   .replace(/\bna\b(?!\s*\()/g, 'null').replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/:=/g, '=');
-for (const typeName of ['ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem']) {
-  const body = source.match(new RegExp(`^type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
+for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem']) {
+  const body = source.match(new RegExp(`^(?:export )?type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
   const fields = body.trim().split('\n').map(line => line.trim().match(/^\S+ (\w+)(?: = (.+))?$/).slice(1));
   context[typeName] = { new: (...values) => Object.fromEntries(fields.map(([key, fallback], index) => [key, index < values.length ? values[index] : fallback ? vm.runInContext(expression(fallback), context) : null])) };
 }
-function compile(name) {
+function compile(name, returnsValue = true) {
   const match = source.match(new RegExp(`^(?:export )?${name}\\(([^\\n]*)\\) =>\\n((?:[ \\t]+[^\\n]*\\n|\\n)+)`, 'm'));
   assert.ok(match, name);
   const parameters = match[1].split(',').map(value => value.trim().split(' ').at(-1)).join(',');
@@ -64,7 +64,7 @@ function compile(name) {
       block = false;
       line = line.replace(/^(?:array<[^>]+>|[\w.]+) (\w+) = /, 'let $1 = ').replace(/^\[([^\]]+)\] = /, 'let [$1] = ');
       line = line.replace(/polyline\.new\(layer.points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new\(layer.fillColor, 100\), fill_color=layer.fillColor\)/, 'polyline.new(layer.points, layer.fillColor)');
-      if (index === lines.length - 1 || (name === 'deltaOuterTime' && line.startsWith('chartTimeAtOffset('))) line = `return ${line}`;
+      if (returnsValue && (index === lines.length - 1 || (name === 'deltaOuterTime' && line.startsWith('chartTimeAtOffset(')))) line = `return ${line}`;
       line += ';';
     }
     output.push(line);
@@ -73,7 +73,11 @@ function compile(name) {
   while (blocks.length) { output.push('}'); blocks.pop(); }
   vm.runInContext(`function ${name}(${parameters}) {\n${output.join('\n')}\n}`, context, { filename: `${name}.pine-adapter.js` });
 }
-for (const name of ['visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+for (const name of ['highestDeltaRow', 'highestDeltaMarkerGlyph', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+
+compile('queueOutlierPeaks', false);
+context.levelMarkerTime = value => value;
+context.legilimensProfile.OutlierCandidate = { new: (...values) => values };
 
 const config = (overrides = {}) => ({ limits: { polylines: 100 }, delta: { visibleRows: context.OPTION_ALL, rowFilter: context.OPTION_ALL, showHistogram: true, histogramWidthPercent: 20, ...overrides } });
 function profile(index, count = 12, low = 100) {
@@ -240,4 +244,90 @@ test('rebuilding live or Replay geometry does not reuse stale data for unchanged
   const next = prepare([value])[0];
   assert.notDeepEqual(first.regions, next.regions);
   assert.ok(next.regions.every(region => region.points.every(point => point.price >= 200)));
+});
+
+
+test('new session profiles follow the existing content, shell-only, and hidden visibility states', () => {
+  for (const key of [context.SOURCE_FOMC, context.SOURCE_OVERNIGHT_NINE, context.SOURCE_NY_EARLY]) {
+    for (const developingContentVisible of [false, true]) for (const showDevelopingShell of [false, true]) {
+      const style = { key, developingContentVisible };
+      assert.equal(context.developingControlled(style), true);
+      assert.equal(context.developingProfileVisible(style, { showDevelopingShell }), developingContentVisible || showDevelopingShell);
+    }
+  }
+  for (const key of ['Fixed', 'Rolling', 'Weekly', 'Monthly']) {
+    assert.equal(context.developingControlled({ key }), false);
+    assert.equal(context.developingProfileVisible({ key, developingContentVisible: false }, { showDevelopingShell: false }), true);
+  }
+});
+
+test('FOMC and overnight visibility inputs reach both profile selection and rendering', () => {
+  const shellInput = host.split('\n').find(row => row.startsWith('showDevelopingShell ='));
+  for (const [prefix, toggle] of [['fomc', 'showFomcDevelopingContent'], ['overnightNine', 'showOvernightNineDevelopingContent']]) {
+    const inputRow = host.split('\n').find(row => row.startsWith(`${toggle} =`));
+    assert.ok(inputRow.includes('input.bool(true,'));
+    assert.ok(inputRow.includes(`active=${prefix}Selected`));
+    assert.ok(shellInput.includes(`${prefix}Selected`));
+    const sourceRow = host.split('\n').find(row => row.includes(`SourceSpec ${prefix}PresentationSource =`));
+    assert.ok(sourceRow.includes(`${prefix}Selected, ${toggle},`));
+    assert.ok(host.includes(`selectSessionProfiles(priorProfilesToShow, ${prefix}InSession, legilimensPresentation.developingProfileVisible(${prefix}PresentationSource, presentationConfig), ${prefix}Anchor`));
+  }
+});
+
+
+test('Extend Unmitigated forces dotted tier lines regardless of the selected style', () => {
+  for (const chosen of [context.STYLE_DASHED, context.STYLE_DOTTED]) {
+    for (const extendUnmitigated of [false, true]) {
+      const settings = { delta: { tierLineStyle: chosen }, interactions: { extendUnmitigated } };
+      assert.equal(context.deltaTierLineStyle(settings, context.STYLE_DASHED), extendUnmitigated ? context.STYLE_DOTTED : chosen);
+    }
+  }
+  assert.doesNotMatch(host + source, /tierLineStyleOverride/);
+  assert.match(source, /string lineStyle = deltaTierLineStyle\(config, appearanceLineStyle\(appearance\)\)/);
+  assert.match(source, /PendingMitigatedZone.new\([^\n]+lineStyle, levelRank/);
+  assert.match(source, /queueRightLine\([^\n]+lineStyle, levelRank/);
+});
+
+
+function queuedPeaks(rowDeltas, peaks, showHighestDeltaLevels = true) {
+  const value = profile(0, rowDeltas.length);
+  value.data.rowDeltas = rowDeltas;
+  const state = { pendingOutlierLevels: [] };
+  context.queueOutlierPeaks(state, value, { key: 'FOMC' }, peaks, '', 100, 1, false, {
+    delta: { showTiers: true, qualifyDeltaTiersByFib: false, showHighestDeltaLevels },
+  });
+  return { value, state };
+}
+const peak = (buySide, firstRow, lastRow = firstRow) => ({ buySide, firstRow, lastRow, price: 100 + firstRow, zoneLow: 100 + firstRow, zoneHigh: 101 + lastRow, delta: buySide ? 10 : -10, strength: 2 });
+
+test('highest-row flags use raw delta magnitude, preserve tie handling, and respect Highest Delta Levels', () => {
+  const peaks = [peak(true, 0), peak(true, 2), peak(false, 3, 4), peak(true, 5)];
+  const { value, state } = queuedPeaks([3, -4, 12, -6, -20, 12], peaks);
+  assert.equal(context.highestDeltaRow(value, true), 2);
+  assert.equal(context.highestDeltaRow(value, false), 4);
+  assert.deepEqual(Array.from(state.pendingOutlierLevels, item => item.containsHighestDeltaRow), [false, true, true, false]);
+  assert.ok(queuedPeaks([3, -4, 12, -6, -20, 12], peaks, false).state.pendingOutlierLevels.every(item => !item.containsHighestDeltaRow));
+  assert.equal(context.highestDeltaRow(queuedPeaks([0, -4, -12], []).value, true), -1);
+  assert.ok(queuedPeaks([3, -4, 12], [peak(true, 0)]).state.pendingOutlierLevels.every(item => !item.containsHighestDeltaRow));
+});
+
+test('a merged tier keeps the highest-row flag from any member, including a nonrepresentative member', () => {
+  const { state } = queuedPeaks([3, -4, 12, -6, -20, 5], [peak(true, 0), peak(true, 2), peak(false, 3, 4), peak(true, 5)]);
+  const group = (memberIndices, buySide, firstRow, lastRow) => ({ memberIndices, representativeIndex: memberIndices[0], price: 101, zoneLow: 100, zoneHigh: 106, buySide, firstRow, lastRow, strengthRank: 1 });
+  context.legilimensProfile.rankOutlierCandidates = () => [group([0, 1], true, 0, 2), group([2], false, 3, 4), group([3], true, 5, 5)];
+  const [ranked] = context.rankPendingOutlierLevels(state, { tickSize: .25 }, { levels: { mergeOverlaps: true, mergeDistancePercent: 0 }, delta: { visibleTierCount: 5 } });
+  assert.deepEqual(Array.from(ranked, item => item.containsHighestDeltaRow), [true, true, false]);
+  assert.equal(state.pendingOutlierLevels.length, 0);
+  for (const glyph of ['●', '◆', '✦']) {
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[0].containsHighestDeltaRow, ranked[0].buySide), glyph + '⁺');
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[1].containsHighestDeltaRow, ranked[1].buySide), glyph + '⁻');
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[2].containsHighestDeltaRow, ranked[2].buySide), glyph);
+  }
+});
+
+test('regular and extended tier markers share the decorated glyph without adding drawing objects', () => {
+  assert.match(source, /string markerGlyph = highestDeltaMarkerGlyph\(baseMarkerGlyph, ranked.containsHighestDeltaRow, ranked.buySide\)/);
+  assert.match(source, /PendingMitigatedZone.new\([^\n]+markerGlyph, markerLabel/);
+  assert.match(source, /queueLevelMarker\(state, ranked.price, ranked.markerTime, markerGlyph, markerLabel/);
+  assert.match(source, /queueLevelMarker\(state, pending.price, levelMarkerTime\(rightTime\), pending.markerGlyph/);
 });
