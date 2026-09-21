@@ -145,7 +145,6 @@ export type LevelSettings
 export type InteractionSettings
     bool extendUnmitigated
     string mitigationWindow
-    bool showRoleReversal
     int retainedProfiles
 
 export type PresentationConfig
@@ -161,10 +160,8 @@ export type BarContext
     int barTime
     int barEndTime
     int barIndex
-    float barOpen
     float barHigh
     float barLow
-    float barClose
     float tickSize
     bool confirmed
     bool twentyFourSeven
@@ -173,10 +170,8 @@ export type BarContext
 export type PriceSamples
     array<int> startTimes
     array<int> endTimes
-    array<float> opens
     array<float> highs
     array<float> lows
-    array<float> closes
 
 export type SelectionBinding
     legilimensOrchestration.ProfileSelection selection
@@ -258,20 +253,6 @@ export type MitigatedZoneState
     float price
     int mitigatedTime
     bool available
-
-export type RoleReversalZoneState
-    string sourceName
-    int profileStartTime
-    int eligibilityTime
-    int expirationTime
-    float price
-    float zoneLow
-    float zoneHigh
-    int originalDirection
-    bool extendsUntilMitigated
-    bool armed
-    bool interacted
-    bool reversed
 
 export type PendingRightLabel
     float price
@@ -374,13 +355,11 @@ export type RenderState
     array<PendingRightLine> pendingRightLines
     array<MitigatedZoneState> mitigatedZoneStates
     array<ZoneTrackingProfileKey> mitigatedProfiles
-    array<RoleReversalZoneState> roleReversalZoneStates
-    array<ZoneTrackingProfileKey> roleReversalProfiles
     array<int> cachedChartTimes
     int chartTimesBuiltAtBar
 
 export newRenderState() =>
-    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<RoleReversalZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1)
+    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1)
 
 sourceSpec(array<SourceSpec> sources, string sourceName) =>
     SourceSpec found = na
@@ -407,12 +386,6 @@ sourceSelected(array<SourceSpec> sources, string sourceName) =>
 
 mitigationEnabled(array<SourceSpec> sources, string sourceName, PresentationConfig config) =>
     config.interactions.extendUnmitigated and unmitigatedEligible(sourceName) and sourceSelected(sources, sourceName)
-
-roleReversalEnabled(array<SourceSpec> sources, string sourceName, PresentationConfig config) =>
-    config.interactions.showRoleReversal and sourceName != SOURCE_ROLLING and sourceSelected(sources, sourceName)
-
-zoneTrackingEnabled(array<SourceSpec> sources, string sourceName, PresentationConfig config) =>
-    mitigationEnabled(sources, sourceName, config) or roleReversalEnabled(sources, sourceName, config)
 
 toLineStyle(string styleName) =>
     styleName == STYLE_DASHED ? line.style_dashed : styleName == STYLE_DOTTED ? line.style_dotted : line.style_solid
@@ -599,45 +572,6 @@ registerMitigatedZone(RenderState state, string sourceName, int profileStartTime
         removeMitigatedProfile(state, sourceName, expiredProfileStartTime)
     if mitigatedZoneStateIndex(state, sourceName, profileStartTime, eligibilityTime, price) < 0
         array.push(state.mitigatedZoneStates, MitigatedZoneState.new(sourceName, profileStartTime, eligibilityTime, price, na, true))
-
-roleReversalZoneStateIndex(RenderState state, string sourceName, int profileStartTime, float price, int originalDirection) =>
-    int foundIndex = -1
-    int count = array.size(state.roleReversalZoneStates)
-    if count > 0
-        for stateIndex = 0 to count - 1
-            RoleReversalZoneState zoneState = array.get(state.roleReversalZoneStates, stateIndex)
-            if zoneState.sourceName == sourceName and zoneState.profileStartTime == profileStartTime and zoneState.price == price and zoneState.originalDirection == originalDirection
-                foundIndex := stateIndex
-                break
-    foundIndex
-
-removeRoleReversalProfile(RenderState state, string sourceName, int profileStartTime) =>
-    int stateIndex = array.size(state.roleReversalZoneStates) - 1
-    while stateIndex >= 0
-        RoleReversalZoneState zoneState = array.get(state.roleReversalZoneStates, stateIndex)
-        if zoneState.sourceName == sourceName and zoneState.profileStartTime == profileStartTime
-            array.remove(state.roleReversalZoneStates, stateIndex)
-        stateIndex -= 1
-
-registerRoleReversalZone(RenderState state, string sourceName, int profileStartTime, int eligibilityTime, int expirationTime, float price, float zoneLow, float zoneHigh, int originalDirection, bool extendsUntilMitigated, PresentationConfig config) =>
-    int expiredProfileStartTime = registerZoneTrackingProfile(state.roleReversalProfiles, sourceName, profileStartTime, config.interactions.retainedProfiles)
-    if not na(expiredProfileStartTime)
-        removeRoleReversalProfile(state, sourceName, expiredProfileStartTime)
-    int stateIndex = roleReversalZoneStateIndex(state, sourceName, profileStartTime, price, originalDirection)
-    if stateIndex < 0
-        array.push(state.roleReversalZoneStates, RoleReversalZoneState.new(sourceName, profileStartTime, eligibilityTime, expirationTime, price, zoneLow, zoneHigh, originalDirection, extendsUntilMitigated, false, false, false))
-    else
-        RoleReversalZoneState zoneState = array.get(state.roleReversalZoneStates, stateIndex)
-        zoneState.eligibilityTime := eligibilityTime
-        zoneState.expirationTime := expirationTime
-        zoneState.zoneLow := zoneLow
-        zoneState.zoneHigh := zoneHigh
-        zoneState.extendsUntilMitigated := extendsUntilMitigated
-        array.set(state.roleReversalZoneStates, stateIndex, zoneState)
-
-roleReversalZoneIsReversed(RenderState state, string sourceName, int profileStartTime, float price, int originalDirection) =>
-    int stateIndex = roleReversalZoneStateIndex(state, sourceName, profileStartTime, price, originalDirection)
-    stateIndex >= 0 and array.get(state.roleReversalZoneStates, stateIndex).reversed
 
 flushPendingRightLines(RenderState state, PresentationConfig config, BarContext context) =>
     int pendingCount = array.size(state.pendingRightLines)
@@ -897,26 +831,6 @@ mitigatedZoneEndTime(RenderState state, string sourceName, int profileStartTime,
         zoneEndTime := zoneState.available ? na(zoneState.mitigatedTime) ? math.max(eligibilityTime, context.barEndTime) : zoneState.mitigatedTime : eligibilityTime
     zoneEndTime
 
-advanceRoleReversalState(RoleReversalZoneState zoneState, float sampleOpen, float sampleHigh, float sampleLow, float sampleClose) =>
-    if not zoneState.reversed and not na(sampleOpen) and not na(sampleHigh) and not na(sampleLow) and not na(sampleClose)
-        bool originalSideObserved = zoneState.originalDirection < 0 ? sampleOpen <= zoneState.zoneLow or sampleClose <= zoneState.zoneLow : sampleOpen >= zoneState.zoneHigh or sampleClose >= zoneState.zoneHigh
-        zoneState.armed := zoneState.armed or originalSideObserved
-        bool zoneTouched = sampleHigh >= zoneState.zoneLow and sampleLow <= zoneState.zoneHigh
-        zoneState.interacted := zoneState.interacted or zoneState.armed and zoneTouched
-        bool broken = zoneState.originalDirection < 0 ? sampleClose > zoneState.zoneHigh : sampleClose < zoneState.zoneLow
-        zoneState.reversed := zoneState.interacted and broken
-    zoneState
-
-advanceRoleReversalFromSamples(RoleReversalZoneState zoneState, PriceSamples samples, int activeEndTime) =>
-    int sampleCount = math.min(math.min(math.min(array.size(samples.startTimes), array.size(samples.endTimes)), math.min(array.size(samples.opens), array.size(samples.highs))), math.min(array.size(samples.lows), array.size(samples.closes)))
-    if sampleCount > 0
-        for sampleIndex = 0 to sampleCount - 1
-            int sampleTime = array.get(samples.startTimes, sampleIndex)
-            int sampleEndTime = array.get(samples.endTimes, sampleIndex)
-            if sampleTime >= zoneState.eligibilityTime and sampleEndTime <= activeEndTime
-                advanceRoleReversalState(zoneState, array.get(samples.opens, sampleIndex), array.get(samples.highs, sampleIndex), array.get(samples.lows, sampleIndex), array.get(samples.closes, sampleIndex))
-    zoneState
-
 firstIntrabarTouchEnd(PriceSamples samples, int eligibilityTime, float price, string windowMode, bool twentyFourSeven) =>
     int touchEndTime = na
     int sampleCount = math.min(math.min(array.size(samples.startTimes), array.size(samples.endTimes)), math.min(array.size(samples.highs), array.size(samples.lows)))
@@ -966,39 +880,9 @@ export requiredBoundaryTimeframe(RenderState state, string intrabarTimeframe, Ba
                         requestedTimeframe := includeBoundaryRequest(requestedTimeframe, activeStartTime)
                     if activeEndTime < context.barEndTime and not intrabarBoundaryIsPrecise(intrabarTimeframe, activeEndTime)
                         requestedTimeframe := includeBoundaryRequest(requestedTimeframe, activeEndTime)
-    int roleCount = array.size(state.roleReversalZoneStates)
-    if config.interactions.showRoleReversal and roleCount > 0
-        for stateIndex = 0 to roleCount - 1
-            RoleReversalZoneState zoneState = array.get(state.roleReversalZoneStates, stateIndex)
-            int activeEndTime = zoneState.extendsUntilMitigated ? mitigatedZoneEndTime(state, zoneState.sourceName, zoneState.profileStartTime, zoneState.price, zoneState.expirationTime, context) : zoneState.expirationTime
-            bool overlaps = context.barEndTime > zoneState.eligibilityTime and context.barTime < activeEndTime
-            if not zoneState.reversed and overlaps
-                if context.barTime < zoneState.eligibilityTime and context.barEndTime > zoneState.eligibilityTime and not intrabarBoundaryIsPrecise(intrabarTimeframe, zoneState.eligibilityTime)
-                    requestedTimeframe := includeBoundaryRequest(requestedTimeframe, zoneState.eligibilityTime)
-                if context.barTime < activeEndTime and context.barEndTime > activeEndTime and not intrabarBoundaryIsPrecise(intrabarTimeframe, activeEndTime)
-                    requestedTimeframe := includeBoundaryRequest(requestedTimeframe, activeEndTime)
     requestedTimeframe
 
 export updateInteractions(RenderState state, PriceSamples profileSamples, PriceSamples boundarySamples, string intrabarTimeframe, BarContext context, PresentationConfig config) =>
-    if config.interactions.showRoleReversal and context.confirmed and not na(context.barOpen) and not na(context.barHigh) and not na(context.barLow) and not na(context.barClose)
-        int count = array.size(state.roleReversalZoneStates)
-        if count > 0
-            for stateIndex = 0 to count - 1
-                RoleReversalZoneState zoneState = array.get(state.roleReversalZoneStates, stateIndex)
-                int activeEndTime = zoneState.extendsUntilMitigated ? mitigatedZoneEndTime(state, zoneState.sourceName, zoneState.profileStartTime, zoneState.price, zoneState.expirationTime, context) : zoneState.expirationTime
-                bool overlaps = context.barEndTime > zoneState.eligibilityTime and context.barTime < activeEndTime
-                if not zoneState.reversed and overlaps
-                    bool startBoundaryBar = context.barTime < zoneState.eligibilityTime and context.barEndTime > zoneState.eligibilityTime
-                    bool endBoundaryBar = context.barTime < activeEndTime and context.barEndTime > activeEndTime
-                    if startBoundaryBar or endBoundaryBar
-                        bool profilePrecise = (not startBoundaryBar or intrabarBoundaryIsPrecise(intrabarTimeframe, zoneState.eligibilityTime)) and (not endBoundaryBar or intrabarBoundaryIsPrecise(intrabarTimeframe, activeEndTime))
-                        if profilePrecise
-                            zoneState := advanceRoleReversalFromSamples(zoneState, profileSamples, activeEndTime)
-                        else
-                            zoneState := advanceRoleReversalFromSamples(zoneState, boundarySamples, activeEndTime)
-                    else
-                        zoneState := advanceRoleReversalState(zoneState, context.barOpen, context.barHigh, context.barLow, context.barClose)
-                    array.set(state.roleReversalZoneStates, stateIndex, zoneState)
     int mitigatedCount = array.size(state.mitigatedZoneStates)
     if mitigatedCount > 0
         for stateIndex = 0 to mitigatedCount - 1
@@ -1404,22 +1288,14 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             color markerColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceTextColor(appearance), qualified) : appearanceTextColor(appearance)
             string baseMarkerGlyph = config.delta.qualifyDeltaTiersByFib ? fibLocationMarkerGlyph(ranked.fibLocationGrade) : LEVEL_MARKER_GLYPH
             string markerGlyph = highestDeltaMarkerGlyph(baseMarkerGlyph, ranked.containsHighestDeltaRow, ranked.buySide)
-            bool roleReversed = config.interactions.showRoleReversal and roleReversalZoneIsReversed(state, ranked.sourceName, ranked.profileStartTime, ranked.price, direction)
-            color borderColor = markerColor
-            if roleReversed
-                DeltaTierAppearance reversedAppearance = deltaTierAppearance(not ranked.buySide, tier, source)
-                borderColor := appearanceTextColor(reversedAppearance)
-            int borderWidth = math.max(fibBorderWidth, roleReversed ? 1 : 0)
             if deltaTierSideVisible(ranked.buySide, config)
                 if registrationOnly
                     if extendPriorityZone
                         registerMitigatedZone(state, ranked.sourceName, ranked.profileStartTime, ranked.rightTime, ranked.price, config)
-                    if roleReversalEnabled(sources, ranked.sourceName, config)
-                        registerRoleReversalZone(state, ranked.sourceName, ranked.profileStartTime, ranked.lineStartTime, ranked.rightTime, ranked.price, ranked.zoneLow, ranked.zoneHigh, direction, extendPriorityZone, config)
                 else if extendPriorityZone
-                    array.push(state.pendingMitigatedZones, PendingMitigatedZone.new(ranked.price, ranked.zoneLow, ranked.zoneHigh, ranked.profileStartTime, ranked.lineStartTime, ranked.rightTime, zoneColor, borderWidth, borderColor, appearanceHasLine(appearance), lineColor, appearanceLineWidth(appearance), lineStyle, levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction, markerGlyph, markerLabel, markerColor, tierMarkerSize(tier)))
+                    array.push(state.pendingMitigatedZones, PendingMitigatedZone.new(ranked.price, ranked.zoneLow, ranked.zoneHigh, ranked.profileStartTime, ranked.lineStartTime, ranked.rightTime, zoneColor, fibBorderWidth, markerColor, appearanceHasLine(appearance), lineColor, appearanceLineWidth(appearance), lineStyle, levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction, markerGlyph, markerLabel, markerColor, tierMarkerSize(tier)))
                 else
-                    renderZoneFill(state, ranked.lineStartTime, ranked.rightTime, ranked.zoneLow, ranked.zoneHigh, zoneColor, borderWidth, borderColor, config)
+                    renderZoneFill(state, ranked.lineStartTime, ranked.rightTime, ranked.zoneLow, ranked.zoneHigh, zoneColor, fibBorderWidth, markerColor, config)
                     if appearanceHasLine(appearance)
                         queueRightLine(state, ranked.price, ranked.lineStartTime, ranked.rightTime, lineColor, appearanceLineWidth(appearance), lineStyle, levelRank, ranked.sourceName, ranked.tradingDayKey, ranked.historical, direction, context)
                     queueLevelMarker(state, ranked.price, ranked.markerTime, markerGlyph, markerLabel, markerColor, tierMarkerSize(tier), config)
@@ -1647,12 +1523,11 @@ export renderStandaloneProfile(RenderState state, legilimensOrchestration.Profil
     true
 
 export registerProfileZones(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
-    if zoneTrackingEnabled(sources, source.key, config)
+    if mitigationEnabled(sources, source.key, config)
         int sessionCloseTime = sessionOccurrenceClose(source, profile, false, context)
         int levelEndTime = sessionLevelEndpoint(source, sessionCloseTime, context)
         int sessionTradingDayKey = legilimensOrchestration.tradingDayKey(sessionCloseTime)
-        if mitigationEnabled(sources, source.key, config)
-            renderLowVolumeStructures(state, profile, source, "", levelEndTime, sessionTradingDayKey, true, true, sources, context, config)
+        renderLowVolumeStructures(state, profile, source, "", levelEndTime, sessionTradingDayKey, true, true, sources, context, config)
         if config.delta.showTiers
             array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
             array<legilimensProfile.OutlierPeak> outlierPeaks = legilimensProfile.collectOutlierPeaks(profile.data, strengths)
@@ -1664,7 +1539,7 @@ export registerProfileZones(RenderState state, legilimensOrchestration.Profile p
 export registerFinalizedProfiles(RenderState state, legilimensOrchestration.AnchorState anchor, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     int count = legilimensOrchestration.finalizedProfileCount(anchor)
     if count > 0
-        if zoneTrackingEnabled(sources, source.key, config)
+        if mitigationEnabled(sources, source.key, config)
             for profileIndex = 0 to count - 1
                 registerProfileZones(state, legilimensOrchestration.finalizedProfileAt(anchor, profileIndex), source, sources, context, config)
         legilimensOrchestration.clearFinalizedProfiles(anchor)

@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 10 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 11 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -121,6 +121,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 9 | Published · loaded · tested · approved | Batches compatible delta/volume polylines and derives history capacity from drawing settings | `230aa22148bebc33f9daf376c2a9043b603ddb5688009842ccbca501b73dba09` |
 
 | LegilimensPresentationLibrary | 10 | Published · loaded · tested · approved | Adds developing visibility controls, dotted tiers with Extend Unmitigated, and highest-delta group superscripts | `1267395a9732a97a0a0d76025f79da4c56090bd1287ee87416026cda9fd6749f` |
+
+| LegilimensPresentationLibrary | 11 | Published · loaded · tested · approved | Removes zone role reversal, its state and sampling fields; preserves mitigation and Fib borders | `764ae833480e99f79d3fa3a89307f2fbfec256aedbd43575832cb5f4611c85b8` |
 
 ## Publication-instruction log
 
@@ -229,6 +231,7 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-21-02 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. Test developing visibility for FOMC and Overnight + NY Early on NQ 5-minute Replay/Range; verify FOMC Extended On forces dotted delta-tier lines, Off restores the chosen style, and other sources including a Fixed Range overlay retain their own style | `WITHDRAWN_USER_CORRECTION` |
 | PUB-2026-09-21-03 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the corrected `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. On NQ 5-minute Replay/Range, test FOMC and Overnight developing visibility, then verify Extend Unmitigated On forces dotted delta-tier lines across profiles regardless of the selected tier style; Off restores that style. Check regular and extended tier lines, mitigation, and a simultaneous Fixed Range overlay | `SUPERSEDED_BEFORE_PUBLICATION` |
 | PUB-2026-09-21-04 | 2026-09-21 | LegilimensPresentationLibrary | 10 | Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/10`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/10`. Test NQ 5-minute Replay/Range with Highest Delta Levels and dots On: groups containing the widest positive/negative row receive a superscript plus/minus on their existing marker, including merged and extended groups. Check Fib glyphs, hidden sides, tied extremes, Highest Delta Levels Off, and ungrouped highest-delta outlines. Also verify FOMC/Overnight developing visibility and Extend Unmitigated dotted tiers | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-21-05 | 2026-09-21 | LegilimensPresentationLibrary | 11 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/11`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/11`. On NQ 5-minute Replay and Range charts, verify Zone Role Reversal is absent, crossed zones retain their original Fib border styling, and Extend Unmitigated still stops eligible levels at the first permitted touch. Check mitigation windows, session boundaries, Fixed Range, Rolling, and high history counts | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -246,13 +249,23 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens: Profile Orchestration Library `/1` is published but the host compile failed because the NY cutoff helper was not exported.
 - Legilimens: on 2026-09-09 the user confirmed no library has been published since the maturity feature started. Profile `/4` and Orchestration `/2` remain published; development and production imports both match those versions. Orchestration `/2` source has been restored to its recorded published fingerprint.
 - Legilimens `/3`: discarded before publication; the earlier publication instruction is withdrawn. The user subsequently removed the maturity feature entirely; no extraction or migration is planned.
-- Legilimens current handoff: Presentation `/10` is published, loaded, tested, and approved by the user on 2026-09-21, with the host importing Profile `/4`, Orchestration `/2`, and Presentation `/10`. FOMC and Overnight + NY Early now have independent developing-content toggles, both default On, and participate in the shared inner-frame/title option. Host profile selection and library drawing visibility use the same setting. Hidden developing profiles continue accumulating data and completed profiles retain normal rendering. Extend Unmitigated On forces dotted delta-tier lines across all sources regardless of the selected tier style. Off restores the selected style. FOMC Extended does not affect styling; the mistaken source override was removed. When Highest Delta Levels is On, a visible delta-tier group containing the profile's strongest positive or negative row appends a superscript plus or minus to its existing marker. Membership survives grouping and extended-zone drawing; ties retain the existing first-row choice. Dots Off still hides all markers. Ungrouped highest-delta outlines remain unchanged. The 1–50 history dropdown and batching behavior are unchanged. Publication, host loading, testing, and approval are user-confirmed by the commit instruction; no independent TradingView validation is claimed.
+- Legilimens last approved release: Presentation `/10` is published, loaded, tested, and approved by the user on 2026-09-21, with the host importing Profile `/4`, Orchestration `/2`, and Presentation `/10`. FOMC and Overnight + NY Early now have independent developing-content toggles, both default On, and participate in the shared inner-frame/title option. Host profile selection and library drawing visibility use the same setting. Hidden developing profiles continue accumulating data and completed profiles retain normal rendering. Extend Unmitigated On forces dotted delta-tier lines across all sources regardless of the selected tier style. Off restores the selected style. FOMC Extended does not affect styling; the mistaken source override was removed. When Highest Delta Levels is On, a visible delta-tier group containing the profile's strongest positive or negative row appends a superscript plus or minus to its existing marker. Membership survives grouping and extended-zone drawing; ties retain the existing first-row choice. Dots Off still hides all markers. Ungrouped highest-delta outlines remain unchanged. The 1–50 history dropdown and batching behavior are unchanged. Publication, host loading, testing, and approval are user-confirmed by the commit instruction; no independent TradingView validation is claimed.
+
+- Legilimens current handoff: Presentation `/11` is published, loaded, tested, and approved by the user on 2026-09-21. Development and production imports are Profile `/4`, Orchestration `/2`, and Presentation `/11`. The host-only quarter-marker prototype is abandoned and removed. Zone Role Reversal is removed from the host controls and library configuration, retained state, registration, boundary requests, update loop, and border overrides. Reversal-only open/close transport is removed from the presentation contracts and boundary sample request. Extend Unmitigated, its windows, existing Fib borders, profile calculations, and history budgeting remain. Publication was explicitly confirmed; host loading, testing, and approval are confirmed by the commit request under the repository rule. The principal completed an independent source review with no actionable findings. No independent TradingView validation is claimed.
 
 ## Pending release notes
 
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/11`
+
+```text
+Removes Zone Role Reversal and its tracking state. Delta zones retain their original Fib-qualified border styling after price crosses them. Extend Unmitigated and its trading-window behavior remain unchanged. Removes the abandoned 25% / 75% marker prototype from the host.
+```
+
+Presentation `/11` was published before the host using Profile `/4`, Orchestration `/2`, and Presentation `/11`. Publication, host loading, testing, and approval are user-confirmed. No new library publication is required.
 
 ### LegilimensPresentationLibrary `/10`
 
@@ -299,6 +312,8 @@ Adds an optional host-supplied frame-title prefix. Legilimens uses it to show �
 ```
 
 ## Current host validation
+
+- Presentation `/11`: all 23 existing FOMC, batching, visibility, and tier-marker regression tests pass. Source comparison confirms the mitigation update loop, boundary-timeframe selection for mitigation, window/touch helpers, and LVN rendering are unchanged. The four edited UDT constructor contracts match their host/library call sites, and no quarter-marker or role-reversal identifiers remain in the active sources. Pine identifier/title, registry, and scoped whitespace checks pass. The principal independently reviewed the cleanup and found no actionable issues. Publication was explicitly confirmed and the commit request confirms host loading, testing, and approval. Chart validation was user-performed, not independently verified by Codex.
 
 - Presentation `/10`: all 23 local tests pass, including content/shell/hidden visibility cases, host wiring for both new controls, and the global Extend Unmitigated dotted tier-style override and its regular/extended rendering paths. Highest-delta checks cover raw magnitude, ties, absent sides, disabled visibility, nonrepresentative merged members, all three marker glyphs, and regular/extended propagation. Pine identifier/title, registry, and whitespace checks pass. These checks do not establish TradingView compilation or visual behavior. The user confirmed publication, host loading, testing, and approval with the 2026-09-21 commit instruction; chart validation was user-performed, not independently verified by Codex.
 
