@@ -14,6 +14,7 @@ const string GROUP_LOOKBACK   = "Lookback"
 const string GROUP_HTF_PROFILES = "HTF Profiles"
 const string GROUP_INTRADAY_PROFILES = "Intraday Profiles"
 const string GROUP_LIQUIDITY_DEPTH = "Liquidity Depth"
+const string GROUP_DAILY_BOUNDARY_EXCEEDED = "Daily Boundary Exceeded"
 const string GROUP_FORECAST   = "Forecast"
 const string GROUP_FIB_HISTORY  = "Fibonacci: History"
 const string GROUP_FIB_DEFAULT_LEVELS = "Fibonacci: Default Levels"
@@ -278,6 +279,34 @@ type LiquidityDepthProfileState
     LiquidityDepthSessionState currentSession
     array<LiquidityDepthSessionState> history
 
+type ProfileEdgeQualificationConfig
+    bool enabled
+    bool historyEnabled
+    int cutoffMinute
+    color outlineColor
+    int outlineWidth
+
+type ProfileEdgeQualificationSnapshot
+    int profileStartTime
+    int profileStartIndex
+    int profileEndTime
+    int profileEndIndex
+    float outerHigh
+    float outerLow
+    bool qualified
+
+type ProfileEdgeQualificationState
+    ProfileEdgeQualificationSnapshot currentSnapshot
+    array<ProfileEdgeQualificationSnapshot> history
+    box currentOutline
+    array<box> historyOutlines
+    bool currentDirty
+    bool historyDirty
+
+type ProfileEdgeQualification
+    ProfileEdgeQualificationConfig config
+    ProfileEdgeQualificationState state
+
 type ScheduledProfileForecastData
     float referenceOpen
     float referenceHigh
@@ -373,6 +402,7 @@ type ScheduledProfile
     ScheduledProfileRuntime runtimeState
     SlotState drawingState
     LiquidityDepthProfileState liquidityDepthState
+    ProfileEdgeQualification edgeQualification
     string identifierText
 
 fib_width_value(string widthSetting) =>
@@ -501,6 +531,22 @@ useMidnight = input.bool(false, "", inline="daily_profile", group=GROUP_HTF_PROF
 dailyProfileColor = input.color(DAILY_PROFILE_COLOR, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow)
 dailyProfileHistory = input.int(DAILY_PROFILE_HISTORY_DEFAULT, "", inline="daily_profile", group=GROUP_HTF_PROFILES, minval=SLOT_HISTORY_MIN, maxval=SLOT_HISTORY_MAX, active=dailyProfileShow)
 dailyProfileFibPreset = input.string(FIB_PRESET_OFF, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow, options=[FIB_PRESET_OFF, FIB_PRESET_DEFAULT, FIB_PRESET_ALTERNATIVE])
+
+// DAILY BOUNDARY EXCEEDED
+
+dailyBoundaryExceededEnabled = input.bool(true, "Enable", inline="daily_boundary_exceeded", group=GROUP_DAILY_BOUNDARY_EXCEEDED, active=dailyProfileShow)
+dailyBoundaryExceededCutoff = input.string("08:00", "", options=[
+     "00:00", "00:15", "00:30", "00:45", "01:00", "01:15", "01:30", "01:45", "02:00", "02:15", "02:30", "02:45",
+     "03:00", "03:15", "03:30", "03:45", "04:00", "04:15", "04:30", "04:45", "05:00", "05:15", "05:30", "05:45",
+     "06:00", "06:15", "06:30", "06:45", "07:00", "07:15", "07:30", "07:45", "08:00", "08:15", "08:30", "08:45",
+     "09:00", "09:15", "09:30", "09:45", "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
+     "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30", "13:45", "14:00", "14:15", "14:30", "14:45",
+     "15:00", "15:15", "15:30", "15:45", "16:00", "16:15", "16:30", "16:45", "17:00", "17:15", "17:30", "17:45",
+     "18:00", "18:15", "18:30", "18:45", "19:00", "19:15", "19:30", "19:45", "20:00", "20:15", "20:30", "20:45",
+     "21:00", "21:15", "21:30", "21:45", "22:00", "22:15", "22:30", "22:45", "23:00", "23:15", "23:30", "23:45"],
+     inline="daily_boundary_exceeded", group=GROUP_DAILY_BOUNDARY_EXCEEDED, active=dailyProfileShow and dailyBoundaryExceededEnabled,
+     tooltip="Marks the complete Daily profile when either outer edge is reached or price comes within one minimum tick before the selected New York cutoff. Uses the same outer boundaries as Daily LD.")
+dailyBoundaryExceededHistory = input.bool(false, "History", inline="daily_boundary_exceeded", group=GROUP_DAILY_BOUNDARY_EXCEEDED, active=dailyProfileShow and dailyBoundaryExceededEnabled)
 
 // INTRADAY PROFILES
 
@@ -861,6 +907,16 @@ var ScheduledProfileConfig ivbPlusConfig = ScheduledProfileConfig.new(
      fibLabelsEnabled=fibLabelIvbPlus, fibLabelSize=fibLabelSizeIvbPlus,
      fibLabelPosition=fibLabelPosIvbPlus, fibLabelOffset=fibLabelOffIvbPlus,
      slotLabelSize=INTRADAY_PROFILE_LABEL_SIZE, fibFade=SCHEDULED_PROFILE_FIB_FADE)
+
+time_option_minutes(string timeOption) =>
+    int(str.tonumber(str.substring(timeOption, 0, 2))) * MINUTES_PER_HOUR + int(str.tonumber(str.substring(timeOption, 3, 5)))
+
+var ProfileEdgeQualificationConfig dailyProfileEdgeQualificationConfig = ProfileEdgeQualificationConfig.new(
+     enabled=dailyBoundaryExceededEnabled,
+     historyEnabled=dailyBoundaryExceededHistory,
+     cutoffMinute=time_option_minutes(dailyBoundaryExceededCutoff),
+     outlineColor=color.orange,
+     outlineWidth=3)
 
 get_label_size(string s) =>
     s == LBL_TINY   ? size.tiny   :
@@ -1405,6 +1461,12 @@ new_liquidity_depth_side() =>
 new_liquidity_depth_profile() =>
     LiquidityDepthProfileState.new(history=array.new<LiquidityDepthSessionState>())
 
+new_profile_edge_qualification_state() =>
+    ProfileEdgeQualificationState.new(
+         currentSnapshot=ProfileEdgeQualificationSnapshot.new(qualified=false),
+         history=array.new<ProfileEdgeQualificationSnapshot>(), historyOutlines=array.new<box>(),
+         currentDirty=true, historyDirty=true)
+
 var SlotState slot1 = new_slot()
 var SlotState slot2 = new_slot()
 var SlotState weeklyProfileSlot = new_slot()
@@ -1519,6 +1581,114 @@ liquidity_depth_anchors(float profileOpen, float medianHighOpen, float meanHighO
     float medianLower = profileOpen - medianOpenLow
     float meanLower = profileOpen - meanOpenLow
     [math.max(medianUpper, meanUpper), math.min(medianLower, meanLower)]
+
+profile_edge_cutoff_time(int profileStartTime, int profileStartMinute, int cutoffMinute) =>
+    int cutoffDayOffset = cutoffMinute <= profileStartMinute ? 1 : 0
+    scheduled_profile_timestamp(profileStartTime, cutoffMinute, cutoffDayOffset)
+
+profile_edge_snapshot_from_runtime(ScheduledProfileRuntime profileRuntime) =>
+    ProfileEdgeQualificationSnapshot.new(
+         profileStartTime=profileRuntime.startTime, profileStartIndex=profileRuntime.startIndex,
+         profileEndTime=profileRuntime.endTime, profileEndIndex=profileRuntime.endIndex,
+         qualified=false)
+
+copy_profile_edge_snapshot(ProfileEdgeQualificationSnapshot sourceSnapshot) =>
+    ProfileEdgeQualificationSnapshot.new(
+         profileStartTime=sourceSnapshot.profileStartTime, profileStartIndex=sourceSnapshot.profileStartIndex,
+         profileEndTime=sourceSnapshot.profileEndTime, profileEndIndex=sourceSnapshot.profileEndIndex,
+         outerHigh=sourceSnapshot.outerHigh, outerLow=sourceSnapshot.outerLow,
+         qualified=sourceSnapshot.qualified)
+
+profile_edge_snapshot_has_bounds(ProfileEdgeQualificationSnapshot qualificationSnapshot) =>
+    not na(qualificationSnapshot.profileStartTime) and not na(qualificationSnapshot.profileEndTime) and not na(qualificationSnapshot.outerHigh) and not na(qualificationSnapshot.outerLow)
+
+profile_edge_touched(float observedHigh, float observedLow, float highAnchor, float lowAnchor, float touchTolerance) =>
+    observedHigh >= highAnchor - touchTolerance or observedLow <= lowAnchor + touchTolerance
+
+profile_edge_observation_qualifies(int observationStartTime, int observationEndTime, bool observationConfirmed, int profileStartTime, int profileEndTime, int qualificationDeadline, float observedHigh, float observedLow, float highAnchor, float lowAnchor, float touchTolerance) =>
+    bool observationInsideProfile = observationConfirmed and not na(observationStartTime) and not na(observationEndTime) and observationStartTime >= profileStartTime and observationEndTime <= profileEndTime
+    bool observationBeforeCutoff = observationConfirmed and not na(observationEndTime) and observationEndTime <= qualificationDeadline
+    observationInsideProfile and observationBeforeCutoff and profile_edge_touched(observedHigh, observedLow, highAnchor, lowAnchor, touchTolerance)
+
+update_profile_edge_qualification_state(ProfileEdgeQualificationState qualificationState, ScheduledProfileRuntime profileRuntime, int profileStartMinute, ProfileEdgeQualificationConfig qualificationConfig, int historyCap, int observationStartTime, int observationEndTime, bool observationConfirmed, float observedHigh, float observedLow, float touchTolerance) =>
+    ProfileEdgeQualificationSnapshot currentSnapshot = qualificationState.currentSnapshot
+    if not qualificationConfig.enabled or not profileRuntime.valid
+        bool stateHasContent = not na(currentSnapshot.profileStartTime) or array.size(qualificationState.history) > 0 or not na(qualificationState.currentOutline) or array.size(qualificationState.historyOutlines) > 0
+        if stateHasContent
+            qualificationState.currentSnapshot := ProfileEdgeQualificationSnapshot.new(qualified=false)
+            array.clear(qualificationState.history)
+            qualificationState.currentDirty := true
+            qualificationState.historyDirty := true
+    else if not na(profileRuntime.startTime)
+        bool newProfile = na(currentSnapshot.profileStartTime) or currentSnapshot.profileStartTime != profileRuntime.startTime
+        if newProfile
+            if historyCap > 0 and profile_edge_snapshot_has_bounds(currentSnapshot)
+                array.push(qualificationState.history, copy_profile_edge_snapshot(currentSnapshot))
+                qualificationState.historyDirty := true
+            qualificationState.currentSnapshot := profile_edge_snapshot_from_runtime(profileRuntime)
+            currentSnapshot := qualificationState.currentSnapshot
+            qualificationState.currentDirty := true
+        if not newProfile
+            bool currentEndChanged = currentSnapshot.qualified and (na(currentSnapshot.profileEndTime) or currentSnapshot.profileEndTime != profileRuntime.endTime)
+            currentSnapshot.profileEndTime := profileRuntime.endTime
+            currentSnapshot.profileEndIndex := profileRuntime.endIndex
+            qualificationState.currentDirty := qualificationState.currentDirty or currentEndChanged
+
+        while array.size(qualificationState.history) > historyCap
+            array.shift(qualificationState.history)
+            qualificationState.historyDirty := true
+
+        bool anchorsReady = not na(profileRuntime.sessionOpen) and not na(profileRuntime.medianHighOpen) and not na(profileRuntime.meanHighOpen) and not na(profileRuntime.medianOpenLow) and not na(profileRuntime.meanOpenLow)
+        if anchorsReady
+            [highAnchor, lowAnchor] = liquidity_depth_anchors(profileRuntime.sessionOpen, profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow)
+            bool currentBoundsChanged = currentSnapshot.qualified and (na(currentSnapshot.outerHigh) or na(currentSnapshot.outerLow) or currentSnapshot.outerHigh != highAnchor or currentSnapshot.outerLow != lowAnchor)
+            currentSnapshot.outerHigh := highAnchor
+            currentSnapshot.outerLow := lowAnchor
+            qualificationState.currentDirty := qualificationState.currentDirty or currentBoundsChanged
+            int qualificationDeadline = profile_edge_cutoff_time(profileRuntime.startTime, profileStartMinute, qualificationConfig.cutoffMinute)
+            bool observationQualifies = profile_edge_observation_qualifies(
+                 observationStartTime, observationEndTime, observationConfirmed,
+                 profileRuntime.startTime, profileRuntime.endTime, qualificationDeadline,
+                 observedHigh, observedLow, highAnchor, lowAnchor, touchTolerance)
+            if not currentSnapshot.qualified and observationQualifies
+                currentSnapshot.qualified := true
+                qualificationState.currentDirty := true
+    qualificationState.currentDirty or qualificationState.historyDirty
+
+make_profile_edge_qualification_outline(ProfileEdgeQualificationSnapshot qualificationSnapshot, bool timeBased, color outlineColor, int outlineWidth) =>
+    box.new(drawing_x(qualificationSnapshot.profileStartTime, qualificationSnapshot.profileStartIndex, timeBased), qualificationSnapshot.outerHigh,
+         drawing_x(qualificationSnapshot.profileEndTime, qualificationSnapshot.profileEndIndex, timeBased), qualificationSnapshot.outerLow,
+         xloc=drawing_xloc(timeBased), bgcolor=na, border_color=outlineColor, border_width=outlineWidth)
+
+update_profile_edge_qualification_outline(box outline, ProfileEdgeQualificationSnapshot qualificationSnapshot, bool timeBased) =>
+    box.set_left(outline, drawing_x(qualificationSnapshot.profileStartTime, qualificationSnapshot.profileStartIndex, timeBased))
+    box.set_right(outline, drawing_x(qualificationSnapshot.profileEndTime, qualificationSnapshot.profileEndIndex, timeBased))
+    box.set_top(outline, qualificationSnapshot.outerHigh)
+    box.set_bottom(outline, qualificationSnapshot.outerLow)
+    outline
+
+draw_profile_edge_qualification_state(ProfileEdgeQualificationState qualificationState, ProfileEdgeQualificationConfig qualificationConfig) =>
+    if qualificationState.historyDirty
+        while array.size(qualificationState.historyOutlines) > 0
+            box.delete(array.pop(qualificationState.historyOutlines))
+        if qualificationConfig.enabled
+            for qualificationSnapshot in qualificationState.history
+                if qualificationSnapshot.qualified
+                    array.push(qualificationState.historyOutlines, make_profile_edge_qualification_outline(qualificationSnapshot, false, qualificationConfig.outlineColor, qualificationConfig.outlineWidth))
+        qualificationState.historyDirty := false
+    if qualificationState.currentDirty
+        ProfileEdgeQualificationSnapshot currentSnapshot = qualificationState.currentSnapshot
+        bool currentOutlineVisible = qualificationConfig.enabled and currentSnapshot.qualified and profile_edge_snapshot_has_bounds(currentSnapshot)
+        if currentOutlineVisible
+            if na(qualificationState.currentOutline)
+                qualificationState.currentOutline := make_profile_edge_qualification_outline(currentSnapshot, true, qualificationConfig.outlineColor, qualificationConfig.outlineWidth)
+            else
+                update_profile_edge_qualification_outline(qualificationState.currentOutline, currentSnapshot, true)
+        else if not na(qualificationState.currentOutline)
+            box.delete(qualificationState.currentOutline)
+            qualificationState.currentOutline := na
+        qualificationState.currentDirty := false
+    qualificationState.currentDirty or qualificationState.historyDirty
 
 liquidity_depth_price(float anchorPrice, bool isHigh, int levelIndex, float depthStep) =>
     float depthOffset = (levelIndex + 1) * depthStep
@@ -2082,37 +2252,59 @@ dailyProfileRuntime.forecast := ScheduledProfileForecastData.new(
 dailyProfileRuntime.forecastStartTime := dailyProfileForecastStartT
 dailyProfileRuntime.forecastEndTime := dailyProfileForecastEndT
 dailyProfileRuntime.forecastVisible := dailyProfileForecastVisible
-var ScheduledProfile dailyScheduledProfile = ScheduledProfile.new(config=dailyProfileConfig, runtimeState=dailyProfileRuntime, drawingState=dailyProfileSlot, liquidityDepthState=dailyProfileLiquidityDepthState, identifierText=dailyProfileIdentifierText)
+var ScheduledProfile dailyScheduledProfile = ScheduledProfile.new(
+     config=dailyProfileConfig, runtimeState=dailyProfileRuntime, drawingState=dailyProfileSlot,
+     liquidityDepthState=dailyProfileLiquidityDepthState,
+     edgeQualification=ProfileEdgeQualification.new(config=dailyProfileEdgeQualificationConfig, state=new_profile_edge_qualification_state()),
+     identifierText=dailyProfileIdentifierText)
 
 var ScheduledProfileRuntime overnightRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(overnightRuntime, overnightConfig, overnightData, overnightValid, overnightTransition,
      overnightStartIndex, overnightEndIndex, overnightEffectiveRunHigh, overnightEffectiveRunLow)
-var ScheduledProfile overnightScheduledProfile = ScheduledProfile.new(config=overnightConfig, runtimeState=overnightRuntime, drawingState=overnightSlot, liquidityDepthState=overnightLiquidityDepthState, identifierText=overnightIdentifierText)
+var ScheduledProfile overnightScheduledProfile = ScheduledProfile.new(
+     config=overnightConfig, runtimeState=overnightRuntime, drawingState=overnightSlot,
+     liquidityDepthState=overnightLiquidityDepthState, edgeQualification=na,
+     identifierText=overnightIdentifierText)
 
 var ScheduledProfileRuntime nyEarlyRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(nyEarlyRuntime, nyEarlyConfig, nyEarlyData, nyEarlyValid, nyEarlyTransition,
      nyEarlyStartIndex, nyEarlyEndIndex, nyEarlyEffectiveRunHigh, nyEarlyEffectiveRunLow)
-var ScheduledProfile nyEarlyScheduledProfile = ScheduledProfile.new(config=nyEarlyConfig, runtimeState=nyEarlyRuntime, drawingState=nyEarlySlot, liquidityDepthState=nyEarlyLiquidityDepthState, identifierText=nyEarlyIdentifierText)
+var ScheduledProfile nyEarlyScheduledProfile = ScheduledProfile.new(
+     config=nyEarlyConfig, runtimeState=nyEarlyRuntime, drawingState=nyEarlySlot,
+     liquidityDepthState=nyEarlyLiquidityDepthState, edgeQualification=na,
+     identifierText=nyEarlyIdentifierText)
 
 var ScheduledProfileRuntime nyAmRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(nyAmRuntime, nyAmConfig, nyAmData, nyAmValid, nyAmTransition,
      nyAmStartIndex, nyAmEndIndex, nyAmEffectiveRunHigh, nyAmEffectiveRunLow)
-var ScheduledProfile nyAmScheduledProfile = ScheduledProfile.new(config=nyAmConfig, runtimeState=nyAmRuntime, drawingState=nyAmSlot, liquidityDepthState=nyAmLiquidityDepthState, identifierText=nyAmIdentifierText)
+var ScheduledProfile nyAmScheduledProfile = ScheduledProfile.new(
+     config=nyAmConfig, runtimeState=nyAmRuntime, drawingState=nyAmSlot,
+     liquidityDepthState=nyAmLiquidityDepthState, edgeQualification=na,
+     identifierText=nyAmIdentifierText)
 
 var ScheduledProfileRuntime nyPmRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(nyPmRuntime, nyPmConfig, nyPmData, nyPmValid, nyPmTransition,
      nyPmStartIndex, nyPmEndIndex, nyPmEffectiveRunHigh, nyPmEffectiveRunLow)
-var ScheduledProfile nyPmScheduledProfile = ScheduledProfile.new(config=nyPmConfig, runtimeState=nyPmRuntime, drawingState=nyPmSlot, liquidityDepthState=nyPmLiquidityDepthState, identifierText=nyPmIdentifierText)
+var ScheduledProfile nyPmScheduledProfile = ScheduledProfile.new(
+     config=nyPmConfig, runtimeState=nyPmRuntime, drawingState=nyPmSlot,
+     liquidityDepthState=nyPmLiquidityDepthState, edgeQualification=na,
+     identifierText=nyPmIdentifierText)
 
 var ScheduledProfileRuntime ivbRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(ivbRuntime, ivbConfig, ivbData, ivbValid, ivbTransition,
      ivbStartIndex, ivbEndIndex, ivbEffectiveRunHigh, ivbEffectiveRunLow)
-var ScheduledProfile ivbScheduledProfile = ScheduledProfile.new(config=ivbConfig, runtimeState=ivbRuntime, drawingState=ivbSlot, liquidityDepthState=ivbLiquidityDepthState, identifierText=ivbIdentifierText)
+var ScheduledProfile ivbScheduledProfile = ScheduledProfile.new(
+     config=ivbConfig, runtimeState=ivbRuntime, drawingState=ivbSlot,
+     liquidityDepthState=ivbLiquidityDepthState, edgeQualification=na,
+     identifierText=ivbIdentifierText)
 
 var ScheduledProfileRuntime ivbPlusRuntime = new_scheduled_profile_runtime()
 update_intraday_profile_runtime(ivbPlusRuntime, ivbPlusConfig, ivbPlusData, ivbPlusValid, ivbPlusTransition,
      ivbPlusStartIndex, ivbPlusEndIndex, ivbPlusEffectiveRunHigh, ivbPlusEffectiveRunLow)
-var ScheduledProfile ivbPlusScheduledProfile = ScheduledProfile.new(config=ivbPlusConfig, runtimeState=ivbPlusRuntime, drawingState=ivbPlusSlot, liquidityDepthState=ivbPlusLiquidityDepthState, identifierText=ivbPlusIdentifierText)
+var ScheduledProfile ivbPlusScheduledProfile = ScheduledProfile.new(
+     config=ivbPlusConfig, runtimeState=ivbPlusRuntime, drawingState=ivbPlusSlot,
+     liquidityDepthState=ivbPlusLiquidityDepthState, edgeQualification=na,
+     identifierText=ivbPlusIdentifierText)
 array<ScheduledProfile> scheduledProfiles = array.from(dailyScheduledProfile, overnightScheduledProfile, nyEarlyScheduledProfile, nyAmScheduledProfile, nyPmScheduledProfile, ivbScheduledProfile, ivbPlusScheduledProfile)
 
 for profileIndex = 0 to array.size(scheduledProfiles) - 1
@@ -2151,6 +2343,7 @@ int forecastZoneCount = (s1ForecastVisible ? 1 : 0) + (s2ForecastVisible ? 1 : 0
 // Stable worst-case reserves prevent scheduled profile toggles from trimming ordinary history.
 int scheduledProfileCurrentLineReserve = 0
 int scheduledProfileCurrentLabelReserve = 0
+int scheduledProfileQualificationBoxReserve = 0
 for profileIndex = 0 to array.size(scheduledProfiles) - 1
     ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
     ScheduledProfileConfig profileConfig = profile.config
@@ -2173,7 +2366,10 @@ for profileIndex = 0 to array.size(scheduledProfiles) - 1
     scheduledProfileCurrentLabelReserve += profileRuntime.valid ? labelsPerZone : 0
     scheduledProfileCurrentLabelReserve += depthActive ? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0
     scheduledProfileCurrentLabelReserve += forecastDepthVisible ? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0
-int currentBoxReserve = (currentBoxZoneCount + forecastZoneCount) * 2
+    ProfileEdgeQualification edgeQualification = profile.edgeQualification
+    if not na(edgeQualification) and edgeQualification.config.enabled and profileRuntime.valid
+        scheduledProfileQualificationBoxReserve += latestOnly or not edgeQualification.config.historyEnabled ? 1 : profileConfig.historyLimit
+int currentBoxReserve = (currentBoxZoneCount + forecastZoneCount) * 2 + scheduledProfileQualificationBoxReserve
 int availableHistoryBoxZones = int(math.max(0, INDICATOR_MAX_BOXES - currentBoxReserve) / 2)
 array<int> boxHistZoneCaps = allocate_history_zone_caps(availableHistoryBoxZones, historyBudgetValids, boxHistoryZoneRequests, HTF_PROFILE_COUNT, SLOT_HISTORY_MAX)
 int s1BoxHistZoneCap = array.get(boxHistZoneCaps, 0)
@@ -2227,6 +2423,15 @@ update_slot(monthlyProfileSlot, monthlyProfileValid, monthlyProfileTransition, m
 
 // Each written call keeps independent Pine history for update_slot()'s [1] snapshots.
 int dailyProfileBudgetIndex = HTF_PROFILE_COUNT + DAILY_PROFILE_INDEX
+for profileIndex = 0 to array.size(scheduledProfiles) - 1
+    ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
+    ProfileEdgeQualification edgeQualification = profile.edgeQualification
+    if not na(edgeQualification)
+        int profileBudgetIndex = HTF_PROFILE_COUNT + profileIndex
+        int qualificationHistoryCap = latestOnly or not edgeQualification.config.historyEnabled ? 0 : array.get(boxHistZoneCaps, profileBudgetIndex)
+        update_profile_edge_qualification_state(
+             edgeQualification.state, profile.runtimeState, profile.config.startMinute, edgeQualification.config, qualificationHistoryCap,
+             time, time_close, barstate.isconfirmed, high, low, syminfo.mintick)
 update_scheduled_profile(dailyProfileSlot, dailyProfileConfig, dailyProfileRuntime,
      fibPalette, array.get(boxHistZoneCaps, dailyProfileBudgetIndex), array.get(fibHistCaps, dailyProfileBudgetIndex),
      array.get(historyLabelSlots, dailyProfileBudgetIndex), array.get(histFibLabelCaps, dailyProfileBudgetIndex), array.get(historyLabelsPerZone, dailyProfileBudgetIndex),
@@ -2288,6 +2493,9 @@ if barstate.islast
              fibPalette, fibLabelsEnabled, labelOffsetBars * chartBarMs, labelOffsetBars)
         draw_liquidity_depth_profile(slotState, profile.liquidityDepthState, profileConfig, depthActive, currentVisible, dailyLiquidityDepthDistance, array.get(scheduledProfileDepthHistoryCaps, profileIndex), forecastLiquidityDepth)
         draw_liquidity_depth_forecast(slotState, profileConfig, profileRuntime, depthActive, dailyLiquidityDepthDistance, forecastLiquidityDepth)
+        ProfileEdgeQualification edgeQualification = profile.edgeQualification
+        if not na(edgeQualification)
+            draw_profile_edge_qualification_state(edgeQualification.state, edgeQualification.config)
     draw_slot_forecast(slot1, s1ForecastVisible, s1CurRightT, slot_forecast_right_time(s1Safe, s1CurRightT), s1OEff, s1RHi, s1RLo, slot1Color, s1ForecastIdentifierText, SLOT1_LABEL_SIZE, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL)
     draw_slot_forecast(slot2, s2ForecastVisible, s2CurRightT, slot_forecast_right_time(s2Safe, s2CurRightT), s2OEff, s2RHi, s2RLo, slot2Color, s2ForecastIdentifierText, SLOT2_LABEL_SIZE, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL)
     draw_slot_forecast(weeklyProfileSlot, weeklyProfileForecastVisible, weeklyProfileRightTime, slot_forecast_right_time(WEEKLY_TIMEFRAME, weeklyProfileRightTime), weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, WEEKLY_PROFILE_NAME, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL)
@@ -2314,46 +2522,58 @@ addRow(table tbl, int row, string name, color clr) =>
     table.cell(tbl, 2, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
 
 if showTable and barstate.islast
-    int colorTableRowCount = 1 + HTF_PROFILE_COUNT + array.size(scheduledProfiles) + 9 + 1
+    int activeColorInputCount = (slot1Show ? 1 : 0) + (slot2Show ? 1 : 0) + (weeklyProfileShow ? 1 : 0) + (monthlyProfileShow ? 1 : 0)
+    for profileIndex = 0 to array.size(scheduledProfiles) - 1
+        ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
+        activeColorInputCount += profile.config.enabled ? 1 : 0
+    activeColorInputCount += fibInputsActive ? 9 : 0
+    activeColorInputCount += showOnlyEnabled ? 1 : 0
+    int colorTableRowCount = 1 + activeColorInputCount
     var table colorTable = table.new(position.top_right, 3, colorTableRowCount, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
     table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(colorTable, 1, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     table.cell(colorTable, 2, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
     int row = 1
-    addRow(colorTable, row, "Slot 1", slot1Color)
-    row += 1
-    addRow(colorTable, row, "Slot 2", slot2Color)
-    row += 1
-    addRow(colorTable, row, WEEKLY_PROFILE_NAME, weeklyProfileColor)
-    row += 1
-    addRow(colorTable, row, MONTHLY_PROFILE_NAME, monthlyProfileColor)
-    row += 1
+    if slot1Show
+        addRow(colorTable, row, "Slot 1", slot1Color)
+        row += 1
+    if slot2Show
+        addRow(colorTable, row, "Slot 2", slot2Color)
+        row += 1
+    if weeklyProfileShow
+        addRow(colorTable, row, WEEKLY_PROFILE_NAME, weeklyProfileColor)
+        row += 1
+    if monthlyProfileShow
+        addRow(colorTable, row, MONTHLY_PROFILE_NAME, monthlyProfileColor)
+        row += 1
     for profileIndex = 0 to array.size(scheduledProfiles) - 1
         ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
         ScheduledProfileConfig profileConfig = profile.config
-        addRow(colorTable, row, profileConfig.sourceLabel, profileConfig.slotColor)
+        if profileConfig.enabled
+            addRow(colorTable, row, profileConfig.sourceLabel, profileConfig.slotColor)
+            row += 1
+
+    if fibInputsActive
+        addRow(colorTable, row, "Fib 1.0", fibColor100)
+        row += 1
+        addRow(colorTable, row, "Fib 0.786", fibColor786)
+        row += 1
+        addRow(colorTable, row, "Fib 0.705", fibColor705)
+        row += 1
+        addRow(colorTable, row, "Fib 0.618", fibColor618)
+        row += 1
+        addRow(colorTable, row, "Fib 0.5", fibColor50)
+        row += 1
+        addRow(colorTable, row, "Fib 0.382", fibColor382)
+        row += 1
+        addRow(colorTable, row, "Fib 0.295", fibColor295)
+        row += 1
+        addRow(colorTable, row, "Fib 0.214", fibColor214)
+        row += 1
+        addRow(colorTable, row, "Fib 0", fibColor0)
         row += 1
 
-    addRow(colorTable, row, "Fib 1.0", fibColor100)
-    row += 1
-    addRow(colorTable, row, "Fib 0.786", fibColor786)
-    row += 1
-    addRow(colorTable, row, "Fib 0.705", fibColor705)
-    row += 1
-    addRow(colorTable, row, "Fib 0.618", fibColor618)
-    row += 1
-    addRow(colorTable, row, "Fib 0.5", fibColor50)
-    row += 1
-    addRow(colorTable, row, "Fib 0.382", fibColor382)
-    row += 1
-    addRow(colorTable, row, "Fib 0.295", fibColor295)
-    row += 1
-    addRow(colorTable, row, "Fib 0.214", fibColor214)
-    row += 1
-    addRow(colorTable, row, "Fib 0", fibColor0)
-    row += 1
-
-    if showOnlyEnabled and showOnlyTimeframeAllowed
+    if showOnlyEnabled
         addRow(colorTable, row, "Hidden Candles", hiddenCandleColor)
         row += 1
 

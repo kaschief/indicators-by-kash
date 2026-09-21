@@ -223,14 +223,21 @@ You may convert colors ONLY when:
 
 ## Always Keep Color Reference Table in Sync
 
-**CORE PRINCIPLE: The color reference table must always reflect ALL color inputs in the indicator.**
+**CORE PRINCIPLE: The color reference table must always reflect ONLY color inputs whose owning controls are currently active and enabled. Never show inactive or disabled color inputs.**
+
+### Active-Only Rule
+
+- Add a color row only while the feature or control that owns that color is active and enabled.
+- Remove the row immediately when that feature or control becomes inactive or disabled.
+- Use the same activation condition for the color-table row and its row-count allocation.
+- Do not list a color merely because its input exists in the source.
 
 ### When Adding a Color
 
-When adding ANY new color input to an indicator:
+When adding any new color input to an indicator:
 
-1. **Add to color reference table** - Create a new row with the color name, RGB values, and transparency
-2. **Increase table row count** - Update `table.new()` to accommodate the new row
+1. **Add to color reference table** - Create a conditional row with the color name, RGB values, and transparency only while its owning control is active and enabled
+2. **Update table row count** - Make `table.new()` allocate the matching number of active color rows
 3. **Use consistent naming** - The table label should clearly identify what the color controls
 
 ### When Removing a Color

@@ -258,6 +258,138 @@ test('anchors use the outer profile edges independent of median and mean orderin
   assert.match(body, /math\.min\(medianLower, meanLower\)/);
 });
 
+test('Daily Boundary Exceeded controls configure reusable profile-edge qualification', () => {
+  assert.match(source, /^const string GROUP_DAILY_BOUNDARY_EXCEEDED = "Daily Boundary Exceeded"$/m);
+  assert.doesNotMatch(source, /Daily Outer Touch/);
+  assert.match(source, /^dailyBoundaryExceededEnabled = input\.bool\(true, "Enable",/m);
+  assert.match(source, /^dailyBoundaryExceededCutoff = input\.string\("08:00", "", options=\[/m);
+  assert.match(source, /^dailyBoundaryExceededHistory = input\.bool\(false, "History", inline="daily_boundary_exceeded", group=GROUP_DAILY_BOUNDARY_EXCEEDED, active=dailyProfileShow and dailyBoundaryExceededEnabled\)$/m);
+  assert.match(source, /inline="daily_boundary_exceeded", group=GROUP_DAILY_BOUNDARY_EXCEEDED, active=dailyProfileShow and dailyBoundaryExceededEnabled/);
+  assert.doesNotMatch(source, /dailyBoundaryExceededColor|dailyBoundaryExceededWidth|DEFAULT_DAILY_BOUNDARY_EXCEEDED_COLOR/);
+  const cutoffOptionsBlock = source.match(/^dailyBoundaryExceededCutoff = input\.string\("08:00", "", options=\[([\s\S]*?)\],\n     inline="daily_boundary_exceeded"/m)?.[1];
+  assert.ok(cutoffOptionsBlock, 'Daily cutoff options must exist');
+  const cutoffOptions = [...cutoffOptionsBlock.matchAll(/"(\d{2}:\d{2})"/g)].map(match => match[1]);
+  const expectedCutoffOptions = Array.from({ length: 96 }, (_, index) => {
+    const minutes = index * 15;
+    return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  });
+  assert.deepEqual(cutoffOptions, expectedCutoffOptions);
+  assert.match(functionBody('time_option_minutes'), /str\.substring\(timeOption, 0, 2\)[\s\S]*str\.substring\(timeOption, 3, 5\)/);
+  assert.match(source, /^type ProfileEdgeQualificationState\n    ProfileEdgeQualificationSnapshot currentSnapshot\n    array<ProfileEdgeQualificationSnapshot> history\n    box currentOutline\n    array<box> historyOutlines\n    bool currentDirty\n    bool historyDirty$/m);
+  assert.match(source, /^type ScheduledProfile[\s\S]*?^    ProfileEdgeQualification edgeQualification$/m);
+  assert.doesNotMatch(source, /^type ProfileEdgeQualificationState[\s\S]*?^    (?:int profileStart|float outer|bool triggered)/m);
+  assert.match(source, /dailyProfileEdgeQualificationConfig = ProfileEdgeQualificationConfig\.new\(\n     enabled=dailyBoundaryExceededEnabled/);
+  assert.match(source, /historyEnabled=dailyBoundaryExceededHistory/);
+  assert.match(source, /cutoffMinute=time_option_minutes\(dailyBoundaryExceededCutoff\)/);
+  assert.match(source, /outlineColor=color\.orange,\n     outlineWidth=3/);
+  assert.match(source, /edgeQualification=ProfileEdgeQualification\.new\(config=dailyProfileEdgeQualificationConfig, state=new_profile_edge_qualification_state\(\)\)/);
+  assert.equal(source.match(/edgeQualification=na/g)?.length, 6);
+  assert.doesNotMatch(source, /disabledProfileEdgeQualificationConfig/);
+
+  const updateBody = functionBody('update_profile_edge_qualification_state');
+  assert.match(updateBody, /\[highAnchor, lowAnchor\] = liquidity_depth_anchors\(/);
+  assert.match(updateBody, /profile_edge_observation_qualifies\(/);
+  assert.doesNotMatch(updateBody, /\btime_close\b|\bbarstate\b|\bsyminfo\b|\btimenow\b/);
+  assert.match(source, /time, time_close, barstate\.isconfirmed, high, low, syminfo\.mintick\)/);
+
+  const outlineBody = functionBody('make_profile_edge_qualification_outline');
+  assert.match(outlineBody, /drawing_x\(qualificationSnapshot\.profileStartTime, qualificationSnapshot\.profileStartIndex, timeBased\), qualificationSnapshot\.outerHigh/);
+  assert.match(outlineBody, /drawing_x\(qualificationSnapshot\.profileEndTime, qualificationSnapshot\.profileEndIndex, timeBased\), qualificationSnapshot\.outerLow/);
+  assert.match(outlineBody, /xloc=drawing_xloc\(timeBased\)/);
+  assert.match(outlineBody, /bgcolor=na, border_color=outlineColor, border_width=outlineWidth/);
+  assert.match(source, /scheduledProfileQualificationBoxReserve \+= latestOnly or not edgeQualification\.config\.historyEnabled \? 1 : profileConfig\.historyLimit/);
+  assert.match(source, /qualificationHistoryCap = latestOnly or not edgeQualification\.config\.historyEnabled \? 0 : array\.get\(boxHistZoneCaps, profileBudgetIndex\)/);
+  assert.doesNotMatch(source, /addRow\(colorTable, row, profileConfig\.sourceLabel \+ " Outer Touch"/);
+});
+
+test('profile-edge observations require a complete confirmed bar inside the profile and cutoff', () => {
+  const qualifies = ({ start, end, confirmed, profileStart, profileEnd, deadline, barHigh, barLow, highAnchor, lowAnchor, tolerance }) =>
+    confirmed && start != null && end != null && start >= profileStart && end <= profileEnd && end <= deadline &&
+    (barHigh >= highAnchor - tolerance || barLow <= lowAnchor + tolerance);
+  const base = { start: 100, end: 110, confirmed: true, profileStart: 100, profileEnd: 200, deadline: 150, barHigh: 109, barLow: 91, highAnchor: 110, lowAnchor: 90, tolerance: 1 };
+  assert.equal(qualifies(base), true, 'one-tick proximity qualifies');
+  assert.equal(qualifies({ ...base, start: 99 }), false, 'a Range bar spanning the profile start is excluded');
+  assert.equal(qualifies({ ...base, start: 149, end: 151 }), false, 'a bar spanning the cutoff is excluded');
+  assert.equal(qualifies({ ...base, confirmed: false }), false, 'an unconfirmed realtime bar is excluded');
+  assert.equal(qualifies({ ...base, barHigh: 108, barLow: 92 }), false, 'price outside the touch tolerance does not qualify');
+
+  const body = functionBody('profile_edge_observation_qualifies');
+  assert.match(body, /observationStartTime >= profileStartTime/);
+  assert.match(body, /observationEndTime <= profileEndTime/);
+  assert.match(body, /observationEndTime <= qualificationDeadline/);
+  assert.match(body, /profile_edge_touched\(observedHigh, observedLow, highAnchor, lowAnchor, touchTolerance\)/);
+  assert.match(functionBody('profile_edge_touched'), /observedHigh >= highAnchor - touchTolerance or observedLow <= lowAnchor \+ touchTolerance/);
+});
+
+test('profile-edge snapshots are copied into the recent profile window without aliasing', () => {
+  const recentWindow = [true, false, false, true, false].slice(-3);
+  assert.deepEqual(recentWindow, [false, true, false]);
+  assert.deepEqual(recentWindow.filter(Boolean), [true]);
+
+  const currentSnapshot = { profileStartTime: 100, profileEndTime: 200, outerHigh: 110, outerLow: 90, qualified: true };
+  const archivedSnapshot = { ...currentSnapshot };
+  currentSnapshot.profileStartTime = 200;
+  currentSnapshot.profileEndTime = 300;
+  currentSnapshot.outerHigh = 120;
+  currentSnapshot.qualified = false;
+  assert.deepEqual(archivedSnapshot, { profileStartTime: 100, profileEndTime: 200, outerHigh: 110, outerLow: 90, qualified: true });
+
+  const updateBody = functionBody('update_profile_edge_qualification_state');
+  assert.match(updateBody, /if historyCap > 0 and profile_edge_snapshot_has_bounds\(currentSnapshot\)/);
+  assert.match(updateBody, /array\.push\(qualificationState\.history, copy_profile_edge_snapshot\(currentSnapshot\)\)/);
+  assert.match(updateBody, /while array\.size\(qualificationState\.history\) > historyCap/);
+  assert.doesNotMatch(updateBody, /if currentSnapshot\.qualified and historyCap/);
+  const copyBody = functionBody('copy_profile_edge_snapshot');
+  assert.match(copyBody, /ProfileEdgeQualificationSnapshot\.new\(/);
+  assert.match(copyBody, /qualified=sourceSnapshot\.qualified/);
+  assert.doesNotMatch(updateBody, /array\.push\(qualificationState\.history, currentSnapshot\)/);
+});
+
+test('profile-edge rendering updates current geometry without rebuilding unchanged history', () => {
+  const geometryChanged = (snapshot, next) => snapshot.qualified &&
+    (snapshot.profileEndTime !== next.profileEndTime || snapshot.outerHigh !== next.outerHigh || snapshot.outerLow !== next.outerLow);
+  const qualifiedSnapshot = { qualified: true, profileEndTime: 200, outerHigh: 110, outerLow: 90 };
+  assert.equal(geometryChanged(qualifiedSnapshot, { profileEndTime: 200, outerHigh: 110, outerLow: 90 }), false);
+  assert.equal(geometryChanged(qualifiedSnapshot, { profileEndTime: 200, outerHigh: 112, outerLow: 90 }), true);
+  assert.equal(geometryChanged({ ...qualifiedSnapshot, qualified: false }, { profileEndTime: 200, outerHigh: 112, outerLow: 90 }), false);
+
+  const renderCounts = { currentUpdates: 0, historyRebuilds: 0 };
+  const render = ({ currentDirty, historyDirty }) => {
+    if (historyDirty) renderCounts.historyRebuilds += 1;
+    if (currentDirty) renderCounts.currentUpdates += 1;
+  };
+  render({ currentDirty: true, historyDirty: false });
+  render({ currentDirty: true, historyDirty: false });
+  assert.deepEqual(renderCounts, { currentUpdates: 2, historyRebuilds: 0 });
+
+  const updateBody = functionBody('update_profile_edge_qualification_state');
+  const drawBody = functionBody('draw_profile_edge_qualification_state');
+  assert.doesNotMatch(source, /stateUpdated/);
+  assert.match(updateBody, /currentBoundsChanged = currentSnapshot\.qualified/);
+  assert.match(updateBody, /qualificationState\.currentDirty := qualificationState\.currentDirty or currentBoundsChanged/);
+  assert.match(drawBody, /^if qualificationState\.historyDirty/);
+  assert.match(drawBody, /if qualificationState\.currentDirty/);
+  assert.match(drawBody, /if qualificationSnapshot\.qualified/);
+  assert.match(drawBody, /make_profile_edge_qualification_outline\(qualificationSnapshot, false,/);
+  assert.match(drawBody, /update_profile_edge_qualification_outline\(qualificationState\.currentOutline, currentSnapshot, true\)/);
+  assert.match(functionBody('update_profile_edge_qualification_outline'), /box\.set_left[\s\S]*box\.set_right[\s\S]*box\.set_top[\s\S]*box\.set_bottom/);
+  assert.match(drawBody, /qualificationState\.historyDirty := false/);
+  assert.match(drawBody, /qualificationState\.currentDirty := false/);
+  assert.match(drawBody, /qualificationState\.currentDirty or qualificationState\.historyDirty$/);
+});
+
+test('profile-edge cutoff follows the configured profile across midnight', () => {
+  const cutoffDayOffset = (profileStartMinute, cutoffMinute) => cutoffMinute <= profileStartMinute ? 1 : 0;
+  assert.equal(cutoffDayOffset(18 * 60, 8 * 60), 1, '08:00 belongs to the next NY date for the Globex Daily profile');
+  assert.equal(cutoffDayOffset(18 * 60, 20 * 60), 0, '20:00 belongs to the opening NY date for the Globex Daily profile');
+  assert.equal(cutoffDayOffset(0, 8 * 60), 0, '08:00 remains on the same NY date in Midnight mode');
+  assert.equal(cutoffDayOffset(0, 0), 1, 'a cutoff equal to the profile start covers the complete Daily window');
+
+  const body = functionBody('profile_edge_cutoff_time');
+  assert.match(body, /cutoffMinute <= profileStartMinute \? 1 : 0/);
+  assert.match(body, /scheduled_profile_timestamp\(profileStartTime, cutoffMinute, cutoffDayOffset\)/);
+});
+
 test('levels use one, two and three fixed steps from the anchor', () => {
   const body = functionBody('liquidity_depth_price');
   assert.match(body, /\(levelIndex \+ 1\) \* depthStep/);
@@ -402,6 +534,22 @@ test('HTF open requests share the deepest enabled history when timeframes overla
   assert.match(source, /htfOpenRequestHistory = math\.max\(slot1Show \? slot1RequestHistory : 0, slot2Show \? slot2RequestHistory : 0,\n     weeklyProfileShow \? weeklyProfileRequestHistory : 0, monthlyProfileShow \? monthlyProfileRequestHistory : 0\)/);
   assert.equal(source.match(/fetch_htf_open\(htfTickerId, [^\n]+, htfOpenRequestHistory\)/g)?.length, 4);
   assert.match(functionBody('fetch_htf_open'), /calc_bars_count=historyLimit \+ 2/);
+});
+
+test('color reference table lists only active color inputs', () => {
+  const tableBlock = source.slice(source.indexOf('if showTable and barstate.islast'));
+  assert.match(tableBlock, /int activeColorInputCount = \(slot1Show \? 1 : 0\) \+ \(slot2Show \? 1 : 0\) \+ \(weeklyProfileShow \? 1 : 0\) \+ \(monthlyProfileShow \? 1 : 0\)/);
+  assert.match(tableBlock, /activeColorInputCount \+= profile\.config\.enabled \? 1 : 0/);
+  assert.match(tableBlock, /activeColorInputCount \+= fibInputsActive \? 9 : 0/);
+  assert.match(tableBlock, /activeColorInputCount \+= showOnlyEnabled \? 1 : 0/);
+  assert.match(tableBlock, /if slot1Show\n        addRow\(colorTable, row, "Slot 1", slot1Color\)/);
+  assert.match(tableBlock, /if slot2Show\n        addRow\(colorTable, row, "Slot 2", slot2Color\)/);
+  assert.match(tableBlock, /if weeklyProfileShow\n        addRow\(colorTable, row, WEEKLY_PROFILE_NAME, weeklyProfileColor\)/);
+  assert.match(tableBlock, /if monthlyProfileShow\n        addRow\(colorTable, row, MONTHLY_PROFILE_NAME, monthlyProfileColor\)/);
+  assert.match(tableBlock, /if profileConfig\.enabled\n            addRow\(colorTable, row, profileConfig\.sourceLabel, profileConfig\.slotColor\)/);
+  assert.match(tableBlock, /if fibInputsActive\n        addRow\(colorTable, row, "Fib 1\.0", fibColor100\)/);
+  assert.match(tableBlock, /if showOnlyEnabled\n        addRow\(colorTable, row, "Hidden Candles", hiddenCandleColor\)/);
+  assert.doesNotMatch(tableBlock, /if showOnlyEnabled and showOnlyTimeframeAllowed/);
 });
 
 test('history budget allocators stop at the deepest requested layer', () => {
