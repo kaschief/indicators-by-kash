@@ -147,6 +147,18 @@ export type InteractionSettings
     string mitigationWindow
     int retainedProfiles
 
+export enum FocusDirection
+    off = "Off"
+    above = "Above"
+    around = "Around"
+    below = "Below"
+
+export type FocusSettings
+    FocusDirection direction
+    float anchorPrice
+    int extraProfiles
+    int searchDepth
+
 export type PresentationConfig
     ObjectLimits limits
     DeltaSettings delta
@@ -155,6 +167,7 @@ export type PresentationConfig
     bool showDevelopingShell
     bool extendedNyModeActive
     int profileRows
+    FocusSettings focus
 
 export type BarContext
     int barTime
@@ -176,6 +189,15 @@ export type PriceSamples
 export type SelectionBinding
     legilimensOrchestration.ProfileSelection selection
     SourceSpec source
+
+export type FocusProfile
+    legilimensOrchestration.Profile profile
+    string sourceName
+    array<float> prices
+
+type FocusCandidate
+    FocusProfile archived
+    float distance
 
 export type ZoneTrackingProfileKey
     string sourceName
@@ -357,9 +379,10 @@ export type RenderState
     array<ZoneTrackingProfileKey> mitigatedProfiles
     array<int> cachedChartTimes
     int chartTimesBuiltAtBar
+    array<FocusProfile> focusProfiles
 
 export newRenderState() =>
-    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1)
+    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1, array.new<FocusProfile>())
 
 sourceSpec(array<SourceSpec> sources, string sourceName) =>
     SourceSpec found = na
@@ -628,17 +651,20 @@ flushPendingRightLabels(RenderState state, PresentationConfig config) =>
 usesGlobexPalette(string sourceName) =>
     sourceName == SOURCE_GLOBEX or sourceName == SOURCE_MIDNIGHT
 
-profileOuterColor(string sourceName) =>
+export profileOuterColor(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(128, 222, 234), 94) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 94) : sourceName == SOURCE_IVB ? color.new(color.rgb(245, 65, 240), 95) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(165, 214, 167), 70) : sourceName == SOURCE_RTH ? color.new(color.rgb(41, 98, 255), 90) : usesGlobexPalette(sourceName) ? color.new(color.rgb(233, 30, 99), 90) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(156, 39, 176), 90) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(223, 107, 12), 85) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(248, 187, 208), 75) : color.new(color.rgb(187, 217, 251), 70)
 
 profileInnerColor(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(128, 222, 234), 50) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 88) : sourceName == SOURCE_IVB ? color.new(color.rgb(249, 121, 246), 55) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(56, 142, 60), 82) : sourceName == SOURCE_RTH ? color.new(color.rgb(144, 191, 249), 30) : usesGlobexPalette(sourceName) ? color.new(color.rgb(248, 187, 208), 30) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(156, 39, 176), 88) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(255, 152, 0), 20) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(248, 187, 208), 30) : color.new(color.rgb(187, 217, 251), 30)
 
-profileRangeLabelColor(string sourceName) =>
+export profileRangeLabelColor(string sourceName) =>
     sourceName == SOURCE_NY_EARLY ? color.new(color.rgb(0, 188, 212), 9) : sourceName == SOURCE_EXTENDED_NY_EARLY ? color.new(color.rgb(76, 65, 245), 9) : sourceName == SOURCE_IVB ? color.new(color.rgb(245, 65, 240), 20) : sourceName == SOURCE_ASIA_PREMARKET ? color.new(color.rgb(56, 142, 60), 5) : sourceName == SOURCE_RTH ? color.new(color.rgb(48, 79, 254), 30) : usesGlobexPalette(sourceName) ? color.new(color.rgb(211, 47, 47), 30) : sourceName == SOURCE_WEEKLY ? color.new(color.rgb(123, 31, 162), 30) : sourceName == SOURCE_MONTHLY ? color.new(color.rgb(239, 108, 0), 30) : sourceName == SOURCE_ROLLING ? color.new(color.rgb(173, 20, 87), 30) : color.new(color.rgb(41, 98, 255), 30)
 
 profileRangeLabelSize(string sourceName) =>
     sourceName == SOURCE_NY_EARLY or sourceName == SOURCE_EXTENDED_NY_EARLY or sourceName == SOURCE_IVB or sourceName == SOURCE_ASIA_PREMARKET or sourceName == SOURCE_RTH ? LABEL_SIZE_TINY : LABEL_SIZE_SMALL
+
+export profileRangeLabelFontSize(string sourceName) =>
+    toLabelSize(profileRangeLabelSize(sourceName))
 
 profileDeltaPlusColor(SourceSpec source) =>
     source.alternateStyles ? color.new(color.rgb(76, 175, 80), 15) : color.new(#43c59e, 62)
@@ -1492,7 +1518,74 @@ renderProfileItems(RenderState state, array<ProfileRenderItem> items, bool inclu
     flushProfilePolylineBatch(state, batch, true, config)
     true
 
+focusSourceAllowed(string sourceName) =>
+    sourceName == SOURCE_GLOBEX or sourceName == SOURCE_WEEKLY or sourceName == SOURCE_MONTHLY
+
+focusPriceDistance(array<float> prices, FocusSettings focus) =>
+    float nearest = na
+    if not na(focus.anchorPrice)
+        for levelPrice in prices
+            bool directionMatches = focus.direction == FocusDirection.above ? levelPrice > focus.anchorPrice : focus.direction == FocusDirection.below ? levelPrice < focus.anchorPrice : focus.direction == FocusDirection.around
+            if not na(levelPrice) and directionMatches
+                float distance = math.abs(levelPrice - focus.anchorPrice)
+                nearest := na(nearest) ? distance : math.min(nearest, distance)
+    nearest
+
+focusHistoryCutoff(array<SelectionBinding> bindings, string sourceName, int fallbackTime) =>
+    int cutoffTime = na
+    for binding in bindings
+        if binding.source.key == sourceName
+            cutoffTime := fallbackTime
+            for profile in binding.selection.profiles
+                cutoffTime := math.min(cutoffTime, profile.startTime)
+    cutoffTime
+
+focusCandidateOutranks(FocusCandidate candidate, FocusCandidate other) =>
+    candidate.distance != other.distance ? candidate.distance < other.distance : candidate.archived.profile.endTime > other.archived.profile.endTime
+
+retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int capacity) =>
+    int count = array.size(ranked)
+    bool admitted = count < capacity
+    if not admitted and count > 0
+        admitted := focusCandidateOutranks(candidate, array.last(ranked))
+    if admitted
+        int insertAt = count
+        if count > 0
+            for candidateIndex = 0 to count - 1
+                if focusCandidateOutranks(candidate, array.get(ranked, candidateIndex))
+                    insertAt := candidateIndex
+                    break
+        array.insert(ranked, insertAt, candidate)
+        if array.size(ranked) > capacity
+            array.pop(ranked)
+    admitted
+
+focusedCandidates(array<FocusProfile> archive, array<SelectionBinding> bindings, int fallbackTime, FocusSettings focus) =>
+    array<FocusCandidate> ranked = array.new<FocusCandidate>()
+    if focus.direction != FocusDirection.off and focus.extraProfiles > 0
+        for archived in archive
+            int cutoffTime = focusHistoryCutoff(bindings, archived.sourceName, fallbackTime)
+            if focusSourceAllowed(archived.sourceName) and not na(cutoffTime) and archived.profile.startTime < cutoffTime
+                float distance = focusPriceDistance(archived.prices, focus)
+                if not na(distance)
+                    retainFocusCandidate(ranked, FocusCandidate.new(archived, distance), focus.extraProfiles)
+    ranked
+
+appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<FocusCandidate> candidates, array<SourceSpec> sources, int availablePolylines, bool preserveHistograms, PresentationConfig config) =>
+    int capacity = maximumProfileCapacity(config.limits, config.delta, config.levels)
+    for candidate in candidates
+        if array.size(items) >= capacity
+            break
+        SourceSpec source = sourceSpec(sources, candidate.archived.sourceName)
+        ProfilePolylineLayout geometry = profilePolylineLayout(candidate.archived.profile, source, state.cachedChartTimes, config)
+        array.push(items, ProfileRenderItem.new(geometry, "", false, true, false, true))
+        if profilePolylineCost(state, items, preserveHistograms, config) > availablePolylines
+            array.pop(items)
+            break
+    true
+
 export renderSelections(RenderState state, array<SelectionBinding> bindings, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+    array<FocusCandidate> candidates = focusedCandidates(state.focusProfiles, bindings, context.barTime, config.focus)
     trimBindings(bindings, maximumProfileCapacity(config.limits, config.delta, config.levels), config, context)
     if state.chartTimesBuiltAtBar != context.barIndex
         state.cachedChartTimes := recentChartTimes(context.barIndex)
@@ -1507,6 +1600,8 @@ export renderSelections(RenderState state, array<SelectionBinding> bindings, boo
         if array.size(items) >= previousCount
             break
     bool renderHistograms = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
+    if array.size(candidates) > 0
+        appendFocusedItems(state, items, candidates, sources, availablePolylines, renderHistograms, config)
     renderProfileItems(state, items, renderHistograms, sources, context, config)
     true
 
@@ -1536,12 +1631,56 @@ export registerProfileZones(RenderState state, legilimensOrchestration.Profile p
             renderRankedOutlierLevels(state, rankedLevels, true, sources, context, config)
     true
 
+profileFocusPrices(legilimensOrchestration.Profile profile, SourceSpec source, BarContext context, PresentationConfig config) =>
+    array<float> prices = array.new<float>()
+    if config.delta.showTiers
+        RenderState scratch = newRenderState()
+        array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
+        array<legilimensProfile.OutlierPeak> peaks = legilimensProfile.collectOutlierPeaks(profile.data, strengths)
+        queueOutlierPeaks(scratch, profile, source, peaks, "", profile.endTime, legilimensOrchestration.tradingDayKey(profile.endTime), true, config)
+        [rankedLevels, _] = rankPendingOutlierLevels(scratch, context, config)
+        for ranked in rankedLevels
+            if deltaTierSideVisible(ranked.buySide, config)
+                array.push(prices, ranked.price)
+    if config.delta.showLvnTiers
+        array<legilimensProfile.LowVolumeCandidate> candidates = legilimensProfile.selectLowVolumeCandidates(profile.data, config.delta.visibleLvnTierCount)
+        for candidate in candidates
+            array.push(prices, candidate.isLvn ? (candidate.zoneLow + candidate.zoneHigh) * 0.5 : candidate.price)
+    prices
+
+cacheFocusProfile(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, BarContext context, PresentationConfig config) =>
+    array.push(state.focusProfiles, FocusProfile.new(profile, source.key, profileFocusPrices(profile, source, context, config)))
+    int sourceCount = 0
+    int oldestIndex = -1
+    int count = array.size(state.focusProfiles)
+    for profileIndex = 0 to count - 1
+        if array.get(state.focusProfiles, profileIndex).sourceName == source.key
+            sourceCount += 1
+            if oldestIndex < 0
+                oldestIndex := profileIndex
+    if sourceCount > config.focus.searchDepth
+        FocusProfile expired = array.remove(state.focusProfiles, oldestIndex)
+        removeMitigatedProfile(state, expired.sourceName, expired.profile.startTime)
+        int keyIndex = array.size(state.mitigatedProfiles) - 1
+        while keyIndex >= 0
+            ZoneTrackingProfileKey profileKey = array.get(state.mitigatedProfiles, keyIndex)
+            if profileKey.sourceName == expired.sourceName and profileKey.startTime == expired.profile.startTime
+                array.remove(state.mitigatedProfiles, keyIndex)
+            keyIndex -= 1
+    true
+
 export registerFinalizedProfiles(RenderState state, legilimensOrchestration.AnchorState anchor, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     int count = legilimensOrchestration.finalizedProfileCount(anchor)
     if count > 0
-        if mitigationEnabled(sources, source.key, config)
+        bool collectFocus = config.focus.direction != FocusDirection.off and focusSourceAllowed(source.key)
+        bool collectZones = mitigationEnabled(sources, source.key, config)
+        if collectFocus or collectZones
             for profileIndex = 0 to count - 1
-                registerProfileZones(state, legilimensOrchestration.finalizedProfileAt(anchor, profileIndex), source, sources, context, config)
+                legilimensOrchestration.Profile profile = legilimensOrchestration.finalizedProfileAt(anchor, profileIndex)
+                if collectFocus
+                    cacheFocusProfile(state, profile, source, context, config)
+                if collectZones
+                    registerProfileZones(state, profile, source, sources, context, config)
         legilimensOrchestration.clearFinalizedProfiles(anchor)
     true
 

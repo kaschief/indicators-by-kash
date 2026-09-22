@@ -15,6 +15,9 @@ const context = vm.createContext({
     push: (values, value) => values.push(value), first: values => values[0],
     clear: values => { values.length = 0; }, concat: (target, values) => target.push(...values),
     from: (...values) => values, new: (count = 0, value = null) => Array(count).fill(value),
+    last: values => values.at(-1), pop: values => values.pop(),
+    insert: (values, index, value) => values.splice(index, 0, value),
+    remove: (values, index) => values.splice(index, 1)[0],
   },
   chart: { point: { from_time: (time, price) => ({ time, price }) } },
   color: { new: (value, fade) => `${value}:${fade}`, rgb: (...channels) => channels.join(',') },
@@ -37,13 +40,13 @@ for (const name of ['profileDeltaPlusColor', 'profileDeltaMinusColor', 'profileD
 }
 const expression = value => value.replace(/array\.new<[^>]+>/g, 'array.new')
   .replace(/\bna\b(?!\s*\()/g, 'null').replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/:=/g, '=');
-for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem']) {
+for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
   const body = source.match(new RegExp(`^(?:export )?type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
   const fields = body.trim().split('\n').map(line => line.trim().match(/^\S+ (\w+)(?: = (.+))?$/).slice(1));
   context[typeName] = { new: (...values) => Object.fromEntries(fields.map(([key, fallback], index) => [key, index < values.length ? values[index] : fallback ? vm.runInContext(expression(fallback), context) : null])) };
 }
-function compile(name, returnsValue = true) {
-  const match = source.match(new RegExp(`^(?:export )?${name}\\(([^\\n]*)\\) =>\\n((?:[ \\t]+[^\\n]*\\n|\\n)+)`, 'm'));
+function compile(name, returnsValue = true, inputSource = source) {
+  const match = inputSource.match(new RegExp(`^(?:export )?${name}\\(([^\\n]*)\\) =>\\n((?:[ \\t]+[^\\n]*\\n|\\n)+)`, 'm'));
   assert.ok(match, name);
   const parameters = match[1].split(',').map(value => value.trim().split(' ').at(-1)).join(',');
   const lines = match[2].trimEnd().split('\n').filter(line => line.trim() && !line.trim().startsWith('//'));
@@ -56,6 +59,7 @@ function compile(name, returnsValue = true) {
     if (line.startsWith('if ')) line = `if (${line.slice(3)}) {`;
     else if (line.startsWith('else if ')) line = `else if (${line.slice(8)}) {`;
     else if (line === 'else') line = 'else {';
+    else if (line.startsWith('while ')) line = `while (${line.slice(6)}) {`;
     else if (line.startsWith('for ')) {
       const range = line.match(/^for (\w+) = (.+) to (.+)$/);
       const each = line.match(/^for (\w+) in (.+)$/);
@@ -330,4 +334,156 @@ test('regular and extended tier markers share the decorated glyph without adding
   assert.match(source, /PendingMitigatedZone.new\([^\n]+markerGlyph, markerLabel/);
   assert.match(source, /queueLevelMarker\(state, ranked.price, ranked.markerTime, markerGlyph, markerLabel/);
   assert.match(source, /queueLevelMarker\(state, pending.price, levelMarkerTime\(rightTime\), pending.markerGlyph/);
+});
+
+context.FocusDirection = { off: 'Off', above: 'Above', around: 'Around', below: 'Below' };
+for (const name of ['SOURCE_WEEKLY', 'SOURCE_MONTHLY', 'DELTA_TIER_VISIBILITY_BUY', 'DELTA_TIER_VISIBILITY_SELL']) {
+  context[name] = source.match(new RegExp(`^const string ${name} = "([^"]+)"`, 'm'))[1];
+}
+context.sourceSpec = (sources, key) => sources.find(item => item.key === key);
+for (const name of ['focusSourceAllowed', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
+
+const focusSettings = (direction = 'Above', anchorPrice = 100, extraProfiles = 10) => ({ direction, anchorPrice, extraProfiles, searchDepth: 250 });
+const archivedProfile = (index, prices, sourceName = context.SOURCE_GLOBEX) => ({ profile: profile(index), prices, sourceName });
+const focusBindings = (indices, sourceName = context.SOURCE_GLOBEX) => [{ source: spec(undefined, sourceName), selection: { profiles: indices.map(index => profile(index)), currentIndex: indices.length - 1 } }];
+
+test('Focus selects additional older profiles, excludes the full requested recent set, and breaks distance ties by recency', () => {
+  const archive = [archivedProfile(1, [102]), archivedProfile(2, [102]), archivedProfile(3, [101]), archivedProfile(4, [100.1]), archivedProfile(5, [100.01]), archivedProfile(0, [100.001], context.SOURCE_RTH)];
+  const bindings = focusBindings([4, 5]);
+  const selected = context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 10));
+  assert.deepEqual(Array.from(selected, item => item.archived.profile.startTime), [300, 200, 100]);
+  assert.equal(bindings[0].selection.currentIndex, 1);
+  assert.deepEqual(bindings[0].selection.profiles.map(item => item.startTime), [400, 500]);
+  assert.equal(context.focusedCandidates(archive, bindings, 600, focusSettings('Off')).length, 0);
+  assert.equal(context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 0)).length, 0);
+});
+
+test('Focus direction is strict, Around includes equality, and manual zero/negative prices are honored', () => {
+  for (const [direction, expected] of [['Above', 2], ['Below', 1], ['Around', 0]]) {
+    assert.equal(context.focusPriceDistance([-1, 0, 2], focusSettings(direction, 0)), expected);
+  }
+  assert.equal(context.focusPriceDistance([-9, -5], focusSettings('Above', -10)), 1);
+  assert.equal(context.focusPriceDistance([100], focusSettings('Above', 100)), null);
+  assert.equal(context.focusPriceDistance([100], focusSettings('Below', 100)), null);
+  assert.equal(context.focusPriceDistance([], focusSettings()), null);
+  assert.equal(context.focusPriceDistance([101], focusSettings('Above', null)), null);
+});
+
+test('Focus uses only Globex, Weekly and Monthly, with capped counts and independently changing price anchors', () => {
+  for (const sourceName of [context.SOURCE_GLOBEX, context.SOURCE_WEEKLY, context.SOURCE_MONTHLY]) {
+    const archive = Array.from({ length: 250 }, (_, index) => archivedProfile(index, [index + 1], sourceName));
+    assert.equal(context.focusedCandidates(archive, focusBindings([250], sourceName), 25100, focusSettings('Around', 150, 10)).length, 10);
+    const choose = price => context.focusedCandidates(archive, focusBindings([250], sourceName), 25100, focusSettings('Around', price, 1))[0].archived.profile.startTime;
+    assert.equal(choose(1), 0);
+    assert.equal(choose(200), 19900);
+  }
+  for (const sourceName of [context.SOURCE_RTH, context.SOURCE_NY_EARLY, context.SOURCE_ASIA_PREMARKET, context.SOURCE_FOMC, 'Rolling', 'Fixed']) assert.equal(context.focusSourceAllowed(sourceName), false);
+  assert.match(host, /focusControlsActive = globexSelected or weeklySelected or monthlySelected/);
+  assert.match(host, /focusDirection = input.enum\(legilimensPresentation.FocusDirection.off/);
+});
+
+test('Focus additions preserve base profiles and stop at core-object or polyline capacity, including base histograms', () => {
+  const settings = config({ showTiers: false, visibleTierCount: 2, showLvnTiers: false, showHighestDeltaLevels: false });
+  settings.levels = { showValueArea: false, showPoc: false, showMidpoint: false };
+  settings.limits = { lines: 500, labels: 500, boxes: 4, polylines: 100 };
+  const style = spec(undefined, context.SOURCE_GLOBEX);
+  const baseline = prepare([profile(100)], settings, style);
+  const first = baseline[0];
+  const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index }));
+  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [] }, baseline, candidates, [style], 100, true, settings);
+  assert.equal(baseline.length, 2);
+  assert.equal(baseline[0], first);
+  assert.equal(baseline[1].geometry.profile.startTime, 100);
+  settings.limits.boxes = 500;
+  const crowded = prepare([profile(100)], settings, style);
+  crowded[0].historical = false;
+  const allowed = context.profilePolylineCost({ drawnPolylines: [] }, crowded, true, settings);
+  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [] }, crowded, candidates, [style], allowed, true, settings);
+  assert.equal(crowded.length, 1);
+  assert.equal(context.profilePolylineCost({ drawnPolylines: [] }, crowded, true, settings), allowed);
+});
+
+test('Focus scoring shares tier ranking and side visibility; LVN midpoints and cliffs match displayed prices', () => {
+  context.newRenderState = () => ({ pendingOutlierLevels: [] });
+  context.legilimensOrchestration = { tradingDayKey: value => value };
+  context.legilimensProfile.collectOutlierPeaks = () => [peak(true, 0), peak(false, 1)];
+  context.legilimensProfile.selectLowVolumeCandidates = () => [{ isLvn: true, zoneLow: 90, zoneHigh: 94, price: 90 }, { isLvn: false, price: 108 }];
+  context.legilimensProfile.rankOutlierCandidates = () => [
+    { memberIndices: [0], representativeIndex: 0, price: 101, buySide: true, strengthRank: 1 },
+    { memberIndices: [1], representativeIndex: 1, price: 105, buySide: false, strengthRank: 1 },
+  ];
+  const settings = { delta: { showTiers: true, showLvnTiers: true, visibleLvnTierCount: 2, visibleTierCount: 2, visibleTierSides: context.DELTA_TIER_VISIBILITY_BUY }, levels: { mergeOverlaps: true, mergeDistancePercent: 0 } };
+  const score = () => Array.from(context.profileFocusPrices(profile(1), spec(undefined, context.SOURCE_GLOBEX), { tickSize: .25 }, settings));
+  assert.deepEqual(score(), [101, 92, 108]);
+  settings.delta.visibleTierSides = context.DELTA_TIER_VISIBILITY_SELL;
+  assert.deepEqual(score(), [105, 92, 108]);
+  settings.delta.showTiers = false;
+  assert.deepEqual(score(), [92, 108]);
+  settings.delta.showLvnTiers = false;
+  assert.deepEqual(score(), []);
+});
+
+test('Focus archive expiry also expires mitigation metadata and leaves other sources intact', () => {
+  const settings = { delta: { showTiers: false, showLvnTiers: false }, focus: { searchDepth: 2 } };
+  const state = { focusProfiles: [archivedProfile(0, [], context.SOURCE_WEEKLY)], mitigatedProfiles: [{ sourceName: context.SOURCE_WEEKLY, startTime: 0 }, { sourceName: context.SOURCE_GLOBEX, startTime: 100 }] };
+  const expired = [];
+  context.removeMitigatedProfile = (state, sourceName, startTime) => expired.push([sourceName, startTime]);
+  for (const index of [1, 2, 3]) context.cacheFocusProfile(state, profile(index), spec(undefined, context.SOURCE_GLOBEX), {}, settings);
+  assert.deepEqual(Array.from(state.focusProfiles, item => item.profile.startTime), [0, 200, 300]);
+  assert.deepEqual(expired, [[context.SOURCE_GLOBEX, 100]]);
+  assert.deepEqual(state.mitigatedProfiles, [{ sourceName: context.SOURCE_WEEKLY, startTime: 0 }]);
+});
+
+test('deeper Rolling Weekly/Monthly history preserves recent period boundaries and sample membership across DST', () => {
+  const orchestration = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+  const parts = value => Object.fromEntries(formatter.formatToParts(new Date(value)).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+  context.NY_TIMEZONE = 'America/New_York';
+  context.START_TIME_UNSET = -1;
+  context.MS_PER_HOUR = 3600000;
+  for (const name of ['year', 'month', 'hour', 'minute']) context[name] = value => parts(value)[name];
+  context.dayofmonth = value => parts(value).day;
+  context.dayofweek = Object.assign(value => { const p = parts(value); return new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay() + 1; }, { saturday: 7, sunday: 1 });
+  context.timestamp = (zone, year, month, day, hour, minute) => {
+    const target = Date.UTC(year, month - 1, day, hour, minute);
+    let value = target;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const p = parts(value);
+      value += target - Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    }
+    return value;
+  };
+  for (const name of ['previousNyCutoff', 'nextNyCutoff', 'lookbackDaysStart', 'lookforwardDaysEndValue', 'processRollingPeriodAnchor']) compile(name, true, orchestration);
+  compile('rollingFocusPeriodCount', true, host);
+  context.legilimensProfile.compactIfNeeded = () => {};
+  context.appendBatchSample = (state, samples, index) => state.volumes.push(samples.volumes[index]);
+  context.finalizePeriod = (state, startTime, endTime, keepProfiles) => {
+    if (state.volumes.length) {
+      state.profiles.push({ startTime, endTime, members: [...state.volumes] });
+      while (state.profiles.length > keepProfiles) state.profiles.shift();
+      state.volumes.length = 0;
+    }
+  };
+  for (const twentyFourSeven of [false, true]) for (const periodDays of [7, 30]) for (const finalDate of [[2026, 3, 30], [2026, 9, 22], [2026, 11, 9]]) {
+    const finalTime = context.timestamp('', ...finalDate, 18, 0);
+    const firstTime = context.timestamp('', finalDate[0] - 1, finalDate[1], finalDate[2], 18, 0);
+    const count = context.rollingFocusPeriodCount(finalTime, firstTime, periodDays, 4, 250);
+    assert.ok(count > 4 && count <= 250);
+    const run = periods => {
+      const startTime = context.lookbackDaysStart(finalTime, periodDays * periods, twentyFourSeven);
+      const state = { startTime: -1, periodEndTime: -1, volumes: [], highs: [], lows: [], deltas: [], profiles: [] };
+      for (let instant = firstTime; instant <= finalTime; instant = context.nextNyCutoff(instant, 18, 0)) {
+        const weekday = context.dayofweek(instant);
+        const volume = twentyFourSeven || (weekday !== 7 && weekday !== 1) ? [instant] : [];
+        const samples = { startTimes: [instant], endTimes: [instant + 60000], volumes: volume };
+        context.processRollingPeriodAnchor(state, true, periodDays, startTime, finalTime, twentyFourSeven, true, instant, samples, 50, 400, .25);
+      }
+      return state.profiles;
+    };
+    const base = run(4);
+    assert.equal(base.length, 4);
+    assert.deepEqual(run(count).slice(-4), base, `${periodDays} days; 24/7=${twentyFourSeven}; end=${finalDate}`);
+  }
+  assert.equal(context.rollingFocusPeriodCount(Date.UTC(2026, 1), Date.UTC(1990, 1), 30, 4, 250), 250);
+  assert.match(host, /focusSelected and rollingPeriodSelected and \(na\(rollingFocusEndTime\)/);
 });
