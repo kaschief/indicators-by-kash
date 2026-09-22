@@ -116,18 +116,43 @@ test('forecast values travel as one shared data object', () => {
 
 test('intraday request objects are normalized before their fields are read', () => {
   const body = functionBody('scheduled_profile_data_or_empty');
-  assert.match(body, /if na\(safeProfileData\)\n        safeProfileData := ScheduledProfileData\.new\(forecast=ScheduledProfileForecastData\.new\(\)\)/);
+  assert.match(body, /var ScheduledProfileData emptyProfileData = ScheduledProfileData\.new\(forecast=ScheduledProfileForecastData\.new\(\)\)/);
+  assert.match(body, /if na\(safeProfileData\)\n        safeProfileData := emptyProfileData/);
   assert.match(body, /else if na\(safeProfileData\.forecast\)\n        safeProfileData\.forecast := ScheduledProfileForecastData\.new\(\)/);
 
   for (const prefix of ['overnight', 'nyEarly', 'nyAm', 'nyPm', 'ivb', 'ivbPlus']) {
     assert.match(source, new RegExp(`^${prefix}Data := scheduled_profile_data_or_empty\\(${prefix}Data\\)$`, 'm'));
   }
 
-  const requestIndex = source.indexOf('[overnightData, nyEarlyData, nyAmData, nyPmData, ivbData, ivbPlusData] = request.security(');
+  const requestIndex = source.indexOf('[overnightData, nyEarlyData, nyAmData, nyPmData, ivbData, ivbPlusData] = if ');
   const normalizationIndex = source.indexOf('overnightData := scheduled_profile_data_or_empty(overnightData)');
   const dereferenceIndex = source.indexOf('overnightChartState, scheduledProfileTrackOnChart, overnightData.startTime');
   assert.ok(requestIndex >= 0 && requestIndex < normalizationIndex);
   assert.ok(normalizationIndex < dereferenceIndex);
+});
+
+test('Daily-only charts skip the intraday request instead of returning disabled profile objects', () => {
+  const requestBlock = source.match(/^\[overnightData, nyEarlyData, nyAmData, nyPmData, ivbData, ivbPlusData\] = if ([^\n]+)\n([\s\S]*?)^overnightData :=/m);
+  assert.ok(requestBlock);
+  const expectedValids = ['overnightValid', 'nyEarlyValid', 'nyAmValid', 'nyPmValid', 'ivbValid', 'ivbPlusValid'];
+  assert.deepEqual(requestBlock[1].split(' or '), expectedValids);
+  const [enabledBranch, disabledBranch] = requestBlock[2].split('\nelse\n');
+  assert.match(enabledBranch, /^    request\.security\(/);
+  assert.match(enabledBranch, /fetch_intraday_profiles_data\(/);
+  assert.doesNotMatch(disabledBranch, /request\.|\.new\(/);
+  assert.match(disabledBranch, /ScheduledProfileData unavailableData = na/);
+  assert.equal(disabledBranch.match(/unavailableData/g)?.length, 7);
+});
+
+test('disabled sessions and bars outside their requested history return no object payload', () => {
+  const body = functionBody('fetch_intraday_profile_data');
+  const constructorGate = body.indexOf('if tailEnabled\n');
+  assert.ok(constructorGate >= 0);
+  assert.doesNotMatch(body.slice(0, constructorGate), /ScheduledProfile(?:Forecast)?Data\.new\(/);
+  assert.match(body, /ScheduledProfileData profileData = na\n    if tailEnabled/);
+  assert.match(body, /if tailEnabled\n        ScheduledProfileForecastData forecastData = ScheduledProfileForecastData\.new\(/);
+  assert.match(body, /        profileData := ScheduledProfileData\.new\(/);
+  assert.match(body, /\n    profileData$/);
 });
 
 test('intraday forecast statistics include the latest completed occurrence', () => {
@@ -469,7 +494,7 @@ test('scheduled profile requests scale to configured lookback and history', () =
   assert.match(body, /DISABLED_PROFILE_REQUEST_BARS/);
   assert.equal(source.match(/calc_bars_count=scheduled_profile_request_bars\(/g)?.length, 1);
   assert.equal(source.match(/calc_bars_count=scheduled_intraday_request_bars\(/g)?.length, 1);
-  assert.match(source, /request\.security\(\n     htfTickerId, SESSION_SOURCE_TIMEFRAME,\n     fetch_intraday_profiles_data\(/);
+  assert.match(source, /request\.security\(\n         htfTickerId, SESSION_SOURCE_TIMEFRAME,\n         fetch_intraday_profiles_data\(/);
   assert.equal(source.match(/fetch_scheduled_profile_data\(/g)?.length, 3);
   assert.equal(source.match(/fetch_intraday_profile_data\(/g)?.length, 7);
   const combinedBody = functionBody('scheduled_intraday_request_bars');
