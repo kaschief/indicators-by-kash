@@ -281,7 +281,7 @@ test('Daily Boundary Exceeded controls configure reusable profile-edge qualifica
   assert.match(source, /dailyProfileEdgeQualificationConfig = ProfileEdgeQualificationConfig\.new\(\n     enabled=dailyBoundaryExceededEnabled/);
   assert.match(source, /historyEnabled=dailyBoundaryExceededHistory/);
   assert.match(source, /cutoffMinute=time_option_minutes\(dailyBoundaryExceededCutoff\)/);
-  assert.match(source, /outlineColor=color\.orange,\n     outlineWidth=3/);
+  assert.match(source, /outlineColor=color\.orange,\n     outlineWidth=2/);
   assert.match(source, /edgeQualification=ProfileEdgeQualification\.new\(config=dailyProfileEdgeQualificationConfig, state=new_profile_edge_qualification_state\(\)\)/);
   assert.equal(source.match(/edgeQualification=na/g)?.length, 6);
   assert.doesNotMatch(source, /disabledProfileEdgeQualificationConfig/);
