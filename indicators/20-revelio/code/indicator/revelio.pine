@@ -72,6 +72,7 @@ HISTOGRAM_WIDTH_PERCENT = 25.0
 VALUE_AREA_PERCENT = 70.0
 HISTOGRAM_BATCH_POINT_LIMIT = 9900
 COMPOSITE_ALL_DISPLAYED = "All Displayed"
+COMPOSITE_RTH_GLOBEX = "RTH + Globex"
 COMPOSITE_FRAME_TRANSPARENCY = 70
 COMPOSITE_FRAME_PADDING_ROWS = 8.0
 
@@ -375,7 +376,7 @@ globexMergeMode = input.enum(revelioProfiles.MergeMode.allIntoPrevious, revelioP
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — Manual Composite
 // ═══════════════════════════════════════════════════════════════════════════════
-manualCompositeSource = input.string(revelioProfiles.OPTION_OFF, "Composite", options=[revelioProfiles.OPTION_OFF, COMPOSITE_ALL_DISPLAYED, revelioProfiles.ANCHOR_RTH, revelioProfiles.ANCHOR_GLOBEX, revelioProfiles.ANCHOR_WEEKLY, revelioProfiles.ANCHOR_MONTHLY, revelioProfiles.ANCHOR_QUARTERLY], inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
+manualCompositeSource = input.string(revelioProfiles.OPTION_OFF, "Composite", options=[revelioProfiles.OPTION_OFF, COMPOSITE_ALL_DISPLAYED, COMPOSITE_RTH_GLOBEX, revelioProfiles.ANCHOR_RTH, revelioProfiles.ANCHOR_GLOBEX, revelioProfiles.ANCHOR_WEEKLY, revelioProfiles.ANCHOR_MONTHLY, revelioProfiles.ANCHOR_QUARTERLY], inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
 manualCompositeFrom = input.time(0, "From", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE)
 manualCompositeThrough = input.time(0, "Through", inline="manual_composite", group=GROUP_MANUAL_COMPOSITE, tooltip="Reset points")
 
@@ -509,7 +510,6 @@ labelMergeDistancePercent = labelMergePreset == LABEL_MERGE_STRICT ? LABEL_MERGE
 // INPUTS — Right Edge
 // ═══════════════════════════════════════════════════════════════════════════════
 levelLabelOffset = input.int(20, LABEL_LEVEL_LABEL_OFFSET, minval=0, maxval=100, tooltip="Shift price labels this many bars into the right margin.", group=GROUP_RIGHT_EDGE)
-stopLevelLinesAtOffset = input.bool(true, "Stop Lines at Price Label Offset", group=GROUP_RIGHT_EDGE, tooltip="Stops open level lines at the Price Label Offset.")
 floatingValueGapOffset = input.int(150, "Floating Gaps · Offset", minval=1, maxval=500, inline="right_edge_floating", group=GROUP_RIGHT_EDGE, active=valueGapFloatingControlsActive)
 floatingValueGapWidth = input.int(10, "Width", minval=2, maxval=50, inline="right_edge_floating", group=GROUP_RIGHT_EDGE, active=valueGapFloatingControlsActive, tooltip="Offset sets where floating gaps begin. Width sets each gap's bar width. Adjacent gaps keep 10 empty bars between them.")
 upcomingValueGapOffset = input.int(90, "Upcoming Gap · Offset", minval=1, maxval=100, inline="right_edge_upcoming", group=GROUP_RIGHT_EDGE, active=upcomingValueGapControlsActive)
@@ -936,7 +936,8 @@ mostRecentWeekday(int dateSerial) =>
     weekday == dayofweek.saturday ? dateSerial - 1 : weekday == dayofweek.sunday ? dateSerial - 2 : dateSerial
 
 manualCompositeIncludesAnchor(string selection, string anchor, bool displayed) =>
-    displayed and (selection == COMPOSITE_ALL_DISPLAYED or selection == anchor)
+    bool selectedDailyPair = selection == COMPOSITE_RTH_GLOBEX and (anchor == revelioProfiles.ANCHOR_RTH or anchor == revelioProfiles.ANCHOR_GLOBEX)
+    displayed and (selection == COMPOSITE_ALL_DISPLAYED or selectedDailyPair or selection == anchor)
 
 resolveManualCompositeSelection(bool configured, string source, int fromTime, int throughTime, bool useUtcCalendar, bool twentyFourSeven) =>
     var revelioCore.ManualCompositeRange disabledRange = revelioCore.newManualCompositeRange(false, false, START_TIME_UNSET, START_TIME_UNSET)
@@ -972,10 +973,11 @@ purgeInvalidatedManualComposite(revelioCore.AnchorState state, revelioCore.AutoS
     removed
 
 renderManualCompositeSelectionGuides(int fromTime, int throughTime, color selectionColor) =>
+    color guideColor = color.new(selectionColor, 40)
     if fromTime > 0
-        trackLine(line.new(fromTime, low, fromTime, high, xloc=xloc.bar_time, extend=extend.both, color=selectionColor, style=line.style_dotted, width=1))
+        trackLine(line.new(fromTime, low, fromTime, high, xloc=xloc.bar_time, extend=extend.both, color=guideColor, style=line.style_dotted, width=1))
     if throughTime > 0
-        trackLine(line.new(throughTime, low, throughTime, high, xloc=xloc.bar_time, extend=extend.both, color=selectionColor, style=line.style_dotted, width=1))
+        trackLine(line.new(throughTime, low, throughTime, high, xloc=xloc.bar_time, extend=extend.both, color=guideColor, style=line.style_dotted, width=1))
     true
 
 matchingManualCompositeProfile(array<revelioCore.Profile> profiles, revelioCore.Profile liveProfile, int startKey, int endKey) =>
@@ -1114,8 +1116,8 @@ renderManualCompositeFrame(array<revelioCore.Profile> profiles, revelioCore.Prof
 
 // sweptDenote adds a faded continuation that preserves the level's original style and width.
 drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidth, string styleName, bool extendRight, color labelColor, string levelName, SessionStyle style, bool sweptDenote, color sweptContinuationColor, bool hitTraceActive, bool archivedTouch, bool isLive, bool isLast, int anchorEndTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, string displaySuffix) =>
-    int primaryEndTime = stopLevelLinesAtOffset and extendRight ? time : endTime
-    line primaryLine = line.new(x1=startTime, y1=price, x2=primaryEndTime, y2=price, xloc=xloc.bar_time, extend=extendRight and not stopLevelLinesAtOffset ? extend.right : extend.none, color=lineColor, width=lineWidth, style=toLineStyle(styleName))
+    int primaryEndTime = extendRight ? time : endTime
+    line primaryLine = line.new(x1=startTime, y1=price, x2=primaryEndTime, y2=price, xloc=xloc.bar_time, extend=extend.none, color=lineColor, width=lineWidth, style=toLineStyle(styleName))
     bool primaryLineRetained = trackLine(primaryLine)
     line activeLine = extendRight and primaryLineRetained ? primaryLine : na
     bool rightEdgeSegmentRetained = extendRight and primaryLineRetained
@@ -1133,13 +1135,13 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
         color anchorReminderTextColor = revelioInteractions.fadeColor(labelTextColor, ANCHOR_REMINDER_FADE_PERCENT / 100.0)
         queueBoundedLineReminder(price, anchorEndTime, visibleEndTime, lineReminderPlacementPhase(levelName), anchorLabelIdentity, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth)
     if sweptDenote
-        line sweptContinuationLine = line.new(x1=endTime, y1=price, x2=time, y2=price, xloc=xloc.bar_time, extend=stopLevelLinesAtOffset ? extend.none : extend.right, color=sweptContinuationColor, width=lineWidth, style=toLineStyle(styleName))
+        line sweptContinuationLine = line.new(x1=endTime, y1=price, x2=time, y2=price, xloc=xloc.bar_time, extend=extend.none, color=sweptContinuationColor, width=lineWidth, style=toLineStyle(styleName))
         bool sweptContinuationRetained = trackLine(sweptContinuationLine)
         activeLine := sweptContinuationRetained ? sweptContinuationLine : na
         continuationLine := sweptContinuationRetained ? sweptContinuationLine : na
         continuationLineColor := sweptContinuationRetained ? sweptContinuationColor : na
         rightEdgeSegmentRetained := sweptContinuationRetained
-    if stopLevelLinesAtOffset and (extendRight or sweptDenote) and rightEdgeSegmentRetained and style.levelLabelOffset > 0
+    if (extendRight or sweptDenote) and rightEdgeSegmentRetained and style.levelLabelOffset > 0
         color carrierColor = sweptDenote ? sweptContinuationColor : lineColor
         int carrierWidth = lineWidth
         string carrierStyle = toLineStyle(styleName)
@@ -1316,7 +1318,7 @@ renderFocusAnchor(bool anchorVisible, float anchorPrice, bool anchorPlaced, colo
 
 levelDrawingLineCount(int breachTime, string extensionMode, bool sweptDenote, int labelOffset) =>
     [_, extendRight] = levelEndpoint(0, breachTime, extensionMode)
-    int carrierCount = stopLevelLinesAtOffset and labelOffset > 0 and (extendRight or sweptDenote) ? 1 : 0
+    int carrierCount = labelOffset > 0 and (extendRight or sweptDenote) ? 1 : 0
     1 + (sweptDenote ? 1 : 0) + carrierCount
 
 // Must mirror every level-line emission path in renderProfile and drawLevel.
