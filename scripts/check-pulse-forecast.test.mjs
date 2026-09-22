@@ -87,7 +87,7 @@ for (const period of ['Daily', 'Weekly', 'Monthly', 'Overnight', 'Premarket', 'A
   });
 }
 
-test('Asia Open and Rafael defer confirmed mitigation and LD consumption until the next 05:00 NY boundary', () => {
+test('Asia Open and Rafael track provisional LD touches while deferring parent confirmation until 05:00 NY', () => {
   const detectionBody = functionBody('pool_detect_breaches');
   const confirmationBody = functionBody('delayed_mitigation_confirmation_start');
 
@@ -95,7 +95,7 @@ test('Asia Open and Rafael defer confirmed mitigation and LD consumption until t
   assert.match(detectionBody, /bool canConfirmMitigation = not delayedMitigation or eventTime >= delayed_mitigation_confirmation_start\(array\.get\(pool\.session_start_times, poolIndex\)\)/);
   for (const side of ['high', 'low']) {
     assert.match(detectionBody, new RegExp(`else if not array\\.get\\(pool\\.${side}_provisional_breached, poolIndex\\)\\n\\s+array\\.set\\(pool\\.${side}_provisional_breached, poolIndex, true\\)`));
-    assert.match(detectionBody, new RegExp(`if ${side}Breached\\n\\s+pool_detect_depth_breaches`));
+    assert.match(detectionBody, new RegExp(`if ${side}Breached or array\\.get\\(pool\\.${side}_provisional_breached, poolIndex\\)\\n\\s+pool_detect_depth_breaches\\([^\\n]+depthStep, ${side}Breached\\)`));
   }
   assert.match(functionBody('pool_store_session'), /array\.push\(pool\.high_provisional_breached, false\)/);
   assert.match(functionBody('pool_store_session'), /array\.push\(pool\.low_provisional_breached, false\)/);
@@ -109,6 +109,141 @@ test('Forecast LD remains visible while a delayed parent breach is still provisi
   assert.equal(drawDepth(true, false, false), false);
   assert.equal(drawDepth(true, true, false), true);
 });
+
+test('provisional boundary coordinates are stored once and follow pool storage/pruning', () => {
+  for (const side of ['high', 'low']) {
+    for (const [field, value] of [['times', 'eventTime'], ['indices', 'candleIndex']]) {
+      const name = `${side}_provisional_${field}`;
+      assert.ok(functionBody('pool_store_session').includes(`array.push(pool.${name}, na)`));
+      assert.ok(functionBody('prune_pool').includes(`array.shift(pool.${name})`));
+      assert.ok(source.includes(`array.clear(weekly_pool.${name})`));
+      const firstTouchBranch = functionBody('pool_detect_breaches').match(new RegExp(`else if not array\\.get\\(pool\\.${side}_provisional_breached, poolIndex\\)\\n((?: {20}[^\\n]+\\n)+)`))?.[1];
+      assert.ok(firstTouchBranch?.includes(`array.set(pool.${name}, poolIndex, ${value})`));
+    }
+    assert.ok(functionBody('draw_liquidity_pool').includes(`draw_pool_boundary(all_lines, ${side}_val, ${side}_time, ${side}_index, ${side}_end_time, ${side}_end_index, array.get(pool.${side}_provisional_times, idx), array.get(pool.${side}_provisional_indices, idx), ${side}LineColor, renderSpec.lineWidth)`));
+  }
+});
+
+const renderBoundarySource = toJavaScript(functionBody('draw_pool_boundary'))
+  .replace(/^(\s*)(bool|int) /gm, '$1let ')
+  .replace(/^\s*if hasProvisionalTouch$/m, 'if (hasProvisionalTouch) {') + '\n}';
+const renderBoundary = new Function('startTime', 'startIndex', 'endTime', 'endIndex', 'provisionalTime', 'provisionalIndex',
+  `const drawn = [], levelPrice = 100, lineColor = 'pool-color', lineWidth = 2, LINE_WIDTH_1 = 1;
+   const na = value => value == null;
+   const array = { push: (values, value) => values.push(value) };
+   const line = { style_solid: 'solid', style_dashed: 'dashed' };
+   const create_pool_line = (startTime, startIndex, price, endTime, endIndex, color, width, style) =>
+     ({ startTime, startIndex, endTime, endIndex, style, width });
+   ${renderBoundarySource}
+   return drawn;`);
+
+test('untouched and directly confirmed boundaries retain a single solid segment', () => {
+  for (const endTime of [2000, 3000]) {
+    assert.deepEqual(renderBoundary(1000, 10, endTime, 30, null, null), [
+      { startTime: 1000, startIndex: 10, endTime, endIndex: 30, style: 'solid', width: 2 },
+    ]);
+  }
+});
+
+test('provisional boundary splits at its first touch and the dashed segment stops at confirmation', () => {
+  for (const [endTime, endIndex] of [[3000, 30], [4000, 40]]) {
+    assert.deepEqual(renderBoundary(1000, 10, endTime, endIndex, 2000, 20), [
+      { startTime: 1000, startIndex: 10, endTime: 2000, endIndex: 20, style: 'solid', width: 2 },
+      { startTime: 2000, startIndex: 20, endTime, endIndex, style: 'dashed', width: 1 },
+    ]);
+  }
+});
+
+test('provisional boundary preserves distinct Range bars sharing a timestamp', () => {
+  assert.deepEqual(renderBoundary(1000, 10, 2000, 30, 2000, 20), [
+    { startTime: 1000, startIndex: 10, endTime: 2000, endIndex: 20, style: 'solid', width: 2 },
+    { startTime: 2000, startIndex: 20, endTime: 2000, endIndex: 30, style: 'dashed', width: 1 },
+  ]);
+  assert.match(functionBody('create_pool_line'), /chart\.is_range \? line\.new\(range_start_index/);
+});
+
+// Execute the depth helper's source with Pine array/na shims; this is not a Pine compiler.
+const depthDetectionStatements = [];
+const depthDetectionBlocks = [];
+for (const rawLine of functionBody('pool_detect_depth_breaches').split('\n')) {
+  const statement = rawLine.trim();
+  if (!statement) continue;
+  const indent = rawLine.length - rawLine.trimStart().length;
+  while (depthDetectionBlocks.length && indent <= depthDetectionBlocks.at(-1)) {
+    depthDetectionStatements.push('}');
+    depthDetectionBlocks.pop();
+  }
+  const loop = statement.match(/^for (\w+) = (.+) to (.+)$/);
+  if (loop) {
+    depthDetectionStatements.push(`for (let ${loop[1]} = ${loop[2]}; ${loop[1]} <= ${loop[3]}; ${loop[1]}++) {`);
+    depthDetectionBlocks.push(indent);
+  } else if (statement.startsWith('if ')) {
+    depthDetectionStatements.push(`if (${toJavaScript(statement.slice(3))}) {`);
+    depthDetectionBlocks.push(indent);
+  } else {
+    assert.match(statement, /^(float |bool |array\.set\()/);
+    depthDetectionStatements.push(toJavaScript(statement.replace(/^(float|bool) /, 'let ')) + ';');
+  }
+}
+depthDetectionStatements.push(...depthDetectionBlocks.map(() => '}'));
+const detectDepth = new Function('depthState', 'basePrice', 'isHigh', 'barExtreme', 'eventTime', 'candleIndex', 'depthStep', 'parentBreached',
+  `const NUM_LIQUIDITY_DEPTH_LEVELS = 3;
+   const array = { get: (values, index) => values[index], set: (values, index, value) => { values[index] = value; } };
+   const na = value => value == null;
+   const liquidity_depth_price = (basePrice, isHigh, levelIndex, depthStep) => {
+     ${functionBody('liquidity_depth_price').replace(/^float /, 'let ').replace(/\n\s+(isHigh \?)/, ';\nreturn $1')}
+   };
+   ${depthDetectionStatements.join('\n')}`);
+const newDepthState = () => ({ breached: [false, false, false], breach_times: [null, null, null], breach_indices: [null, null, null] });
+
+for (const isHigh of [false, true]) {
+  const side = isHigh ? 'high' : 'low';
+  const extreme = distance => 100 + (isHigh ? distance : -distance);
+
+  test(`${side}: acceptance restores each earlier touch endpoint without consuming untouched L3`, () => {
+    const state = newDepthState();
+    detectDepth(state, 100, isHigh, extreme(10), 1000, 11, 10, false);
+    detectDepth(state, 100, isHigh, extreme(20), 2000, 12, 10, false);
+    assert.deepEqual(state.breached, [false, false, false]);
+    assert.deepEqual(state.breach_times, [1000, 2000, null]);
+    detectDepth(state, 100, isHigh, extreme(0), 3000, 13, 10, true);
+    assert.deepEqual(state.breached, [true, true, false]);
+    assert.deepEqual(state.breach_times, [1000, 2000, null]);
+    assert.deepEqual(state.breach_indices, [11, 12, null]);
+    detectDepth(state, 100, isHigh, extreme(30), 4000, 14, 10, true);
+    assert.deepEqual(state.breached, [true, true, true]);
+    assert.deepEqual(state.breach_times, [1000, 2000, 4000]);
+    assert.deepEqual(state.breach_indices, [11, 12, 14]);
+  });
+
+  test(`${side}: confirmation candle can consume new depths while preserving an earlier Range bar at the same timestamp`, () => {
+    const state = newDepthState();
+    detectDepth(state, 100, isHigh, extreme(10), 1000, 21, 10, false);
+    detectDepth(state, 100, isHigh, extreme(30), 1000, 22, 10, true);
+    assert.deepEqual(state.breached, [true, true, true]);
+    assert.deepEqual(state.breach_times, [1000, 1000, 1000]);
+    assert.deepEqual(state.breach_indices, [21, 22, 22]);
+  });
+
+  test(`${side}: fully touched provisional ladder remains unmitigated until acceptance`, () => {
+    const state = newDepthState();
+    detectDepth(state, 100, isHigh, extreme(30), 1000, 31, 10, false);
+    detectDepth(state, 100, isHigh, extreme(0), 2000, 32, 10, false);
+    assert.deepEqual(state.breached, [false, false, false]);
+    detectDepth(state, 100, isHigh, extreme(0), 3000, 33, 10, true);
+    assert.deepEqual(state.breached, [true, true, true]);
+    assert.deepEqual(state.breach_indices, [31, 31, 31]);
+  });
+
+  test(`${side}: immediate confirmation retains normal first-touch mitigation`, () => {
+    const state = newDepthState();
+    detectDepth(state, 100, isHigh, extreme(9), 1000, 41, 10, true);
+    assert.deepEqual(state, newDepthState());
+    detectDepth(state, 100, isHigh, extreme(20), 2000, 42, 10, true);
+    assert.deepEqual(state.breached, [true, true, false]);
+    assert.deepEqual(state.breach_times, [2000, 2000, null]);
+  });
+}
 
 test('all seven pools share drawing, visibility and price calculation', () => {
   assert.equal((source.match(/PoolRenderSpec\.new\(/g) || []).length, 7);
@@ -127,15 +262,15 @@ test('Unmitigated Only preserves faded breached context only for a partly active
   const body = functionBody('draw_pool_depths');
   assert.match(body, /bool hasUnmitigatedLevel = depth_has_unmitigated_level\(depthState\)/);
   assert.match(body, /bool mitigatedContext = showUnmitigatedOnly and hasUnmitigatedLevel and levelBreached/);
-  assert.match(body, /color\.new\(levelColor, mitigatedContextTransparency\)/);
+  assert.match(body, /color\.new\(levelColor, 85\)/);
   assert.match(body, /buffer_liq_depth_labels\([^\n]+mitigatedContext\)/);
   assert.match(body, /create_liq_depth_connector\([^\n]+connectorTransparency\)/);
-  assert.match(source, /mitigatedContextTransparency = input\.int\(85, "Mitigated Context Transparency", minval=0, maxval=100, step=5/);
+  assert.doesNotMatch(source, /mitigatedContextTransparency|Mitigated Context Transparency/);
   const poolBody = functionBody('draw_liquidity_pool');
   for (const side of ['high', 'low']) {
     const title = `${side[0].toUpperCase()}${side.slice(1)}`;
     assert.match(poolBody, new RegExp(`bool ${side}MitigatedContext = showUnmitigatedOnly and ${side}_breached and ${side}DepthVisible and depth_has_unmitigated_level\\(${side}DepthState\\)`));
-    assert.match(poolBody, new RegExp(`color ${side}LineColor = ${side}MitigatedContext \\? color\\.new\\(renderSpec\\.lineColor, mitigatedContextTransparency\\)`));
+    assert.match(poolBody, new RegExp(`color ${side}LineColor = ${side}MitigatedContext \\? color\\.new\\(renderSpec\\.lineColor, 85\\)`));
     assert.match(poolBody, new RegExp(`buffer_pool_label\\([^\\n]+${side}MitigatedContext\\)`));
     assert.match(poolBody, new RegExp(`bool show${title}Pool = not showUnmitigatedOnly or not ${side}_breached or ${side}MitigatedContext`));
   }
@@ -193,8 +328,8 @@ for (const [selection, keyOpens, sessions] of [
   });
 }
 
-test('Today additions default to None and do not change dedicated session preferences', () => {
-  assert.match(source, /todayAdditionalPools = input.string\("None", "Show in Today", [^\n]*options=\["None", FILTER_KEY_OPENS, FILTER_ASIA_OPEN_RAFAEL, FILTER_ALL\]/);
+test('Today additions default to Asia Open + Rafael and do not change dedicated session preferences', () => {
+  assert.match(source, /todayAdditionalPools = input.string\(FILTER_ASIA_OPEN_RAFAEL, "Show in Today", [^\n]*options=\["None", FILTER_KEY_OPENS, FILTER_ASIA_OPEN_RAFAEL, FILTER_ALL\]/);
   assert.doesNotMatch(source, /showKeyOpensInToday|showAsiaOpenRafaelInToday/);
   for (const enabled of [false, true]) {
     for (const name of ['AsiaOpen', 'Rafael']) {

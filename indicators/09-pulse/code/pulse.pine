@@ -229,6 +229,10 @@ type LiquidityPool
     array<bool> low_breached
     array<bool> high_provisional_breached
     array<bool> low_provisional_breached
+    array<int> high_provisional_times
+    array<int> low_provisional_times
+    array<int> high_provisional_indices
+    array<int> low_provisional_indices
     array<int> high_breach_times
     array<int> low_breach_times
     array<int> high_breach_indices
@@ -371,9 +375,8 @@ get_detected_asset_name() =>
 pulseModeFilter = input.string(FILTER_TODAY, "Show Only", group=GROUP_PULSE_MODE, options=[FILTER_ALL, FILTER_TODAY, FILTER_LIQUIDITY_MAP, FILTER_WORK_RANGE_KEY_OPENS_HTF, FILTER_HTF, FILTER_DAILY, FILTER_WEEKLY, FILTER_MONTHLY, FILTER_OVERNIGHT_PREMARKET, FILTER_ASIA_OPEN_RAFAEL, FILTER_KEY_OPENS, FILTER_RANGE_KEY_OPENS, FILTER_RANGE_BOX_1600, FILTER_RANGE_BOX])
 showPeaks = input.bool(false, "Show Peaks", inline="pulse_primary_toggles", group=GROUP_PULSE_MODE)
 forecastLiquidityDepth = input.bool(false, "Forecast LD", inline="pulse_primary_toggles", group=GROUP_PULSE_MODE)
-todayAdditionalPools = input.string("None", "Show in Today", inline="pulse_secondary_toggles", options=["None", FILTER_KEY_OPENS, FILTER_ASIA_OPEN_RAFAEL, FILTER_ALL], group=GROUP_PULSE_MODE, active=pulseModeFilter == FILTER_TODAY)
+todayAdditionalPools = input.string(FILTER_ASIA_OPEN_RAFAEL, "Show in Today", inline="pulse_secondary_toggles", options=["None", FILTER_KEY_OPENS, FILTER_ASIA_OPEN_RAFAEL, FILTER_ALL], group=GROUP_PULSE_MODE, active=pulseModeFilter == FILTER_TODAY)
 showUnmitigatedOnly = input.bool(false, "Unmitigated Only", inline="pulse_secondary_toggles", group=GROUP_PULSE_MODE)
-mitigatedContextTransparency = input.int(85, "Mitigated Context Transparency", minval=0, maxval=100, step=5, group=GROUP_PULSE_MODE, active=showUnmitigatedOnly, tooltip="Fades a breached pool and breached L1–L3 while its ladder still contains an untouched level.")
 todayShowLast = input.int(1, "Today Show Last", group=GROUP_PULSE_MODE, options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10], tooltip="Pools per type and side in Today mode.")
 
 // ─── Quick Filter: Show Only ───
@@ -588,7 +591,7 @@ actualOvernightSession := is247Asset ? ("1600-0500" + DAY_CODE_ALL_DAYS) : (str.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 create_pool() =>
-    LiquidityPool.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_bool(), array.new_bool(), array.new_bool(), array.new_bool(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), na, na, na, na, na, na, na)
+    LiquidityPool.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_bool(), array.new_bool(), array.new_bool(), array.new_bool(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new_int(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), array.new<LiquidityDepthLevels>(), na, na, na, na, na, na, na)
 
 create_range_box() =>
     RangeBox.new(array.new_float(), array.new_float(), array.new_int(), array.new_int(), na, na, na)
@@ -625,6 +628,10 @@ prune_pool(LiquidityPool pool, int maxSize) =>
         array.shift(pool.low_breached)
         array.shift(pool.high_provisional_breached)
         array.shift(pool.low_provisional_breached)
+        array.shift(pool.high_provisional_times)
+        array.shift(pool.low_provisional_times)
+        array.shift(pool.high_provisional_indices)
+        array.shift(pool.low_provisional_indices)
         array.shift(pool.high_breach_times)
         array.shift(pool.low_breach_times)
         array.shift(pool.high_breach_indices)
@@ -775,6 +782,10 @@ pool_store_session(LiquidityPool pool, bool intraday = false, int endTime = na) 
         array.push(pool.low_breached, false)
         array.push(pool.high_provisional_breached, false)
         array.push(pool.low_provisional_breached, false)
+        array.push(pool.high_provisional_times, na)
+        array.push(pool.low_provisional_times, na)
+        array.push(pool.high_provisional_indices, na)
+        array.push(pool.low_provisional_indices, na)
         array.push(pool.high_breach_times, na)
         array.push(pool.low_breach_times, na)
         array.push(pool.high_breach_indices, na)
@@ -801,14 +812,16 @@ liquidity_depth_price(float basePrice, bool isHigh, int levelIndex, float depthS
 depth_distances_text(float depthStep) =>
     str.tostring(depthStep) + " | " + str.tostring(depthStep * 2) + " | " + str.tostring(depthStep * 3)
 
-pool_detect_depth_breaches(LiquidityDepthLevels depthState, float basePrice, bool isHigh, float barExtreme, int eventTime, int candleIndex, float depthStep) =>
+pool_detect_depth_breaches(LiquidityDepthLevels depthState, float basePrice, bool isHigh, float barExtreme, int eventTime, int candleIndex, float depthStep, bool parentBreached) =>
     for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
         if not array.get(depthState.breached, levelIndex)
             float levelPrice = liquidity_depth_price(basePrice, isHigh, levelIndex, depthStep)
-            if isHigh ? barExtreme >= levelPrice : barExtreme <= levelPrice
-                array.set(depthState.breached, levelIndex, true)
+            bool levelTouched = isHigh ? barExtreme >= levelPrice : barExtreme <= levelPrice
+            if na(array.get(depthState.breach_times, levelIndex)) and levelTouched
                 array.set(depthState.breach_times, levelIndex, eventTime)
                 array.set(depthState.breach_indices, levelIndex, candleIndex)
+            if parentBreached and not na(array.get(depthState.breach_times, levelIndex))
+                array.set(depthState.breached, levelIndex, true)
 
 delayed_mitigation_confirmation_start(int sessionStartTime) =>
     timestamp(NY_TIMEZONE, year(sessionStartTime, NY_TIMEZONE), month(sessionStartTime, NY_TIMEZONE), dayofmonth(sessionStartTime, NY_TIMEZONE) + 1, MITIGATION_START_HOUR, 0)
@@ -830,6 +843,8 @@ pool_detect_breaches(LiquidityPool pool, int scanCap, bool depthActive, bool int
                     array.set(pool.high_breach_indices, poolIndex, candleIndex)
                 else if not array.get(pool.high_provisional_breached, poolIndex)
                     array.set(pool.high_provisional_breached, poolIndex, true)
+                    array.set(pool.high_provisional_times, poolIndex, eventTime)
+                    array.set(pool.high_provisional_indices, poolIndex, candleIndex)
             if not lowBreached and barLow <= lowPrice
                 if canConfirmMitigation
                     lowBreached := true
@@ -838,13 +853,15 @@ pool_detect_breaches(LiquidityPool pool, int scanCap, bool depthActive, bool int
                     array.set(pool.low_breach_indices, poolIndex, candleIndex)
                 else if not array.get(pool.low_provisional_breached, poolIndex)
                     array.set(pool.low_provisional_breached, poolIndex, true)
+                    array.set(pool.low_provisional_times, poolIndex, eventTime)
+                    array.set(pool.low_provisional_indices, poolIndex, candleIndex)
             if depthActive
                 array<LiquidityDepthLevels> highDepths = intradayDepth ? pool.intraday_high_liquidity_depths : pool.high_liquidity_depths
                 array<LiquidityDepthLevels> lowDepths = intradayDepth ? pool.intraday_low_liquidity_depths : pool.low_liquidity_depths
-                if highBreached
-                    pool_detect_depth_breaches(array.get(highDepths, poolIndex), highPrice, true, barHigh, eventTime, candleIndex, depthStep)
-                if lowBreached
-                    pool_detect_depth_breaches(array.get(lowDepths, poolIndex), lowPrice, false, barLow, eventTime, candleIndex, depthStep)
+                if highBreached or array.get(pool.high_provisional_breached, poolIndex)
+                    pool_detect_depth_breaches(array.get(highDepths, poolIndex), highPrice, true, barHigh, eventTime, candleIndex, depthStep, highBreached)
+                if lowBreached or array.get(pool.low_provisional_breached, poolIndex)
+                    pool_detect_depth_breaches(array.get(lowDepths, poolIndex), lowPrice, false, barLow, eventTime, candleIndex, depthStep, lowBreached)
 
 depth_label_text(level_idx, pool_type = "") =>
     level_str = "L" + str.tostring(level_idx + 1)
@@ -903,8 +920,8 @@ buffer_pool_label(array<PendingLabelEvent> pending, float price, int start_index
 
 create_pool_label(label_index, price_val, label_str, is_high, inline_label, mitigated_context) =>
     label_style = inline_label ? label.style_label_center : is_high ? label.style_label_down : label.style_label_up
-    label_background = inline_label ? (mitigated_context ? color.new(DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND, mitigatedContextTransparency) : DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND) : color.new(color.white, 100)
-    label_text_color = mitigated_context ? color.new(DEFAULT_LABEL_TEXT_COLOR, mitigatedContextTransparency) : DEFAULT_LABEL_TEXT_COLOR
+    label_background = inline_label ? (mitigated_context ? color.new(DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND, 85) : DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND) : color.new(color.white, 100)
+    label_text_color = mitigated_context ? color.new(DEFAULT_LABEL_TEXT_COLOR, 85) : DEFAULT_LABEL_TEXT_COLOR
     safe_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
     label.new(safe_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=label_text_color, size=6, color=label_background)
 
@@ -914,6 +931,12 @@ pool_label_merge_tolerance(float price) =>
 label_events_overlap(PendingLabelEvent left, PendingLabelEvent right) =>
     float tolerance = math.max(pool_label_merge_tolerance(left.price), pool_label_merge_tolerance(right.price))
     math.abs(left.label_index - right.label_index) <= DEPTH_LABEL_INDEX_TOLERANCE and math.abs(left.price - right.price) <= tolerance
+
+label_requires_price_anchor(PendingLabelEvent eventState) =>
+    eventState.core and (eventState.identity == POOL_TYPE_ASIA_OPEN or eventState.identity == POOL_TYPE_RAFAEL)
+
+label_cluster_prices_compatible(bool hasPriceAnchor, float minimumPrice, float maximumPrice) =>
+    not hasPriceAnchor or minimumPrice == maximumPrice
 
 label_event_root(array<int> parents, int event_index) =>
     int root = event_index
@@ -973,11 +996,17 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
         array<int> parents = array.new<int>()
         array<bool> root_has_inline_label = array.new<bool>()
         array<float> root_inline_prices = array.new<float>()
+        array<bool> root_has_price_anchor = array.new<bool>()
+        array<float> root_min_prices = array.new<float>()
+        array<float> root_max_prices = array.new<float>()
         for pending_index = 0 to pending_count - 1
             PendingLabelEvent candidate = array.get(pending, pending_index)
             array.push(parents, pending_index)
             array.push(root_has_inline_label, candidate.inline_label)
             array.push(root_inline_prices, candidate.inline_label ? candidate.price : na)
+            array.push(root_has_price_anchor, label_requires_price_anchor(candidate))
+            array.push(root_min_prices, candidate.price)
+            array.push(root_max_prices, candidate.price)
         if mergeOverlappingLabels and pending_count > 1
             for left_index = 0 to pending_count - 2
                 PendingLabelEvent left = array.get(pending, left_index)
@@ -992,7 +1021,10 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                             float left_inline_price = array.get(root_inline_prices, left_root)
                             float right_inline_price = array.get(root_inline_prices, right_root)
                             bool inline_prices_compatible = not left_has_inline_label or not right_has_inline_label or left_inline_price == right_inline_price
-                            if inline_prices_compatible
+                            bool merged_has_price_anchor = array.get(root_has_price_anchor, left_root) or array.get(root_has_price_anchor, right_root)
+                            float merged_min_price = math.min(array.get(root_min_prices, left_root), array.get(root_min_prices, right_root))
+                            float merged_max_price = math.max(array.get(root_max_prices, left_root), array.get(root_max_prices, right_root))
+                            if inline_prices_compatible and label_cluster_prices_compatible(merged_has_price_anchor, merged_min_price, merged_max_price)
                                 int root = math.min(left_root, right_root)
                                 int child = math.max(left_root, right_root)
                                 bool merged_has_inline_label = left_has_inline_label or right_has_inline_label
@@ -1000,6 +1032,9 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                                 array.set(parents, child, root)
                                 array.set(root_has_inline_label, root, merged_has_inline_label)
                                 array.set(root_inline_prices, root, merged_inline_price)
+                                array.set(root_has_price_anchor, root, merged_has_price_anchor)
+                                array.set(root_min_prices, root, merged_min_price)
+                                array.set(root_max_prices, root, merged_max_price)
         array<int> component_roots = array.new<int>()
         array<int> component_carriers = array.new<int>()
         array<bool> component_inline_labels = array.new<bool>()
@@ -1268,6 +1303,12 @@ if includeSundayEvening != prev_trading_week_mode
     array.clear(weekly_pool.low_indices)
     array.clear(weekly_pool.high_breached)
     array.clear(weekly_pool.low_breached)
+    array.clear(weekly_pool.high_provisional_breached)
+    array.clear(weekly_pool.low_provisional_breached)
+    array.clear(weekly_pool.high_provisional_times)
+    array.clear(weekly_pool.low_provisional_times)
+    array.clear(weekly_pool.high_provisional_indices)
+    array.clear(weekly_pool.low_provisional_indices)
     array.clear(weekly_pool.high_breach_times)
     array.clear(weekly_pool.low_breach_times)
     array.clear(weekly_pool.high_breach_indices)
@@ -1575,13 +1616,21 @@ draw_pool_depths(LiquidityDepthLevels depthState, float basePrice, int startTime
             int endTime = levelBreached and not na(breachTime) ? breachTime : time
             int endIndex = levelBreached and not na(breachIndex) ? breachIndex : bar_index
             color levelColor = get_pool_liq_depth_color(levelIndex, renderSpec.lineColor)
-            color renderedLevelColor = mitigatedContext ? color.new(levelColor, mitigatedContextTransparency) : levelColor
+            color renderedLevelColor = mitigatedContext ? color.new(levelColor, 85) : levelColor
             array.push(all_lines, create_pool_line(startTime, startIndex, levelPrice, endTime, endIndex, renderedLevelColor, get_pool_liq_depth_width(levelIndex), get_pool_liq_depth_style(levelIndex)))
             if showLabels
                 buffer_liq_depth_labels(pending_label_events, startIndex, endIndex, levelPrice, levelIndex, isHigh, renderSpec.poolType, mitigatedContext)
             color connectorColor = get_pool_liq_depth_color(0, renderSpec.lineColor)
-            int connectorTransparency = mitigatedContext ? mitigatedContextTransparency : 80
+            int connectorTransparency = mitigatedContext ? 85 : 80
             array.push(all_lines, create_liq_depth_connector(startTime, startIndex, basePrice, levelPrice, connectorColor, connectorTransparency))
+
+draw_pool_boundary(array<line> drawn, float levelPrice, int startTime, int startIndex, int endTime, int endIndex, int provisionalTime, int provisionalIndex, color lineColor, int lineWidth) =>
+    bool hasProvisionalTouch = not na(provisionalTime) and not na(provisionalIndex)
+    int solidEndTime = hasProvisionalTouch ? provisionalTime : endTime
+    int solidEndIndex = hasProvisionalTouch ? provisionalIndex : endIndex
+    array.push(drawn, create_pool_line(startTime, startIndex, levelPrice, solidEndTime, solidEndIndex, lineColor, lineWidth, line.style_solid))
+    if hasProvisionalTouch
+        array.push(drawn, create_pool_line(provisionalTime, provisionalIndex, levelPrice, endTime, endIndex, lineColor, LINE_WIDTH_1, line.style_dashed))
 
 draw_liquidity_pool(PoolRenderSpec renderSpec) =>
     LiquidityPool pool = renderSpec.poolState
@@ -1614,11 +1663,11 @@ draw_liquidity_pool(PoolRenderSpec renderSpec) =>
             int low_end_index = pool_get_low_end_index(pool, idx, bar_index)
 
             if showHighPool
-                color highLineColor = highMitigatedContext ? color.new(renderSpec.lineColor, mitigatedContextTransparency) : renderSpec.lineColor
-                array.push(all_lines, create_pool_line(high_time, high_index, high_val, high_end_time, high_end_index, highLineColor, renderSpec.lineWidth, line.style_solid))
+                color highLineColor = highMitigatedContext ? color.new(renderSpec.lineColor, 85) : renderSpec.lineColor
+                draw_pool_boundary(all_lines, high_val, high_time, high_index, high_end_time, high_end_index, array.get(pool.high_provisional_times, idx), array.get(pool.high_provisional_indices, idx), highLineColor, renderSpec.lineWidth)
             if showLowPool
-                color lowLineColor = lowMitigatedContext ? color.new(renderSpec.lineColor, mitigatedContextTransparency) : renderSpec.lineColor
-                array.push(all_lines, create_pool_line(low_time, low_index, low_val, low_end_time, low_end_index, lowLineColor, renderSpec.lineWidth, line.style_solid))
+                color lowLineColor = lowMitigatedContext ? color.new(renderSpec.lineColor, 85) : renderSpec.lineColor
+                draw_pool_boundary(all_lines, low_val, low_time, low_index, low_end_time, low_end_index, array.get(pool.low_provisional_times, idx), array.get(pool.low_provisional_indices, idx), lowLineColor, renderSpec.lineWidth)
 
             if highDepthVisible
                 draw_pool_depths(highDepthState, high_val, high_time, high_index, true, renderSpec)
