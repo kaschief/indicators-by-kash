@@ -30,7 +30,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -257,7 +257,7 @@ test('rebuilding live or Replay geometry does not reuse stale data for unchanged
 
 
 test('new session profiles follow the existing content, shell-only, and hidden visibility states', () => {
-  for (const key of [context.SOURCE_FOMC, context.SOURCE_OVERNIGHT_NINE, context.SOURCE_NY_EARLY]) {
+  for (const key of [context.SOURCE_FOMC, context.SOURCE_OVERNIGHT_NINE, context.SOURCE_NY_EARLY, context.SOURCE_NY_AFTERNOON, context.SOURCE_ALL_DAY_TO_AFTERNOON]) {
     for (const developingContentVisible of [false, true]) for (const showDevelopingShell of [false, true]) {
       const style = { key, developingContentVisible };
       assert.equal(context.developingControlled(style), true);
@@ -270,11 +270,11 @@ test('new session profiles follow the existing content, shell-only, and hidden v
   }
 });
 
-test('FOMC and overnight visibility inputs reach both profile selection and rendering', () => {
+test('bounded-session visibility inputs reach both profile selection and rendering', () => {
   const shellInput = host.split('\n').find(row => row.startsWith('showDevelopingShell ='));
-  for (const [prefix, toggle] of [['fomc', 'showFomcDevelopingContent'], ['overnightNine', 'showOvernightNineDevelopingContent']]) {
+  for (const [prefix, toggle, defaultVisible] of [['fomc', 'showFomcDevelopingContent', true], ['overnightNine', 'showOvernightNineDevelopingContent', true], ['nyAfternoon', 'showNyAfternoonDevelopingContent', false], ['allDayToAfternoon', 'showAllDayToAfternoonDevelopingContent', false]]) {
     const inputRow = host.split('\n').find(row => row.startsWith(`${toggle} =`));
-    assert.ok(inputRow.includes('input.bool(true,'));
+    assert.ok(inputRow.includes(`input.bool(${defaultVisible},`));
     assert.ok(inputRow.includes(`active=${prefix}Selected`));
     assert.ok(shellInput.includes(`${prefix}Selected`));
     const sourceRow = host.split('\n').find(row => row.includes(`SourceSpec ${prefix}PresentationSource =`));

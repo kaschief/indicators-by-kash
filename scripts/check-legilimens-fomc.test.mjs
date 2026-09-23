@@ -23,7 +23,7 @@ const context = vm.createContext({
   NY_TIMEZONE: 'America/New_York', START_TIME_UNSET: -1,
   year: value => parts(value).year, month: value => parts(value).month,
   dayofmonth: value => parts(value).day, hour: value => parts(value).hour,
-  minute: value => parts(value).minute, timestamp, int: Math.trunc, math: Math,
+  minute: value => parts(value).minute, timestamp, int: Math.trunc, math: Math, na: value => value == null,
   dayofweek: Object.assign(value => {
     const p = parts(value);
     return new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay() + 1;
@@ -49,7 +49,8 @@ compile(orchestration, 'nySessionStartBoundary', 'nySessionStartBoundary');
 compile(orchestration, 'nySessionEndBoundary', 'nySessionEndBoundary');
 compile(orchestration, 'inNyMinuteWindow', 'inNyMinuteWindow');
 compile(orchestration, 'isNySessionTradingDay');
-for (const name of ['FOMC_END_MINUTE', 'FOMC_EXTENDED_END_MINUTE']) {
+compile(orchestration, 'barFitsNyMinuteWindow');
+for (const name of ['FOMC_END_MINUTE', 'FOMC_EXTENDED_END_MINUTE', 'NY_AFTERNOON_START_MINUTE', 'ALL_DAY_TO_AFTERNOON_START_MINUTE', 'AFTERNOON_END_MINUTE']) {
   const expression = host.match(new RegExp(`^const int ${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, `Missing ${name}`);
   context[name] = vm.runInContext(expression, context);
@@ -113,3 +114,45 @@ test('sample routing and live state share the override; the overnight profile st
   assert.match(host, /fomcForceOn = input\.bool\(false, "Force On"/);
   assert.match(host, /fomcEndMinute = fomcCutoffMinute\(fomcExtended\)/);
 });
+
+for (const [name, prefix, startConstant, startClock, beforeStart, straddlingStart] of [
+  ['NY Afternoon', 'nyAfternoon', 'NY_AFTERNOON_START_MINUTE', '09:30:00', '09:29:00', ['09:00:00', '10:00:00']],
+  ['All Day to Afternoon', 'allDayToAfternoon', 'ALL_DAY_TO_AFTERNOON_START_MINUTE', '06:00:00', '05:59:00', ['05:30:00', '06:30:00']],
+]) {
+  test(`${name} includes its opening, excludes 13:30, and follows New York DST`, () => {
+    const start = context[startConstant], end = context.AFTERNOON_END_MINUTE;
+    assert.equal(start, startClock === '06:00:00' ? 360 : 570);
+    assert.equal(end, 810);
+    for (const [day, offset] of [['2026-01-15', '-05:00'], ['2026-07-15', '-04:00']]) {
+      const at = clock => Date.parse(day + 'T' + clock + offset);
+      const activeSession = clock => context.activeNySessionStart(at(clock), true, start, end, false, false);
+      assert.equal(activeSession(beforeStart), -1);
+      assert.equal(activeSession(startClock), at(startClock));
+      assert.equal(activeSession('13:29:00'), at(startClock));
+      assert.equal(activeSession('13:30:00'), -1);
+      assert.equal(context.nySessionEndBoundary(at(startClock), start, end), at('13:30:00'));
+      assert.equal(context.barFitsNyMinuteWindow(at('13:29:00'), at('13:30:00'), start, end), true);
+      assert.equal(context.barFitsNyMinuteWindow(at('13:30:00'), at('13:31:00'), start, end), false);
+      assert.equal(context.barFitsNyMinuteWindow(at(straddlingStart[0]), at(straddlingStart[1]), start, end), false);
+      assert.equal(context.barFitsNyMinuteWindow(at('13:00:00'), at('14:00:00'), start, end), false);
+    }
+  });
+
+  test(`${name} runs on weekdays and daily for 24/7 assets without an FOMC date filter`, () => {
+    const start = context[startConstant], end = context.AFTERNOON_END_MINUTE;
+    const activeSession = (date, crypto, enabled = true) => context.activeNySessionStart(Date.parse(date + 'T10:00:00-04:00'), enabled, start, end, crypto, false);
+    assert.notEqual(activeSession('2026-09-23', false), -1);
+    for (const date of ['2026-09-26', '2026-09-27']) {
+      assert.equal(activeSession(date, false), -1);
+      assert.notEqual(activeSession(date, true), -1);
+    }
+    assert.equal(activeSession('2026-09-23', false, false), -1);
+  });
+
+  test(`${name} sampling, lifecycle and selection share its session boundaries`, () => {
+    assert.ok(host.includes(`${prefix}Samples = selectNySessionSamples(barSamples, ${prefix}ModeActive, ${startConstant}, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false, ${prefix}SampleSessionStarts)`));
+    assert.ok(host.includes(`${prefix}CurrentSessionStart = activeNySessionStart(boundedSessionEvaluationTime, ${prefix}ModeActive, ${startConstant}, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false)`));
+    assert.ok(host.includes(`processKeyedBoundedNyAnchor(${prefix}Anchor, ${prefix}ModeActive, sessionProfileRetention, ${startConstant}, AFTERNOON_END_MINUTE, ${prefix}InSession, ${prefix}CurrentSessionStart, ${prefix}SampleSessionStarts, ${prefix}Samples.endTimes, ${prefix}Samples,`));
+    assert.ok(host.includes(`selectSessionProfiles(priorProfilesToShow, ${prefix}InSession, legilimensPresentation.developingProfileVisible(${prefix}PresentationSource, presentationConfig), ${prefix}Anchor, keyedNoSamples, false, ${prefix}Anchor.lastBarTime)`));
+  });
+}
