@@ -128,8 +128,6 @@ export type DeltaSettings
     int visibleLvnTierCount
     bool showDots
     bool showDotLabels
-    bool qualifyDeltaTiersByFib
-    bool qualifyLvnByFib
     int lvnFibBorderTransparency
     int lvnFibMarkerTransparency
     bool showHistogram
@@ -147,6 +145,12 @@ export type InteractionSettings
     string mitigationWindow
     int retainedProfiles
 
+export enum FocusMode
+    off = "Off"
+    price = "Price"
+    date = "Date"
+    priceAndDate = "Price + Date"
+
 export enum FocusDirection
     off = "Off"
     above = "Above"
@@ -154,10 +158,14 @@ export enum FocusDirection
     below = "Below"
 
 export type FocusSettings
+    FocusMode mode
     FocusDirection direction
     float anchorPrice
     int extraProfiles
     int searchDepth
+    int dateTime
+    int startDateTime
+    bool hideNonFocusProfiles
 
 export type PresentationConfig
     ObjectLimits limits
@@ -1213,7 +1221,7 @@ renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile pro
                 color borderColor = markerColor
                 string markerGlyph = LEVEL_MARKER_GLYPH
                 int fibBorderWidth = 0
-                if candidate.isLvn and config.delta.qualifyLvnByFib
+                if candidate.isLvn
                     float fibMidpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
                     bool buySide = labelPrice < fibMidpointPrice
                     bool sellSide = labelPrice > fibMidpointPrice
@@ -1255,8 +1263,8 @@ queueOutlierPeaks(RenderState state, legilimensOrchestration.Profile profile, So
                 legilimensProfile.OutlierPeak peak = array.get(peaks, peakIndex)
                 int highestRow = peak.buySide ? highestBuyRow : highestSellRow
                 bool containsHighestDeltaRow = highestRow >= 0 and highestRow >= peak.firstRow and highestRow <= peak.lastRow
-                int fibGrade = config.delta.qualifyDeltaTiersByFib ? deltaTierFibLocationGrade(peak.buySide, peak.price, profile.data.rangeLow, profile.data.rangeHigh) : FIB_LOCATION_UNKNOWN
-                float fibMidpoint = config.delta.qualifyDeltaTiersByFib ? (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT : na
+                int fibGrade = deltaTierFibLocationGrade(peak.buySide, peak.price, profile.data.rangeLow, profile.data.rangeHigh)
+                float fibMidpoint = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
                 array.push(state.pendingOutlierLevels, PendingOutlierLevel.new(peak.price, peak.zoneLow, peak.zoneHigh, peak.delta, peak.strength, peak.buySide, profile.startTime, profile.endTime, levelEndTime, markerTime, source.key, displayNameOverride, sessionTradingDayKey, historical, peak.firstRow, peak.lastRow, fibGrade, fibMidpoint, containsHighestDeltaRow))
 
 rankPendingOutlierLevels(RenderState state, BarContext context, PresentationConfig config) =>
@@ -1307,12 +1315,12 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             bool extendPriorityZone = ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
             int direction = ranked.buySide ? 1 : -1
             string markerLabel = config.delta.showDotLabels and ranked.strengthRank == 1 ? ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName : ""
-            int fibBorderWidth = config.delta.qualifyDeltaTiersByFib ? fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice) : 0
-            bool qualified = config.delta.qualifyDeltaTiersByFib and ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
-            color zoneColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceZoneColor(appearance), qualified) : appearanceZoneColor(appearance)
-            color lineColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceLineColor(appearance), qualified) : appearanceLineColor(appearance)
-            color markerColor = config.delta.qualifyDeltaTiersByFib ? fibQualificationColor(appearanceTextColor(appearance), qualified) : appearanceTextColor(appearance)
-            string baseMarkerGlyph = config.delta.qualifyDeltaTiersByFib ? fibLocationMarkerGlyph(ranked.fibLocationGrade) : LEVEL_MARKER_GLYPH
+            int fibBorderWidth = fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice)
+            bool qualified = ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
+            color zoneColor = fibQualificationColor(appearanceZoneColor(appearance), qualified)
+            color lineColor = fibQualificationColor(appearanceLineColor(appearance), qualified)
+            color markerColor = fibQualificationColor(appearanceTextColor(appearance), qualified)
+            string baseMarkerGlyph = fibLocationMarkerGlyph(ranked.fibLocationGrade)
             string markerGlyph = highestDeltaMarkerGlyph(baseMarkerGlyph, ranked.containsHighestDeltaRow, ranked.buySide)
             if deltaTierSideVisible(ranked.buySide, config)
                 if registrationOnly
@@ -1521,6 +1529,10 @@ renderProfileItems(RenderState state, array<ProfileRenderItem> items, bool inclu
 focusSourceAllowed(string sourceName) =>
     sourceName == SOURCE_GLOBEX or sourceName == SOURCE_WEEKLY or sourceName == SOURCE_MONTHLY
 
+focusDateAllowsProfile(legilimensOrchestration.Profile profile, FocusSettings focus) =>
+    bool dateBounded = focus.mode == FocusMode.date or focus.mode == FocusMode.priceAndDate
+    not dateBounded or (not na(focus.dateTime) and profile.startTime <= focus.dateTime and (na(focus.startDateTime) or (focus.startDateTime <= focus.dateTime and profile.endTime > focus.startDateTime)))
+
 focusPriceDistance(array<float> prices, FocusSettings focus) =>
     float nearest = na
     if not na(focus.anchorPrice)
@@ -1562,11 +1574,14 @@ retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int
 
 focusedCandidates(array<FocusProfile> archive, array<SelectionBinding> bindings, int fallbackTime, FocusSettings focus) =>
     array<FocusCandidate> ranked = array.new<FocusCandidate>()
-    if focus.direction != FocusDirection.off and focus.extraProfiles > 0
+    if focus.mode != FocusMode.off and focus.extraProfiles > 0
+        bool dateFocusWithoutBase = focus.hideNonFocusProfiles and (focus.mode == FocusMode.date or focus.mode == FocusMode.priceAndDate)
         for archived in archive
             int cutoffTime = focusHistoryCutoff(bindings, archived.sourceName, fallbackTime)
-            if focusSourceAllowed(archived.sourceName) and not na(cutoffTime) and archived.profile.startTime < cutoffTime
-                float distance = focusPriceDistance(archived.prices, focus)
+            if dateFocusWithoutBase and not na(cutoffTime)
+                cutoffTime := fallbackTime
+            if focusSourceAllowed(archived.sourceName) and not na(cutoffTime) and archived.profile.startTime < cutoffTime and focusDateAllowsProfile(archived.profile, focus)
+                float distance = focus.mode == FocusMode.date ? float(focus.dateTime - archived.profile.startTime) : focusPriceDistance(archived.prices, focus)
                 if not na(distance)
                     retainFocusCandidate(ranked, FocusCandidate.new(archived, distance), focus.extraProfiles)
     ranked
@@ -1586,12 +1601,16 @@ appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<Focu
 
 export renderSelections(RenderState state, array<SelectionBinding> bindings, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     array<FocusCandidate> candidates = focusedCandidates(state.focusProfiles, bindings, context.barTime, config.focus)
-    trimBindings(bindings, maximumProfileCapacity(config.limits, config.delta, config.levels), config, context)
+    bool showRecentProfiles = config.focus.mode == FocusMode.off or not config.focus.hideNonFocusProfiles
+    if showRecentProfiles
+        trimBindings(bindings, maximumProfileCapacity(config.limits, config.delta, config.levels), config, context)
     if state.chartTimesBuiltAtBar != context.barIndex
         state.cachedChartTimes := recentChartTimes(context.barIndex)
         state.chartTimesBuiltAtBar := context.barIndex
     array<ProfilePolylineLayout> layouts = array.new<ProfilePolylineLayout>()
-    array<ProfileRenderItem> items = profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
+    array<ProfileRenderItem> items = array.new<ProfileRenderItem>()
+    if showRecentProfiles
+        items := profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
     int availablePolylines = config.limits.polylines - array.size(state.drawnPolylines)
     while array.size(items) > 0 and profilePolylineCost(state, items, false, config) > availablePolylines
         int previousCount = array.size(items)
@@ -1601,7 +1620,9 @@ export renderSelections(RenderState state, array<SelectionBinding> bindings, boo
             break
     bool renderHistograms = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
     if array.size(candidates) > 0
-        appendFocusedItems(state, items, candidates, sources, availablePolylines, renderHistograms, config)
+        appendFocusedItems(state, items, candidates, sources, availablePolylines, showRecentProfiles and renderHistograms, config)
+        if not showRecentProfiles
+            renderHistograms := config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
     renderProfileItems(state, items, renderHistograms, sources, context, config)
     true
 
@@ -1649,30 +1670,32 @@ profileFocusPrices(legilimensOrchestration.Profile profile, SourceSpec source, B
     prices
 
 cacheFocusProfile(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, BarContext context, PresentationConfig config) =>
-    array.push(state.focusProfiles, FocusProfile.new(profile, source.key, profileFocusPrices(profile, source, context, config)))
-    int sourceCount = 0
-    int oldestIndex = -1
-    int count = array.size(state.focusProfiles)
-    for profileIndex = 0 to count - 1
-        if array.get(state.focusProfiles, profileIndex).sourceName == source.key
-            sourceCount += 1
-            if oldestIndex < 0
-                oldestIndex := profileIndex
-    if sourceCount > config.focus.searchDepth
-        FocusProfile expired = array.remove(state.focusProfiles, oldestIndex)
-        removeMitigatedProfile(state, expired.sourceName, expired.profile.startTime)
-        int keyIndex = array.size(state.mitigatedProfiles) - 1
-        while keyIndex >= 0
-            ZoneTrackingProfileKey profileKey = array.get(state.mitigatedProfiles, keyIndex)
-            if profileKey.sourceName == expired.sourceName and profileKey.startTime == expired.profile.startTime
-                array.remove(state.mitigatedProfiles, keyIndex)
-            keyIndex -= 1
+    if focusDateAllowsProfile(profile, config.focus)
+        array<float> prices = config.focus.mode == FocusMode.date ? array.new<float>() : profileFocusPrices(profile, source, context, config)
+        array.push(state.focusProfiles, FocusProfile.new(profile, source.key, prices))
+        int sourceCount = 0
+        int oldestIndex = -1
+        int count = array.size(state.focusProfiles)
+        for profileIndex = 0 to count - 1
+            if array.get(state.focusProfiles, profileIndex).sourceName == source.key
+                sourceCount += 1
+                if oldestIndex < 0
+                    oldestIndex := profileIndex
+        if sourceCount > config.focus.searchDepth
+            FocusProfile expired = array.remove(state.focusProfiles, oldestIndex)
+            removeMitigatedProfile(state, expired.sourceName, expired.profile.startTime)
+            int keyIndex = array.size(state.mitigatedProfiles) - 1
+            while keyIndex >= 0
+                ZoneTrackingProfileKey profileKey = array.get(state.mitigatedProfiles, keyIndex)
+                if profileKey.sourceName == expired.sourceName and profileKey.startTime == expired.profile.startTime
+                    array.remove(state.mitigatedProfiles, keyIndex)
+                keyIndex -= 1
     true
 
 export registerFinalizedProfiles(RenderState state, legilimensOrchestration.AnchorState anchor, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     int count = legilimensOrchestration.finalizedProfileCount(anchor)
     if count > 0
-        bool collectFocus = config.focus.direction != FocusDirection.off and focusSourceAllowed(source.key)
+        bool collectFocus = config.focus.mode != FocusMode.off and focusSourceAllowed(source.key)
         bool collectZones = mitigationEnabled(sources, source.key, config)
         if collectFocus or collectZones
             for profileIndex = 0 to count - 1

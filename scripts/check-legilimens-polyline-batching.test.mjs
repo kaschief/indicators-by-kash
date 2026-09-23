@@ -79,7 +79,12 @@ function compile(name, returnsValue = true, inputSource = source) {
 }
 for (const name of ['highestDeltaRow', 'highestDeltaMarkerGlyph', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
 
+for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_LOCATION_\w+|LEVEL_MARKER_GLYPH|LOW_VOLUME_LEVEL_RANK|LOW_VOLUME_LINE_WIDTH) = (.+)$/gm)) {
+  context[name] = vm.runInContext(value, context);
+}
+for (const name of ['deltaTierFibLocationGrade', 'fibLocationMarkerGlyph', 'fibLocationBorderWidth']) compile(name);
 compile('queueOutlierPeaks', false);
+compile('renderLowVolumeStructures', false);
 context.levelMarkerTime = value => value;
 context.legilimensProfile.OutlierCandidate = { new: (...values) => values };
 
@@ -296,13 +301,52 @@ test('Extend Unmitigated forces dotted tier lines regardless of the selected sty
 function queuedPeaks(rowDeltas, peaks, showHighestDeltaLevels = true) {
   const value = profile(0, rowDeltas.length);
   value.data.rowDeltas = rowDeltas;
+  value.data.rangeLow = value.data.priceLow;
+  value.data.rangeHigh = value.data.priceHigh;
   const state = { pendingOutlierLevels: [] };
   context.queueOutlierPeaks(state, value, { key: 'FOMC' }, peaks, '', 100, 1, false, {
-    delta: { showTiers: true, qualifyDeltaTiersByFib: false, showHighestDeltaLevels },
+    delta: { showTiers: true, showHighestDeltaLevels },
   });
   return { value, state };
 }
 const peak = (buySide, firstRow, lastRow = firstRow) => ({ buySide, firstRow, lastRow, price: 100 + firstRow, zoneLow: 100 + firstRow, zoneHigh: 101 + lastRow, delta: buySide ? 10 : -10, strength: 2 });
+
+test('Delta peaks always retain Fib grades and midpoint without qualification switches', () => {
+  const { state } = queuedPeaks(Array(100).fill(1), [
+    peak(true, 10), peak(true, 30), peak(true, 45), peak(true, 80),
+    peak(false, 90), peak(false, 70), peak(false, 55), peak(false, 20),
+  ]);
+  assert.deepEqual(Array.from(state.pendingOutlierLevels, item => item.fibLocationGrade), [3, 2, 1, 0, 3, 2, 1, 0]);
+  assert.ok(state.pendingOutlierLevels.every(item => item.fibMidpointPrice === 150));
+  assert.deepEqual(Array.from(state.pendingOutlierLevels, item => context.fibLocationMarkerGlyph(item.fibLocationGrade)), ['✦', '◆', '●', '●', '✦', '◆', '●', '●']);
+});
+
+test('LVNs always receive directional Fib styling while midpoint LVNs and cliffs stay neutral', () => {
+  const candidates = [
+    { isLvn: true, zoneLow: 108, zoneHigh: 112 },
+    { isLvn: true, zoneLow: 168, zoneHigh: 172 },
+    { isLvn: true, zoneLow: 148, zoneHigh: 152 },
+    { isLvn: false, price: 190 },
+  ];
+  const zones = [], markers = [], cliffs = [];
+  context.legilimensProfile.selectLowVolumeCandidates = () => candidates;
+  context.fibQualificationColor = value => value;
+  context.tierMarkerSize = value => value;
+  context.renderLowVolumeZone = (...args) => { zones.push(args); return false; };
+  context.queueLevelMarker = (...args) => markers.push(args);
+  context.queueRightLine = (...args) => cliffs.push(args);
+  context.renderLowVolumeStructures({}, { startTime: 0, endTime: 20, data: { rangeLow: 100, rangeHigh: 200 } },
+    { key: 'Globex', alternateStyles: false }, '', 100, 1, false, false, [], {}, {
+      delta: { showLvnTiers: true, visibleLvnTierCount: 5, showDotLabels: false, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
+    });
+  assert.deepEqual(zones.map(args => args[10]), [1, 1, 0]);
+  assert.deepEqual(zones.slice(0, 2).map(args => args[11]), ['profileDeltaPlusPlusColor:false:90', 'profileDeltaMinusMinusColor:false:90']);
+  assert.deepEqual(markers.map(args => args[3]), ['✦', '◆', '●', '●']);
+  assert.deepEqual(markers.slice(0, 2).map(args => args[5]), ['profileDeltaPlusPlusColor:false:50', 'profileDeltaMinusMinusColor:false:50']);
+  assert.equal(markers[2][5], markers[3][5]);
+  assert.equal(cliffs.length, 1);
+  assert.equal(cliffs[0][1], 190);
+});
 
 test('highest-row flags use raw delta magnitude, preserve tie handling, and respect Highest Delta Levels', () => {
   const peaks = [peak(true, 0), peak(true, 2), peak(false, 3, 4), peak(true, 5)];
@@ -337,13 +381,14 @@ test('regular and extended tier markers share the decorated glyph without adding
 });
 
 context.FocusDirection = { off: 'Off', above: 'Above', around: 'Around', below: 'Below' };
+context.FocusMode = { off: 'Off', price: 'Price', date: 'Date', priceAndDate: 'Price + Date' };
 for (const name of ['SOURCE_WEEKLY', 'SOURCE_MONTHLY', 'DELTA_TIER_VISIBILITY_BUY', 'DELTA_TIER_VISIBILITY_SELL']) {
   context[name] = source.match(new RegExp(`^const string ${name} = "([^"]+)"`, 'm'))[1];
 }
 context.sourceSpec = (sources, key) => sources.find(item => item.key === key);
-for (const name of ['focusSourceAllowed', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
+for (const name of ['focusSourceAllowed', 'focusDateAllowsProfile', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
 
-const focusSettings = (direction = 'Above', anchorPrice = 100, extraProfiles = 10) => ({ direction, anchorPrice, extraProfiles, searchDepth: 250 });
+const focusSettings = (direction = 'Above', anchorPrice = 100, extraProfiles = 10, overrides = {}) => ({ mode: direction === 'Off' ? context.FocusMode.off : context.FocusMode.price, direction, anchorPrice, extraProfiles, searchDepth: 250, dateTime: null, startDateTime: null, hideNonFocusProfiles: false, ...overrides });
 const archivedProfile = (index, prices, sourceName = context.SOURCE_GLOBEX) => ({ profile: profile(index), prices, sourceName });
 const focusBindings = (indices, sourceName = context.SOURCE_GLOBEX) => [{ source: spec(undefined, sourceName), selection: { profiles: indices.map(index => profile(index)), currentIndex: indices.length - 1 } }];
 
@@ -379,7 +424,115 @@ test('Focus uses only Globex, Weekly and Monthly, with capped counts and indepen
   }
   for (const sourceName of [context.SOURCE_RTH, context.SOURCE_NY_EARLY, context.SOURCE_ASIA_PREMARKET, context.SOURCE_FOMC, 'Rolling', 'Fixed']) assert.equal(context.focusSourceAllowed(sourceName), false);
   assert.match(host, /focusControlsActive = globexSelected or weeklySelected or monthlySelected/);
-  assert.match(host, /focusDirection = input.enum\(legilimensPresentation.FocusDirection.off/);
+  assert.match(host, /focusMode = input.enum\(legilimensPresentation.FocusMode.off/);
+  assert.match(host, /focusDirection = input.enum\(legilimensPresentation.FocusDirection.above/);
+});
+
+test('Date Focus selects completed profiles on or before the chosen day, nearest first', () => {
+  const archive = [1, 2, 3, 4, 5].map(index => archivedProfile(index, []));
+  const bindings = focusBindings([5]);
+  const selected = context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 2, { mode: context.FocusMode.date, dateTime: 350 }));
+  assert.deepEqual(Array.from(selected, item => item.archived.profile.startTime), [300, 200]);
+  assert.equal(context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 2, { mode: context.FocusMode.date, dateTime: null })).length, 0);
+});
+
+test('Price + Date filters by date before ranking eligible levels by price', () => {
+  const archive = [archivedProfile(1, [101]), archivedProfile(2, [105]), archivedProfile(3, [102]), archivedProfile(4, [100.01])];
+  const selected = context.focusedCandidates(archive, focusBindings([5]), 600, focusSettings('Above', 100, 2, { mode: context.FocusMode.priceAndDate, dateTime: 350 }));
+  assert.deepEqual(Array.from(selected, item => item.archived.profile.startTime), [100, 300]);
+});
+
+test('hidden normal profiles let Date and Price + Date surface a selected recent completed session', () => {
+  const archive = [archivedProfile(1, [101]), archivedProfile(2, [102]), archivedProfile(3, [100.1]), archivedProfile(4, [100.01])];
+  const bindings = focusBindings([3, 4]);
+  for (const mode of [context.FocusMode.date, context.FocusMode.priceAndDate]) {
+    const hidden = focusSettings('Above', 100, 1, { mode, dateTime: 350, hideNonFocusProfiles: true });
+    const shown = focusSettings('Above', 100, 1, { mode, dateTime: 350, hideNonFocusProfiles: false });
+    assert.equal(context.focusedCandidates(archive, bindings, 500, hidden)[0].archived.profile.startTime, 300);
+    assert.equal(context.focusedCandidates(archive, bindings, 500, shown)[0].archived.profile.startTime, mode === context.FocusMode.date ? 200 : 100);
+  }
+});
+
+test('Between includes both boundary sessions, excludes outside profiles, and preserves price ranking', () => {
+  const archive = [archivedProfile(1, [100.01]), archivedProfile(2, [101]), archivedProfile(3, [103]), archivedProfile(4, [102]), archivedProfile(5, [100.001])];
+  const bindings = focusBindings([4, 5]);
+  const bounds = { startDateTime: 200, dateTime: 419, hideNonFocusProfiles: true };
+  const choose = mode => Array.from(context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 3, { ...bounds, mode })), item => item.archived.profile.startTime);
+  assert.deepEqual(choose(context.FocusMode.date), [400, 300, 200]);
+  assert.deepEqual(choose(context.FocusMode.priceAndDate), [200, 400, 300]);
+  const capped = context.focusedCandidates(archive, bindings, 600, focusSettings('Above', 100, 1, { ...bounds, mode: context.FocusMode.date }));
+  assert.equal(capped.length, 1);
+  assert.equal(capped[0].archived.profile.startTime, 400);
+});
+
+test('Between keeps whole overlapping profiles and rejects disjoint or reversed windows', () => {
+  const settings = focusSettings('Above', 100, 10, { mode: context.FocusMode.date, startDateTime: 200, dateTime: 299 });
+  assert.equal(context.focusDateAllowsProfile({ startTime: 100, endTime: 400 }, settings), true);
+  assert.equal(context.focusDateAllowsProfile({ startTime: 100, endTime: 200 }, settings), false);
+  assert.equal(context.focusDateAllowsProfile({ startTime: 300, endTime: 400 }, settings), false);
+  assert.equal(context.focusDateAllowsProfile({ startTime: 200, endTime: 300 }, settings), true);
+  assert.equal(context.focusDateAllowsProfile({ startTime: 100, endTime: 400 }, { ...settings, startDateTime: 400 }), false);
+  assert.equal(context.focusDateAllowsProfile({ startTime: 100, endTime: 150 }, { ...settings, mode: context.FocusMode.price }), true);
+});
+
+test('Between archive retains only profiles overlapping the requested dates', () => {
+  const settings = { delta: { showTiers: false, showLvnTiers: false }, focus: focusSettings('Above', 100, 10, { mode: context.FocusMode.date, startDateTime: 200, dateTime: 419 }) };
+  const state = { focusProfiles: [], mitigatedProfiles: [] };
+  for (let index = 1; index <= 300; index++) context.cacheFocusProfile(state, profile(index), spec(undefined, context.SOURCE_GLOBEX), {}, settings);
+  assert.deepEqual(Array.from(state.focusProfiles, item => item.profile.startTime), [200, 300, 400]);
+});
+
+test('trading-date boundaries include full dates through DST and calendar rollover', () => {
+  compile('validFocusDate', true, host);
+  compile('focusTradingDateBoundary', true, host);
+  context.NY_TIMEZONE = 'America/New_York';
+  context.UTC_TIMEZONE = 'GMT+0';
+  context.SUNDAY_REOPEN_START_HOUR = 18;
+  const savedTimestamp = context.timestamp;
+  context.timestamp = (zone, year, month, day, hour, minute) => {
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: zone === 'GMT+0' ? 'UTC' : zone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+    const target = Date.UTC(year, month - 1, day, hour, minute);
+    let value = target;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const p = Object.fromEntries(formatter.formatToParts(new Date(value)).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+      value += target - Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    }
+    return value;
+  };
+  try {
+    const boundary = context.focusTradingDateBoundary;
+    assert.equal(boundary(2026, 3, 8, false, false), Date.parse('2026-03-07T23:00:00Z'));
+    assert.equal(boundary(2026, 3, 8, false, true), Date.parse('2026-03-08T22:00:00Z'));
+    assert.equal(boundary(2026, 11, 1, false, true) - boundary(2026, 11, 1, false, false), 25 * 3600000);
+    assert.equal(boundary(2024, 2, 29, true, false), Date.parse('2024-02-29T00:00:00Z'));
+    assert.equal(boundary(2024, 2, 29, true, true), Date.parse('2024-03-01T00:00:00Z'));
+    assert.equal(boundary(2026, 12, 31, true, true), Date.parse('2027-01-01T00:00:00Z'));
+    for (const [year, month, day, valid] of [[2024, 2, 29, true], [2000, 2, 29, true], [2100, 2, 29, false], [2026, 2, 29, false], [2026, 4, 31, false], [2026, 9, 23, true]]) {
+      assert.equal(context.validFocusDate(year, month, day), valid);
+    }
+  } finally {
+    context.timestamp = savedTimestamp;
+  }
+});
+
+test('Focus Profiles Only keeps Focus candidates and skips the normal render items', () => {
+  assert.match(host, /focusHideNonFocusProfiles = input.bool\(false, "Focus Profiles Only"/);
+  assert.match(source, /array<FocusCandidate> candidates = focusedCandidates\(state.focusProfiles, bindings, context.barTime, config.focus\)/);
+  assert.match(source, /showRecentProfiles = config.focus.mode == FocusMode.off or not config.focus.hideNonFocusProfiles/);
+  assert.match(source, /if showRecentProfiles\n        items := profileRenderItems\(/);
+  assert.match(source, /appendFocusedItems\(state, items, candidates, sources, availablePolylines, showRecentProfiles and renderHistograms, config\)/);
+  assert.match(host, /"Delta Histogram"/);
+  assert.match(host, /"Delta Tiers"/);
+  assert.match(host, /showFocusAnchorGuide = focusUsesPrice and focusDateInputsValid and profileChartAllowed/);
+  assert.match(host, /if showFocusAnchorGuide and focusSearchActive and not na\(presentationFocusSettings.anchorPrice\)/);
+});
+
+test('Delta Histogram Off leaves the selected right-side tier visibility intact', () => {
+  const settings = config({ visibleRows: context.OPTION_OFF, showTiers: true, visibleTierSides: context.OPTION_ALL });
+  const geometry = context.profilePolylineLayout(profile(1), spec(), [], settings);
+  assert.equal(geometry.pointCounts.slice(2).reduce((total, count) => total + count, 0), 0);
+  assert.equal(context.deltaTierSideVisible(true, settings), true);
+  assert.equal(context.deltaTierSideVisible(false, settings), true);
 });
 
 test('Focus additions preserve base profiles and stop at core-object or polyline capacity, including base histograms', () => {
@@ -424,7 +577,7 @@ test('Focus scoring shares tier ranking and side visibility; LVN midpoints and c
 });
 
 test('Focus archive expiry also expires mitigation metadata and leaves other sources intact', () => {
-  const settings = { delta: { showTiers: false, showLvnTiers: false }, focus: { searchDepth: 2 } };
+  const settings = { delta: { showTiers: false, showLvnTiers: false }, focus: focusSettings('Above', 100, 10, { searchDepth: 2 }) };
   const state = { focusProfiles: [archivedProfile(0, [], context.SOURCE_WEEKLY)], mitigatedProfiles: [{ sourceName: context.SOURCE_WEEKLY, startTime: 0 }, { sourceName: context.SOURCE_GLOBEX, startTime: 100 }] };
   const expired = [];
   context.removeMitigatedProfile = (state, sourceName, startTime) => expired.push([sourceName, startTime]);
@@ -432,6 +585,14 @@ test('Focus archive expiry also expires mitigation metadata and leaves other sou
   assert.deepEqual(Array.from(state.focusProfiles, item => item.profile.startTime), [0, 200, 300]);
   assert.deepEqual(expired, [[context.SOURCE_GLOBEX, 100]]);
   assert.deepEqual(state.mitigatedProfiles, [{ sourceName: context.SOURCE_WEEKLY, startTime: 0 }]);
+});
+
+test('Date archive retains target-era profiles even when many newer sessions are loaded', () => {
+  const settings = { delta: { showTiers: false, showLvnTiers: false }, focus: focusSettings('Above', 100, 10, { mode: context.FocusMode.date, dateTime: 350, searchDepth: 2 }) };
+  const state = { focusProfiles: [], mitigatedProfiles: [] };
+  for (let index = 1; index <= 300; index++) context.cacheFocusProfile(state, profile(index), spec(undefined, context.SOURCE_GLOBEX), {}, settings);
+  assert.deepEqual(Array.from(state.focusProfiles, item => item.profile.startTime), [200, 300]);
+  assert.deepEqual(Array.from(state.focusProfiles, item => item.prices.length), [0, 0]);
 });
 
 test('deeper Rolling Weekly/Monthly history preserves recent period boundaries and sample membership across DST', () => {
@@ -485,5 +646,5 @@ test('deeper Rolling Weekly/Monthly history preserves recent period boundaries a
     assert.deepEqual(run(count).slice(-4), base, `${periodDays} days; 24/7=${twentyFourSeven}; end=${finalDate}`);
   }
   assert.equal(context.rollingFocusPeriodCount(Date.UTC(2026, 1), Date.UTC(1990, 1), 30, 4, 250), 250);
-  assert.match(host, /focusSelected and rollingPeriodSelected and \(na\(rollingFocusEndTime\)/);
+  assert.match(host, /focusSearchActive and rollingPeriodSelected and \(na\(rollingFocusEndTime\)/);
 });

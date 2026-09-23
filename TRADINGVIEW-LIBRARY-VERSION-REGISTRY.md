@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-22
+Updated: 2026-09-23
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 13 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 16 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -126,6 +126,9 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 
 | LegilimensPresentationLibrary | 12 | Published · user confirmed | Adds additive Price Focus for Globex, Weekly and Monthly with bounded completed-profile archives, cached tier prices, and recent-first drawing admission | `dc408dbf76bc08def8ec16687b24ab92481a5b89182da917cc8d685041de78c2` |
 | LegilimensPresentationLibrary | 13 | Published · loaded · tested · approved | Exports shared outer-frame color and profile-title color/font size for the Focus guide and label | `668ec5c82b0d9e7456150c17448d3aa01a921660447a9148828a361923a8626c` |
+| LegilimensPresentationLibrary | 14 | Published · user confirmed | Adds Date and Price + Date Focus, optional hiding of non-Focus profiles, and clearer Delta Histogram and Delta Tiers labels | `d66db589f5a85c6a5f356918e32070108900f6c6206ef8af8e59c628cd26f290` |
+| LegilimensPresentationLibrary | 15 | Published · user confirmed | Adds an inclusive Start Date and End Date window alongside On or Before for Date and Price + Date Focus | `1795b7fd36fc233ed573658e5e88f75f2d659c87d948b06cdf8e239e033f4c42` |
+| LegilimensPresentationLibrary | 16 | Published · loaded · tested · approved | Makes Delta and LVN Fib qualification unconditional and removes both obsolete DeltaSettings fields and disabled branches | `8e2e250f97af8f4255099248c03297ae9f59901113db74ac2adf90d7bb02f512` |
 
 ## Publication-instruction log
 
@@ -237,6 +240,9 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-21-05 | 2026-09-21 | LegilimensPresentationLibrary | 11 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/11`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/11`. On NQ 5-minute Replay and Range charts, verify Zone Role Reversal is absent, crossed zones retain their original Fib border styling, and Extend Unmitigated still stops eligible levels at the first permitted touch. Check mitigation windows, session boundaries, Fixed Range, Rolling, and high history counts | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-22-01 | 2026-09-22 | LegilimensPresentationLibrary | 12 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/12`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/12`. On NQ1! 1H, 5m, and 180R/360R, test Globex 10 prior plus 10 Focus Above/Around/Below, manual/current anchors, Weekly/Monthly Use Rolling Off/On, rollover/Replay/reload, heavy drawing settings, and Extend Unmitigated On/Off. Compare old June context, retained recent profiles, extension endpoints, and Pine Profiler/runtime limits. Publication and TradingView compile are pending | `PUBLISHED_USER_CONFIRMED` |
 | PUB-2026-09-22-02 | 2026-09-22 | LegilimensPresentationLibrary | 13 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/13`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/13`. On NQ1! 1H and 180R/360R, verify Focus lines match Globex, Weekly, and Monthly outer-frame colors and one-pixel width and lowercase Focus labels match their respective profile-title colors and font sizes, including Use Rolling On/Off, Above/Around/Below, manual/current anchors, and Focus Off cleanup. Confirm Fixed Range Reset Points selects only Start Time then End Time. Publication and TradingView validation remain pending | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-23-01 | 2026-09-23 | LegilimensPresentationLibrary | 14 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/14`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/14`. Compile and test Focus Off, Price, Date, and Price + Date on NQ time and Range charts, including dates before and after the loaded history, Show Prior Profiles On/Off, Hide Non-Focus Profiles On/Off, drawing capacity, current/manual prices, and Rolling Weekly/Monthly. Confirm Delta Histogram Off keeps Delta Tiers and Fixed Range Reset Points still selects only Start Time then End Time. Library publication is user-confirmed; host compilation and chart validation remain unconfirmed | `PUBLISHED_USER_CONFIRMED` |
+| PUB-2026-09-23-02 | 2026-09-23 | LegilimensPresentationLibrary | 15 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/15`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/15`. Check On or Before and Between in Date and Price + Date on NQ 1H, 5m Replay, and 180R/360R; include same-day bounds, recent dates with Hide Non-Focus Profiles On, whole Weekly/Monthly overlaps, reversed or invalid dates, DST, and UTC 24/7 assets. Library publication is user-confirmed; host compilation and chart validation remain unconfirmed | `PUBLISHED_USER_CONFIRMED` |
+| PUB-2026-09-23-03 | 2026-09-23 | LegilimensPresentationLibrary | 16 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/16`, then compile `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/16`. On NQ 5m and Range charts, verify Delta/LVN Fib borders and markers match the prior enabled appearance, midpoint LVNs and cliffs remain neutral, and Extend Unmitigated On/Off preserves styling. Publication, host loading, testing, and approval are user-confirmed by the commit instruction | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -257,12 +263,37 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens last approved release: Presentation `/10` is published, loaded, tested, and approved by the user on 2026-09-21, with the host importing Profile `/4`, Orchestration `/2`, and Presentation `/10`. FOMC and Overnight + NY Early now have independent developing-content toggles, both default On, and participate in the shared inner-frame/title option. Host profile selection and library drawing visibility use the same setting. Hidden developing profiles continue accumulating data and completed profiles retain normal rendering. Extend Unmitigated On forces dotted delta-tier lines across all sources regardless of the selected tier style. Off restores the selected style. FOMC Extended does not affect styling; the mistaken source override was removed. When Highest Delta Levels is On, a visible delta-tier group containing the profile's strongest positive or negative row appends a superscript plus or minus to its existing marker. Membership survives grouping and extended-zone drawing; ties retain the existing first-row choice. Dots Off still hides all markers. Ungrouped highest-delta outlines remain unchanged. The 1–50 history dropdown and batching behavior are unchanged. Publication, host loading, testing, and approval are user-confirmed by the commit instruction; no independent TradingView validation is claimed.
 
 - Legilimens current handoff: Presentation `/13` is published, loaded, tested, and approved by the user on 2026-09-22. Development and production imports are Profile `/4`, Orchestration `/2`, and Presentation `/13`; no library release is pending. Price Focus defaults Off and adds older Globex, Weekly, or Monthly profiles to the normal recent selection. Up to 250 completed profiles are searched by enabled Delta/LVN levels; Above/Below are strict and Around accepts both sides and equality. Extra Profiles caps additions ranked by price distance, with newer profiles winning ties and recent drawings retaining priority within object budgets. Calendar and rolling Weekly/Monthly modes are supported. A one-pixel guide uses the profile outer-frame color; the lowercase direction-and-price label uses the profile-name color and font size. Manual Price uses a numeric field, preserving Fixed Range Start Time and End Time as the only Reset Points inputs. Tooltips explain Highest Delta Levels, Extend Unmitigated scope/windows, tier filters, Fib Qualification, Focus, rolling/history, and appearance controls. Host title is `legilimens •`. The 30 targeted tests, Pine identifier/title checks, registry validation, and scoped whitespace checks passed. Publication, host loading, chart testing, and approval are user-confirmed; no independent TradingView runtime or profiler validation is claimed. The user authorized the scoped local commit; no push is authorized.
+- Legilimens current handoff, superseding the `/13` handoff above: Presentation `/14`, `/15`, and `/16` publication is user-confirmed. Presentation `/15` adds On or Before and Between to Date and Price + Date Focus. Start and End dates are inclusive trading dates; Between admits completed whole profiles overlapping the window. New York sessions run from 18:00 on the preceding date to 18:00 on End Date; 24/7 assets use UTC calendar days. Invalid or reversed dates disable Date Focus and reserve no guide objects. Focus Profiles Only and the independent Delta Histogram/Delta Tiers controls remain available. Development imports are Profile `/4`, Orchestration `/2`, and Presentation `/16`; the published Presentation version is `/16`, with no library release pending. The host now always enables Delta/LVN Fib qualification and places Extend Unmitigated below Show Prior Profiles; the `/16` library cleanup also removes the two obsolete qualification fields and disabled branches from DeltaSettings. Appearance should match `/15` with both flags enabled. The final host retains the user-selected Mode label and title `legilimens •`. Publication, host loading, testing, and approval are user-confirmed by the commit instruction. TradingView validation was user-performed, not independently observed by Codex.
 
 ## Pending release notes
 
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/16`
+
+```text
+Makes Fib qualification permanent for Delta tiers and LVN zones. Removes the obsolete library switches and disabled rendering branches while preserving the existing enabled appearance, midpoint LVNs, cliff styling, and mitigation behavior.
+```
+
+Presentation `/16` was published before the host importing Profile `/4`, Orchestration `/2`, and Presentation `/16`. Publication, loading, testing, and approval are user-confirmed. No new library publication is required.
+
+### LegilimensPresentationLibrary `/15`
+
+```text
+Adds an inclusive Start Date and End Date window to Date and Price + Date Focus. Choose On or Before or Between; Between keeps completed whole profiles that overlap the selected trading dates. Price + Date also applies the selected price filter.
+```
+
+Presentation `/15` library publication is user-confirmed. Host compilation and chart validation remain unconfirmed.
+
+### LegilimensPresentationLibrary `/14`
+
+```text
+Adds Date and Price + Date to Focus for completed Globex, Weekly, and Monthly profiles. Hide Non-Focus Profiles can show only Focus selections and free drawing capacity for older profiles. Relabels the independent Delta controls as Delta Histogram and Delta Tiers.
+```
+
+Presentation `/14` library publication is user-confirmed. Host compilation and chart validation remain unconfirmed.
 
 ### LegilimensPresentationLibrary `/13`
 
@@ -347,7 +378,7 @@ Adds an optional host-supplied frame-title prefix. Legilimens uses it to show �
 - Dominant through Weak+ filters suppress a context box whenever the strongest row belongs to a currently visible same-side tier zone, while lowering the visible tier count restores the fallback when that zone is filtered out.
 - Highest Delta Levels uses fixed width 3 with no Width control; the boxes retain no fill, marker, label, mitigation, or role-reversal behavior while reusing the existing corresponding Delta-zone color in standard and alternate profile palettes.
 - Fib-qualified LVNs use fixed 90% border fade and 50% marker fade with no fade controls; the border remains one pixel, the gray LVN fill remains visually dominant, and the Fib marker shape remains unchanged.
-- Apply to LVNs Off restores neutral LVN presentation without disabling Fib qualification on normal Delta tiers, and On restores the directional LVN border and Fib marker.
+- Presentation `/16` makes Delta and LVN Fib qualification unconditional. Midpoint LVNs and cliff levels retain neutral styling.
 - Highest Delta Levels and normal Delta-tier zone widths, colors, fills, and markers remain unchanged.
 
 - Publish Core `/12`, then Gaps `/13` and Profile Orchestration `/10`; publish Interactions `/29`; compile `indicators/20-revelio/code/indicator/revelio.pine` against that pending chain.
