@@ -499,7 +499,7 @@ test('scheduled profile requests scale to configured lookback and history', () =
   assert.equal(source.match(/fetch_intraday_profile_data\(/g)?.length, 7);
   const combinedBody = functionBody('scheduled_intraday_request_bars');
   assert.equal(combinedBody.match(/math\.max\(/g)?.length, 5);
-  assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : math\.max\(historyLimit, fibHistoryLimit \+ 1\)/);
+  assert.match(functionBody('profile_request_history_limit'), /latestOnlyEnabled \? 1 : historyLimit/);
   assert.equal(source.match(/profile_request_history_limit\(latestOnly,/g)?.length, 11);
   assert.equal(source.match(/SourceRequestBars = scheduled_profile_request_bars\(/g)?.length, 6);
   assert.match(functionBody('scheduled_profile_tail_enabled'), /bar_index >= last_bar_index - requestBars \+ 1/);
@@ -535,9 +535,17 @@ test('Fibonacci history uses one shared amount with independent profile selectio
   }
 
   assert.doesNotMatch(source, /(?:slot1|slot2|weeklyProfile|monthlyProfile|dailyProfile|overnight|nyEarly|nyAm|nyPm|ivb|ivbPlus)FibHistoryAmount/);
-  assert.match(functionBody('fib_history_zone_request'), /latestOnlyEnabled \? 0 : fibHistoryN/);
+  assert.match(functionBody('fib_history_zone_request'), /latestOnlyEnabled \? 0 : math\.min\(fibHistoryN, retainedProfileHistory\)/);
   assert.equal(source.match(/fibHistoryLimit=/g)?.length, 7);
   assert.doesNotMatch(source, /fibHistoryInput|FIB_HISTORY_OFF/);
+});
+
+test('saved Fib sets cannot outnumber displayed historical profiles', () => {
+  assert.match(functionBody('history_zone_request'), /math\.max\(0, historyN - 1\)/);
+  assert.match(functionBody('fib_history_zone_request'), /latestOnlyEnabled \? 0 : math\.min\(fibHistoryN, retainedProfileHistory\)/);
+  assert.match(source, /fib_history_zone_request\(latestOnly, slot1FibHistoryLimit, s1BoxHistZoneCap\)/);
+  assert.match(source, /fib_history_zone_request\(latestOnly, profileConfig\.fibHistoryLimit, array\.get\(boxHistZoneCaps, HTF_PROFILE_COUNT \+ profileIndex\)\)/);
+  assert.match(functionBody('update_slot'), /while array\.size\(s\.histFibLines\) > fibHistCap/);
 });
 
 test('disabled HTF profiles cannot seed a one-bar Daily request', () => {
