@@ -30,7 +30,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -40,7 +40,7 @@ for (const name of ['profileDeltaPlusColor', 'profileDeltaMinusColor', 'profileD
 }
 const expression = value => value.replace(/array\.new<[^>]+>/g, 'array.new')
   .replace(/\bna\b(?!\s*\()/g, 'null').replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/:=/g, '=');
-for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
+for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfileAnalysis', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
   const body = source.match(new RegExp(`^(?:export )?type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
   const fields = body.trim().split('\n').map(line => line.trim().match(/^\S+ (\w+)(?: = (.+))?$/).slice(1));
   context[typeName] = { new: (...values) => Object.fromEntries(fields.map(([key, fallback], index) => [key, index < values.length ? values[index] : fallback ? vm.runInContext(expression(fallback), context) : null])) };
@@ -77,7 +77,7 @@ function compile(name, returnsValue = true, inputSource = source) {
   while (blocks.length) { output.push('}'); blocks.pop(); }
   vm.runInContext(`function ${name}(${parameters}) {\n${output.join('\n')}\n}`, context, { filename: `${name}.pine-adapter.js` });
 }
-for (const name of ['highestDeltaRow', 'highestDeltaMarkerGlyph', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaMarkerGlyph', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
 
 for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_LOCATION_\w+|LEVEL_MARKER_GLYPH|LOW_VOLUME_LEVEL_RANK|LOW_VOLUME_LINE_WIDTH) = (.+)$/gm)) {
   context[name] = vm.runInContext(value, context);
@@ -96,14 +96,14 @@ function profile(index, count = 12, low = 100) {
 const spec = (placement = 'PROFILE_POSITION_RIGHT_LEFT', key = 'Overnight', alternateStyles = false) => ({ key, alternateStyles, deltaWidthBars: 12, profilePosition: context[placement] });
 function prepare(profiles, settings = config(), style = spec(), selected = null) {
   return profiles.map(value => {
-    const geometry = context.profilePolylineLayout(value, style, [], settings);
+    const geometry = context.profilePolylineLayout(value, style, context.profileAnalysis({ completedAnalyses: [] }, value, style, false), [], settings);
     const rows = selected ?? Array(value.data.rowCount).fill(true);
     const regions = context.profilePolylineRegions(geometry, rows, settings.delta.showHistogram, [], settings);
     return { geometry, regions, historical: true, developing: false, contentVisible: true };
   });
 }
 function execute(items, settings = config(), histogram = true, draw = true) {
-  const state = { drawnPolylines: [] };
+  const state = { drawnPolylines: [], completedAnalyses: [] };
   const batch = context.newProfilePolylineBatch();
   for (const item of items) if (item.contentVisible) context.processProfilePolylineBatch(state, batch, item.geometry, item.historical && !item.developing, histogram, item.regions.filter(region => histogram || region.layerIndex >= 2), draw, settings);
   context.flushProfilePolylineBatch(state, batch, draw, settings);
@@ -230,12 +230,23 @@ test('history capacity follows heavy and light configurations rather than a univ
   assert.ok(context.maximumProfileCapacity({ ...limits, boxes: 200 }, delta, levels) < 50);
 });
 
+test('all-tier labels reserve one text label per marker across sides and LVNs', () => {
+  const limits = { lines: 500, labels: 500, boxes: 500, polylines: 100 };
+  const levels = { showValueArea: false, showPoc: false, showMidpoint: true };
+  const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 5, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 5, showDots: true, showDotLabels: true };
+  assert.equal(context.maximumCoreObjectCostsPerProfile(delta, levels)[1], 33);
+  assert.equal(context.maximumProfileCapacity(limits, delta, levels), 15);
+  assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, showDots: false }, levels)[1], 3);
+  assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, visibleTierSides: context.DELTA_ROWS_BUY }, levels)[1], 23);
+  assert.match(host, /dotDisplay = input.string\(DOT_DISPLAY_DOTS_LABELS,/);
+});
+
 test('irregular chart times and projected edges stay inside the reserved envelope', () => {
   const times = [0, 1, 4, 5, 20, 21, 35, 50, 100, 101, 109, 120];
   for (const placement of ['PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
     const settings = config();
     const value = profile(0, 400);
-    const geometry = context.profilePolylineLayout(value, spec(placement), times, settings);
+    const geometry = context.profilePolylineLayout(value, spec(placement), context.profileAnalysis({ completedAnalyses: [] }, value, spec(placement), false), times, settings);
     const regions = context.profilePolylineRegions(geometry, Array(400).fill(true), true, times, settings);
     const [left, right] = context.profilePolylineBounds(geometry, true);
     for (const region of regions) for (const point of region.points) assert.ok(point.time >= left && point.time <= right);
@@ -271,12 +282,13 @@ test('new session profiles follow the existing content, shell-only, and hidden v
 });
 
 test('bounded-session visibility inputs reach both profile selection and rendering', () => {
-  const shellInput = host.split('\n').find(row => row.startsWith('showDevelopingShell ='));
-  for (const [prefix, toggle, defaultVisible] of [['fomc', 'showFomcDevelopingContent', true], ['overnightNine', 'showOvernightNineDevelopingContent', true], ['nyAfternoon', 'showNyAfternoonDevelopingContent', false], ['allDayToAfternoon', 'showAllDayToAfternoonDevelopingContent', false]]) {
+  assert.match(host, /showDevelopingShell = input.bool\(true, "Show Inner Frames \+ Titles", group=GROUP_DEVELOPING/);
+  assert.match(host, /presentationInteractionSettings, showDevelopingShell, extendedNyEarlyModeActive/);
+  for (const inputRow of host.split('\n').filter(row => /^show\w+DevelopingContent =/.test(row))) assert.ok(inputRow.includes('input.bool(false,'));
+  for (const [prefix, toggle, defaultVisible] of [['fomc', 'showFomcDevelopingContent', false], ['overnightNine', 'showOvernightNineDevelopingContent', false], ['nyAfternoon', 'showNyAfternoonDevelopingContent', false], ['allDayToAfternoon', 'showAllDayToAfternoonDevelopingContent', false]]) {
     const inputRow = host.split('\n').find(row => row.startsWith(`${toggle} =`));
     assert.ok(inputRow.includes(`input.bool(${defaultVisible},`));
     assert.ok(inputRow.includes(`active=${prefix}Selected`));
-    assert.ok(shellInput.includes(`${prefix}Selected`));
     const sourceRow = host.split('\n').find(row => row.includes(`SourceSpec ${prefix}PresentationSource =`));
     assert.ok(sourceRow.includes(`${prefix}Selected, ${toggle},`));
     assert.ok(host.includes(`selectSessionProfiles(priorProfilesToShow, ${prefix}InSession, legilimensPresentation.developingProfileVisible(${prefix}PresentationSource, presentationConfig), ${prefix}Anchor`));
@@ -329,14 +341,13 @@ test('LVNs always receive directional Fib styling while midpoint LVNs and cliffs
     { isLvn: false, price: 190 },
   ];
   const zones = [], markers = [], cliffs = [];
-  context.legilimensProfile.selectLowVolumeCandidates = () => candidates;
   context.fibQualificationColor = value => value;
   context.tierMarkerSize = value => value;
   context.renderLowVolumeZone = (...args) => { zones.push(args); return false; };
   context.queueLevelMarker = (...args) => markers.push(args);
   context.queueRightLine = (...args) => cliffs.push(args);
   context.renderLowVolumeStructures({}, { startTime: 0, endTime: 20, data: { rangeLow: 100, rangeHigh: 200 } },
-    { key: 'Globex', alternateStyles: false }, '', 100, 1, false, false, [], {}, {
+    { key: 'Globex', alternateStyles: false }, candidates, '', 100, 1, false, false, [], {}, {
       delta: { showLvnTiers: true, visibleLvnTierCount: 5, showDotLabels: false, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
     });
   assert.deepEqual(zones.map(args => args[10]), [1, 1, 0]);
@@ -529,7 +540,7 @@ test('Focus Profiles Only keeps Focus candidates and skips the normal render ite
 
 test('Delta Histogram Off leaves the selected right-side tier visibility intact', () => {
   const settings = config({ visibleRows: context.OPTION_OFF, showTiers: true, visibleTierSides: context.OPTION_ALL });
-  const geometry = context.profilePolylineLayout(profile(1), spec(), [], settings);
+  const geometry = context.profilePolylineLayout(profile(1), spec(), context.profileAnalysis({ completedAnalyses: [] }, profile(1), spec(), false), [], settings);
   assert.equal(geometry.pointCounts.slice(2).reduce((total, count) => total + count, 0), 0);
   assert.equal(context.deltaTierSideVisible(true, settings), true);
   assert.equal(context.deltaTierSideVisible(false, settings), true);
@@ -543,7 +554,7 @@ test('Focus additions preserve base profiles and stop at core-object or polyline
   const baseline = prepare([profile(100)], settings, style);
   const first = baseline[0];
   const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index }));
-  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [] }, baseline, candidates, [style], 100, true, settings);
+  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [], completedAnalyses: [] }, baseline, candidates, [style], 100, true, settings);
   assert.equal(baseline.length, 2);
   assert.equal(baseline[0], first);
   assert.equal(baseline[1].geometry.profile.startTime, 100);
@@ -551,7 +562,7 @@ test('Focus additions preserve base profiles and stop at core-object or polyline
   const crowded = prepare([profile(100)], settings, style);
   crowded[0].historical = false;
   const allowed = context.profilePolylineCost({ drawnPolylines: [] }, crowded, true, settings);
-  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [] }, crowded, candidates, [style], allowed, true, settings);
+  context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [], completedAnalyses: [] }, crowded, candidates, [style], allowed, true, settings);
   assert.equal(crowded.length, 1);
   assert.equal(context.profilePolylineCost({ drawnPolylines: [] }, crowded, true, settings), allowed);
 });
@@ -647,4 +658,148 @@ test('deeper Rolling Weekly/Monthly history preserves recent period boundaries a
   }
   assert.equal(context.rollingFocusPeriodCount(Date.UTC(2026, 1), Date.UTC(1990, 1), 30, 4, 250), 250);
   assert.match(host, /focusSearchActive and rollingPeriodSelected and \(na\(rollingFocusEndTime\)/);
+});
+
+test('every Delta and LVN tier keeps its profile label and developing suffix', () => {
+  compile('developingLevelLabel');
+  compile('renderRankedOutlierLevels', false);
+  const markers = [];
+  context.sourceSpec = (sources, key) => sources.find(item => item.key === key);
+  context.deltaTierAppearance = () => ({});
+  for (const name of ['appearanceLineStyle', 'appearanceZoneColor', 'appearanceLineColor', 'appearanceTextColor']) context[name] = () => 'style';
+  context.appearanceHasLine = () => false;
+  context.mitigationEnabled = () => false;
+  context.deltaTierSideVisible = () => true;
+  context.renderZoneFill = () => {};
+  context.queueLevelMarker = (...args) => markers.push(args);
+  context.renderLowVolumeZone = () => false;
+  const profileSource = { key: 'NY Early', labelName: 'NY Early' };
+  const settings = { delta: { showDotLabels: true, showLvnTiers: true }, interactions: { extendUnmitigated: false } };
+  const ranked = Array.from({ length: 10 }, (_, index) => ({ sourceName: profileSource.key, strengthRank: index % 5 + 1, buySide: index < 5, fibLocationGrade: 0 }));
+  const candidates = Array.from({ length: 5 }, (_, index) => ({ isLvn: index < 4, zoneLow: 100 + index, zoneHigh: 102 + index, price: 120 }));
+  for (const developing of [true, false]) {
+    const caption = context.developingLevelLabel('NY Early', developing);
+    assert.equal(caption, developing ? 'NY Early (dev)' : 'NY Early');
+    for (const showLabels of [true, false]) {
+      markers.length = 0;
+      settings.delta.showDotLabels = showLabels;
+      context.renderRankedOutlierLevels({}, ranked.map(item => ({ ...item, displayNameOverride: caption })), false, [profileSource], {}, settings);
+      context.renderLowVolumeStructures({}, { data: { rangeLow: 100, rangeHigh: 200 } }, profileSource, candidates, caption, 100, 1, false, false, [], {}, settings);
+      assert.equal(markers.length, 15);
+      assert.ok(markers.every(args => args[4] === (showLabels ? caption : '')));
+    }
+  }
+});
+
+test('disabling Extended preserves NY Early and IVB in the combined mode', () => {
+  for (const [, name, value] of host.matchAll(/^const string (PROFILE_EMOJI_\w+) = (.+)$/gm)) context[name] = vm.runInContext(value, context);
+  for (const key of ['MODE_NY_EARLY', 'MODE_NY_EARLY_IVB', 'MODE_IVB']) {
+    context[key] = vm.runInContext(host.match(new RegExp(`^${key} = (.+)$`, 'm'))[1], context);
+  }
+  compile('nyEarlyModeSelected', true, host);
+  compile('ivbModeSelected', true, host);
+  const extendedSelection = expression(host.match(/^extendedNyEarlySelected = (.+)$/m)[1]);
+  const groupedSelection = expression(host.match(/^    bool groupedNyProfilesActive = (.+)$/m)[1]);
+  for (const mode of [context.MODE_NY_EARLY, context.MODE_NY_EARLY_IVB, context.MODE_IVB]) {
+    context.nyEarlySelected = context.nyEarlyModeSelected(mode);
+    context.nyEarlyModeActive = context.nyEarlySelected;
+    context.ivbModeActive = context.ivbModeSelected(mode);
+    for (const enabled of [false, true]) {
+      context.nyEarlyExtended = enabled;
+      context.extendedNyEarlyModeActive = vm.runInContext(extendedSelection, context);
+      assert.equal(context.extendedNyEarlyModeActive, enabled && mode !== context.MODE_IVB);
+      assert.equal(vm.runInContext(groupedSelection, context), mode === context.MODE_NY_EARLY_IVB || (mode === context.MODE_NY_EARLY && enabled));
+    }
+  }
+});
+
+function useActualProfileAnalytics() {
+  const analyticsSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
+  context.array.max = values => Math.max(...values);
+  for (const [, name, value] of analyticsSource.matchAll(/^const (?:int|float) (VALUE_AREA_PERCENT|OUTLIER_\w+|LOW_VOLUME_\w+) = (.+)$/gm)) {
+    context[name] = vm.runInContext(value, context);
+  }
+  for (const typeName of ['LowVolumeCandidate', 'OutlierPeak']) {
+    const fields = analyticsSource.match(new RegExp(`^export type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1].trim().split('\n').map(line => line.trim().split(' ')[1]);
+    context[typeName] = { new: (...values) => Object.fromEntries(fields.map((key, index) => [key, values[index]])) };
+  }
+  for (const name of ['computeRowStrengths', 'profileValueLevels', 'isOutlierStrength', 'smoothProfileVolumes', 'volumeWindowAverage', 'collectLowVolumeCandidates', 'lowVolumeCandidatesOverlap', 'selectLowVolumeCandidates', 'outlierPeak', 'collectSideOutlierPeaks', 'collectOutlierPeaks']) compile(name, true, analyticsSource);
+  const calls = { computeRowStrengths: 0, profileValueLevels: 0, collectOutlierPeaks: 0, selectLowVolumeCandidates: 0 };
+  for (const name of Object.keys(calls)) context.legilimensProfile[name] = (...args) => { calls[name]++; return context[name](...args); };
+  return calls;
+}
+
+test('completed NY analyses reuse real analytics across forward steps while developing data stays fresh', () => {
+  const calls = useActualProfileAnalytics();
+  const state = { completedAnalyses: [], analysisBarTime: null };
+  const settings = config({ showTiers: true, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 5 });
+  const profiles = Array.from({ length: 25 }, (_, index) => {
+    const value = profile(index, 80 + index % 4 * 20);
+    value.data.rowVolumes = value.data.rowVolumes.map((_, row) => 10 + (row % 40 < 12 ? 1 : 100) + row % 7);
+    return value;
+  });
+  const sources = [spec(undefined, context.SOURCE_NY_EARLY), spec(undefined, context.SOURCE_EXTENDED_NY_EARLY)];
+  const analyze = (value, style, completed) => {
+    const analysis = context.profileAnalysis(state, value, style, completed);
+    context.profileOutlierPeaks(analysis, value, settings);
+    context.profileLowVolumeCandidates(analysis, value, settings);
+    return analysis;
+  };
+  const items = profiles.flatMap(value => sources.map(style => ({ geometry: { profile: value, source: style, analysis: analyze(value, style, true) }, developing: false, contentVisible: true })));
+  assert.ok(items.some(item => item.geometry.analysis.lowVolumeCandidates.length > 0));
+  assert.ok(items.some(item => item.geometry.analysis.outlierPeaks.length > 0));
+  context.retainCompletedAnalyses(state, items);
+  assert.equal(state.completedAnalyses.length, 50);
+  const snapshots = items.map(item => structuredClone(item.geometry.analysis));
+  const live = profile(30, 100);
+  let lastLive = null;
+  for (let step = 0; step < 20; step++) {
+    context.prepareProfileAnalysisCache(state, 4000 + step);
+    for (const [index, item] of items.entries()) {
+      const reused = analyze(item.geometry.profile, item.geometry.source, true);
+      assert.equal(reused, item.geometry.analysis);
+      assert.deepEqual(reused, snapshots[index]);
+    }
+    live.data.rowDeltas[0] = 1000 + step;
+    const freshLive = analyze(live, sources[0], false);
+    if (lastLive) assert.notDeepEqual(freshLive.strengths, lastLive.strengths);
+    assert.notEqual(freshLive, lastLive);
+    lastLive = freshLive;
+    context.retainCompletedAnalyses(state, [...items, { geometry: { source: sources[0], analysis: freshLive }, developing: true, contentVisible: true }]);
+  }
+  for (const count of Object.values(calls)) assert.equal(count, 70, '50 completed calculations once, plus 20 live updates');
+  for (const item of items) {
+    const fresh = analyze(item.geometry.profile, item.geometry.source, false);
+    assert.deepEqual(fresh, item.geometry.analysis, 'cached values must equal an independent fresh calculation');
+  }
+});
+
+test('cache admission, occurrence keys, backward Replay and chart geometry prevent stale reuse', () => {
+  useActualProfileAnalytics();
+  const state = { completedAnalyses: [], analysisBarTime: 1000 };
+  const style = spec('PROFILE_POSITION_RIGHT_RIGHT', context.SOURCE_NY_EARLY);
+  const settings = config({ showTiers: true, showLvnTiers: true, visibleLvnTierCount: 5 });
+  const value = profile(1);
+  const saved = context.profileAnalysis(state, value, style, true);
+  const item = { geometry: { source: style, analysis: saved }, developing: false, contentVisible: true };
+  context.retainCompletedAnalyses(state, [item,
+    { ...item, developing: true }, { ...item, contentVisible: false },
+    { ...item, geometry: { source: { key: context.SOURCE_FIXED }, analysis: saved } },
+    { ...item, geometry: { source: { key: context.SOURCE_ROLLING }, analysis: saved } },
+  ]);
+  assert.equal(state.completedAnalyses.length, 1);
+  assert.equal(context.profileAnalysis(state, value, style, true), saved);
+  assert.notEqual(context.profileAnalysis(state, value, { ...style, key: context.SOURCE_EXTENDED_NY_EARLY }, true), saved);
+  assert.notEqual(context.profileAnalysis(state, { ...value, endTime: value.endTime + 1 }, style, true), saved);
+  const oldGeometry = context.profilePolylineLayout(value, style, saved, [100, 105, 120, 140], settings);
+  const nextGeometry = context.profilePolylineLayout(value, style, saved, [100, 105, 120, 130, 131, 132, 133, 140], settings);
+  assert.notEqual(oldGeometry.deltaRightTime, nextGeometry.deltaRightTime, 'geometry must follow the current chart even when analytics are reused');
+  const freshGeometry = context.profilePolylineLayout(value, style, context.profileAnalysis(state, value, style, false), [100, 105, 120, 130, 131, 132, 133, 140], settings);
+  assert.deepEqual(nextGeometry, freshGeometry);
+  context.prepareProfileAnalysisCache(state, 999);
+  assert.equal(state.completedAnalyses.length, 0);
+  assert.notEqual(context.profileAnalysis(state, value, style, true), saved);
+  context.retainCompletedAnalyses(state, [item]);
+  context.retainCompletedAnalyses(state, []);
+  assert.equal(state.completedAnalyses.length, 0, 'profiles leaving the rendered set must release their cache');
 });

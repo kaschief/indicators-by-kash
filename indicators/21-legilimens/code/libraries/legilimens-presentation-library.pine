@@ -334,18 +334,26 @@ appearanceTextColor(DeltaTierAppearance config) =>
 appearanceZoneColor(DeltaTierAppearance config) =>
     config.zoneColor
 
-type ProfilePolylineLayout
-    legilimensOrchestration.Profile profile
-    SourceSpec source
+export type ProfileAnalysis
+    string sourceName
+    int startTime
+    int endTime
     array<float> strengths
-    array<int> pointCounts
-    int startScaleIndex
-    int endScaleIndex
     int valueAreaLowRow
     int valueAreaHighRow
     float pocPrice
     float valueAreaLowPrice
     float valueAreaHighPrice
+    array<legilimensProfile.OutlierPeak> outlierPeaks
+    array<legilimensProfile.LowVolumeCandidate> lowVolumeCandidates
+
+type ProfilePolylineLayout
+    legilimensOrchestration.Profile profile
+    SourceSpec source
+    ProfileAnalysis analysis
+    array<int> pointCounts
+    int startScaleIndex
+    int endScaleIndex
     int deltaLeftTime
     int deltaRightTime
     int histogramLeftTime
@@ -391,9 +399,11 @@ export type RenderState
     array<int> cachedChartTimes
     int chartTimesBuiltAtBar
     array<FocusProfile> focusProfiles
+    array<ProfileAnalysis> completedAnalyses
+    int analysisBarTime
 
 export newRenderState() =>
-    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1, array.new<FocusProfile>())
+    RenderState.new(array.new<box>(), array.new<line>(), array.new<polyline>(), array.new<label>(), array.new<PendingOutlierLevel>(), array.new<PendingMitigatedZone>(), array.new<PendingRightLabel>(), array.new<PendingRightLine>(), array.new<MitigatedZoneState>(), array.new<ZoneTrackingProfileKey>(), array.new<int>(), -1, array.new<FocusProfile>(), array.new<ProfileAnalysis>(), na)
 
 sourceSpec(array<SourceSpec> sources, string sourceName) =>
     SourceSpec found = na
@@ -473,8 +483,8 @@ maximumCoreObjectCostsPerProfile(DeltaSettings delta, LevelSettings levels) =>
     int rightLineCount = lvnTierCount + deltaTierSides * math.min(2, delta.visibleTierCount)
     int pocLabelCount = levels.showPoc ? 1 : 0
     int midpointLabelCount = levels.showMidpoint ? 1 : 0
-    int lvnMarkerLabelCount = delta.showDots ? lvnTierCount + (delta.showDotLabels and lvnTierCount > 0 ? 1 : 0) : 0
-    int deltaMarkerLabelCount = delta.showDots ? deltaTierCount + (delta.showDotLabels ? deltaTierSides : 0) : 0
+    int lvnMarkerLabelCount = delta.showDots ? lvnTierCount * (delta.showDotLabels ? 2 : 1) : 0
+    int deltaMarkerLabelCount = delta.showDots ? deltaTierCount * (delta.showDotLabels ? 2 : 1) : 0
     int zoneBoxCount = lvnTierCount + deltaTierCount + highestDeltaBoxCount
     [referenceLineCount + rightLineCount, PROFILE_HEADING_LABEL_COUNT + pocLabelCount + midpointLabelCount + lvnMarkerLabelCount + deltaMarkerLabelCount, PROFILE_FRAME_BOX_COUNT + zoneBoxCount]
 
@@ -1037,16 +1047,45 @@ deltaLayerIndex(float rowDelta, bool outlierRow) =>
     outlierRow ? rowDelta >= 0 ? 4 : 5 : rowDelta >= 0 ? 2 : 3
 
 histogramRegionRows(ProfilePolylineLayout geometry, int regionIndex) =>
-    int firstRow = regionIndex == 0 ? 0 : regionIndex == 1 ? geometry.valueAreaLowRow : geometry.valueAreaHighRow + 1
-    int lastRow = regionIndex == 0 ? geometry.valueAreaLowRow - 1 : regionIndex == 1 ? geometry.valueAreaHighRow : geometry.profile.data.rowCount - 1
+    int firstRow = regionIndex == 0 ? 0 : regionIndex == 1 ? geometry.analysis.valueAreaLowRow : geometry.analysis.valueAreaHighRow + 1
+    int lastRow = regionIndex == 0 ? geometry.analysis.valueAreaLowRow - 1 : regionIndex == 1 ? geometry.analysis.valueAreaHighRow : geometry.profile.data.rowCount - 1
     [firstRow, lastRow]
 
-profilePolylineLayout(legilimensOrchestration.Profile profile, SourceSpec source, array<int> chartTimes, PresentationConfig config) =>
+prepareProfileAnalysisCache(RenderState state, int barTime) =>
+    if not na(state.analysisBarTime) and barTime < state.analysisBarTime
+        array.clear(state.completedAnalyses)
+    state.analysisBarTime := barTime
+    true
+
+profileAnalysis(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, bool completed) =>
+    ProfileAnalysis analysis = na
+    // Completed session data is immutable; input changes restart the script.
+    if completed
+        for cached in state.completedAnalyses
+            if cached.sourceName == source.key and cached.startTime == profile.startTime and cached.endTime == profile.endTime
+                analysis := cached
+                break
+    if na(analysis)
+        [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = legilimensProfile.profileValueLevels(profile.data.rowVolumes, profile.data.rowCount, profile.data.priceLow, profile.data.priceHigh)
+        array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
+        analysis := ProfileAnalysis.new(source.key, profile.startTime, profile.endTime, strengths, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice, na, na)
+    analysis
+
+profileOutlierPeaks(ProfileAnalysis analysis, legilimensOrchestration.Profile profile, PresentationConfig config) =>
+    if na(analysis.outlierPeaks) and (config.delta.showTiers or config.delta.showHighestDeltaLevels)
+        analysis.outlierPeaks := legilimensProfile.collectOutlierPeaks(profile.data, analysis.strengths)
+    analysis.outlierPeaks
+
+profileLowVolumeCandidates(ProfileAnalysis analysis, legilimensOrchestration.Profile profile, PresentationConfig config) =>
+    if na(analysis.lowVolumeCandidates) and config.delta.showLvnTiers
+        analysis.lowVolumeCandidates := legilimensProfile.selectLowVolumeCandidates(profile.data, config.delta.visibleLvnTierCount)
+    analysis.lowVolumeCandidates
+
+profilePolylineLayout(legilimensOrchestration.Profile profile, SourceSpec source, ProfileAnalysis analysis, array<int> chartTimes, PresentationConfig config) =>
     int startScaleIndex = nearestChartTimeIndex(chartTimes, profile.startTime)
     int endScaleIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
-    [_, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice] = legilimensProfile.profileValueLevels(profile.data.rowVolumes, profile.data.rowCount, profile.data.priceLow, profile.data.priceHigh)
-    array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
-    ProfilePolylineLayout geometry = ProfilePolylineLayout.new(profile, source, strengths, array.new<int>(PROFILE_POLYLINE_LAYER_COUNT, 0), startScaleIndex, endScaleIndex, valueAreaLowRow, valueAreaHighRow, pocPrice, valueAreaLowPrice, valueAreaHighPrice, na, na, na, na)
+    array<float> strengths = analysis.strengths
+    ProfilePolylineLayout geometry = ProfilePolylineLayout.new(profile, source, analysis, array.new<int>(PROFILE_POLYLINE_LAYER_COUNT, 0), startScaleIndex, endScaleIndex, na, na, na, na)
     float maximumMagnitude = 0.0
     if profile.data.maxAbsRowDelta > 0 and config.delta.visibleRows != OPTION_OFF
         for rowIndex = 0 to profile.data.rowCount - 1
@@ -1116,7 +1155,7 @@ profilePolylineRegions(ProfilePolylineLayout geometry, array<bool> selectedRows,
         int baselineTime = profileBaselineTime(profile, chartTimes, baselineIndex, attachRight)
         for rowIndex = 0 to profile.data.rowCount - 1
             float rowDelta = array.get(profile.data.rowDeltas, rowIndex)
-            float strength = array.get(geometry.strengths, rowIndex)
+            float strength = array.get(geometry.analysis.strengths, rowIndex)
             bool selectedRow = rowIndex < array.size(selectedRows) and array.get(selectedRows, rowIndex)
             if array.get(profile.data.rowVolumes, rowIndex) > 0 and math.abs(rowDelta) > 0 and rowPassesDeltaFilter(rowDelta, strength, selectedRow, config)
                 int layerIndex = deltaLayerIndex(rowDelta, legilimensProfile.isOutlierStrength(strength))
@@ -1214,9 +1253,8 @@ renderLowVolumeZone(RenderState state, legilimensOrchestration.Profile profile, 
         renderZoneFill(state, profile.endTime, levelEndTime, zoneLow, zoneHigh, zoneColor, borderWidth, borderColor, config)
     markerDeferred
 
-renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool registrationOnly, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<legilimensProfile.LowVolumeCandidate> candidates, string displayNameOverride, int levelEndTime, int sessionTradingDayKey, bool historical, bool registrationOnly, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     if config.delta.showLvnTiers
-        array<legilimensProfile.LowVolumeCandidate> candidates = legilimensProfile.selectLowVolumeCandidates(profile.data, config.delta.visibleLvnTierCount)
         int count = array.size(candidates)
         if count > 0
             for candidateIndex = 0 to count - 1
@@ -1224,7 +1262,7 @@ renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile pro
                 legilimensProfile.LowVolumeCandidate candidate = array.get(candidates, candidateIndex)
                 int levelRank = LOW_VOLUME_LEVEL_RANK - structureRank
                 float labelPrice = candidate.isLvn ? (candidate.zoneLow + candidate.zoneHigh) * 0.5 : candidate.price
-                string markerLabel = config.delta.showDotLabels and structureRank == 1 ? displayNameOverride != "" ? displayNameOverride : source.labelName : ""
+                string markerLabel = config.delta.showDotLabels ? displayNameOverride != "" ? displayNameOverride : source.labelName : ""
                 color markerColor = color.new(color.rgb(15, 15, 15), 75)
                 color borderColor = markerColor
                 string markerGlyph = LEVEL_MARKER_GLYPH
@@ -1322,7 +1360,7 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             int levelRank = 2000 - ranked.strengthRank
             bool extendPriorityZone = ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
             int direction = ranked.buySide ? 1 : -1
-            string markerLabel = config.delta.showDotLabels and ranked.strengthRank == 1 ? ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName : ""
+            string markerLabel = config.delta.showDotLabels ? ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName : ""
             int fibBorderWidth = fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice)
             bool qualified = ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
             color zoneColor = fibQualificationColor(appearanceZoneColor(appearance), qualified)
@@ -1390,12 +1428,15 @@ renderOuterSessionFrame(RenderState state, legilimensOrchestration.Profile profi
     if canDrawBox(state, config)
         array.push(state.drawnBoxes, box.new(left=profile.startTime, top=rangeHighTitleY + titleClearance, right=levelEndTime, bottom=rangeLowTitleY - titleClearance, xloc=xloc.bar_time, border_color=outerColor, border_width=1, border_style=line.style_solid, bgcolor=color.new(outerColor, 100)))
 
-renderReferenceLevel(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, int levelEndTime, float price, string levelName, color lineColor, PresentationConfig config) =>
+developingLevelLabel(string labelText, bool developing) =>
+    labelText + (developing ? " (dev)" : "")
+
+renderReferenceLevel(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, bool developing, int levelEndTime, float price, string levelName, color lineColor, PresentationConfig config) =>
     bool pocLevel = levelName == LEVEL_POC
     if canDrawLine(state, config)
         array.push(state.drawnLines, line.new(profile.startTime, price, levelEndTime, price, xloc=xloc.bar_time, color=lineColor, style=toLineStyle(pocLevel ? STYLE_DASHED : STYLE_SOLID), width=pocLevel ? POC_LEVEL_WIDTH : VALUE_AREA_LEVEL_WIDTH))
     if pocLevel and canDrawLabel(state, config)
-        string labelText = (displayNameOverride != "" ? displayNameOverride : source.displayName) + " " + levelName
+        string labelText = developingLevelLabel((displayNameOverride != "" ? displayNameOverride : source.displayName) + " " + levelName, developing)
         array.push(state.drawnLabels, label.new(levelEndTime + int(math.round(POC_LABEL_OFFSET_BARS * barSpanMs())), price, labelText, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, textcolor=color.rgb(49, 27, 146), size=POC_LABEL_SIZE, color=color.new(color.white, 100)))
 
 renderRangeLabels(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, string displayNameOverride, bool pairedNyHeadings, array<int> chartTimes, int startScaleIndex, int endScaleIndex, PresentationConfig config) =>
@@ -1415,7 +1456,7 @@ renderRangeLabels(RenderState state, legilimensOrchestration.Profile profile, So
     if canDrawLabel(state, config)
         array.push(state.drawnLabels, label.new(headingTime, rangeLowTitleY, rangeLabel, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelColor, size=toLabelSize(labelSize), color=backgroundColor))
 
-renderProfileMidpointLine(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, int levelEndTime, array<int> chartTimes, PresentationConfig config) =>
+renderProfileMidpointLine(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, bool developing, int levelEndTime, array<int> chartTimes, PresentationConfig config) =>
     if config.levels.showMidpoint and canDrawLine(state, config)
         float midpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
         array.push(state.drawnLines, line.new(profile.endTime, midpointPrice, levelEndTime, midpointPrice, xloc=xloc.bar_time, color=color.new(#2962ff, 70), style=line.style_solid, width=3))
@@ -1425,7 +1466,7 @@ renderProfileMidpointLine(RenderState state, legilimensOrchestration.Profile pro
             int endIndex = nearestChartTimeIndex(chartTimes, levelEndTime)
             if startIndex >= 0 and endIndex >= 0
                 midpointTime := array.get(chartTimes, int(math.round((startIndex + endIndex) * 0.5)))
-            array.push(state.drawnLabels, label.new(midpointTime, midpointPrice, str.lower(source.key) + " 0.5", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_center, textcolor=color.new(#2962ff, 45), size=5, color=color.new(color.white, 50), textalign=text.align_center))
+            array.push(state.drawnLabels, label.new(midpointTime, midpointPrice, developingLevelLabel(str.lower(source.key) + " 0.5", developing), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_center, textcolor=color.new(#2962ff, 45), size=5, color=color.new(color.white, 50), textalign=text.align_center))
 
 selectedOutlierRowMask(legilimensOrchestration.Profile profile, array<float> strengths, array<legilimensProfile.RankedOutlierSelection> selections, PresentationConfig config) =>
     bool enabled = config.delta.rowFilter == DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS and config.delta.showTiers and config.delta.visibleTierSides != OPTION_OFF
@@ -1444,23 +1485,22 @@ renderSelectedProfile(RenderState state, ProfilePolylineLayout geometry, Profile
     renderRangeLabels(state, profile, source, displayNameOverride, pairedNyHeadings, chartTimes, startScaleIndex, endScaleIndex, config)
     renderProfileBox(state, profile, source, config)
     if not developing or not developingControlled(source) or source.developingContentVisible
-        renderProfileMidpointLine(state, profile, source, levelEndTime, chartTimes, config)
-        array<float> strengths = geometry.strengths
-        array<legilimensProfile.OutlierPeak> outlierPeaks = array.new<legilimensProfile.OutlierPeak>()
-        if config.delta.showTiers or config.delta.showHighestDeltaLevels
-            outlierPeaks := legilimensProfile.collectOutlierPeaks(profile.data, strengths)
-        queueOutlierPeaks(state, profile, source, outlierPeaks, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, config)
+        renderProfileMidpointLine(state, profile, source, developing, levelEndTime, chartTimes, config)
+        string levelDisplayName = developingLevelLabel(displayNameOverride != "" ? displayNameOverride : source.labelName, developing)
+        array<float> strengths = geometry.analysis.strengths
+        array<legilimensProfile.OutlierPeak> outlierPeaks = profileOutlierPeaks(geometry.analysis, profile, config)
+        queueOutlierPeaks(state, profile, source, outlierPeaks, levelDisplayName, levelEndTime, sessionTradingDayKey, historical, config)
         [rankedOutlierLevels, rankedOutlierSelections] = rankPendingOutlierLevels(state, context, config)
         array<bool> selectedRows = selectedOutlierRowMask(profile, strengths, rankedOutlierSelections, config)
         array<ProfilePolylineRegion> regions = profilePolylineRegions(geometry, selectedRows, renderBudgetedHistogram, chartTimes, config)
         processProfilePolylineBatch(state, batch, geometry, historical and not developing, renderBudgetedHistogram, regions, true, config)
         if config.levels.showValueArea
             color valueAreaColor = profileValueAreaLevelColor(source.key)
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.valueAreaHighPrice, LEVEL_VAH, valueAreaColor, config)
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.valueAreaLowPrice, LEVEL_VAL, valueAreaColor, config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, developing, levelEndTime, geometry.analysis.valueAreaHighPrice, LEVEL_VAH, valueAreaColor, config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, developing, levelEndTime, geometry.analysis.valueAreaLowPrice, LEVEL_VAL, valueAreaColor, config)
         if config.levels.showPoc
-            renderReferenceLevel(state, profile, source, displayNameOverride, levelEndTime, geometry.pocPrice, LEVEL_POC, color.rgb(49, 27, 146), config)
-        renderLowVolumeStructures(state, profile, source, displayNameOverride, levelEndTime, sessionTradingDayKey, historical, false, sources, context, config)
+            renderReferenceLevel(state, profile, source, displayNameOverride, developing, levelEndTime, geometry.analysis.pocPrice, LEVEL_POC, color.rgb(49, 27, 146), config)
+        renderLowVolumeStructures(state, profile, source, profileLowVolumeCandidates(geometry.analysis, profile, config), levelDisplayName, levelEndTime, sessionTradingDayKey, historical, false, sources, context, config)
         renderRankedOutlierLevels(state, rankedOutlierLevels, false, sources, context, config)
         renderHighestDeltaLevels(state, profile, source, levelEndTime, outlierPeaks, rankedOutlierSelections, config)
 
@@ -1487,18 +1527,18 @@ trimBindings(array<SelectionBinding> bindings, int capacity, PresentationConfig 
         array.push(sourceNames, binding.source.key)
     legilimensOrchestration.trimProfileSelectionsToCapacity(selections, sourceNames, capacity, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, config.extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, context.tickSize)
 
-findProfilePolylineLayout(array<ProfilePolylineLayout> layouts, legilimensOrchestration.Profile profile, SourceSpec source, array<int> chartTimes, PresentationConfig config) =>
+findProfilePolylineLayout(RenderState state, array<ProfilePolylineLayout> layouts, legilimensOrchestration.Profile profile, SourceSpec source, bool developing, array<int> chartTimes, PresentationConfig config) =>
     ProfilePolylineLayout found = na
     for geometry in layouts
         if geometry.source.key == source.key and geometry.profile.startTime == profile.startTime and geometry.profile.endTime == profile.endTime
             found := geometry
             break
     if na(found)
-        found := profilePolylineLayout(profile, source, chartTimes, config)
+        found := profilePolylineLayout(profile, source, profileAnalysis(state, profile, source, not developing), chartTimes, config)
         array.push(layouts, found)
     found
 
-profileRenderItems(array<SelectionBinding> bindings, array<ProfilePolylineLayout> layouts, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<int> chartTimes, BarContext context, PresentationConfig config) =>
+profileRenderItems(RenderState state, array<SelectionBinding> bindings, array<ProfilePolylineLayout> layouts, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<int> chartTimes, BarContext context, PresentationConfig config) =>
     array<ProfileRenderItem> items = array.new<ProfileRenderItem>()
     for renderPass = 0 to 1
         bool currentPass = renderPass == 0
@@ -1515,7 +1555,7 @@ profileRenderItems(array<SelectionBinding> bindings, array<ProfilePolylineLayout
                             bool hiddenCounterpart = binding.source.key == SOURCE_NY_EARLY and hideDevelopingExtendedCounterpart and profile.startTime == currentNyEarlyStartTime
                             bool developing = currentProfile and binding.selection.currentDeveloping
                             bool contentVisible = not developing or not developingControlled(binding.source) or binding.source.developingContentVisible
-                            ProfilePolylineLayout geometry = findProfilePolylineLayout(layouts, profile, binding.source, chartTimes, config)
+                            ProfilePolylineLayout geometry = findProfilePolylineLayout(state, layouts, profile, binding.source, developing, chartTimes, config)
                             array.push(items, ProfileRenderItem.new(geometry, hiddenCounterpart ? "" : decision.displayNameOverride, hiddenCounterpart ? false : decision.pairedHeadings, not currentProfile, developing, contentVisible))
     items
 
@@ -1527,11 +1567,20 @@ profilePolylineCost(RenderState state, array<ProfileRenderItem> items, bool incl
     flushProfilePolylineBatch(state, batch, false, config)
     batch.completedCount
 
+retainCompletedAnalyses(RenderState state, array<ProfileRenderItem> items) =>
+    array<ProfileAnalysis> retained = array.new<ProfileAnalysis>()
+    for item in items
+        if not item.developing and item.contentVisible and item.geometry.source.key != SOURCE_FIXED and item.geometry.source.key != SOURCE_ROLLING
+            array.push(retained, item.geometry.analysis)
+    state.completedAnalyses := retained
+    true
+
 renderProfileItems(RenderState state, array<ProfileRenderItem> items, bool includeHistogram, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     ProfilePolylineBatch batch = newProfilePolylineBatch()
     for item in items
         renderSelectedProfile(state, item.geometry, batch, item.displayNameOverride, item.pairedHeadings, item.historical, item.developing, includeHistogram, state.cachedChartTimes, sources, context, config)
     flushProfilePolylineBatch(state, batch, true, config)
+    retainCompletedAnalyses(state, items)
     true
 
 focusSourceAllowed(string sourceName) =>
@@ -1600,7 +1649,7 @@ appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<Focu
         if array.size(items) >= capacity
             break
         SourceSpec source = sourceSpec(sources, candidate.archived.sourceName)
-        ProfilePolylineLayout geometry = profilePolylineLayout(candidate.archived.profile, source, state.cachedChartTimes, config)
+        ProfilePolylineLayout geometry = profilePolylineLayout(candidate.archived.profile, source, profileAnalysis(state, candidate.archived.profile, source, true), state.cachedChartTimes, config)
         array.push(items, ProfileRenderItem.new(geometry, "", false, true, false, true))
         if profilePolylineCost(state, items, preserveHistograms, config) > availablePolylines
             array.pop(items)
@@ -1608,6 +1657,7 @@ appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<Focu
     true
 
 export renderSelections(RenderState state, array<SelectionBinding> bindings, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+    prepareProfileAnalysisCache(state, context.barTime)
     array<FocusCandidate> candidates = focusedCandidates(state.focusProfiles, bindings, context.barTime, config.focus)
     bool showRecentProfiles = config.focus.mode == FocusMode.off or not config.focus.hideNonFocusProfiles
     if showRecentProfiles
@@ -1618,12 +1668,12 @@ export renderSelections(RenderState state, array<SelectionBinding> bindings, boo
     array<ProfilePolylineLayout> layouts = array.new<ProfilePolylineLayout>()
     array<ProfileRenderItem> items = array.new<ProfileRenderItem>()
     if showRecentProfiles
-        items := profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
+        items := profileRenderItems(state, bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
     int availablePolylines = config.limits.polylines - array.size(state.drawnPolylines)
     while array.size(items) > 0 and profilePolylineCost(state, items, false, config) > availablePolylines
         int previousCount = array.size(items)
         trimBindings(bindings, previousCount - 1, config, context)
-        items := profileRenderItems(bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
+        items := profileRenderItems(state, bindings, layouts, hideDevelopingExtendedCounterpart, currentNyEarlyStartTime, state.cachedChartTimes, context, config)
         if array.size(items) >= previousCount
             break
     bool renderHistograms = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
@@ -1634,13 +1684,13 @@ export renderSelections(RenderState state, array<SelectionBinding> bindings, boo
     renderProfileItems(state, items, renderHistograms, sources, context, config)
     true
 
-export renderStandaloneProfile(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+export renderStandaloneProfile(RenderState state, legilimensOrchestration.Profile profile, bool developing, SourceSpec source, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     if state.chartTimesBuiltAtBar != context.barIndex
         state.cachedChartTimes := recentChartTimes(context.barIndex)
         state.chartTimesBuiltAtBar := context.barIndex
-    ProfilePolylineLayout geometry = profilePolylineLayout(profile, source, state.cachedChartTimes, config)
+    ProfilePolylineLayout geometry = profilePolylineLayout(profile, source, profileAnalysis(state, profile, source, false), state.cachedChartTimes, config)
     bool contentVisible = not developingControlled(source) or source.developingContentVisible
-    array<ProfileRenderItem> items = array.from(ProfileRenderItem.new(geometry, "", false, false, true, contentVisible))
+    array<ProfileRenderItem> items = array.from(ProfileRenderItem.new(geometry, "", false, false, developing, contentVisible))
     int availablePolylines = config.limits.polylines - array.size(state.drawnPolylines)
     bool renderHistogramAllowed = config.delta.showHistogram and profilePolylineCost(state, items, true, config) <= availablePolylines
     renderProfileItems(state, items, renderHistogramAllowed, sources, context, config)
@@ -1651,7 +1701,8 @@ export registerProfileZones(RenderState state, legilimensOrchestration.Profile p
         int sessionCloseTime = sessionOccurrenceClose(source, profile, false, context)
         int levelEndTime = sessionLevelEndpoint(source, sessionCloseTime, context)
         int sessionTradingDayKey = legilimensOrchestration.tradingDayKey(sessionCloseTime)
-        renderLowVolumeStructures(state, profile, source, "", levelEndTime, sessionTradingDayKey, true, true, sources, context, config)
+        array<legilimensProfile.LowVolumeCandidate> candidates = config.delta.showLvnTiers ? legilimensProfile.selectLowVolumeCandidates(profile.data, config.delta.visibleLvnTierCount) : na
+        renderLowVolumeStructures(state, profile, source, candidates, "", levelEndTime, sessionTradingDayKey, true, true, sources, context, config)
         if config.delta.showTiers
             array<float> strengths = legilimensProfile.computeRowStrengths(profile.data)
             array<legilimensProfile.OutlierPeak> outlierPeaks = legilimensProfile.collectOutlierPeaks(profile.data, strengths)
