@@ -89,6 +89,7 @@ GROUP_INTRADAY_CLOSE_1600 = "Intraday Close: 16:00"
 GROUP_LABELS = "Labels"
 GROUP_COLOR_TABLE = "Color Reference"
 GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
+GROUP_QUICK_FILTER_SPECIAL_SETTINGS = "⚡ Quick Filter: Special Settings"
 
 SESSION_WINDOW_OVERNIGHT = "1600-0500:1234567"
 SESSION_WINDOW_FROM_0500 = "0500-1600:1234567"
@@ -301,7 +302,7 @@ type PendingLabelEvent
     bool endpoint
     bool core
     bool inline_label
-    bool mitigated_context
+    int context_transparency
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ASSET CONFIGURATION REGISTRY
@@ -384,6 +385,10 @@ showOnlyEnabled = input.bool(false, "Show Only", inline="show_only", group=GROUP
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
 visibleWindow = input.string(WINDOW_LABEL_RTH, "", options=[WINDOW_LABEL_OVERNIGHT, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled)
 showOnlyMostRecent = input.bool(false, "Most Recent Only", inline="show_only", group=GROUP_QUICK_FILTER_SHOW_ONLY, active=showOnlyEnabled, tooltip="Windows (NY)\n• Overnight — 16:00–05:00\n• ● ● RTH — 05:00–16:00\n• ● RTH — 08:30–16:00\n• RTH — 09:30–16:00\n\nMost Recent Only limits the window to the current NY date. Available through 1H and on Range charts.")
+
+// ─── Quick Filter: Special Settings ───
+matchLiquidityDepthPoolColor = input.bool(false, "Match LD to Pool Color", group=GROUP_QUICK_FILTER_SPECIAL_SETTINGS, tooltip="L1–L3 use their parent pool's color. Mitigated levels retain their fading.")
+preserveMitigatedContext = input.bool(false, "Fade Mitigated Levels Instead of Hiding", group=GROUP_QUICK_FILTER_SPECIAL_SETTINGS, active=showUnmitigatedOnly, tooltip="Retain completed pools and L-levels at 93% transparency within Show Last. Partly active ladders keep their existing fading.")
 
 daily_boundary_mode = input.string(DAILY_BOUNDARY_EXCHANGE, "Daily Boundary", options=[DAILY_BOUNDARY_EXCHANGE, DAILY_BOUNDARY_CALENDAR], group=GROUP_TIME_BEHAVIOR, tooltip="Exchange Session — 18:00–17:59 NY.\nCalendar Day — 00:00–23:59 NY.\n24/7 assets use Calendar Day.")
 includeSundayEvening = input.bool(false, "Include Sunday Evening", group=GROUP_TIME_BEHAVIOR, tooltip="Sunday evening — 18:00–00:00 NY.\nOff — week starts Monday 00:00.\nOn — week starts Sunday 18:00.\nIgnored for 24/7 assets.")
@@ -899,29 +904,29 @@ queue_label_event(array<PendingLabelEvent> pending, PendingLabelEvent candidate)
     array.push(pending, candidate)
     true
 
-buffer_liq_depth_labels(array<PendingLabelEvent> pending, start_index, end_index, price_val, level_idx, is_high, pool_type = "", mitigated_context = false) =>
+buffer_liq_depth_labels(array<PendingLabelEvent> pending, start_index, end_index, price_val, level_idx, is_high, pool_type = "", context_transparency = 0) =>
     array<int> label_indices = reminder_indices(start_index, end_index, showLabels and showDepthReminders, false)
     if showLabels and array.size(label_indices) > 0
         string identity = depth_label_text(level_idx, pool_type)
         int rank = pool_priority(pool_type)
         for placement = 0 to array.size(label_indices) - 1
-            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price_val, identity, is_high, rank, false, false, true, mitigated_context))
+            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price_val, identity, is_high, rank, false, false, true, context_transparency))
     true
 
-buffer_pool_label(array<PendingLabelEvent> pending, float price, int start_index, int end_index, string label_text, bool is_high, bool breached, string pool_type, bool mitigated_context) =>
+buffer_pool_label(array<PendingLabelEvent> pending, float price, int start_index, int end_index, string label_text, bool is_high, bool breached, string pool_type, int context_transparency) =>
     array<int> label_indices = reminder_indices(start_index, end_index, showLabels and showPoolReminders, not breached)
     if showLabels and array.size(label_indices) > 0
         int rank = pool_priority(pool_type)
         int last_placement = array.size(label_indices) - 1
         for placement = 0 to last_placement
             bool endpoint = not breached and placement == last_placement
-            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price, label_text, is_high, rank, endpoint, true, false, mitigated_context))
+            queue_label_event(pending, PendingLabelEvent.new(array.get(label_indices, placement), price, label_text, is_high, rank, endpoint, true, false, context_transparency))
     true
 
-create_pool_label(label_index, price_val, label_str, is_high, inline_label, mitigated_context) =>
+create_pool_label(label_index, price_val, label_str, is_high, inline_label, context_transparency) =>
     label_style = inline_label ? label.style_label_center : is_high ? label.style_label_down : label.style_label_up
-    label_background = inline_label ? (mitigated_context ? color.new(DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND, 85) : DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND) : color.new(color.white, 100)
-    label_text_color = mitigated_context ? color.new(DEFAULT_LABEL_TEXT_COLOR, 85) : DEFAULT_LABEL_TEXT_COLOR
+    label_background = inline_label ? (context_transparency > 0 ? color.new(DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND, context_transparency) : DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND) : color.new(color.white, 100)
+    label_text_color = context_transparency > 0 ? color.new(DEFAULT_LABEL_TEXT_COLOR, context_transparency) : DEFAULT_LABEL_TEXT_COLOR
     safe_label_index = math.max(label_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
     label.new(safe_label_index, price_val, label_str, xloc=xloc.bar_index, yloc=yloc.price, style=label_style, textcolor=label_text_color, size=6, color=label_background)
 
@@ -945,7 +950,7 @@ label_event_root(array<int> parents, int event_index) =>
     root
 
 label_event_precedes(PendingLabelEvent candidate, int candidate_order, PendingLabelEvent current, int current_order) =>
-    candidate.mitigated_context != current.mitigated_context ? not candidate.mitigated_context :
+    candidate.context_transparency != current.context_transparency ? candidate.context_transparency < current.context_transparency :
      candidate.endpoint != current.endpoint ? candidate.endpoint :
      candidate.core != current.core ? candidate.core :
      candidate.rank > current.rank or (candidate.rank == current.rank and candidate_order < current_order)
@@ -1012,7 +1017,7 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                 PendingLabelEvent left = array.get(pending, left_index)
                 for right_index = left_index + 1 to pending_count - 1
                     PendingLabelEvent right = array.get(pending, right_index)
-                    if label_events_overlap(left, right)
+                    if (left.context_transparency == 93) == (right.context_transparency == 93) and label_events_overlap(left, right)
                         int left_root = label_event_root(parents, left_index)
                         int right_root = label_event_root(parents, right_index)
                         if left_root != right_root
@@ -1039,7 +1044,7 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
         array<int> component_carriers = array.new<int>()
         array<bool> component_inline_labels = array.new<bool>()
         array<int> component_inline_carriers = array.new<int>()
-        array<bool> component_mitigated_context = array.new<bool>()
+        array<int> component_context_transparency = array.new<int>()
         array<int> identity_clusters = array.new<int>()
         array<string> identity_texts = array.new<string>()
         array<bool> identity_sides = array.new<bool>()
@@ -1054,11 +1059,11 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                 array.push(component_carriers, pending_index)
                 array.push(component_inline_labels, candidate.inline_label)
                 array.push(component_inline_carriers, candidate.inline_label ? pending_index : -1)
-                array.push(component_mitigated_context, candidate.mitigated_context)
+                array.push(component_context_transparency, candidate.context_transparency)
                 cluster_index := array.size(component_roots) - 1
             else
                 array.set(component_inline_labels, cluster_index, array.get(component_inline_labels, cluster_index) or candidate.inline_label)
-                array.set(component_mitigated_context, cluster_index, array.get(component_mitigated_context, cluster_index) and candidate.mitigated_context)
+                array.set(component_context_transparency, cluster_index, math.min(array.get(component_context_transparency, cluster_index), candidate.context_transparency))
                 if candidate.inline_label and array.get(component_inline_carriers, cluster_index) < 0
                     array.set(component_inline_carriers, cluster_index, pending_index)
                 int current_carrier_index = array.get(component_carriers, cluster_index)
@@ -1111,10 +1116,10 @@ flush_label_events(array<PendingLabelEvent> pending, array<label> drawn) =>
                 PendingLabelEvent carrier = array.get(pending, carrier_index)
                 string merged_text = compose_label_event_cluster(cluster_index, pending_count, identity_clusters, identity_texts, identity_sides, identity_ranks, identity_orders)
                 bool inline_label = array.get(component_inline_labels, cluster_index)
-                bool mitigated_context = array.get(component_mitigated_context, cluster_index)
+                int context_transparency = array.get(component_context_transparency, cluster_index)
                 int anchor_index = inline_label ? array.get(component_inline_carriers, cluster_index) : carrier_index
                 PendingLabelEvent anchor = array.get(pending, anchor_index)
-                label created_label = create_pool_label(anchor.label_index, anchor.price, merged_text, anchor.is_high, inline_label, mitigated_context)
+                label created_label = create_pool_label(anchor.label_index, anchor.price, merged_text, anchor.is_high, inline_label, context_transparency)
                 if not na(created_label)
                     array.push(drawn, created_label)
         array.clear(pending)
@@ -1125,9 +1130,8 @@ create_liq_depth_connector(x_time, x_index, start_price, end_price, connector_co
     range_x_index = math.max(x_index, bar_index - BAR_INDEX_DRAWING_LOOKBACK)
     chart.is_range ? line.new(range_x_index, start_price, range_x_index, end_price, xloc=xloc.bar_index, color=color.new(connector_color, connector_transparency), width=LINE_WIDTH_1, style=line.style_dashed) : line.new(x_time, start_price, x_time, end_price, xloc=xloc.bar_time, color=color.new(connector_color, connector_transparency), width=LINE_WIDTH_1, style=line.style_dashed)
 
-// Today: pool-colored L1, extension-colored L2/L3.
 get_pool_liq_depth_color(level_idx, lineColor) =>
-    isTodayFilter ? (level_idx == 0 ? lineColor : DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR) : DEFAULT_LIQUIDITY_DEPTH_BLUE
+    matchLiquidityDepthPoolColor ? lineColor : isTodayFilter ? (level_idx == 0 ? lineColor : DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR) : DEFAULT_LIQUIDITY_DEPTH_BLUE
 
 // Today emphasizes L1 and L3.
 get_pool_liq_depth_width(level_idx) =>
@@ -1603,25 +1607,31 @@ depth_has_unmitigated_level(LiquidityDepthLevels depthState) =>
             hasUnmitigatedLevel := true
     hasUnmitigatedLevel
 
-draw_pool_depths(LiquidityDepthLevels depthState, float basePrice, int startTime, int startIndex, bool isHigh, PoolRenderSpec renderSpec) =>
+pool_context_transparency(bool breached, bool hasOpenDepth) =>
+    not showUnmitigatedOnly or not breached ? 0 : hasOpenDepth ? 85 : preserveMitigatedContext ? 93 : -1
+
+pool_drawing_allowed(int contextTransparency, bool preservedPass, int requiredLines) =>
+    contextTransparency >= 0 and (contextTransparency == 93) == preservedPass and (not preservedPass or array.size(all_lines) + requiredLines <= INDICATOR_MAX_LINES)
+
+draw_pool_depths(LiquidityDepthLevels depthState, float basePrice, int startTime, int startIndex, bool isHigh, PoolRenderSpec renderSpec, bool preservedPass) =>
     bool hasUnmitigatedLevel = depth_has_unmitigated_level(depthState)
 
     for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
         float levelPrice = liquidity_depth_price(basePrice, isHigh, levelIndex, renderSpec.depthStep)
         bool levelBreached = array.get(depthState.breached, levelIndex)
-        bool mitigatedContext = showUnmitigatedOnly and hasUnmitigatedLevel and levelBreached
-        if not showUnmitigatedOnly or not levelBreached or mitigatedContext
+        int contextTransparency = pool_context_transparency(levelBreached, hasUnmitigatedLevel)
+        if pool_drawing_allowed(contextTransparency, preservedPass, 2)
             int breachTime = array.get(depthState.breach_times, levelIndex)
             int breachIndex = array.get(depthState.breach_indices, levelIndex)
             int endTime = levelBreached and not na(breachTime) ? breachTime : time
             int endIndex = levelBreached and not na(breachIndex) ? breachIndex : bar_index
             color levelColor = get_pool_liq_depth_color(levelIndex, renderSpec.lineColor)
-            color renderedLevelColor = mitigatedContext ? color.new(levelColor, 85) : levelColor
+            color renderedLevelColor = contextTransparency > 0 ? color.new(levelColor, contextTransparency) : levelColor
             array.push(all_lines, create_pool_line(startTime, startIndex, levelPrice, endTime, endIndex, renderedLevelColor, get_pool_liq_depth_width(levelIndex), get_pool_liq_depth_style(levelIndex)))
             if showLabels
-                buffer_liq_depth_labels(pending_label_events, startIndex, endIndex, levelPrice, levelIndex, isHigh, renderSpec.poolType, mitigatedContext)
+                buffer_liq_depth_labels(pending_label_events, startIndex, endIndex, levelPrice, levelIndex, isHigh, renderSpec.poolType, contextTransparency)
             color connectorColor = get_pool_liq_depth_color(0, renderSpec.lineColor)
-            int connectorTransparency = mitigatedContext ? 85 : 80
+            int connectorTransparency = contextTransparency > 0 ? contextTransparency : 80
             array.push(all_lines, create_liq_depth_connector(startTime, startIndex, basePrice, levelPrice, connectorColor, connectorTransparency))
 
 draw_pool_boundary(array<line> drawn, float levelPrice, int startTime, int startIndex, int endTime, int endIndex, int provisionalTime, int provisionalIndex, color lineColor, int lineWidth) =>
@@ -1632,9 +1642,9 @@ draw_pool_boundary(array<line> drawn, float levelPrice, int startTime, int start
     if hasProvisionalTouch
         array.push(drawn, create_pool_line(provisionalTime, provisionalIndex, levelPrice, endTime, endIndex, lineColor, LINE_WIDTH_1, line.style_dashed))
 
-draw_liquidity_pool(PoolRenderSpec renderSpec) =>
+draw_liquidity_pool(PoolRenderSpec renderSpec, bool preservedPass = false) =>
     LiquidityPool pool = renderSpec.poolState
-    if renderSpec.visible and array.size(pool.highs) > 0
+    if renderSpec.visible and array.size(pool.highs) > 0 and (not preservedPass or array.size(all_lines) < INDICATOR_MAX_LINES)
         int count = math.min(renderSpec.showLast, array.size(pool.highs))
         for i = 0 to count - 1
             int idx = array.size(pool.highs) - 1 - i
@@ -1652,33 +1662,32 @@ draw_liquidity_pool(PoolRenderSpec renderSpec) =>
             LiquidityDepthLevels lowDepthState = array.get(lowDepths, idx)
             bool highDepthVisible = renderSpec.depthActive and should_draw_liquidity_depth(renderSpec.depthEnabled, high_breached, forecastLiquidityDepth)
             bool lowDepthVisible = renderSpec.depthActive and should_draw_liquidity_depth(renderSpec.depthEnabled, low_breached, forecastLiquidityDepth)
-            bool highMitigatedContext = showUnmitigatedOnly and high_breached and highDepthVisible and depth_has_unmitigated_level(highDepthState)
-            bool lowMitigatedContext = showUnmitigatedOnly and low_breached and lowDepthVisible and depth_has_unmitigated_level(lowDepthState)
-            bool showHighPool = not showUnmitigatedOnly or not high_breached or highMitigatedContext
-            bool showLowPool = not showUnmitigatedOnly or not low_breached or lowMitigatedContext
+            int highContextTransparency = pool_context_transparency(high_breached, highDepthVisible and depth_has_unmitigated_level(highDepthState))
+            int lowContextTransparency = pool_context_transparency(low_breached, lowDepthVisible and depth_has_unmitigated_level(lowDepthState))
+            int highBoundaryLines = not na(array.get(pool.high_provisional_times, idx)) and not na(array.get(pool.high_provisional_indices, idx)) ? 2 : 1
+            int lowBoundaryLines = not na(array.get(pool.low_provisional_times, idx)) and not na(array.get(pool.low_provisional_indices, idx)) ? 2 : 1
 
             int high_end_time = pool_get_high_end_time(pool, idx, time)
             int low_end_time = pool_get_low_end_time(pool, idx, time)
             int high_end_index = pool_get_high_end_index(pool, idx, bar_index)
             int low_end_index = pool_get_low_end_index(pool, idx, bar_index)
 
-            if showHighPool
-                color highLineColor = highMitigatedContext ? color.new(renderSpec.lineColor, 85) : renderSpec.lineColor
+            if pool_drawing_allowed(highContextTransparency, preservedPass, highBoundaryLines)
+                color highLineColor = highContextTransparency > 0 ? color.new(renderSpec.lineColor, highContextTransparency) : renderSpec.lineColor
                 draw_pool_boundary(all_lines, high_val, high_time, high_index, high_end_time, high_end_index, array.get(pool.high_provisional_times, idx), array.get(pool.high_provisional_indices, idx), highLineColor, renderSpec.lineWidth)
-            if showLowPool
-                color lowLineColor = lowMitigatedContext ? color.new(renderSpec.lineColor, 85) : renderSpec.lineColor
+                if showLabels
+                    buffer_pool_label(pending_label_events, high_val, high_index, high_end_index, renderSpec.poolType, true, high_breached, renderSpec.poolType, highContextTransparency)
+            if pool_drawing_allowed(lowContextTransparency, preservedPass, lowBoundaryLines)
+                color lowLineColor = lowContextTransparency > 0 ? color.new(renderSpec.lineColor, lowContextTransparency) : renderSpec.lineColor
                 draw_pool_boundary(all_lines, low_val, low_time, low_index, low_end_time, low_end_index, array.get(pool.low_provisional_times, idx), array.get(pool.low_provisional_indices, idx), lowLineColor, renderSpec.lineWidth)
+                if showLabels
+                    buffer_pool_label(pending_label_events, low_val, low_index, low_end_index, renderSpec.poolType, false, low_breached, renderSpec.poolType, lowContextTransparency)
 
             if highDepthVisible
-                draw_pool_depths(highDepthState, high_val, high_time, high_index, true, renderSpec)
+                draw_pool_depths(highDepthState, high_val, high_time, high_index, true, renderSpec, preservedPass)
             if lowDepthVisible
-                draw_pool_depths(lowDepthState, low_val, low_time, low_index, false, renderSpec)
+                draw_pool_depths(lowDepthState, low_val, low_time, low_index, false, renderSpec, preservedPass)
 
-            if showLabels
-                if showHighPool
-                    buffer_pool_label(pending_label_events, high_val, high_index, high_end_index, renderSpec.poolType, true, high_breached, renderSpec.poolType, highMitigatedContext)
-                if showLowPool
-                    buffer_pool_label(pending_label_events, low_val, low_index, low_end_index, renderSpec.poolType, false, low_breached, renderSpec.poolType, lowMitigatedContext)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VISUALIZATION
@@ -1764,6 +1773,11 @@ if barstate.islast
         draw_timeframe_opens(nine_thirty_open, effectiveOpen930ShowLast, DEFAULT_930_OPEN_COLOR, LINE_WIDTH_2, "9:30", showLabels, all_lines, all_labels, MARKET_CLOSE_HOUR)
     if showDailyOpenFiltered and timeframe.in_seconds() >= SECONDS_PER_MINUTE and timeframe.in_seconds() < SECONDS_PER_DAY
         draw_timeframe_opens(daily_open, openDailyShowLast, DEFAULT_DAILY_OPEN_COLOR, LINE_WIDTH_1, "D", showLabels, all_lines, all_labels)
+
+    if showUnmitigatedOnly and preserveMitigatedContext
+        for renderSpec in poolRenderSpecs
+            draw_liquidity_pool(renderSpec, true)
+        flush_label_events(pending_label_events, all_labels)
 
     // Asset levels table
     var string prev_asset_table = ""

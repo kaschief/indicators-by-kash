@@ -257,24 +257,40 @@ test('all seven pools share drawing, visibility and price calculation', () => {
   }
 });
 
-test('Unmitigated Only preserves faded breached context only for a partly active ladder', () => {
-  assert.doesNotMatch(functionBody('draw_liquidity_pool'), /showUnmitigatedOnly and high_breached and low_breached/);
-  const body = functionBody('draw_pool_depths');
-  assert.match(body, /bool hasUnmitigatedLevel = depth_has_unmitigated_level\(depthState\)/);
-  assert.match(body, /bool mitigatedContext = showUnmitigatedOnly and hasUnmitigatedLevel and levelBreached/);
-  assert.match(body, /color\.new\(levelColor, 85\)/);
-  assert.match(body, /buffer_liq_depth_labels\([^\n]+mitigatedContext\)/);
-  assert.match(body, /create_liq_depth_connector\([^\n]+connectorTransparency\)/);
-  assert.doesNotMatch(source, /mitigatedContextTransparency|Mitigated Context Transparency/);
+test('pool context preserves active and partial ladders and optionally retains completed ones', () => {
+  const resolve = (showUnmitigatedOnly, preserveMitigatedContext, breached, hasOpenDepth) =>
+    evaluate(toJavaScript(functionBody('pool_context_transparency')), {
+      showUnmitigatedOnly, preserveMitigatedContext, breached, hasOpenDepth,
+    });
+  for (const preserve of [false, true]) {
+    for (const breached of [false, true]) {
+      for (const hasOpenDepth of [false, true]) {
+        assert.equal(resolve(false, preserve, breached, hasOpenDepth), 0);
+      }
+    }
+    assert.equal(resolve(true, preserve, false, false), 0);
+    assert.equal(resolve(true, preserve, false, true), 0);
+    assert.equal(resolve(true, preserve, true, true), 85);
+  }
+  assert.equal(resolve(true, false, true, false), -1);
+  assert.equal(resolve(true, true, true, false), 93);
+});
+
+test('pool boundaries, depth lines, connectors and labels share context fading', () => {
+  const depthBody = functionBody('draw_pool_depths');
+  assert.match(depthBody, /pool_context_transparency\(levelBreached, hasUnmitigatedLevel\)/);
+  assert.match(depthBody, /if pool_drawing_allowed\(contextTransparency, preservedPass, 2\)/);
+  assert.match(depthBody, /color\.new\(levelColor, contextTransparency\)/);
+  assert.match(depthBody, /buffer_liq_depth_labels\([^\n]+contextTransparency\)/);
+  assert.match(depthBody, /contextTransparency > 0 \? contextTransparency : 80/);
   const poolBody = functionBody('draw_liquidity_pool');
   for (const side of ['high', 'low']) {
-    const title = `${side[0].toUpperCase()}${side.slice(1)}`;
-    assert.match(poolBody, new RegExp(`bool ${side}MitigatedContext = showUnmitigatedOnly and ${side}_breached and ${side}DepthVisible and depth_has_unmitigated_level\\(${side}DepthState\\)`));
-    assert.match(poolBody, new RegExp(`color ${side}LineColor = ${side}MitigatedContext \\? color\\.new\\(renderSpec\\.lineColor, 85\\)`));
-    assert.match(poolBody, new RegExp(`buffer_pool_label\\([^\\n]+${side}MitigatedContext\\)`));
-    assert.match(poolBody, new RegExp(`bool show${title}Pool = not showUnmitigatedOnly or not ${side}_breached or ${side}MitigatedContext`));
+    assert.ok(poolBody.includes(`pool_context_transparency(${side}_breached, ${side}DepthVisible and depth_has_unmitigated_level(${side}DepthState))`));
+    assert.ok(poolBody.includes(`color.new(renderSpec.lineColor, ${side}ContextTransparency)`));
+    assert.ok(poolBody.includes(`renderSpec.poolType, ${side}ContextTransparency)`));
   }
-  assert.match(functionBody('flush_label_events'), /component_mitigated_context/);
+  assert.match(functionBody('create_pool_label'), /color\.new\(DEFAULT_LABEL_TEXT_COLOR, context_transparency\)/);
+  assert.match(source, /preserveMitigatedContext = input.bool\(false, "Fade Mitigated Levels Instead of Hiding"[^\n]+active=showUnmitigatedOnly/);
 });
 
 test('fixed projections keep the instrument distances at every base price', () => {
@@ -376,6 +392,7 @@ for (const pool of ['Daily', 'Weekly', 'Monthly', 'Overnight', 'Premarket', 'Asi
         const lineColor = `${pool}-color`;
         const actual = evaluate(toJavaScript(functionBody('get_pool_liq_depth_color')), {
           level_idx, lineColor, isTodayFilter,
+          matchLiquidityDepthPoolColor: false,
           DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR: 'extension-red',
           DEFAULT_LIQUIDITY_DEPTH_BLUE: 'depth-blue',
         });
