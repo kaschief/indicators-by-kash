@@ -55,7 +55,7 @@ for (const name of ['FOMC_END_MINUTE', 'FOMC_EXTENDED_END_MINUTE', 'NY_AFTERNOON
   assert.ok(expression, `Missing ${name}`);
   context[name] = vm.runInContext(expression, context);
 }
-for (const name of ['fomcDecisionDateAllowed', 'nySessionDayAllowed', 'activeNySessionStart', 'fomcCutoffMinute']) compile(host, name);
+for (const name of ['fomcDecisionDateAllowed', 'nySessionDayAllowed', 'activeNySessionStart', 'boundedNySessionStart', 'fomcCutoffMinute']) compile(host, name);
 
 const active = (instant, { extended = false, forceOn = false, crypto = false, enabled = true } = {}) =>
   context.activeNySessionStart(Date.parse(instant), enabled, 1080, context.fomcCutoffMinute(extended), crypto, !forceOn);
@@ -156,3 +156,21 @@ for (const [name, prefix, startConstant, startClock, beforeStart, straddlingStar
     assert.ok(host.includes(`selectSessionProfiles(priorProfilesToShow, ${prefix}InSession, legilimensPresentation.developingProfileVisible(${prefix}PresentationSource, presentationConfig), ${prefix}Anchor, keyedNoSamples, false, ${prefix}Anchor.lastBarTime)`));
   });
 }
+
+test('empty NY session bars use New York boundaries through DST and exclude closed weekdays', () => {
+  for (const [startMinute, endMinute] of [[360, 540], [360, 575], [570, 630]]) {
+    for (const [date, offset] of [['2026-03-06', '-05:00'], ['2026-03-09', '-04:00'], ['2026-11-02', '-05:00']]) {
+      const clock = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}:00`;
+      const startTime = Date.parse(`${date}T${clock(startMinute)}${offset}`);
+      const endTime = Date.parse(`${date}T${clock(endMinute)}${offset}`);
+      const resolve = instant => context.boundedNySessionStart(instant, true, false, null, startMinute, endMinute, false);
+      assert.equal(resolve(startTime - 1), -1);
+      assert.equal(resolve(startTime), startTime);
+      assert.equal(resolve(endTime - 1), startTime);
+      assert.equal(resolve(endTime), -1);
+    }
+  }
+  const saturday = Date.parse('2026-09-05T07:00:00-04:00');
+  assert.equal(context.boundedNySessionStart(saturday, true, false, null, 360, 540, false), -1);
+  assert.equal(context.boundedNySessionStart(saturday, true, false, null, 360, 540, true), Date.parse('2026-09-05T06:00:00-04:00'));
+});

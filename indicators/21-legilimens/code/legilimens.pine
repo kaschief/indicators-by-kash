@@ -732,6 +732,13 @@ activeNySessionStart(int evaluationTime, bool enabled, int startMinute, int endM
     bool tradingDayAllowed = nySessionDayAllowed(evaluationTime, startMinute, endMinute, twentyFourSeven, fomcOnly)
     enabled and tradingDayAllowed and inNyMinuteWindow(evaluationTime, startMinute, endMinute) ? nySessionStartBoundary(evaluationTime, startMinute, endMinute) : START_TIME_UNSET
 
+boundedNySessionStart(int evaluationTime, bool enabled, bool windowObserved, int firstSampleTime, int startMinute, int endMinute, bool twentyFourSeven) =>
+    int referenceTime = na(firstSampleTime) ? evaluationTime : firstSampleTime
+    enabled and windowObserved ? nySessionStartBoundary(referenceTime, startMinute, endMinute) : activeNySessionStart(evaluationTime, enabled, startMinute, endMinute, twentyFourSeven, false)
+
+boundedNyDevelopingEnd(int sampleEndTime, int storedEndTime, int sessionStartTime, int endMinute) =>
+    na(sampleEndTime) ? storedEndTime : math.min(sampleEndTime, nyMinuteBoundary(sessionStartTime, endMinute))
+
 selectNySessionSamples(legilimensProfile.SampleBatch samples, bool enabled, int startMinute, int endMinute, bool twentyFourSeven, bool fomcOnly, array<int> sessionStarts) =>
     legilimensProfile.SampleBatch selectedSamples = legilimensProfile.SampleBatch.new(array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>())
     int sampleCount = array.size(samples.volumes)
@@ -1057,14 +1064,17 @@ int nyAfternoonCurrentSessionStart = activeNySessionStart(boundedSessionEvaluati
 int allDayToAfternoonCurrentSessionStart = activeNySessionStart(boundedSessionEvaluationTime, allDayToAfternoonModeActive, ALL_DAY_TO_AFTERNOON_START_MINUTE, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false)
 bool nyAfternoonInSession = nyAfternoonCurrentSessionStart != START_TIME_UNSET
 bool allDayToAfternoonInSession = allDayToAfternoonCurrentSessionStart != START_TIME_UNSET
-nyEarlyInSession = nyEarlyWindowObserved
-nyEarlySessionStart = nyEarlyInSession and not nyEarlyInSession[1]
+int nyEarlyCurrentSessionStart = boundedNySessionStart(boundedSessionEvaluationTime, nyEarlyModeActive, nyEarlyWindowObserved, nyEarlyFirstSampleTime, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, isTwentyFourSevenAsset)
+nyEarlyInSession = nyEarlyCurrentSessionStart != START_TIME_UNSET
+nyEarlySessionStart = nyEarlyInSession and (na(nyEarlyCurrentSessionStart[1]) or nyEarlyCurrentSessionStart != nyEarlyCurrentSessionStart[1])
 nyEarlySessionEnd = not nyEarlyInSession and nyEarlyInSession[1]
-extendedNyEarlyInSession = extendedNyEarlyWindowObserved
-extendedNyEarlySessionStart = extendedNyEarlyInSession and not extendedNyEarlyInSession[1]
+int extendedNyEarlyCurrentSessionStart = boundedNySessionStart(boundedSessionEvaluationTime, extendedNyEarlyModeActive, extendedNyEarlyWindowObserved, extendedNyEarlyFirstSampleTime, NY_EARLY_START_MINUTE, EXTENDED_NY_EARLY_OPENING_END_MINUTE, isTwentyFourSevenAsset)
+extendedNyEarlyInSession = extendedNyEarlyCurrentSessionStart != START_TIME_UNSET
+extendedNyEarlySessionStart = extendedNyEarlyInSession and (na(extendedNyEarlyCurrentSessionStart[1]) or extendedNyEarlyCurrentSessionStart != extendedNyEarlyCurrentSessionStart[1])
 extendedNyEarlySessionEnd = not extendedNyEarlyInSession and extendedNyEarlyInSession[1]
-ivbInSession = ivbWindowObserved
-ivbSessionStart = ivbInSession and not ivbInSession[1]
+int ivbCurrentSessionStart = boundedNySessionStart(boundedSessionEvaluationTime, ivbModeActive, ivbWindowObserved, ivbFirstSampleTime, IVB_START_MINUTE, IVB_END_MINUTE, isTwentyFourSevenAsset)
+ivbInSession = ivbCurrentSessionStart != START_TIME_UNSET
+ivbSessionStart = ivbInSession and (na(ivbCurrentSessionStart[1]) or ivbCurrentSessionStart != ivbCurrentSessionStart[1])
 ivbSessionEnd = not ivbInSession and ivbInSession[1]
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1082,9 +1092,9 @@ legilimensOrchestration.processKeyedBoundedNyAnchor(fomcAnchor, fomcModeActive, 
 legilimensOrchestration.processKeyedBoundedNyAnchor(overnightNineAnchor, overnightNineModeActive, sessionProfileRetention, OVERNIGHT_NINE_START_MINUTE, OVERNIGHT_NINE_END_MINUTE, overnightNineInSession, overnightNineCurrentSessionStart, overnightNineSampleSessionStarts, overnightNineSamples.endTimes, overnightNineSamples, PROFILE_ROWS, syminfo.mintick)
 legilimensOrchestration.processKeyedBoundedNyAnchor(nyAfternoonAnchor, nyAfternoonModeActive, sessionProfileRetention, NY_AFTERNOON_START_MINUTE, AFTERNOON_END_MINUTE, nyAfternoonInSession, nyAfternoonCurrentSessionStart, nyAfternoonSampleSessionStarts, nyAfternoonSamples.endTimes, nyAfternoonSamples, PROFILE_ROWS, syminfo.mintick)
 legilimensOrchestration.processKeyedBoundedNyAnchor(allDayToAfternoonAnchor, allDayToAfternoonModeActive, sessionProfileRetention, ALL_DAY_TO_AFTERNOON_START_MINUTE, AFTERNOON_END_MINUTE, allDayToAfternoonInSession, allDayToAfternoonCurrentSessionStart, allDayToAfternoonSampleSessionStarts, allDayToAfternoonSamples.endTimes, allDayToAfternoonSamples, PROFILE_ROWS, syminfo.mintick)
-legilimensOrchestration.processBoundedNyAnchor(nyEarlyAnchor, nyEarlyModeActive, sessionProfileRetention, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, nyEarlyInSession, nyEarlySessionStart, nyEarlySessionEnd, nyEarlyFirstSampleTime, nyEarlyLastSampleEndTime, barstate.isconfirmed, nyEarlySamples, PROFILE_ROWS, syminfo.mintick)
-legilimensOrchestration.processBoundedNyAnchor(extendedNyEarlyAnchor, extendedNyEarlyModeActive, sessionProfileRetention, NY_EARLY_START_MINUTE, extendedOpeningQualifiedThisBar ? EXTENDED_NY_EARLY_OPENING_END_MINUTE : IVB_START_MINUTE, extendedNyEarlyInSession, extendedNyEarlySessionStart, extendedNyEarlySessionEnd, extendedNyEarlyFirstSampleTime, extendedNyEarlyLastSampleEndTime, barstate.isconfirmed, extendedNyEarlySamples, PROFILE_ROWS, syminfo.mintick)
-legilimensOrchestration.processBoundedNyAnchor(ivbAnchor, ivbModeActive, sessionProfileRetention, IVB_START_MINUTE, IVB_END_MINUTE, ivbInSession, ivbSessionStart, ivbSessionEnd, ivbFirstSampleTime, ivbLastSampleEndTime, barstate.isconfirmed, ivbSamples, PROFILE_ROWS, syminfo.mintick)
+legilimensOrchestration.processBoundedNyAnchor(nyEarlyAnchor, nyEarlyModeActive, sessionProfileRetention, NY_EARLY_START_MINUTE, NY_EARLY_END_MINUTE, nyEarlyInSession, nyEarlySessionStart, nyEarlySessionEnd, nyEarlyCurrentSessionStart, nyEarlyLastSampleEndTime, barstate.isconfirmed, nyEarlySamples, PROFILE_ROWS, syminfo.mintick)
+legilimensOrchestration.processBoundedNyAnchor(extendedNyEarlyAnchor, extendedNyEarlyModeActive, sessionProfileRetention, NY_EARLY_START_MINUTE, extendedOpeningQualifiedThisBar ? EXTENDED_NY_EARLY_OPENING_END_MINUTE : IVB_START_MINUTE, extendedNyEarlyInSession, extendedNyEarlySessionStart, extendedNyEarlySessionEnd, extendedNyEarlyCurrentSessionStart, extendedNyEarlyLastSampleEndTime, barstate.isconfirmed, extendedNyEarlySamples, PROFILE_ROWS, syminfo.mintick)
+legilimensOrchestration.processBoundedNyAnchor(ivbAnchor, ivbModeActive, sessionProfileRetention, IVB_START_MINUTE, IVB_END_MINUTE, ivbInSession, ivbSessionStart, ivbSessionEnd, ivbCurrentSessionStart, ivbLastSampleEndTime, barstate.isconfirmed, ivbSamples, PROFILE_ROWS, syminfo.mintick)
 
 if barstate.isconfirmed and extendedOpeningWindowObserved
     if extendedOpeningQualifiedThisBar
@@ -1241,9 +1251,9 @@ if barstate.islast
     int asiaPremarketStoredEndTime = asiaPremarketAnchor.lastBarTime
     int asiaPremarketDevelopingSampleEndTime = asiaPremarketStoredEndTime == START_TIME_UNSET ? asiaPremarketEvaluationTime : asiaPremarketStoredEndTime
     int asiaPremarketDevelopingEndTime = asiaPremarketInSession ? math.min(asiaPremarketDevelopingSampleEndTime, nySessionEndBoundary(asiaPremarketCurrentSessionStart, ASIA_PREMARKET_START_MINUTE, ASIA_PREMARKET_END_MINUTE)) : asiaPremarketStoredEndTime
-    int nyEarlyDevelopingEndTime = nyEarlyInSession ? math.min(nyEarlyLastSampleEndTime, nyMinuteBoundary(nyEarlyAnchor.startTime, NY_EARLY_END_MINUTE)) : nyEarlyAnchor.lastBarTime
-    int extendedNyEarlyDevelopingEndTime = extendedNyEarlyInSession ? (extendedOpeningQualifiedThisBar ? math.min(extendedNyEarlyLastSampleEndTime, nyMinuteBoundary(extendedNyEarlyAnchor.startTime, EXTENDED_NY_EARLY_OPENING_END_MINUTE)) : math.min(extendedNyEarlyLastSampleEndTime, nyMinuteBoundary(extendedNyEarlyAnchor.startTime, IVB_START_MINUTE))) : extendedNyEarlyAnchor.lastBarTime
-    int ivbDevelopingEndTime = ivbInSession ? math.min(ivbLastSampleEndTime, nyMinuteBoundary(ivbAnchor.startTime, IVB_END_MINUTE)) : ivbAnchor.lastBarTime
+    int nyEarlyDevelopingEndTime = boundedNyDevelopingEnd(nyEarlyLastSampleEndTime, nyEarlyAnchor.lastBarTime, nyEarlyAnchor.startTime, NY_EARLY_END_MINUTE)
+    int extendedNyEarlyDevelopingEndTime = boundedNyDevelopingEnd(extendedNyEarlyLastSampleEndTime, extendedNyEarlyAnchor.lastBarTime, extendedNyEarlyAnchor.startTime, extendedOpeningQualifiedThisBar ? EXTENDED_NY_EARLY_OPENING_END_MINUTE : IVB_START_MINUTE)
+    int ivbDevelopingEndTime = boundedNyDevelopingEnd(ivbLastSampleEndTime, ivbAnchor.lastBarTime, ivbAnchor.startTime, IVB_END_MINUTE)
 
     legilimensOrchestration.ProfileSelection selectedSessionProfiles = na
     legilimensOrchestration.ProfileSelection selectedNyEarlyProfiles = na

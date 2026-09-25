@@ -540,6 +540,91 @@ test('NY Focus shares overlap suppression and heading decisions before applying 
   assert.match(source, /ProfileRenderItem.new\(geometry, candidate.displayNameOverride, candidate.pairedHeadings, true, false, true\)/);
 });
 
+test('session lifecycles preserve one occurrence across sample gaps and separate subsequent dates', () => {
+  for (const name of ['boundedNySessionStart', 'boundedNyDevelopingEnd']) compile(name, true, host);
+  for (const name of ['processBoundedNyAnchor', 'processAnchor', 'processKeyedBoundedNyAnchor']) compile(name, true, orchestrationSource);
+  const names = ['START_TIME_UNSET', 'nySessionStartBoundary', 'nySessionStartBoundaryValue', 'nySessionEndBoundaryValue', 'nyMinuteBoundary', 'activeNySessionStart', 'appendBatch', 'appendBatchSample', 'finalizePeriod'];
+  const saved = Object.fromEntries(names.map(name => [name, context[name]]));
+  const day = 86400000, minute = 60000;
+  const boundary = (value, startMinute) => Math.floor(value / day) * day + startMinute * minute;
+  context.START_TIME_UNSET = -1;
+  context.nySessionStartBoundary = boundary;
+  context.nySessionStartBoundaryValue = boundary;
+  context.nySessionEndBoundaryValue = (value, startMinute, endMinute) => boundary(value, endMinute);
+  context.nyMinuteBoundary = boundary;
+  context.activeNySessionStart = (value, enabled, startMinute, endMinute) => enabled && value >= boundary(value, startMinute) && value < boundary(value, endMinute) ? boundary(value, startMinute) : -1;
+  const savedCompact = context.legilimensProfile.compactIfNeeded;
+  context.legilimensProfile.compactIfNeeded = () => {};
+  context.appendBatchSample = (state, samples, index) => state.volumes.push(samples.volumes[index]);
+  context.appendBatch = (state, samples) => state.volumes.push(...samples.volumes);
+  context.finalizePeriod = (state, startTime, endTime) => {
+    state.profiles.push({ startTime, endTime, samples: [...state.volumes] });
+    state.volumes.length = 0;
+  };
+  try {
+    for (const [startMinute, endMinute] of [[360, 540], [360, 575], [570, 630]]) {
+      const state = { startTime: -1, lastBarTime: -1, volumes: [], profiles: [] };
+      let previousStart = -1;
+      const step = (value, volume, confirmed = true) => {
+        const observed = volume > 0;
+        const currentStart = context.boundedNySessionStart(value, true, observed, observed ? value : null, startMinute, endMinute, false);
+        const active = currentStart !== -1;
+        context.processBoundedNyAnchor(state, true, 50, startMinute, endMinute, active, active && currentStart !== previousStart, !active && previousStart !== -1, currentStart, observed ? value + 1000 : null, confirmed, { volumes: observed ? [volume] : [] }, 400, .25);
+        previousStart = currentStart;
+      };
+      const startTime = day + startMinute * minute;
+      step(startTime, 0);
+      step(startTime + minute, 10);
+      step(startTime + 2 * minute, 0);
+      step(startTime + 3 * minute, 20);
+      step(startTime + 4 * minute, 0, false);
+      assert.equal(state.profiles.length, 0, 'empty bars must not finalize an active session');
+      assert.equal(context.boundedNyDevelopingEnd(null, state.lastBarTime, state.startTime, endMinute), startTime + 3 * minute + 1000);
+      step(startTime + 5 * minute, 30);
+      step(day + endMinute * minute, 0);
+      assert.deepEqual(state.profiles, [{ startTime, endTime: startTime + 5 * minute + 1000, samples: [10, 20, 30] }]);
+      step(startTime + day, 40);
+      step(startTime + 2 * day, 50);
+      step(3 * day + endMinute * minute, 0);
+      assert.deepEqual(state.profiles.map(item => item.startTime), [startTime, startTime + day, startTime + 2 * day]);
+      assert.deepEqual(state.profiles.map(item => item.samples), [[10, 20, 30], [40], [50]]);
+      assert.equal(context.boundedNySessionStart(startTime, false, true, startTime, startMinute, endMinute, false), -1);
+      assert.equal(context.boundedNySessionStart(day + endMinute * minute, true, true, startTime, startMinute, endMinute, false), startTime, 'a final bar with in-session samples still belongs to that occurrence');
+    }
+    for (const prefix of ['asiaPremarket', 'fomc', 'overnightNine', 'nyAfternoon', 'allDayToAfternoon', 'midnight']) {
+      assert.ok(host.includes(`processKeyedBoundedNyAnchor(${prefix}Anchor,`));
+      const state = { startTime: -1, lastBarTime: -1, volumes: [], profiles: [] };
+      const startTime = day + 360 * minute;
+      const step = (instant, volume, active = true) => context.processKeyedBoundedNyAnchor(state, true, 50, 360, 540, active, active ? startTime : -1, volume ? [startTime] : [], volume ? [instant] : [], { volumes: volume ? [volume] : [] }, 400, .25);
+      step(startTime + minute, 10);
+      step(startTime + 2 * minute, 0);
+      assert.equal(state.profiles.length, 0, prefix);
+      step(startTime + 3 * minute, 20);
+      step(startTime + 4 * minute, 0);
+      step(day + 540 * minute, 0, false);
+      assert.deepEqual(state.profiles, [{ startTime, endTime: startTime + 3 * minute, samples: [10, 20] }], prefix);
+    }
+    for (const prefix of ['rth', 'globex', 'weekly', 'monthly']) {
+      assert.ok(host.includes(`processAnchor(${prefix}Anchor,`));
+      const state = { startTime: -1, lastBarTime: -1, volumes: [], profiles: [] };
+      const startTime = day + 360 * minute;
+      for (const [index, volume] of [10, 0, 20, 0].entries()) {
+        context.processAnchor(state, true, 50, true, index === 0, false, startTime + index * minute, startTime + (index - 1) * minute, true, { volumes: volume ? [volume] : [] }, false, 400, .25);
+        assert.equal(state.profiles.length, 0, prefix);
+      }
+      context.processAnchor(state, true, 50, false, false, true, day + 540 * minute, startTime + 3 * minute, true, { volumes: [] }, false, 400, .25);
+      assert.deepEqual(state.profiles, [{ startTime, endTime: startTime + 2 * minute, samples: [10, 20] }], prefix);
+    }
+    for (const prefix of ['nyEarly', 'extendedNyEarly', 'ivb']) {
+      assert.ok(host.includes(`${prefix}SessionStart = ${prefix}InSession and (na(${prefix}CurrentSessionStart[1]) or ${prefix}CurrentSessionStart != ${prefix}CurrentSessionStart[1])`));
+      assert.ok(host.includes(`${prefix}SessionEnd, ${prefix}CurrentSessionStart,`));
+    }
+  } finally {
+    Object.assign(context, saved);
+    context.legilimensProfile.compactIfNeeded = savedCompact;
+  }
+});
+
 test('Date Focus selects completed profiles on or before the chosen day, nearest first', () => {
   const archive = [1, 2, 3, 4, 5].map(index => archivedProfile(index, []));
   const bindings = focusBindings([5]);
