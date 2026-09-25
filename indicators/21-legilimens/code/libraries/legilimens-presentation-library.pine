@@ -211,6 +211,8 @@ export type FocusProfile
 type FocusCandidate
     FocusProfile archived
     float distance
+    string displayNameOverride
+    bool pairedHeadings
 
 export type ZoneTrackingProfileKey
     string sourceName
@@ -1592,7 +1594,7 @@ renderProfileItems(RenderState state, array<ProfileRenderItem> items, bool inclu
     true
 
 focusSourceAllowed(string sourceName) =>
-    sourceName == SOURCE_GLOBEX or sourceName == SOURCE_WEEKLY or sourceName == SOURCE_MONTHLY
+    sourceName != SOURCE_FIXED and sourceName != SOURCE_ROLLING
 
 focusDateAllowsProfile(legilimensOrchestration.Profile profile, FocusSettings focus) =>
     bool dateBounded = focus.mode == FocusMode.date or focus.mode == FocusMode.priceAndDate
@@ -1637,9 +1639,32 @@ retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int
             array.pop(ranked)
     admitted
 
-focusedCandidates(array<FocusProfile> archive, array<SelectionBinding> bindings, int fallbackTime, FocusSettings focus) =>
+focusOccurrenceKey(legilimensOrchestration.Profile profile, string sourceName) =>
+    sourceName + ":" + str.tostring(legilimensOrchestration.tradingDayKey(legilimensOrchestration.nyMinuteBoundary(profile.startTime, NY_EARLY_END_MINUTE)))
+
+focusComparisonIndices(array<FocusProfile> archive, bool extendedNyModeActive) =>
+    map<string, int> indices = map.new<string, int>()
+    if extendedNyModeActive and array.size(archive) > 0
+        for archiveIndex = 0 to array.size(archive) - 1
+            FocusProfile archived = array.get(archive, archiveIndex)
+            if archived.sourceName == SOURCE_NY_EARLY or archived.sourceName == SOURCE_EXTENDED_NY_EARLY
+                map.put(indices, focusOccurrenceKey(archived.profile, archived.sourceName), archiveIndex)
+    indices
+
+focusRenderDecision(FocusProfile archived, array<FocusProfile> archive, map<string, int> comparisonIndices, bool extendedNyModeActive, float tickSize) =>
+    string counterpartName = archived.sourceName == SOURCE_NY_EARLY ? SOURCE_EXTENDED_NY_EARLY : archived.sourceName == SOURCE_EXTENDED_NY_EARLY ? SOURCE_NY_EARLY : ""
+    array<legilimensOrchestration.Profile> comparisonProfiles = array.new<legilimensOrchestration.Profile>()
+    if extendedNyModeActive and counterpartName != ""
+        int counterpartIndex = map.get(comparisonIndices, focusOccurrenceKey(archived.profile, counterpartName))
+        if not na(counterpartIndex)
+            array.push(comparisonProfiles, array.get(archive, counterpartIndex).profile)
+    legilimensOrchestration.ProfileSelection comparison = legilimensOrchestration.ProfileSelection.new(comparisonProfiles, -1, false)
+    legilimensOrchestration.renderDecision(archived.profile, archived.sourceName, comparison, SOURCE_NY_EARLY, SOURCE_EXTENDED_NY_EARLY, NY_EARLY_END_MINUTE, extendedNyModeActive, DISPLAY_NY_EARLY_PLUS, tickSize)
+
+focusedCandidates(array<FocusProfile> archive, array<SelectionBinding> bindings, int fallbackTime, FocusSettings focus, bool extendedNyModeActive, float tickSize) =>
     array<FocusCandidate> ranked = array.new<FocusCandidate>()
     if focus.mode != FocusMode.off and focus.extraProfiles > 0
+        map<string, int> comparisonIndices = focusComparisonIndices(archive, extendedNyModeActive)
         bool dateFocusWithoutBase = focus.hideNonFocusProfiles and (focus.mode == FocusMode.date or focus.mode == FocusMode.priceAndDate)
         for archived in archive
             int cutoffTime = focusHistoryCutoff(bindings, archived.sourceName, fallbackTime)
@@ -1648,7 +1673,9 @@ focusedCandidates(array<FocusProfile> archive, array<SelectionBinding> bindings,
             if focusSourceAllowed(archived.sourceName) and not na(cutoffTime) and archived.profile.startTime < cutoffTime and focusDateAllowsProfile(archived.profile, focus)
                 float distance = focus.mode == FocusMode.date ? float(focus.dateTime - archived.profile.startTime) : focusPriceDistance(archived.prices, focus)
                 if not na(distance)
-                    retainFocusCandidate(ranked, FocusCandidate.new(archived, distance), focus.extraProfiles)
+                    legilimensOrchestration.RenderDecision decision = focusRenderDecision(archived, archive, comparisonIndices, extendedNyModeActive, tickSize)
+                    if decision.shouldRender
+                        retainFocusCandidate(ranked, FocusCandidate.new(archived, distance, decision.displayNameOverride, decision.pairedHeadings), focus.extraProfiles)
     ranked
 
 appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<FocusCandidate> candidates, array<SourceSpec> sources, int availablePolylines, bool preserveHistograms, PresentationConfig config) =>
@@ -1658,7 +1685,7 @@ appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<Focu
             break
         SourceSpec source = sourceSpec(sources, candidate.archived.sourceName)
         ProfilePolylineLayout geometry = profilePolylineLayout(candidate.archived.profile, source, profileAnalysis(state, candidate.archived.profile, source, true), state.cachedChartTimes, config)
-        array.push(items, ProfileRenderItem.new(geometry, "", false, true, false, true))
+        array.push(items, ProfileRenderItem.new(geometry, candidate.displayNameOverride, candidate.pairedHeadings, true, false, true))
         if profilePolylineCost(state, items, preserveHistograms, config) > availablePolylines
             array.pop(items)
             break
@@ -1666,7 +1693,7 @@ appendFocusedItems(RenderState state, array<ProfileRenderItem> items, array<Focu
 
 export renderSelections(RenderState state, array<SelectionBinding> bindings, bool hideDevelopingExtendedCounterpart, int currentNyEarlyStartTime, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     prepareProfileAnalysisCache(state, context.barTime)
-    array<FocusCandidate> candidates = focusedCandidates(state.focusProfiles, bindings, context.barTime, config.focus)
+    array<FocusCandidate> candidates = focusedCandidates(state.focusProfiles, bindings, context.barTime, config.focus, config.extendedNyModeActive, context.tickSize)
     bool showRecentProfiles = config.focus.mode == FocusMode.off or not config.focus.hideNonFocusProfiles
     if showRecentProfiles
         trimBindings(bindings, maximumProfileCapacity(config.limits, config.delta, config.levels), config, context)

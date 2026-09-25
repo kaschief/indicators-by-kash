@@ -8,6 +8,8 @@ const host = readFileSync(new URL('../indicators/21-legilimens/code/legilimens.p
 
 // Execute the Pine batching functions with drawing/coordinate adapters; this is not Pine compilation.
 const context = vm.createContext({
+  map: { new: () => new Map(), put: (values, key, value) => values.set(key, value), get: (values, key) => values.get(key) ?? null },
+  str: { tostring: String },
   math: Math, int: Math.trunc, float: Number, na: value => value == null,
   array: {
     size: values => values.length, get: (values, index) => values[index],
@@ -30,7 +32,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'NY_EARLY_END_MINUTE', 'DISPLAY_NY_EARLY_PLUS', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -38,7 +40,7 @@ for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOU
 for (const name of ['profileDeltaPlusColor', 'profileDeltaMinusColor', 'profileDeltaPlusPlusColor', 'profileDeltaMinusMinusColor']) {
   context[name] = spec => `${name}:${spec.alternateStyles}`;
 }
-const expression = value => value.replace(/array\.new<[^>]+>/g, 'array.new')
+const expression = value => value.replace(/(array|map)\.new<[^>]+>/g, '$1.new')
   .replace(/\bna\b(?!\s*\()/g, 'null').replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/:=/g, '=');
 for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfileAnalysis', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
   const body = source.match(new RegExp(`^(?:export )?type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
@@ -48,7 +50,7 @@ for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePol
 function compile(name, returnsValue = true, inputSource = source) {
   const match = inputSource.match(new RegExp(`^(?:export )?${name}\\(([^\\n]*)\\) =>\\n((?:[ \\t]+[^\\n]*\\n|\\n)+)`, 'm'));
   assert.ok(match, name);
-  const parameters = match[1].split(',').map(value => value.trim().split(' ').at(-1)).join(',');
+  const parameters = match[1].split(/,(?![^<]*>)/).map(value => value.trim().split(' ').at(-1)).join(',');
   const lines = match[2].trimEnd().split('\n').filter(line => line.trim() && !line.trim().startsWith('//'));
   const output = [], blocks = [];
   for (let index = 0; index < lines.length; index++) {
@@ -66,7 +68,7 @@ function compile(name, returnsValue = true, inputSource = source) {
       line = range ? `for (let ${range[1]} = ${range[2]}; ${range[1]} <= ${range[3]}; ${range[1]}++) {` : `for (const ${each[1]} of ${each[2]}) {`;
     } else {
       block = false;
-      line = line.replace(/^(?:array<[^>]+>|[\w.]+) (\w+) = /, 'let $1 = ').replace(/^\[([^\]]+)\] = /, 'let [$1] = ');
+      line = line.replace(/^(?:(?:array|map)<[^>]+>|[\w.]+) (\w+) = /, 'let $1 = ').replace(/^\[([^\]]+)\] = /, 'let [$1] = ');
       line = line.replace(/polyline\.new\(layer.points, curved=false, closed=true, xloc=xloc.bar_time, line_color=color.new\(layer.fillColor, 100\), fill_color=layer.fillColor\)/, 'polyline.new(layer.points, layer.fillColor)');
       if (returnsValue && (index === lines.length - 1 || (name === 'deltaOuterTime' && line.startsWith('chartTimeAtOffset(')))) line = `return ${line}`;
       line += ';';
@@ -440,7 +442,21 @@ for (const name of ['SOURCE_WEEKLY', 'SOURCE_MONTHLY', 'DELTA_TIER_VISIBILITY_BU
   context[name] = source.match(new RegExp(`^const string ${name} = "([^"]+)"`, 'm'))[1];
 }
 context.sourceSpec = (sources, key) => sources.find(item => item.key === key);
-for (const name of ['focusSourceAllowed', 'focusDateAllowsProfile', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
+for (const name of ['focusSourceAllowed', 'focusDateAllowsProfile', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusOccurrenceKey', 'focusComparisonIndices', 'focusRenderDecision', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
+
+const orchestrationSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
+context.nyMinuteBoundaryValue = (value, minute) => Math.floor(value / 86400000) * 86400000 + minute * 60000;
+context.tradingDayKeyValue = value => Math.floor(value / 86400000);
+context.RenderDecision = { new: (shouldRender, displayNameOverride, pairedHeadings) => ({ shouldRender, displayNameOverride, pairedHeadings }) };
+for (const name of ['profileOccurrenceKey', 'matchingProfile', 'hasPostBoundarySamples', 'rangesMatch', 'renderDecision']) compile(name, true, orchestrationSource);
+context.legilimensOrchestration = {
+  renderDecision: context.renderDecision,
+  nyMinuteBoundary: context.nyMinuteBoundaryValue,
+  tradingDayKey: context.tradingDayKeyValue,
+  ProfileSelection: { new: (profiles, currentIndex, currentDeveloping) => ({ profiles, currentIndex, currentDeveloping }) },
+};
+const selectFocusedCandidates = context.focusedCandidates;
+context.focusedCandidates = (archive, bindings, fallbackTime, settings, extendedNyModeActive = false, tickSize = .25) => selectFocusedCandidates(archive, bindings, fallbackTime, settings, extendedNyModeActive, tickSize);
 
 const focusSettings = (direction = 'Above', anchorPrice = 100, extraProfiles = 10, overrides = {}) => ({ mode: direction === 'Off' ? context.FocusMode.off : context.FocusMode.price, direction, anchorPrice, extraProfiles, searchDepth: 250, dateTime: null, startDateTime: null, hideNonFocusProfiles: false, ...overrides });
 const archivedProfile = (index, prices, sourceName = context.SOURCE_GLOBEX) => ({ profile: profile(index), prices, sourceName });
@@ -468,18 +484,60 @@ test('Focus direction is strict, Around includes equality, and manual zero/negat
   assert.equal(context.focusPriceDistance([101], focusSettings('Above', null)), null);
 });
 
-test('Focus uses only Globex, Weekly and Monthly, with capped counts and independently changing price anchors', () => {
-  for (const sourceName of [context.SOURCE_GLOBEX, context.SOURCE_WEEKLY, context.SOURCE_MONTHLY]) {
+test('Focus supports every recurring source with capped counts and independently changing price anchors', () => {
+  for (const sourceName of [context.SOURCE_GLOBEX, context.SOURCE_WEEKLY, context.SOURCE_MONTHLY, context.SOURCE_RTH, context.SOURCE_NY_EARLY, context.SOURCE_IVB, context.SOURCE_ASIA_PREMARKET, context.SOURCE_FOMC, context.SOURCE_OVERNIGHT_NINE, context.SOURCE_NY_AFTERNOON, context.SOURCE_ALL_DAY_TO_AFTERNOON, context.SOURCE_MIDNIGHT]) {
     const archive = Array.from({ length: 250 }, (_, index) => archivedProfile(index, [index + 1], sourceName));
     assert.equal(context.focusedCandidates(archive, focusBindings([250], sourceName), 25100, focusSettings('Around', 150, 10)).length, 10);
     const choose = price => context.focusedCandidates(archive, focusBindings([250], sourceName), 25100, focusSettings('Around', price, 1))[0].archived.profile.startTime;
     assert.equal(choose(1), 0);
     assert.equal(choose(200), 19900);
   }
-  for (const sourceName of [context.SOURCE_RTH, context.SOURCE_NY_EARLY, context.SOURCE_ASIA_PREMARKET, context.SOURCE_FOMC, 'Rolling', 'Fixed']) assert.equal(context.focusSourceAllowed(sourceName), false);
-  assert.match(host, /focusControlsActive = globexSelected or weeklySelected or monthlySelected/);
+  for (const sourceName of ['Rolling', 'Fixed']) assert.equal(context.focusSourceAllowed(sourceName), false);
+  assert.match(host, /focusControlsActive = not fixedSelected and not rollingSelected/);
   assert.match(host, /focusMode = input.enum\(legilimensPresentation.FocusMode.off/);
   assert.match(host, /focusDirection = input.enum\(legilimensPresentation.FocusDirection.above/);
+});
+
+test('recurring sources honor all Focus modes, while Fixed and standalone Rolling remain excluded even with bindings', () => {
+  const recurring = [context.SOURCE_GLOBEX, context.SOURCE_WEEKLY, context.SOURCE_MONTHLY, context.SOURCE_RTH, context.SOURCE_NY_EARLY, context.SOURCE_IVB, context.SOURCE_ASIA_PREMARKET, context.SOURCE_FOMC, context.SOURCE_OVERNIGHT_NINE, context.SOURCE_NY_AFTERNOON, context.SOURCE_ALL_DAY_TO_AFTERNOON, context.SOURCE_MIDNIGHT];
+  for (const sourceName of [...recurring, context.SOURCE_FIXED, context.SOURCE_ROLLING]) {
+    for (const mode of [context.FocusMode.price, context.FocusMode.date, context.FocusMode.priceAndDate]) {
+      const archive = [archivedProfile(1, [101], sourceName), archivedProfile(2, [102], sourceName)];
+      const result = context.focusedCandidates(archive, focusBindings([3], sourceName), 400, focusSettings('Above', 100, 1, { mode, dateTime: 250 }));
+      assert.equal(result.length, recurring.includes(sourceName) ? 1 : 0, `${sourceName}: ${mode}`);
+      if (result.length) assert.equal(result[0].archived.profile.startTime, mode === context.FocusMode.date ? 200 : 100);
+    }
+  }
+  assert.match(host, /for profileSource in presentationSources\n            if profileSource.selected and profileSource.key != SOURCE_FIXED and profileSource.key != SOURCE_ROLLING/);
+});
+
+test('NY Focus shares overlap suppression and heading decisions before applying the requested count', () => {
+  const day = 86400000, hour = 3600000;
+  const archivedNy = (sourceName, endHour, high = 110) => ({ sourceName, prices: [101], profile: { startTime: day + 6 * hour, endTime: day + endHour * hour, data: { rangeLow: 90, rangeHigh: high } } });
+  const primary = archivedNy(context.SOURCE_NY_EARLY, 9);
+  const extended = archivedNy(context.SOURCE_EXTENDED_NY_EARLY, 9.5);
+  const bindings = [context.SOURCE_NY_EARLY, context.SOURCE_EXTENDED_NY_EARLY, context.SOURCE_IVB].map(key => ({ source: { key }, selection: { profiles: [] } }));
+  const settings = focusSettings('Above', 100, 2, { mode: context.FocusMode.date, dateTime: day * 3 });
+  const choose = (archive, cap = 2, enabled = true) => context.focusedCandidates(archive, bindings, day * 4, { ...settings, extraProfiles: cap }, enabled);
+  let result = choose([primary, extended], 1);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].archived.sourceName, context.SOURCE_NY_EARLY);
+  assert.equal(result[0].displayNameOverride, context.DISPLAY_NY_EARLY_PLUS);
+  assert.equal(result[0].pairedHeadings, false);
+  result = choose([primary, archivedNy(context.SOURCE_EXTENDED_NY_EARLY, 9, 120)]);
+  assert.equal(result.length, 1, 'no samples after primary close');
+  const distinct = archivedNy(context.SOURCE_EXTENDED_NY_EARLY, 9.5, 120);
+  result = choose([primary, distinct]);
+  assert.equal(result.length, 2);
+  assert.ok(result.every(item => item.pairedHeadings && item.displayNameOverride === ''));
+  const ivb = archivedNy(context.SOURCE_IVB, 10.5, 130);
+  result = choose([primary, distinct, ivb], 2);
+  assert.equal(result.length, 2, 'combined sources share one cap');
+  assert.equal(choose([distinct]).length, 0, 'missing primary cannot render an orphan extended profile');
+  result = choose([primary, ivb], 2, false);
+  assert.equal(result.length, 2);
+  assert.ok(result.every(item => !item.pairedHeadings && item.displayNameOverride === ''));
+  assert.match(source, /ProfileRenderItem.new\(geometry, candidate.displayNameOverride, candidate.pairedHeadings, true, false, true\)/);
 });
 
 test('Date Focus selects completed profiles on or before the chosen day, nearest first', () => {
@@ -571,7 +629,7 @@ test('trading-date boundaries include full dates through DST and calendar rollov
 
 test('Focus Profiles Only keeps Focus candidates and skips the normal render items', () => {
   assert.match(host, /focusHideNonFocusProfiles = input.bool\(false, "Focus Profiles Only"/);
-  assert.match(source, /array<FocusCandidate> candidates = focusedCandidates\(state.focusProfiles, bindings, context.barTime, config.focus\)/);
+  assert.match(source, /array<FocusCandidate> candidates = focusedCandidates\(state.focusProfiles, bindings, context.barTime, config.focus, config.extendedNyModeActive, context.tickSize\)/);
   assert.match(source, /showRecentProfiles = config.focus.mode == FocusMode.off or not config.focus.hideNonFocusProfiles/);
   assert.match(source, /if showRecentProfiles\n        items := profileRenderItems\(/);
   assert.match(source, /appendFocusedItems\(state, items, candidates, sources, availablePolylines, showRecentProfiles and renderHistograms, config\)/);
@@ -596,7 +654,7 @@ test('Focus additions preserve base profiles and stop at core-object or polyline
   const style = spec(undefined, context.SOURCE_GLOBEX);
   const baseline = prepare([profile(100)], settings, style);
   const first = baseline[0];
-  const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index }));
+  const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index, displayNameOverride: "", pairedHeadings: false }));
   context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [], completedAnalyses: [] }, baseline, candidates, [style], 100, true, settings);
   assert.equal(baseline.length, 2);
   assert.equal(baseline[0], first);
@@ -612,7 +670,7 @@ test('Focus additions preserve base profiles and stop at core-object or polyline
 
 test('Focus scoring shares tier ranking and side visibility; LVN midpoints and cliffs match displayed prices', () => {
   context.newRenderState = () => ({ pendingOutlierLevels: [] });
-  context.legilimensOrchestration = { tradingDayKey: value => value };
+  context.legilimensOrchestration.tradingDayKey = value => value;
   context.legilimensProfile.collectOutlierPeaks = () => [peak(true, 0), peak(false, 1)];
   context.legilimensProfile.selectLowVolumeCandidates = () => [{ isLvn: true, zoneLow: 90, zoneHigh: 94, price: 90 }, { isLvn: false, price: 108 }];
   context.legilimensProfile.rankOutlierCandidates = () => [

@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 19 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 20 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -132,6 +132,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 17 | Published · loaded · tested · approved | Adds NY Afternoon and All Day to Afternoon source rendering, developing visibility, RTH palette reuse, and shared 13:30 New York level-extension anchors | `e8479062fd595daf07cc3894b71986dd4a869bd3fe9c4584df8a0492a3461b1e` |
 | LegilimensPresentationLibrary | 18 | Published · loaded · tested · approved | Labels every visible tier, marks developing level labels, budgets all labels, and reuses completed-profile strength, value-area, Delta-peak and LVN analyses across redraws | `5513fb2f2268a265dc3dcc88fe27f0e1152e03099149cd75ec2803294055c3d7` |
 | LegilimensPresentationLibrary | 19 | Published · loaded · tested · approved | Adds optional Delta-style LVN/cliff Fib treatment and Middle or Right edge midpoint-label placement | `dd012e51a7f6270794daff83e731d3d41919d8ed081e67bb81a21ef17c9d9ad8` |
+| LegilimensPresentationLibrary | 20 | Published · loaded · tested · approved | Enables Focus for all recurring profiles and preserves combined NY overlap and heading rules | `53db7122b80ecbba6b94b69182255a510573e0e8533c08ce024f6e7298e3e856` |
 
 ## Publication-instruction log
 
@@ -253,6 +254,7 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-25-01 | 2026-09-25 | LegilimensPresentationLibrary | 19 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/19`, then compile `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/19`. On NQ 5m and 180R/360R with Weak+ LVN tiers and Dots + Labels, check 0/1/2 px LVN borders across Fib bands, neutral midpoint structures, directional cliff colors and Fib markers, both palettes, current/history/developing profiles, and Extend Unmitigated On/Off in Replay. Cliffs remain lines; gray LVN fills and existing fading remain unchanged. Publication and TradingView validation are pending | `SUPERSEDED_BEFORE_PUBLICATION` |
 | PUB-2026-09-25-02 | 2026-09-25 | LegilimensPresentationLibrary | 19 | User confirms `/19` remains unpublished. Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/19`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/19`. On NQ 5m and 180R/360R, compare Midpoint Label Position Middle/Right edge, including past/future Hours endpoints, current/prior/developing profiles, and Replay. Verify the same label text and 3 px blue line, right-edge alignment with tier labels, Midpoint Line Off hiding both, and unchanged LVN/cliff Fib behavior from the prior pending handoff. Publication and TradingView validation remain pending | `SUPERSEDED_BEFORE_PUBLICATION` |
 | PUB-2026-09-25-03 | 2026-09-25 | LegilimensPresentationLibrary | 19 | Final revised `/19` release. Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/19`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/19`. On NQ 5m and 180R/360R, test Midpoint Label Position Middle/Right edge with past/future Hours endpoints, current/prior/developing profiles, and Replay. Check Midpoint Line Off hides both line and label. Compare Match LVN/Cliff Fib Styling to Delta Off/On across Fib bands, both palettes, Weak+ tiers, and Extend Unmitigated. Off restores 1 px LVN borders and neutral cliffs; On shares Delta border widths and directional cliff markers. Publication, host loading, testing, and approval are user-confirmed by the commit instruction | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-25-04 | 2026-09-25 | LegilimensPresentationLibrary | 20 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/20`, then compile `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/20`. On NQ 5m and 60R/180R, test every recurring profile in Price, Date, and Price + Date; Focus Profiles Only On/Off; combined NY + IVB with Extended On/Off; and Replay across session completion. Check correct profile guide colors, no duplicated matching NY ranges, preserved NY headings, shared count and drawing limits, and normal visibility with Focus Off. FOMC remains calendar-bound. Fixed and standalone Rolling stay excluded; calendar and rolling Weekly/Monthly remain supported. Publication, host loading, testing, and approval are user-confirmed by the working feedback and commit instruction | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -285,11 +287,21 @@ Entries before this registry was created are reconstructed from the task history
 
 - Legilimens current handoff: Presentation `/19` publication, host loading, testing, and approval are user-confirmed by the 2026-09-25 commit instruction. Development and production imports are Profile `/4`, Orchestration `/2`, Presentation `/19`; no library release is pending. Match LVN/Cliff Fib Styling to Delta defaults Off, preserving 1 px LVN borders (none at midpoint) and neutral cliff lines. On applies shared Delta 0/1/2 px Fib border widths to LVNs and directional Fib colors/markers to cliffs, which remain lines. Midpoint Label Position defaults to Middle; Right edge uses the tier-label endpoint offset and left alignment. Existing label wording, color, size, line price/width/endpoints, LVN fills/fading, and drawing counts are preserved. Host title is `legilimens •`. All 54 local tests and identifier/title, registry, and scoped whitespace checks pass. TradingView behavior is user-confirmed, not independently observed by Codex.
 
+- Legilimens current approved handoff, superseding `/19`: Presentation `/20` publication, host loading, testing, and approval are user-confirmed by the working feedback and commit instruction. Production and development imports are Profile `/4`, Orchestration `/2`, and Presentation `/20`; no library release is pending. Focus admits every recurring source while excluding Fixed and standalone Rolling. Ranking retains the existing price/date rules, 250 completed profiles per source, shared requested count up to 50, and drawing-capacity limits. NY occurrence lookup reuses Orchestration render decisions before ranking admission and carries headings into Focus rendering, suppressing duplicate Extended ranges without consuming the requested count. Guide colors and text styles follow the selected profile. The final host title is `legilimens •`. All 56 adapted local tests, Pine identifier/title checks, registry validation, and scoped whitespace checks pass. Independent principal review found no actionable defects. TradingView behavior is user-confirmed, not independently observed by Codex.
+
 ## Pending release notes
 
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/20`
+
+```text
+Enables Price, Date, and Price + Date Focus for every recurring profile, including IVB, NY Early and Extended NY Early, Asia-Premarket, Overnight + NY Early, FOMC, RTH, Midnight, and both afternoon profiles. Combined NY profiles preserve their overlap and label rules. Focus guides use the selected profile styling. Fixed and standalone Rolling remain excluded; existing count limits and the default Off setting are preserved.
+```
+
+Presentation `/20` was published before the host importing Profile `/4`, Orchestration `/2`, and Presentation `/20`. Publication, host loading, testing, and approval are user-confirmed. No new library publication is required.
 
 ### LegilimensPresentationLibrary `/19`
 
