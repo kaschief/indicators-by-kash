@@ -88,6 +88,34 @@ compile('renderLowVolumeStructures', false);
 context.levelMarkerTime = value => value;
 context.legilimensProfile.OutlierCandidate = { new: (...values) => values };
 
+test('midpoint labels preserve bar-centered placement or align to the tier right edge', () => {
+  const originalMarkerTime = context.levelMarkerTime;
+  const originalBarSpan = context.barSpanMs;
+  context.DOT_MARKER_OFFSET_BARS = Number(source.match(/^const float DOT_MARKER_OFFSET_BARS = (.+)$/m)[1]);
+  context.barSpanMs = () => 100;
+  compile('levelMarkerTime');
+  compile('profileMidpointLabelTime');
+  try {
+    for (const [times, endTime, expectedCenter] of [
+      [[100, 125, 150, 175, 200], 200, 150],
+      [[100, 110, 130, 190, 200], 200, 130],
+      [[100, 110, 130, 190, 200], 300, 200],
+      [[], 200, 150],
+      [[100], 100, 100],
+    ]) {
+      assert.equal(context.profileMidpointLabelTime(100, endTime, times, false), expectedCenter);
+      assert.equal(context.profileMidpointLabelTime(100, endTime, times, true), endTime + 10);
+    }
+    assert.match(host, /midpointLabelPosition = input\.string\("Middle", "Midpoint Label Position", options=\["Middle", "Right edge"\].*active=showProfileMidpointLine/);
+    assert.match(host, /LevelSettings\.new\(showValueAreaLevels, showPocLevel, showProfileMidpointLine, midpointLabelPosition == "Right edge", mergeOverlaps, mergeDistancePercent\)/);
+    assert.match(source, /style=labelAtRight \? label\.style_label_left : label\.style_label_center/);
+    assert.match(source, /textalign=labelAtRight \? text\.align_left : text\.align_center/);
+  } finally {
+    context.levelMarkerTime = originalMarkerTime;
+    context.barSpanMs = originalBarSpan;
+  }
+});
+
 const config = (overrides = {}) => ({ limits: { polylines: 100 }, delta: { visibleRows: context.OPTION_ALL, rowFilter: context.OPTION_ALL, showHistogram: true, histogramWidthPercent: 20, ...overrides } });
 function profile(index, count = 12, low = 100) {
   const deltas = Array.from({ length: count }, (_, row) => (row % 2 ? -1 : 1) * (row % 4 < 2 ? 2 : 10));
@@ -333,30 +361,45 @@ test('Delta peaks always retain Fib grades and midpoint without qualification sw
   assert.deepEqual(Array.from(state.pendingOutlierLevels, item => context.fibLocationMarkerGlyph(item.fibLocationGrade)), ['✦', '◆', '●', '●', '✦', '◆', '●', '●']);
 });
 
-test('LVNs always receive directional Fib styling while midpoint LVNs and cliffs stay neutral', () => {
-  const candidates = [
-    { isLvn: true, zoneLow: 108, zoneHigh: 112 },
-    { isLvn: true, zoneLow: 168, zoneHigh: 172 },
-    { isLvn: true, zoneLow: 148, zoneHigh: 152 },
-    { isLvn: false, price: 190 },
+test('optional LVN/cliff Fib styling restores previous visuals when disabled', () => {
+  const cases = [
+    [100, 2, '✦'], [214, 1, '◆'], [382, 1, '◆'], [450, 1, '●'],
+    [500, 0, '●'], [550, 1, '●'], [618, 1, '◆'], [786, 1, '◆'], [900, 2, '✦'],
   ];
-  const zones = [], markers = [], cliffs = [];
   context.fibQualificationColor = value => value;
   context.tierMarkerSize = value => value;
-  context.renderLowVolumeZone = (...args) => { zones.push(args); return false; };
-  context.queueLevelMarker = (...args) => markers.push(args);
-  context.queueRightLine = (...args) => cliffs.push(args);
-  context.renderLowVolumeStructures({}, { startTime: 0, endTime: 20, data: { rangeLow: 100, rangeHigh: 200 } },
-    { key: 'Globex', alternateStyles: false }, candidates, '', 100, 1, false, false, [], {}, {
-      delta: { showLvnTiers: true, visibleLvnTierCount: 5, showDotLabels: false, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
-    });
-  assert.deepEqual(zones.map(args => args[10]), [1, 1, 0]);
-  assert.deepEqual(zones.slice(0, 2).map(args => args[11]), ['profileDeltaPlusPlusColor:false:90', 'profileDeltaMinusMinusColor:false:90']);
-  assert.deepEqual(markers.map(args => args[3]), ['✦', '◆', '●', '●']);
-  assert.deepEqual(markers.slice(0, 2).map(args => args[5]), ['profileDeltaPlusPlusColor:false:50', 'profileDeltaMinusMinusColor:false:50']);
-  assert.equal(markers[2][5], markers[3][5]);
-  assert.equal(cliffs.length, 1);
-  assert.equal(cliffs[0][1], 190);
+  for (const matchLowVolumeFibStyling of [false, true]) {
+    for (const alternateStyles of [false, true]) {
+      for (const [price, width, glyph] of cases) {
+        const zones = [], markers = [], cliffs = [];
+        context.renderLowVolumeZone = (...args) => { zones.push(args); return false; };
+        context.queueLevelMarker = (...args) => markers.push(args);
+        context.queueRightLine = (...args) => cliffs.push(args);
+        context.renderLowVolumeStructures({}, { startTime: 0, endTime: 20, data: { rangeLow: 0, rangeHigh: 1000 } },
+          { key: 'Globex', alternateStyles }, [
+            { isLvn: true, zoneLow: price - 2, zoneHigh: price + 2 },
+            { isLvn: false, price },
+          ], '', 100, 1, false, false, [], {}, {
+            delta: { showLvnTiers: true, visibleLvnTierCount: 5, matchLowVolumeFibStyling, showDotLabels: false, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
+          });
+        assert.equal(zones.length, 1, 'cliffs must not create zones');
+        assert.equal(zones[0][10], matchLowVolumeFibStyling ? width : price === 500 ? 0 : 1, `border at ${price}`);
+        assert.deepEqual(markers.map(args => args[3]), [glyph, matchLowVolumeFibStyling ? glyph : '●']);
+        const directionalColor = `${price < 500 ? 'profileDeltaPlusPlusColor' : 'profileDeltaMinusMinusColor'}:${alternateStyles}`;
+        const markerColor = price === 500 ? '15,15,15:75' : `${directionalColor}:50`;
+        const cliffColor = matchLowVolumeFibStyling ? markerColor : '15,15,15:75';
+        assert.deepEqual(markers.map(args => args[5]), [markerColor, cliffColor]);
+        if (price !== 500) assert.equal(zones[0][11], `${directionalColor}:90`);
+        assert.equal(cliffs.length, 1);
+        assert.equal(cliffs[0][1], price);
+        assert.equal(cliffs[0][4], cliffColor);
+        assert.equal(cliffs[0][5], context.LOW_VOLUME_LINE_WIDTH);
+        assert.equal(cliffs[0][6], context.STYLE_DOTTED);
+      }
+    }
+  }
+  assert.match(host, /matchLowVolumeFibStyling = input\.bool\(false, "Match LVN\/Cliff Fib Styling to Delta"/);
+  assert.match(host, /visibleLvnTierCount, matchLowVolumeFibStyling, showDots, showDotLabels/);
 });
 
 test('highest-row flags use raw delta magnitude, preserve tie handling, and respect Highest Delta Levels', () => {

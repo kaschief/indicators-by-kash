@@ -129,6 +129,7 @@ export type DeltaSettings
     int highestDeltaBorderWidth
     bool showLvnTiers
     int visibleLvnTierCount
+    bool matchLowVolumeFibStyling
     bool showDots
     bool showDotLabels
     int lvnFibBorderTransparency
@@ -140,6 +141,7 @@ export type LevelSettings
     bool showValueArea
     bool showPoc
     bool showMidpoint
+    bool midpointLabelAtRight
     bool mergeOverlaps
     float mergeDistancePercent
 
@@ -1267,17 +1269,16 @@ renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile pro
                 color borderColor = markerColor
                 string markerGlyph = LEVEL_MARKER_GLYPH
                 int fibBorderWidth = 0
-                if candidate.isLvn
-                    float fibMidpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
-                    bool buySide = labelPrice < fibMidpointPrice
-                    bool sellSide = labelPrice > fibMidpointPrice
-                    if buySide or sellSide
-                        int fibGrade = deltaTierFibLocationGrade(buySide, labelPrice, profile.data.rangeLow, profile.data.rangeHigh)
-                        color directionalColor = buySide ? profileDeltaPlusPlusColor(source) : profileDeltaMinusMinusColor(source)
-                        markerColor := color.new(fibQualificationColor(directionalColor, fibGrade >= FIB_LOCATION_QUALIFIED), config.delta.lvnFibMarkerTransparency)
-                        borderColor := color.new(directionalColor, config.delta.lvnFibBorderTransparency)
-                        markerGlyph := fibLocationMarkerGlyph(fibGrade)
-                        fibBorderWidth := 1
+                float fibMidpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
+                bool buySide = labelPrice < fibMidpointPrice
+                bool sellSide = labelPrice > fibMidpointPrice
+                if (candidate.isLvn or config.delta.matchLowVolumeFibStyling) and (buySide or sellSide)
+                    int fibGrade = deltaTierFibLocationGrade(buySide, labelPrice, profile.data.rangeLow, profile.data.rangeHigh)
+                    color directionalColor = buySide ? profileDeltaPlusPlusColor(source) : profileDeltaMinusMinusColor(source)
+                    markerColor := color.new(fibQualificationColor(directionalColor, fibGrade >= FIB_LOCATION_QUALIFIED), config.delta.lvnFibMarkerTransparency)
+                    borderColor := color.new(directionalColor, config.delta.lvnFibBorderTransparency)
+                    markerGlyph := fibLocationMarkerGlyph(fibGrade)
+                    fibBorderWidth := config.delta.matchLowVolumeFibStyling ? fibLocationBorderWidth(fibGrade, buySide, labelPrice, fibMidpointPrice) : 1
                 bool markerDeferred = false
                 if candidate.isLvn
                     markerDeferred := renderLowVolumeZone(state, profile, source, labelPrice, candidate.zoneLow, candidate.zoneHigh, levelEndTime, levelRank, sessionTradingDayKey, historical, fibBorderWidth, borderColor, markerColor, markerGlyph, markerLabel, tierMarkerSize(6 - structureRank), registrationOnly, sources, config)
@@ -1456,17 +1457,24 @@ renderRangeLabels(RenderState state, legilimensOrchestration.Profile profile, So
     if canDrawLabel(state, config)
         array.push(state.drawnLabels, label.new(headingTime, rangeLowTitleY, rangeLabel, xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_up, textcolor=labelColor, size=toLabelSize(labelSize), color=backgroundColor))
 
+profileMidpointLabelTime(int profileEndTime, int levelEndTime, array<int> chartTimes, bool labelAtRight) =>
+    int labelTime = levelMarkerTime(levelEndTime)
+    if not labelAtRight
+        labelTime := profileEndTime + int(math.round((levelEndTime - profileEndTime) * 0.5))
+        int startIndex = nearestChartTimeIndex(chartTimes, profileEndTime)
+        int endIndex = nearestChartTimeIndex(chartTimes, levelEndTime)
+        if startIndex >= 0 and endIndex >= 0
+            labelTime := array.get(chartTimes, int(math.round((startIndex + endIndex) * 0.5)))
+    labelTime
+
 renderProfileMidpointLine(RenderState state, legilimensOrchestration.Profile profile, SourceSpec source, bool developing, int levelEndTime, array<int> chartTimes, PresentationConfig config) =>
     if config.levels.showMidpoint and canDrawLine(state, config)
         float midpointPrice = (profile.data.rangeLow + profile.data.rangeHigh) * FIB_LOCATION_MIDPOINT
         array.push(state.drawnLines, line.new(profile.endTime, midpointPrice, levelEndTime, midpointPrice, xloc=xloc.bar_time, color=color.new(#2962ff, 70), style=line.style_solid, width=3))
         if canDrawLabel(state, config)
-            int midpointTime = profile.endTime + int(math.round((levelEndTime - profile.endTime) * 0.5))
-            int startIndex = nearestChartTimeIndex(chartTimes, profile.endTime)
-            int endIndex = nearestChartTimeIndex(chartTimes, levelEndTime)
-            if startIndex >= 0 and endIndex >= 0
-                midpointTime := array.get(chartTimes, int(math.round((startIndex + endIndex) * 0.5)))
-            array.push(state.drawnLabels, label.new(midpointTime, midpointPrice, developingLevelLabel(str.lower(source.key) + " 0.5", developing), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_center, textcolor=color.new(#2962ff, 45), size=5, color=color.new(color.white, 50), textalign=text.align_center))
+            bool labelAtRight = config.levels.midpointLabelAtRight
+            int labelTime = profileMidpointLabelTime(profile.endTime, levelEndTime, chartTimes, labelAtRight)
+            array.push(state.drawnLabels, label.new(labelTime, midpointPrice, developingLevelLabel(str.lower(source.key) + " 0.5", developing), xloc=xloc.bar_time, yloc=yloc.price, style=labelAtRight ? label.style_label_left : label.style_label_center, textcolor=color.new(#2962ff, 45), size=5, color=color.new(color.white, 50), textalign=labelAtRight ? text.align_left : text.align_center))
 
 selectedOutlierRowMask(legilimensOrchestration.Profile profile, array<float> strengths, array<legilimensProfile.RankedOutlierSelection> selections, PresentationConfig config) =>
     bool enabled = config.delta.rowFilter == DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS and config.delta.showTiers and config.delta.visibleTierSides != OPTION_OFF
