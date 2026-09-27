@@ -42,7 +42,7 @@ for (const name of ['profileDeltaPlusColor', 'profileDeltaMinusColor', 'profileD
 }
 const expression = value => value.replace(/(array|map)\.new<[^>]+>/g, '$1.new')
   .replace(/\bna\b(?!\s*\()/g, 'null').replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/:=/g, '=');
-for (const typeName of ['PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfileAnalysis', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
+for (const typeName of ['PendingRightLabel', 'PendingMitigatedZone', 'PendingOutlierLevel', 'RankedOutlierLevel', 'ProfilePolylineLayer', 'ProfilePolylineBatch', 'ProfileAnalysis', 'ProfilePolylineLayout', 'ProfilePolylineRegion', 'ProfileRenderItem', 'FocusProfile', 'FocusCandidate']) {
   const body = source.match(new RegExp(`^(?:export )?type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1];
   const fields = body.trim().split('\n').map(line => line.trim().match(/^\S+ (\w+)(?: = (.+))?$/).slice(1));
   context[typeName] = { new: (...values) => Object.fromEntries(fields.map(([key, fallback], index) => [key, index < values.length ? values[index] : fallback ? vm.runInContext(expression(fallback), context) : null])) };
@@ -252,23 +252,23 @@ test('history and render admission retain non-polyline budgets and shared planni
 test('history capacity follows heavy and light configurations rather than a universal profile count', () => {
   const limits = { lines: 500, labels: 500, boxes: 500, polylines: 100 };
   const levels = { showValueArea: false, showPoc: false, showMidpoint: true };
-  const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 2, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 2, showDots: true, showDotLabels: false };
-  assert.equal(context.maximumProfileCapacity(limits, delta, levels), 50);
-  assert.equal(context.maximumProfileCapacity(limits, { ...delta, visibleTierCount: 5, visibleLvnTierCount: 5 }, levels), 26);
+  const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 2, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 2 };
+  assert.equal(context.maximumProfileCapacity(limits, delta, levels), 33);
+  assert.equal(context.maximumProfileCapacity(limits, { ...delta, visibleTierCount: 5, visibleLvnTierCount: 5 }, levels), 15);
   assert.equal(context.maximumProfileCapacity(limits, { ...delta, showTiers: false, showLvnTiers: false, showHighestDeltaLevels: false }, { ...levels, showMidpoint: false }), 250);
-  assert.equal(context.maximumProfileCapacity({ ...limits, polylines: 20 }, delta, levels), 50);
+  assert.equal(context.maximumProfileCapacity({ ...limits, polylines: 20 }, delta, levels), 33);
   assert.ok(context.maximumProfileCapacity({ ...limits, boxes: 200 }, delta, levels) < 50);
 });
 
 test('all-tier labels reserve one text label per marker across sides and LVNs', () => {
   const limits = { lines: 500, labels: 500, boxes: 500, polylines: 100 };
   const levels = { showValueArea: false, showPoc: false, showMidpoint: true };
-  const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 5, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 5, showDots: true, showDotLabels: true };
+  const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 5, showHighestDeltaLevels: true, showLvnTiers: true, visibleLvnTierCount: 5 };
   assert.equal(context.maximumCoreObjectCostsPerProfile(delta, levels)[1], 33);
   assert.equal(context.maximumProfileCapacity(limits, delta, levels), 15);
-  assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, showDots: false }, levels)[1], 3);
+  assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, showTiers: false, showLvnTiers: false }, levels)[1], 3);
   assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, visibleTierSides: context.DELTA_ROWS_BUY }, levels)[1], 23);
-  assert.match(host, /dotDisplay = input.string\(DOT_DISPLAY_DOTS_LABELS,/);
+  assert.match(host, /showPrice = input.bool\(false, "Show Price",/);
 });
 
 test('irregular chart times and projected edges stay inside the reserved envelope', () => {
@@ -382,7 +382,7 @@ test('optional LVN/cliff Fib styling restores previous visuals when disabled', (
             { isLvn: true, zoneLow: price - 2, zoneHigh: price + 2 },
             { isLvn: false, price },
           ], '', 100, 1, false, false, [], {}, {
-            delta: { showLvnTiers: true, visibleLvnTierCount: 5, matchLowVolumeFibStyling, showDotLabels: false, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
+            delta: { showLvnTiers: true, visibleLvnTierCount: 5, matchLowVolumeFibStyling, lvnFibBorderTransparency: 90, lvnFibMarkerTransparency: 50 },
           });
         assert.equal(zones.length, 1, 'cliffs must not create zones');
         assert.equal(zones[0][10], matchLowVolumeFibStyling ? width : price === 500 ? 0 : 1, `border at ${price}`);
@@ -401,7 +401,7 @@ test('optional LVN/cliff Fib styling restores previous visuals when disabled', (
     }
   }
   assert.match(host, /matchLowVolumeFibStyling = input\.bool\(false, "Match LVN\/Cliff Fib Styling to Delta"/);
-  assert.match(host, /visibleLvnTierCount, matchLowVolumeFibStyling, showDots, showDotLabels/);
+  assert.match(host, /visibleLvnTierCount, matchLowVolumeFibStyling, showPrice/);
 });
 
 test('highest-row flags use raw delta magnitude, preserve tie handling, and respect Highest Delta Levels', () => {
@@ -860,20 +860,17 @@ test('every Delta and LVN tier keeps its profile label and developing suffix', (
   context.queueLevelMarker = (...args) => markers.push(args);
   context.renderLowVolumeZone = () => false;
   const profileSource = { key: 'NY Early', labelName: 'NY Early' };
-  const settings = { delta: { showDotLabels: true, showLvnTiers: true }, interactions: { extendUnmitigated: false } };
+  const settings = { delta: { showLvnTiers: true }, interactions: { extendUnmitigated: false } };
   const ranked = Array.from({ length: 10 }, (_, index) => ({ sourceName: profileSource.key, strengthRank: index % 5 + 1, buySide: index < 5, fibLocationGrade: 0 }));
   const candidates = Array.from({ length: 5 }, (_, index) => ({ isLvn: index < 4, zoneLow: 100 + index, zoneHigh: 102 + index, price: 120 }));
   for (const developing of [true, false]) {
     const caption = context.developingLevelLabel('NY Early', developing);
     assert.equal(caption, developing ? 'NY Early (dev)' : 'NY Early');
-    for (const showLabels of [true, false]) {
-      markers.length = 0;
-      settings.delta.showDotLabels = showLabels;
-      context.renderRankedOutlierLevels({}, ranked.map(item => ({ ...item, displayNameOverride: caption })), false, [profileSource], {}, settings);
-      context.renderLowVolumeStructures({}, { data: { rangeLow: 100, rangeHigh: 200 } }, profileSource, candidates, caption, 100, 1, false, false, [], {}, settings);
-      assert.equal(markers.length, 15);
-      assert.ok(markers.every(args => args[4] === (showLabels ? caption : '')));
-    }
+    markers.length = 0;
+    context.renderRankedOutlierLevels({}, ranked.map(item => ({ ...item, displayNameOverride: caption })), false, [profileSource], {}, settings);
+    context.renderLowVolumeStructures({}, { data: { rangeLow: 100, rangeHigh: 200 } }, profileSource, candidates, caption, 100, 1, false, false, [], {}, settings);
+    assert.equal(markers.length, 15);
+    assert.ok(markers.every(args => args[4] === caption));
   }
 });
 
@@ -958,6 +955,90 @@ test('completed NY analyses reuse real analytics across forward steps while deve
     const fresh = analyze(item.geometry.profile, item.geometry.source, false);
     assert.deepEqual(fresh, item.geometry.analysis, 'cached values must equal an independent fresh calculation');
   }
+});
+
+test('optional prices reuse permanent name labels without changing history capacity', () => {
+  const limits = { lines: 500, labels: 500, boxes: 500 };
+  const levels = { showMidpoint: true };
+  for (const showPrice of [false, true]) {
+    const delta = { showTiers: true, visibleTierSides: context.OPTION_ALL, visibleTierCount: 5, showLvnTiers: true, visibleLvnTierCount: 5, showPrice };
+    const costs = context.maximumCoreObjectCostsPerProfile(delta, levels);
+    assert.equal(costs[1], 33);
+    assert.equal(context.maximumProfileCapacity(limits, delta, levels), 15);
+    assert.equal(context.maximumCoreObjectCostsPerProfile({ ...delta, showTiers: false, showLvnTiers: false }, levels)[1], 3);
+  }
+});
+
+test('dots and names always remain while Show Price only appends the number', () => {
+  context.label = { style_none: 'none', style_label_left: 'left' };
+  context.format = { mintick: 'mintick' };
+  context.DOT_LABEL_SIZE = 10;
+  const originalString = context.str.tostring;
+  let decimals = 1;
+  context.str.tostring = (value, format) => format === 'mintick' ? Number(value).toFixed(decimals) : String(value);
+  compile('levelMarkerText');
+  compile('queueLevelMarker', false);
+  try {
+    for (const showPrice of [false, true]) {
+      const state = { pendingRightLabels: [] };
+      context.queueLevelMarker(state, 919.6, 123, '◆⁺', 'NY Early (dev)', 'green', 12, { delta: { showPrice } });
+      assert.deepEqual(state.pendingRightLabels.map(item => [item.labelText, item.labelStyle, item.textSize]), [
+        ['◆⁺', 'none', 12],
+        [showPrice ? 'NY Early (dev) · 919.6' : 'NY Early (dev)', 'left', 10],
+      ]);
+      assert.ok(state.pendingRightLabels.every(item => item.price === 919.6 && item.markerTime === 123 && item.textColor === 'green'));
+    }
+    for (const [precision, value, expected] of [[2, 919.25, 'IVB · 919.25'], [5, 1.08345, 'IVB · 1.08345']]) {
+      decimals = precision;
+      assert.equal(context.levelMarkerText(value, 'IVB', { showPrice: true }), expected);
+    }
+    const cliffState = { pendingRightLabels: [] };
+    context.queueLevelMarker(cliffState, 919.25, 123, '●', 'IVB', 'gray', 10, { delta: { showPrice: false } });
+    assert.deepEqual(cliffState.pendingRightLabels.map(item => item.labelText), ['●', 'IVB']);
+  } finally {
+    context.str.tostring = originalString;
+  }
+});
+
+test('price labels share regular, filtered and mitigated tier endpoints', () => {
+  compile('renderRankedOutlierLevels', false);
+  compile('flushPendingMitigatedZones', false);
+  compile('renderLowVolumeZone');
+  const profileSource = { key: 'NY Early', labelName: 'NY Early' };
+  const settings = { delta: { showPrice: true }, interactions: {} };
+  const ranked = { sourceName: 'NY Early', strengthRank: 1, buySide: true, price: 919.6, zoneLow: 918.5, zoneHigh: 920.1, markerTime: 110, rightTime: 100, lineStartTime: 20, profileStartTime: 10, fibLocationGrade: 1 };
+  context.sourceSpec = () => profileSource;
+  context.deltaTierAppearance = () => ({});
+  for (const name of ['appearanceLineStyle', 'appearanceZoneColor', 'appearanceLineColor', 'appearanceTextColor']) context[name] = () => 'green';
+  context.appearanceHasLine = () => false;
+  context.appearanceLineWidth = () => 1;
+  context.renderZoneFill = () => {};
+  context.levelMarkerTime = endTime => endTime + 10;
+  context.mitigatedZoneEndTime = () => 400;
+  for (const extended of [false, true]) for (const visible of [false, true]) {
+    context.mitigationEnabled = () => extended;
+    context.deltaTierSideVisible = () => visible;
+    const state = { pendingRightLabels: [], pendingMitigatedZones: [] };
+    context.renderRankedOutlierLevels(state, [ranked], false, [profileSource], {}, settings);
+    context.flushPendingMitigatedZones(state, {}, settings);
+    assert.equal(state.pendingRightLabels.length, visible ? 2 : 0);
+    assert.ok(state.pendingRightLabels.every(item => item.markerTime === (extended ? 410 : 110)));
+    if (visible) assert.deepEqual(state.pendingRightLabels.map(item => item.price), [919.6, 919.6]);
+  }
+  context.mitigationEnabled = () => true;
+  const lvnState = { pendingRightLabels: [], pendingMitigatedZones: [] };
+  context.renderLowVolumeStructures(lvnState, { startTime: 10, endTime: 20, data: { rangeLow: 900, rangeHigh: 930 } }, profileSource,
+    [{ isLvn: true, zoneLow: 918.5, zoneHigh: 920.1 }], '', 100, 1, false, false, [profileSource], {},
+    { ...settings, delta: { ...settings.delta, showLvnTiers: true } });
+  context.flushPendingMitigatedZones(lvnState, {}, settings);
+  assert.equal(lvnState.pendingRightLabels.length, 2);
+  assert.ok(lvnState.pendingRightLabels.every(item => item.markerTime === 410));
+  const hiddenState = { pendingRightLabels: [], pendingMitigatedZones: [...lvnState.pendingMitigatedZones] };
+  context.mitigatedZoneEndTime = () => null;
+  context.deltaTierSideVisible = () => true;
+  context.renderRankedOutlierLevels(hiddenState, [ranked], false, [profileSource], {}, settings);
+  context.flushPendingMitigatedZones(hiddenState, {}, settings);
+  assert.equal(hiddenState.pendingRightLabels.length, 0, 'undrawn zones must not leave price labels');
 });
 
 test('cache admission, occurrence keys, backward Replay and chart geometry prevent stale reuse', () => {

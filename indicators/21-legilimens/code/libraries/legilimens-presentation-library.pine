@@ -130,8 +130,7 @@ export type DeltaSettings
     bool showLvnTiers
     int visibleLvnTierCount
     bool matchLowVolumeFibStyling
-    bool showDots
-    bool showDotLabels
+    bool showPrice
     int lvnFibBorderTransparency
     int lvnFibMarkerTransparency
     bool showHistogram
@@ -297,7 +296,7 @@ export type PendingRightLabel
     string labelText
     color textColor
     int textSize
-    bool sessionText
+    string labelStyle
 
 export type PendingRightLine
     float price
@@ -487,8 +486,8 @@ maximumCoreObjectCostsPerProfile(DeltaSettings delta, LevelSettings levels) =>
     int rightLineCount = lvnTierCount + deltaTierSides * math.min(2, delta.visibleTierCount)
     int pocLabelCount = levels.showPoc ? 1 : 0
     int midpointLabelCount = levels.showMidpoint ? 1 : 0
-    int lvnMarkerLabelCount = delta.showDots ? lvnTierCount * (delta.showDotLabels ? 2 : 1) : 0
-    int deltaMarkerLabelCount = delta.showDots ? deltaTierCount * (delta.showDotLabels ? 2 : 1) : 0
+    int lvnMarkerLabelCount = lvnTierCount * 2
+    int deltaMarkerLabelCount = deltaTierCount * 2
     int zoneBoxCount = lvnTierCount + deltaTierCount + highestDeltaBoxCount
     [referenceLineCount + rightLineCount, PROFILE_HEADING_LABEL_COUNT + pocLabelCount + midpointLabelCount + lvnMarkerLabelCount + deltaMarkerLabelCount, PROFILE_FRAME_BOX_COUNT + zoneBoxCount]
 
@@ -538,11 +537,12 @@ export beginFrame(RenderState state) =>
     array.clear(state.pendingRightLines)
     true
 
+levelMarkerText(float price, string markerLabel, DeltaSettings delta) =>
+    markerLabel + (delta.showPrice ? " · " + str.tostring(price, format.mintick) : "")
+
 queueLevelMarker(RenderState state, float price, int markerTime, string markerGlyph, string markerLabel, color markerColor, int markerSize, PresentationConfig config) =>
-    if config.delta.showDots
-        array.push(state.pendingRightLabels, PendingRightLabel.new(price, markerTime, markerGlyph, markerColor, markerSize, false))
-        if markerLabel != ""
-            array.push(state.pendingRightLabels, PendingRightLabel.new(price, markerTime, markerLabel, markerColor, DOT_LABEL_SIZE, true))
+    array.push(state.pendingRightLabels, PendingRightLabel.new(price, markerTime, markerGlyph, markerColor, markerSize, label.style_none))
+    array.push(state.pendingRightLabels, PendingRightLabel.new(price, markerTime, levelMarkerText(price, markerLabel, config.delta), markerColor, DOT_LABEL_SIZE, label.style_label_left))
 
 queueRightLine(RenderState state, float price, int leftTime, int rightTime, color lineColor, int lineWidth, string styleName, int rank, string sourceName, int sessionTradingDayKey, bool historical, int direction, BarContext context) =>
     bool historicalMergeGroup = historical or sessionTradingDayKey != legilimensOrchestration.tradingDayKey(context.barTime)
@@ -667,10 +667,9 @@ flushPendingRightLabels(RenderState state, PresentationConfig config) =>
     if pendingCount > 0
         for pendingIndex = 0 to pendingCount - 1
             PendingRightLabel pending = array.get(state.pendingRightLabels, pendingIndex)
-            string labelStyle = pending.sessionText ? label.style_label_left : label.style_none
-            string textAlignment = pending.sessionText ? text.align_left : text.align_center
+            string textAlignment = pending.labelStyle == label.style_none ? text.align_center : text.align_left
             if canDrawLabel(state, config)
-                array.push(state.drawnLabels, label.new(pending.markerTime, pending.price, pending.labelText, xloc=xloc.bar_time, yloc=yloc.price, style=labelStyle, textcolor=pending.textColor, size=pending.textSize, color=color.new(color.white, 100), textalign=textAlignment))
+                array.push(state.drawnLabels, label.new(pending.markerTime, pending.price, pending.labelText, xloc=xloc.bar_time, yloc=yloc.price, style=pending.labelStyle, textcolor=pending.textColor, size=pending.textSize, color=color.new(color.white, 100), textalign=textAlignment))
         array.clear(state.pendingRightLabels)
 
 usesGlobexPalette(string sourceName) =>
@@ -1266,7 +1265,7 @@ renderLowVolumeStructures(RenderState state, legilimensOrchestration.Profile pro
                 legilimensProfile.LowVolumeCandidate candidate = array.get(candidates, candidateIndex)
                 int levelRank = LOW_VOLUME_LEVEL_RANK - structureRank
                 float labelPrice = candidate.isLvn ? (candidate.zoneLow + candidate.zoneHigh) * 0.5 : candidate.price
-                string markerLabel = config.delta.showDotLabels ? displayNameOverride != "" ? displayNameOverride : source.labelName : ""
+                string markerLabel = displayNameOverride != "" ? displayNameOverride : source.labelName
                 color markerColor = color.new(color.rgb(15, 15, 15), 75)
                 color borderColor = markerColor
                 string markerGlyph = LEVEL_MARKER_GLYPH
@@ -1363,7 +1362,7 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             int levelRank = 2000 - ranked.strengthRank
             bool extendPriorityZone = ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
             int direction = ranked.buySide ? 1 : -1
-            string markerLabel = config.delta.showDotLabels ? ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName : ""
+            string markerLabel = ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName
             int fibBorderWidth = fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice)
             bool qualified = ranked.fibLocationGrade >= FIB_LOCATION_QUALIFIED
             color zoneColor = fibQualificationColor(appearanceZoneColor(appearance), qualified)

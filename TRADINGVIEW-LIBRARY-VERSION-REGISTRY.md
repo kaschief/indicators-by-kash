@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-25
+Updated: 2026-09-27
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 20 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 27 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -133,6 +133,14 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 18 | Published · loaded · tested · approved | Labels every visible tier, marks developing level labels, budgets all labels, and reuses completed-profile strength, value-area, Delta-peak and LVN analyses across redraws | `5513fb2f2268a265dc3dcc88fe27f0e1152e03099149cd75ec2803294055c3d7` |
 | LegilimensPresentationLibrary | 19 | Published · loaded · tested · approved | Adds optional Delta-style LVN/cliff Fib treatment and Middle or Right edge midpoint-label placement | `dd012e51a7f6270794daff83e731d3d41919d8ed081e67bb81a21ef17c9d9ad8` |
 | LegilimensPresentationLibrary | 20 | Published · loaded · tested · approved | Enables Focus for all recurring profiles and preserves combined NY overlap and heading rules | `53db7122b80ecbba6b94b69182255a510573e0e8533c08ce024f6e7298e3e856` |
+| LegilimensPresentationLibrary | 21 | Published · loaded · visual alignment rejected | Adds independent level and zone-boundary prices for visible Delta/LVN tiers, shared regular/extended rendering, and matching label budgets | `582d5d1dd367642cffa5d943cf5a58e0e78c0065e9ee79e4dce49efb4b6dec37` |
+
+| LegilimensPresentationLibrary | 22 | Published · loaded · readability feedback | Centers range price text directly on its upper/lower zone edge instead of outside the zone | `ff3f5768d8ad8d5fdd001f9216811a48ad86bf221a6ec8315243c3cb206e1449` |
+| LegilimensPresentationLibrary | 23 | Published · loaded · rejected | Adds per-tier Level/Range price colors and stacks the profile name above the level price when both are shown | `38b0eda8b836f4613b9a9150ac61c9abc1aab1460b0491add08d9da20aef6f51` |
+| LegilimensPresentationLibrary | 24 | Published · superseded before feedback | Limits Level/Range prices to Dominant and Strong tiers; deployed before the shared-color inline revision, exact build not identified | `unrecorded` |
+| LegilimensPresentationLibrary | 25 | Published · testing | Limits Level/Range prices to Dominant and Strong tiers with one shared price color independent of profile-name colors, and draws the profile name and level price inline on the level line | `8769003d5fec90e6ed52d0308a761118c6eea8f4cc496fe069d0260a4053a24e` |
+| LegilimensPresentationLibrary | 26 | Published · user version correction | Preceding release occupied /26; user corrected the new cleanup release to /27. Exact published source fingerprint has not been independently verified | `unrecorded` |
+| LegilimensPresentationLibrary | 27 | Published · loaded · tested · approved | Removes range prices and the dots display selector; visible Delta/LVN tiers and cliffs always show markers with names, with one optional Show Price suffix in the original color | `0e4ed22c32b115c0089b7c63aebe1bef84a18a06324e586df7af50a946a9df52` |
 
 ## Publication-instruction log
 
@@ -255,9 +263,19 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-25-02 | 2026-09-25 | LegilimensPresentationLibrary | 19 | User confirms `/19` remains unpublished. Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/19`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/19`. On NQ 5m and 180R/360R, compare Midpoint Label Position Middle/Right edge, including past/future Hours endpoints, current/prior/developing profiles, and Replay. Verify the same label text and 3 px blue line, right-edge alignment with tier labels, Midpoint Line Off hiding both, and unchanged LVN/cliff Fib behavior from the prior pending handoff. Publication and TradingView validation remain pending | `SUPERSEDED_BEFORE_PUBLICATION` |
 | PUB-2026-09-25-03 | 2026-09-25 | LegilimensPresentationLibrary | 19 | Final revised `/19` release. Publish the revised `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/19`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/19`. On NQ 5m and 180R/360R, test Midpoint Label Position Middle/Right edge with past/future Hours endpoints, current/prior/developing profiles, and Replay. Check Midpoint Line Off hides both line and label. Compare Match LVN/Cliff Fib Styling to Delta Off/On across Fib bands, both palettes, Weak+ tiers, and Extend Unmitigated. Off restores 1 px LVN borders and neutral cliffs; On shares Delta border widths and directional cliff markers. Publication, host loading, testing, and approval are user-confirmed by the commit instruction | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-25-04 | 2026-09-25 | LegilimensPresentationLibrary | 20 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/20`, then compile `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/20`. On NQ 5m and 60R/180R, test every recurring profile in Price, Date, and Price + Date; Focus Profiles Only On/Off; combined NY + IVB with Extended On/Off; and Replay across session completion. Check correct profile guide colors, no duplicated matching NY ranges, preserved NY headings, shared count and drawing limits, and normal visibility with Focus Off. FOMC remains calendar-bound. Fixed and standalone Rolling stay excluded; calendar and rolling Weekly/Monthly remain supported. Publication, host loading, testing, and approval are user-confirmed by the working feedback and commit instruction | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-27-01 | 2026-09-27 | LegilimensPresentationLibrary | 21 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/21`, then compile `indicators/21-legilimens/code/legilimens.pine` importing Profile `/4`, Orchestration `/2`, and Presentation `/21`. On NQ 5m and 60R/180R, test Prices: Level and Range separately and together with current/prior/developing NY Early, Extended NY Early, IVB, and Globex profiles; existing Delta/LVN filters and sides; Dots Off/Show Dots/Show Dots + Labels; Extend Unmitigated On/Off and Replay across a touch. Verify exact level prices, zone upper/lower prices at their own endpoints, no range on cliffs, cleanup when hidden, close-zone label overlap, and high-history label capacity. Both price inputs default Off. The 2026-09-27 user screenshot confirms publication and host loading; range text appears above/below its respective zone edges and is rejected for alignment. Replay and full validation remain unconfirmed | `PUBLISHED_VISUAL_ALIGNMENT_REJECTED` |
+| PUB-2026-09-27-02 | 2026-09-27 | LegilimensPresentationLibrary | 22 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/22`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/22`. Recheck the reported Globex zone with Range On: upper and lower text should align vertically with their respective horizontal edges. Compare Level On/Off, Delta/LVN zones, narrow zones, and Extend Unmitigated on NQ 5m and 60R/180R, including Replay. Numeric prices, endpoints, colors, size, and budgets remain unchanged. The subsequent user screenshot confirms publication and host loading; inherited light-green text is reported as difficult to read. Full visual approval and Replay remain unconfirmed | `PUBLISHED_READABILITY_FEEDBACK` |
+| PUB-2026-09-27-03 | 2026-09-27 | LegilimensPresentationLibrary | 23 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/23`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/23`. With Prices Level and Range On, change each of the Dominant/Strong/Moderate/Minor/Weak price colors and confirm only that tier's level and range text changes while names and markers keep their colors. With Dots + Labels and Level On, the profile name sits above the level anchor and the price below; with only one of them it stays centered. Check Delta and LVN tiers, cliffs, Extend Unmitigated, Replay, the color table rows, and label capacity with all prices enabled. The 2026-09-27 user screenshots confirm publication and host loading; rejected because prices must appear only on Dominant and Strong, the level price moved below its level, and marker sizes were reported as changed | `PUBLISHED_REJECTED` |
+| PUB-2026-09-27-04 | 2026-09-27 | LegilimensPresentationLibrary | 24 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/24`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/24`. With Prices Level and Range On, confirm prices appear only on Dominant and Strong Delta/LVN tiers, all in the single selected price color, and never on Moderate, Minor or Weak tiers. Changing the price color must not change profile names or markers. The profile name and level price sit on one line at the level (`Name · price`), each in its own color; the upper and lower range prices sit on their zone edges. Compare marker sizes against `/22` on the same chart. Check Extend Unmitigated, Replay, the color table and label capacity. User confirms `/24` was deployed before the shared-color inline revision; it is superseded by `/25` | `PUBLISHED_SUPERSEDED` |
+| PUB-2026-09-27-05 | 2026-09-27 | LegilimensPresentationLibrary | 25 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/25`, then compile `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, and Presentation `/25`. With Prices Level and Range On, confirm prices appear only on Dominant and Strong Delta/LVN tiers, all in the single selected price color, and never on Moderate, Minor or Weak tiers. Changing the price color must not change profile names or markers. The profile name and level price sit on one line at the level (`Name · price`), each in its own color; the upper and lower range prices sit on their zone edges. Compare marker sizes against `/22` on the same chart. Check the inline name/price alignment, including names with emoji. Check Extend Unmitigated, Replay, the color table and label capacity User confirms publication; testing in progress | `PUBLISHED_TESTING` |
+| PUB-2026-09-27-06 | 2026-09-27 | LegilimensPresentationLibrary | 26 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/26`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/26`. Restores the exact `/22` source before price-color customization. Verify Level/Range On and Off, inherited text colors, combined name and level price, all selected visible tiers, zone-edge alignment, Dots Off, Extend Unmitigated, and Replay on NQ 5m and 60R/180R. User subsequently corrected the next cleanup release to /27, establishing /26 as already occupied by the preceding release; exact published fingerprint is unverified. | `PUBLISHED_USER_VERSION_CORRECTION` |
+| PUB-2026-09-27-07 | 2026-09-27 | LegilimensPresentationLibrary | 26 | Publish the updated `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/26`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/26`. This supersedes the earlier unpublished `/26` restoration instructions. Verify Show Price Off keeps dots and names, On appends only the price, and no range-price labels or dots dropdown remain. Check visible Delta/LVN tiers and cliffs, current/developing/prior profiles, Extend Unmitigated, filtered sides, and Replay on NQ 5m and 60R/180R. Publication and live verification remain pending. | `SUPERSEDED_VERSION_CORRECTION` |
+| PUB-2026-09-27-08 | 2026-09-27 | LegilimensPresentationLibrary | 27 | User corrected the cleanup release number to `/27`. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/27`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/27`. Source and reviewed behavior are unchanged: Show Price only appends the number; markers and names always remain on visible tiers; range prices and the dots dropdown are removed. Test Show Price Off/On, tier filters, developing levels, Extend Unmitigated and Replay on NQ 5m and 60R/180R. Publication, host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
+
+- Legilimens current handoff (2026-09-27): Published Presentation `/27` implements the user-approved cleanup after the color rollback: one default-off Show Price checkbox at the top of Quick Filter Settings; visible Delta/LVN tiers and cliffs always retain markers and profile-name labels. Show Price only appends the mintick-formatted number to the same label. Range-price controls/rendering, dots display constants/input/derived flags, obsolete library fields and conditional label-budget branches are removed completely. Existing tier filters, marker glyphs/sizes, developing suffixes, colors and zone geometry remain. Source SHA-256 `0e4ed22c32b115c0089b7c63aebe1bef84a18a06324e586df7af50a946a9df52`. Host imports Profile `/4`, Orchestration `/2`, Presentation `/27`; user corrected the release number to `/27`, so the preceding `/26` is recorded as published with its exact fingerprint unverified. All 61 targeted tests, Pine identifier/title checks, registry validation and scoped whitespace checks pass. Independent principal review found no actionable issues and independently reran the 47 affected tests plus registry/whitespace checks. Publication, host loading, testing and approval are user-confirmed by the commit instruction. Live TradingView behavior was not independently observed by Codex. The final host title is `legilimens •`; no library release is pending and no further publication is required. The four-file local commit is authorized; no push is authorized.
 
 - Published chain: Core `/12`, Gaps `/13`, Interactions `/29`, Profile Orchestration `/10`.
 - Revelio pending: none.
@@ -294,6 +312,40 @@ Entries before this registry was created are reconstructed from the task history
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/27`
+
+```text
+Simplifies level labels to one Show Price switch. Visible Delta/LVN tiers and cliffs always show their marker and profile name; enabling Show Price appends the number in the existing color. Removes range prices and the dots display dropdown while preserving tier filters, marker styling and developing labels.
+```
+
+Presentation `/27` publication, host loading, testing and approval are user-confirmed by the commit instruction. Imports are Profile `/4`, Orchestration `/2`, Presentation `/27`; no further library publication is required. Local checks and independent principal review passed; live behavior was not independently observed by Codex.
+
+### LegilimensPresentationLibrary `/25`
+
+```text
+Level and Range prices now appear only on Dominant and Strong tiers, in one shared price color that you can set separately from profile-name colors. Profile names and markers keep their existing colors. The profile name and level price share one line at the level, with the upper and lower prices on the zone edges.
+```
+
+Presentation `/25` publication is user-confirmed; testing is in progress.
+
+### LegilimensPresentationLibrary `/22`
+
+```text
+Aligns each range price directly with its zone's upper or lower edge instead of placing the text above or below it. Price values, level labels, styling, and zone endpoints are unchanged.
+```
+
+
+Presentation `/22` publication and host loading are confirmed by the subsequent 2026-09-27 screenshot. The user reports inherited light-green label text is hard to read; the later color customization was rejected and its removal is included in the published `/27` cleanup. Full visual approval remains pending.
+
+### LegilimensPresentationLibrary `/21`
+
+```text
+Adds optional Level and Range prices in one compact row. Level shows the exact price for already-visible Delta/LVN tiers and cliff levels. Range shows each visible zone's upper and lower prices. Both default Off and follow the existing tier filters without additional selections. Prices follow regular and extended zone endpoints and remain available with Dots Off. Drawing budgets include the extra labels.
+```
+
+
+Presentation `/21` publication and host loading are confirmed by the 2026-09-27 screenshot. Range-label alignment was rejected; `/22` is the pending correction.
 
 ### LegilimensPresentationLibrary `/20`
 
