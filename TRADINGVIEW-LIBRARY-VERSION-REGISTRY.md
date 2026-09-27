@@ -7,7 +7,7 @@ This is the repository's single source of truth for TradingView library versions
 ## Required workflow
 
 1. Read this file before changing a library, changing an import, or telling the user to publish.
-2. When a published library source changes, reserve the highest recorded version plus one here before changing the host import. Published, pending, and discarded versions are never reused.
+2. When a published library source changes, reserve the highest recorded version plus one here before changing the host import. Published, pending, and discarded versions are never reused, except that TradingView numbers publications sequentially: when the user confirms an unpublished reservation was never taken on TradingView, mark it `Reservation released` and reserve that number again.
 3. Record every publication instruction as a new row before giving it to the user, including errors or superseded instructions.
 4. Record the pending source SHA-256 in Publication history and run `node scripts/check-library-version-registry.mjs`.
 5. Give the user the exact private library name/version, source path, host to compile, test gate, and copy-ready version notes.
@@ -25,9 +25,9 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 13 | — |
 | RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 29 | — |
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
-| LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
-| LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 2 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 27 | — |
+| LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 5 | — |
+| LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 29 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -107,9 +107,12 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensProfileLibrary | 2 | Published · tested · approved | Restores void return contracts for mutation helpers used inside host control-flow branches | `d65e604bcc817f621311729db8f733437e7d86199f1cc16c5287eaa4630241c3` |
 | LegilimensProfileLibrary | 3 | Published · tested · approved | Extracts rolling sample storage, compaction, pruning, window selection, and profile calculation while preserving host lifecycle and presentation ownership | `5e3cd93d7621d8e793d546f6d13fbd0863a2e90c43bb2dfec973dca403bff227` |
 | LegilimensProfileLibrary | 4 | Published · tested · approved | Extracts pure row-strength, LVN/cliff, outlier peak, clustering, ranking, and selected-row-mask analytics | `d0fb6868335b8322a436443ee5ec76bba66688b4b5d240be0099e868702f1239` |
+| LegilimensProfileLibrary | 5 | Published · loaded · tested · approved | Bounded formation index, per-row strongest buy/sell print times, and formation time on Delta peaks | `5af50d953ec654b96709e539a69ab9f6bed363e1212a93f5edf6cb7224ba3f69` |
 | LegilimensProfileOrchestrationLibrary | 1 | Published · host compile missing function reference | Extracts anchor state, boundary calculations, profile retention, and selection lifecycle into compact orchestration types | `6580a8976ad93eb9c5d5531a8b92522de4277b9c6ef99092cfb8e0e0ee76b37b` |
 | LegilimensProfileOrchestrationLibrary | 2 | Published · host compiled · runtime validation pending | Exports the NY cutoff boundary used by the reorganized host | `560b8ae0a37c38f15eb033ccef2eb7a6926cb55c52b5d85c47493158ad32b68e` |
-| LegilimensProfileOrchestrationLibrary | 3 | Discarded before publication | Unpublished maturity extraction withdrawn at user request on 2026-09-09; maturity feature subsequently removed at user request; version remains retired | `d967382236ede8896bc6d5482a1450a058e4f5a8bf4cc453721cd5732f9f288b` |
+| LegilimensProfileOrchestrationLibrary | 3 | Reservation released · never published | Unpublished maturity extraction withdrawn at user request on 2026-09-09; maturity feature subsequently removed at user request; released on 2026-09-27 after the user confirmed TradingView is still at `/2` | `d967382236ede8896bc6d5482a1450a058e4f5a8bf4cc453721cd5732f9f288b` |
+| LegilimensProfileOrchestrationLibrary | 3 | Published · superseded | Optional Delta formation-time tracking for every recurring profile anchor, isolated from developing samples | `744d32fa3805e8c959afea1944c1594e8b7e5ae8708cbc8947a1e29cefc804b7` |
+| LegilimensProfileOrchestrationLibrary | 4 | Published · loaded · tested · approved | Render decisions return a primary-plus flag instead of a fixed display name, so ⁺ appends to the active profile title | `2d53eb5d10e8fee0125f7c8a8c2f9141159d03cc177d4f67758322b593871678` |
 | LegilimensPresentationLibrary | 1 | Published · host compiled · user confirmed working | Extracts presentation, drawing, object-budget, merging, mitigation, and role-reversal ownership from the Legilimens host without intended behavior changes | `28219d081d6ec34fd82de9c481f09553db5ec50e0c69d00d2e558dd76727de11` |
 | LegilimensPresentationLibrary | 2 | Published · host loaded · tested · approved | Applies profile-Fib qualification to LVN zone borders and markers while preserving the neutral LVN fill and cliff styling | `525201bbce26d5d94a38b80dcd65bac6dd764b8f4627142f6a4e40080cc26b19` |
 | LegilimensPresentationLibrary | 3 | Published · deployed | Adds optional one-pixel hollow context boxes for each profile's strongest positive and negative Delta rows when no currently visible Delta tier zone includes the row | `5d6ba4ecd9a154b9c78c5d2e24e90cec3f1d67a6cf02cece738a295f5c9a1134` |
@@ -141,6 +144,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 25 | Published · testing | Limits Level/Range prices to Dominant and Strong tiers with one shared price color independent of profile-name colors, and draws the profile name and level price inline on the level line | `8769003d5fec90e6ed52d0308a761118c6eea8f4cc496fe069d0260a4053a24e` |
 | LegilimensPresentationLibrary | 26 | Published · user version correction | Preceding release occupied /26; user corrected the new cleanup release to /27. Exact published source fingerprint has not been independently verified | `unrecorded` |
 | LegilimensPresentationLibrary | 27 | Published · loaded · tested · approved | Removes range prices and the dots display selector; visible Delta/LVN tiers and cliffs always show markers with names, with one optional Show Price suffix in the original color | `0e4ed22c32b115c0089b7c63aebe1bef84a18a06324e586df7af50a946a9df52` |
+| LegilimensPresentationLibrary | 28 | Published · superseded | Optional HH:mm New York formation-time suffix on Delta tier labels; NY Early 05:00 source palette, developing visibility, and 09:00 level anchor | `1a41fa506713798ce6a95005cb6d263dc91a4f38eeace33e887cec1e8b7a3141` |
+| LegilimensPresentationLibrary | 29 | Published · loaded · tested · approved | Marks Delta formation times with `@HH:mm`, adds optional LVN/cliff formation times, appends ⁺ to the active NY Early title instead of replacing it, and removes the NY Early 05:00 source now replaced by the host Start option | `5e06dabe15448f393d114bdb7be05c3252cb88840892059ae60bc99d7c3656e5` |
 
 ## Publication-instruction log
 
@@ -271,9 +276,20 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-27-06 | 2026-09-27 | LegilimensPresentationLibrary | 26 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/26`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/26`. Restores the exact `/22` source before price-color customization. Verify Level/Range On and Off, inherited text colors, combined name and level price, all selected visible tiers, zone-edge alignment, Dots Off, Extend Unmitigated, and Replay on NQ 5m and 60R/180R. User subsequently corrected the next cleanup release to /27, establishing /26 as already occupied by the preceding release; exact published fingerprint is unverified. | `PUBLISHED_USER_VERSION_CORRECTION` |
 | PUB-2026-09-27-07 | 2026-09-27 | LegilimensPresentationLibrary | 26 | Publish the updated `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/26`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/26`. This supersedes the earlier unpublished `/26` restoration instructions. Verify Show Price Off keeps dots and names, On appends only the price, and no range-price labels or dots dropdown remain. Check visible Delta/LVN tiers and cliffs, current/developing/prior profiles, Extend Unmitigated, filtered sides, and Replay on NQ 5m and 60R/180R. Publication and live verification remain pending. | `SUPERSEDED_VERSION_CORRECTION` |
 | PUB-2026-09-27-08 | 2026-09-27 | LegilimensPresentationLibrary | 27 | User corrected the cleanup release number to `/27`. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/27`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/4`, Orchestration `/2`, Presentation `/27`. Source and reviewed behavior are unchanged: Show Price only appends the number; markers and names always remain on visible tiers; range prices and the dots dropdown are removed. Test Show Price Off/On, tier filters, developing levels, Extend Unmitigated and Replay on NQ 5m and 60R/180R. Publication, host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-27-09 | 2026-09-27 | LegilimensProfileLibrary | 5 | Publish `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` privately as `/5` first; Orchestration `/3` and Presentation `/28` import it.  Host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-27-10 | 2026-09-27 | LegilimensProfileOrchestrationLibrary | 3 | User confirmed TradingView is at `/2`, so the released `/3` reservation is reused. Publish `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` privately as `/3` after Profile `/5`.  Superseded by the next release in the same handoff. | `PUBLISHED_SUPERSEDED` |
+| PUB-2026-09-27-11 | 2026-09-27 | LegilimensPresentationLibrary | 28 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/28` after Profile `/5` and Orchestration `/3`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/5`, Orchestration `/3`, Presentation `/28`. Test NY Early 05:00 against NY Early, and Delta Formation Time Off/On on NY Early, Extended NY Early, Fixed and Rolling, on NQ 1m/5m and a Range chart.  Superseded by the next release in the same handoff. | `PUBLISHED_SUPERSEDED` |
+| PUB-2026-09-27-12 | 2026-09-27 | LegilimensPresentationLibrary | 29 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/29` after Orchestration `/4`, then load `indicators/21-legilimens/code/legilimens.pine` importing Profile `/5`, Orchestration `/4`, Presentation `/29`. Test NY Early Start 06:00/05:00 in NY Early and ★ NY + IVB: titles `NY Early` / `NY Early 05:00`, ⁺ appended when Extended is folded in, Extended following the start, and labels `NY Early @07:42`; LVN Formation Time Off/On on LVNs and cliffs.  TradingView rejected the publish with CE10271: `priceFormationTime` and `formationTimeSuffix` were defined below their first caller; `/29` was not taken. | `SUPERSEDED_COMPILE_ERROR` |
+| PUB-2026-09-27-13 | 2026-09-27 | LegilimensProfileOrchestrationLibrary | 4 | Publish `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` privately as `/4` before Presentation `/29`.  Publication confirmed by the Presentation `/29` compile resolving the `/4` import.  Host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-27-14 | 2026-09-27 | LegilimensPresentationLibrary | 29 | Corrected `/29`: formation helpers now precede their callers, and a definition-order test guards every Legilimens Pine file. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/29` after Orchestration `/4`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/5`, Orchestration `/4`, Presentation `/29`. Test the NY Early Start titles, ⁺, `Extended NY` labels, and Delta/LVN Formation Time Off/On.  TradingView rejected the publish with CE10173: `renderStandaloneProfile` still passed `""` to the renamed bool `ProfileRenderItem.primaryPlus`; `/29` was not taken. | `SUPERSEDED_COMPILE_ERROR` |
+| PUB-2026-09-27-15 | 2026-09-27 | LegilimensPresentationLibrary | 29 | Corrected `/29`: `renderStandaloneProfile` passes `false` for `primaryPlus`; a static signature test now checks arity, argument names and literal types for every Legilimens call. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/29`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/5`, Orchestration `/4`, Presentation `/29`.  User confirmed publication.  Host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
+
+- Legilimens approved handoff (2026-09-27): Profile `/5`, Orchestration `/4` and Presentation `/29` are published, loaded, tested and approved by the user's commit instruction; imports match and no release is pending. NY Early has a Start option (06:00 default, 05:00) driving NY Early, Extended NY Early and ★ NY + IVB; Asia-Premarket keeps its fixed 06:00 end. Frame titles read `NY Early` or `NY Early 05:00`, with the combined ⁺ marker appended to either. Level labels read `NY Early` and `Extended NY`. Optional Delta and LVN/cliff formation times share one settings row and read `@HH:mm`. Definition-order and call-signature tests now guard the Legilimens Pine sources. Final host title is `legilimens •`. TradingView behavior is user-confirmed, not independently observed.
+
+- Legilimens handoff (2026-09-27): the user confirms Profile `/5`, Orchestration `/3` and Presentation `/28` are published from the recorded fingerprints; development imports match and no release is pending. The user confirmed TradingView Orchestration is at `/2`, so the never-published `/3` reservation is released and reused. The host adds NY Early 05:00 (05:00–09:00 New York) as its own profile with NY Early-pattern inputs, a developing-content toggle, and prior/Focus support. A default-off Delta Formation Time input appends the HH:mm New York time of the strongest same-direction print at each visible Delta tier's level price, across all recurring profiles, Fixed and Rolling. Host title is `legilimens • development`. Local adapter tests pass; TradingView compile and visual checks are pending. No commit or push performed.
 
 - Legilimens current handoff (2026-09-27): Published Presentation `/27` implements the user-approved cleanup after the color rollback: one default-off Show Price checkbox at the top of Quick Filter Settings; visible Delta/LVN tiers and cliffs always retain markers and profile-name labels. Show Price only appends the mintick-formatted number to the same label. Range-price controls/rendering, dots display constants/input/derived flags, obsolete library fields and conditional label-budget branches are removed completely. Existing tier filters, marker glyphs/sizes, developing suffixes, colors and zone geometry remain. Source SHA-256 `0e4ed22c32b115c0089b7c63aebe1bef84a18a06324e586df7af50a946a9df52`. Host imports Profile `/4`, Orchestration `/2`, Presentation `/27`; user corrected the release number to `/27`, so the preceding `/26` is recorded as published with its exact fingerprint unverified. All 61 targeted tests, Pine identifier/title checks, registry validation and scoped whitespace checks pass. Independent principal review found no actionable issues and independently reran the 47 affected tests plus registry/whitespace checks. Publication, host loading, testing and approval are user-confirmed by the commit instruction. Live TradingView behavior was not independently observed by Codex. The final host title is `legilimens •`; no library release is pending and no further publication is required. The four-file local commit is authorized; no push is authorized.
 
@@ -312,6 +328,42 @@ Entries before this registry was created are reconstructed from the task history
 None.
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/29`
+
+```text
+Delta formation times now read as `@HH:mm` (for example `NY Early @07:42`) so they cannot be mistaken for names or prices. The ⁺ marker now appends to the active NY Early title (for example `NY Early 05:00 ⁺`). Adds an optional LVN Formation Time: LVN and cliff labels show when the largest print at that price occurred, in the direction of its net delta. Removes the separate NY Early 05:00 profile source; NY Early now has a Start option instead.
+```
+
+Presentation `/29` publication, host loading, testing and approval are user-confirmed by the commit instruction (2026-09-27).
+
+### LegilimensProfileOrchestrationLibrary `/4`
+
+```text
+Render decisions now return whether the combined NY Early ⁺ marker applies instead of a fixed display name, so the marker can follow the active profile title.
+```
+
+Orchestration `/4` publication is confirmed by the Presentation `/29` compile resolving its import (2026-09-27).
+
+### LegilimensProfileLibrary `/5`
+
+```text
+Adds optional Delta formation times. Each profile row can carry the New York time of its strongest buying and selling print, and every Delta peak exposes the time for its level price. A bounded price index keeps the times through sample compaction.
+```
+
+### LegilimensProfileOrchestrationLibrary `/3`
+
+```text
+Adds optional formation-time tracking to every recurring profile anchor. Completed and developing profiles carry the time behind each Delta level; developing updates never alter confirmed history.
+```
+
+### LegilimensPresentationLibrary `/28`
+
+```text
+Adds an optional Delta Formation Time suffix (HH:mm, New York) to visible Delta tier labels. Adds the NY Early 05:00 profile with NY Early colors, developing-profile visibility and the 09:00 level anchor.
+```
+
+Profile `/5`, Orchestration `/3` and Presentation `/28` publication is user-confirmed (2026-09-27); host loading and testing are pending.
 
 ### LegilimensPresentationLibrary `/27`
 
@@ -497,7 +549,7 @@ Adds an optional host-supplied frame-title prefix. Legilimens uses it to show �
 
 ## Invariants
 
-- Version numbers are forward-only across published, pending, and discarded rows. The next version is the highest recorded version plus one. A discarded version is never reused; an active unpublished pending version may still be corrected in place.
+- Version numbers are forward-only across published, pending, and discarded rows. The next version is the highest recorded version plus one. A discarded version is never reused unless the user confirms TradingView never took it (`Reservation released`); an active unpublished pending version may still be corrected in place.
 - Runtime or visual feedback confirms publication and testing of the referenced version. If the referenced version is unclear, ask before advancing it.
 - The development host imports `Pending` when present; otherwise it imports `Published`.
 - Every pending version has exactly one pending history row, one `CURRENT_PENDING` instruction, one SHA-256 fingerprint, and copy-ready notes.

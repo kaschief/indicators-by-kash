@@ -32,7 +32,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'NY_EARLY_END_MINUTE', 'DISPLAY_NY_EARLY_PLUS', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'NY_EARLY_END_MINUTE', 'PRIMARY_PLUS_MARKER', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -64,8 +64,9 @@ function compile(name, returnsValue = true, inputSource = source) {
     else if (line.startsWith('while ')) line = `while (${line.slice(6)}) {`;
     else if (line.startsWith('for ')) {
       const range = line.match(/^for (\w+) = (.+) to (.+)$/);
+      const entries = line.match(/^for \[(\w+), (\w+)\] in (.+)$/);
       const each = line.match(/^for (\w+) in (.+)$/);
-      line = range ? `for (let ${range[1]} = ${range[2]}; ${range[1]} <= ${range[3]}; ${range[1]}++) {` : `for (const ${each[1]} of ${each[2]}) {`;
+      line = range ? `for (let ${range[1]} = ${range[2]}; ${range[1]} <= ${range[3]}; ${range[1]}++) {` : entries ? `for (const [${entries[1]}, ${entries[2]}] of ${entries[3]}) {` : `for (const ${each[1]} of ${each[2]}) {`;
     } else {
       block = false;
       line = line.replace(/^(?:(?:array|map)<[^>]+>|[\w.]+) (\w+) = /, 'let $1 = ').replace(/^\[([^\]]+)\] = /, 'let [$1] = ');
@@ -79,7 +80,7 @@ function compile(name, returnsValue = true, inputSource = source) {
   while (blocks.length) { output.push('}'); blocks.pop(); }
   vm.runInContext(`function ${name}(${parameters}) {\n${output.join('\n')}\n}`, context, { filename: `${name}.pine-adapter.js` });
 }
-for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaMarkerGlyph', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaMarkerGlyph', 'formationTimeSuffix', 'priceFormationTime', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
 
 for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_LOCATION_\w+|LEVEL_MARKER_GLYPH|LOW_VOLUME_LEVEL_RANK|LOW_VOLUME_LINE_WIDTH) = (.+)$/gm)) {
   context[name] = vm.runInContext(value, context);
@@ -121,7 +122,7 @@ test('midpoint labels preserve bar-centered placement or align to the tier right
 const config = (overrides = {}) => ({ limits: { polylines: 100 }, delta: { visibleRows: context.OPTION_ALL, rowFilter: context.OPTION_ALL, showHistogram: true, histogramWidthPercent: 20, ...overrides } });
 function profile(index, count = 12, low = 100) {
   const deltas = Array.from({ length: count }, (_, row) => (row % 2 ? -1 : 1) * (row % 4 < 2 ? 2 : 10));
-  return { startTime: index * 100, endTime: index * 100 + 20, data: { rowCount: count, rowVolumes: Array(count).fill(100), rowDeltas: deltas, strengths: deltas.map(value => Math.abs(value) >= 10 ? 2 : 1), priceLow: low, priceHigh: low + count, maxAbsRowDelta: 10, maxRowVolume: 100 } };
+  return { startTime: index * 100, endTime: index * 100 + 20, data: { rowCount: count, rowVolumes: Array(count).fill(100), rowDeltas: deltas, strengths: deltas.map(value => Math.abs(value) >= 10 ? 2 : 1), priceLow: low, priceHigh: low + count, maxAbsRowDelta: 10, maxRowVolume: 100, rowBuyTimes: Array(count).fill(null), rowSellTimes: Array(count).fill(null) } };
 }
 const spec = (placement = 'PROFILE_POSITION_RIGHT_LEFT', key = 'Overnight', alternateStyles = false) => ({ key, alternateStyles, deltaWidthBars: 12, profilePosition: context[placement] });
 function prepare(profiles, settings = config(), style = spec(), selected = null) {
@@ -447,7 +448,7 @@ for (const name of ['focusSourceAllowed', 'focusDateAllowsProfile', 'focusPriceD
 const orchestrationSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
 context.nyMinuteBoundaryValue = (value, minute) => Math.floor(value / 86400000) * 86400000 + minute * 60000;
 context.tradingDayKeyValue = value => Math.floor(value / 86400000);
-context.RenderDecision = { new: (shouldRender, displayNameOverride, pairedHeadings) => ({ shouldRender, displayNameOverride, pairedHeadings }) };
+context.RenderDecision = { new: (shouldRender, primaryPlus, pairedHeadings) => ({ shouldRender, primaryPlus, pairedHeadings }) };
 for (const name of ['profileOccurrenceKey', 'matchingProfile', 'hasPostBoundarySamples', 'rangesMatch', 'renderDecision']) compile(name, true, orchestrationSource);
 context.legilimensOrchestration = {
   renderDecision: context.renderDecision,
@@ -522,22 +523,22 @@ test('NY Focus shares overlap suppression and heading decisions before applying 
   let result = choose([primary, extended], 1);
   assert.equal(result.length, 1);
   assert.equal(result[0].archived.sourceName, context.SOURCE_NY_EARLY);
-  assert.equal(result[0].displayNameOverride, context.DISPLAY_NY_EARLY_PLUS);
+  assert.equal(result[0].primaryPlus, true);
   assert.equal(result[0].pairedHeadings, false);
   result = choose([primary, archivedNy(context.SOURCE_EXTENDED_NY_EARLY, 9, 120)]);
   assert.equal(result.length, 1, 'no samples after primary close');
   const distinct = archivedNy(context.SOURCE_EXTENDED_NY_EARLY, 9.5, 120);
   result = choose([primary, distinct]);
   assert.equal(result.length, 2);
-  assert.ok(result.every(item => item.pairedHeadings && item.displayNameOverride === ''));
+  assert.ok(result.every(item => item.pairedHeadings && !item.primaryPlus));
   const ivb = archivedNy(context.SOURCE_IVB, 10.5, 130);
   result = choose([primary, distinct, ivb], 2);
   assert.equal(result.length, 2, 'combined sources share one cap');
   assert.equal(choose([distinct]).length, 0, 'missing primary cannot render an orphan extended profile');
   result = choose([primary, ivb], 2, false);
   assert.equal(result.length, 2);
-  assert.ok(result.every(item => !item.pairedHeadings && item.displayNameOverride === ''));
-  assert.match(source, /ProfileRenderItem.new\(geometry, candidate.displayNameOverride, candidate.pairedHeadings, true, false, true\)/);
+  assert.ok(result.every(item => !item.pairedHeadings && !item.primaryPlus));
+  assert.match(source, /ProfileRenderItem.new\(geometry, candidate.primaryPlus, candidate.pairedHeadings, true, false, true\)/);
 });
 
 test('session lifecycles preserve one occurrence across sample gaps and separate subsequent dates', () => {
@@ -739,7 +740,7 @@ test('Focus additions preserve base profiles and stop at core-object or polyline
   const style = spec(undefined, context.SOURCE_GLOBEX);
   const baseline = prepare([profile(100)], settings, style);
   const first = baseline[0];
-  const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index, displayNameOverride: "", pairedHeadings: false }));
+  const candidates = [1, 2, 3].map(index => ({ archived: archivedProfile(index, [101]), distance: index, primaryPlus: false, pairedHeadings: false }));
   context.appendFocusedItems({ drawnPolylines: [], cachedChartTimes: [], completedAnalyses: [] }, baseline, candidates, [style], 100, true, settings);
   assert.equal(baseline.length, 2);
   assert.equal(baseline[0], first);
@@ -1069,4 +1070,105 @@ test('cache admission, occurrence keys, backward Replay and chart geometry preve
   context.retainCompletedAnalyses(state, [item]);
   context.retainCompletedAnalyses(state, []);
   assert.equal(state.completedAnalyses.length, 0, 'profiles leaving the rendered set must release their cache');
+});
+
+function useFormationIndex() {
+  const profileSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
+  Object.assign(context.map, { copy: values => new Map(values), size: values => values.size, clear: values => values.clear() });
+  for (const [, name, value] of profileSource.matchAll(/^const int (FORMATION_\w+) = (.+)$/gm)) context[name] = Number(value);
+  for (const typeName of ['PrintPeak', 'FormationIndex']) {
+    const fields = profileSource.match(new RegExp(`^export type ${typeName}\\n((?:    [^\\n]+\\n)+)`, 'm'))[1].trim().split('\n').map(line => line.trim().split(' ').at(-1));
+    context[typeName] = { new: (...values) => Object.fromEntries(fields.map((key, index) => [key, values[index] ?? null])) };
+  }
+  for (const name of ['newFormationIndex', 'copyFormationIndex', 'formationBucketKey', 'mergePrintPeaks', 'recordFormationSample']) compile(name, true, profileSource);
+  for (const name of ['clearFormationIndex', 'coarsenFormationIndex', 'recordFormation', 'applyFormationTimes']) compile(name, false, profileSource);
+}
+
+function formationProfile() {
+  return { isValid: true, priceLow: 99.875, priceHigh: 100.375, rowCount: 2, rowBuyTimes: [null, null], rowSellTimes: [null, null] };
+}
+
+test('formation times keep the strongest same-direction print per row', () => {
+  useFormationIndex();
+  const index = context.newFormationIndex(0.25);
+  context.recordFormation(index, 1000, 100.25, 100, 10);
+  context.recordFormation(index, 2000, 100, 100, 5);
+  context.recordFormation(index, 3000, 100, 100, 20);
+  context.recordFormation(index, 4000, 100.25, 100.25, -8);
+  context.recordFormation(index, 4500, 100, 100, 0);
+  const data = formationProfile();
+  context.applyFormationTimes(data, index);
+  assert.deepEqual(data.rowBuyTimes, [3000, 1000]);
+  assert.deepEqual(data.rowSellTimes, [null, 4000]);
+
+  const developing = context.copyFormationIndex(index);
+  context.recordFormation(developing, 5000, 100, 100, 100);
+  const confirmed = formationProfile();
+  context.applyFormationTimes(confirmed, index);
+  assert.deepEqual(confirmed.rowBuyTimes, [3000, 1000], 'temporary samples must not leak into the retained index');
+  const withCurrent = formationProfile();
+  context.applyFormationTimes(withCurrent, developing);
+  assert.deepEqual(withCurrent.rowBuyTimes, [5000, 1000]);
+
+  context.clearFormationIndex(index);
+  assert.equal(index.buckets.size, 0);
+  assert.equal(index.bucketSize, 0.25);
+});
+
+test('formation coarsening bounds wide prints without losing the strongest print', () => {
+  useFormationIndex();
+  const index = context.newFormationIndex(0.25);
+  context.recordFormation(index, 3000, 100, 100, 20);
+  context.recordFormation(index, 4000, 100.25, 100.25, -8);
+  context.recordFormation(index, 6000, 150, 100, 1);
+  assert.equal(index.bucketSize, 1);
+  assert.ok(index.buckets.size <= context.FORMATION_MAX_BUCKETS);
+  const data = formationProfile();
+  context.applyFormationTimes(data, index);
+  assert.deepEqual(data.rowBuyTimes, [3000, 3000]);
+  assert.deepEqual(data.rowSellTimes, [4000, 4000]);
+});
+
+test('formation time suffix is optional and New York formatted', () => {
+  const originalStr = context.str;
+  context.str = { ...originalStr, format_time: (time, format, zone) => `${format}@${zone}:${time}` };
+  try {
+    assert.equal(context.formationTimeSuffix(3000, false), '');
+    assert.equal(context.formationTimeSuffix(null, true), '');
+    assert.equal(context.formationTimeSuffix(3000, true), ' @HH:mm@America/New_York:3000');
+  } finally {
+    context.str = originalStr;
+  }
+  assert.match(source, /string markerLabel = \(ranked.displayNameOverride != "" \? ranked.displayNameOverride : source.labelName\) \+ formationTimeSuffix\(ranked.formedTime, config.delta.showFormationTime\)/);
+});
+
+test('NY Early start applies to NY Early and Extended NY Early and only non-default starts appear in titles', () => {
+  assert.match(host, /nyEarlyStart = input.string\(NY_EARLY_START_0600, "Start", options=\[NY_EARLY_START_0600, NY_EARLY_START_0500\], group=GROUP_NY_EARLY/);
+  assert.match(host, /nyEarlyStartMinute = nyEarlyStart == NY_EARLY_START_0500 \? NY_EARLY_0500_START_MINUTE : NY_EARLY_0600_START_MINUTE/);
+  assert.match(host, /ASIA_PREMARKET_END_MINUTE = 6 \* 60/);
+  assert.match(host, /processBoundedNyAnchor\(nyEarlyAnchor, nyEarlyModeActive, sessionProfileRetention, nyEarlyStartMinute, NY_EARLY_END_MINUTE/);
+  assert.match(host, /processBoundedNyAnchor\(extendedNyEarlyAnchor, extendedNyEarlyModeActive, sessionProfileRetention, nyEarlyStartMinute,/);
+  assert.match(host, /nyEarlyDisplayName = nyEarlyStart == NY_EARLY_START_0600 \? SOURCE_NY_EARLY : SOURCE_NY_EARLY \+ " " \+ nyEarlyStart/);
+  assert.match(host, /SourceSpec.new\(SOURCE_NY_EARLY, nyEarlyDisplayName, SOURCE_NY_EARLY,/);
+  compile('profileTitle');
+  assert.equal(context.profileTitle('NY Early 05:00', true), 'NY Early 05:00 ⁺');
+  assert.equal(context.profileTitle('NY Early', true), 'NY Early ⁺');
+  assert.equal(context.profileTitle('NY Early', false), 'NY Early');
+  assert.match(source, /string rangeLabel = source.frameTitlePrefix \+ profileTitle\(source.displayName, primaryPlus\)/);
+  assert.match(source, /string levelDisplayName = developingLevelLabel\(profileTitle\(source.labelName, primaryPlus\), developing\)/);
+  assert.doesNotMatch(host, /0500Selected|NY Early 05:00/);
+  assert.doesNotMatch(source, /SOURCE_NY_EARLY_0500/);
+});
+
+test('LVN formation time uses the dominant print at the structure price and is optional', () => {
+  const data = { priceLow: 99.875, priceHigh: 100.625, rowCount: 3, rowDeltas: [5, -5, -2], rowBuyTimes: [1000, 2000, 3000], rowSellTimes: [null, 2500, null] };
+  assert.equal(context.priceFormationTime(data, 100), 1000);
+  assert.equal(context.priceFormationTime(data, 100.25), 2500);
+  assert.equal(context.priceFormationTime(data, 100.5), 3000, 'falls back to the opposite side when the dominant side has no print');
+  assert.equal(context.priceFormationTime(data, 99), 1000, 'prices outside the profile clamp to the edge row');
+  assert.match(source, /string markerLabel = \(displayNameOverride != "" \? displayNameOverride : source.labelName\) \+ formationTimeSuffix\(config.delta.showLvnFormationTime \? priceFormationTime\(profile.data, labelPrice\) : na, config.delta.showLvnFormationTime\)/);
+  assert.match(host, /showDeltaFormationTime = input.bool\(false, "Formation Time: Delta", inline="formation_time"/);
+  assert.match(host, /showLvnFormationTime = input.bool\(false, "LVN", inline="formation_time"/);
+  assert.match(host, /trackFormationTimes = showDeltaFormationTime or showLvnFormationTime/);
+  assert.match(host, /setFormationTracking\(anchor, trackFormationTimes, syminfo.mintick\)/);
 });

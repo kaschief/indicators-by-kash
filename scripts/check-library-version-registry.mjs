@@ -113,7 +113,7 @@ for (const row of currentRows) {
 
     if (pendingVersion !== null) {
         const occupiedHistoryVersions = historyRows
-            .filter(history => history.Library === library && history.Status !== "Pending publication")
+            .filter(history => history.Library === library && history.Status !== "Pending publication" && !history.Status.startsWith("Reservation released"))
             .map(history => Number(history.Version))
             .filter(isPositiveInteger);
         const highestOccupiedVersion = occupiedHistoryVersions.length > 0 ? Math.max(...occupiedHistoryVersions) : highestPublished ?? 0;

@@ -22,6 +22,8 @@ const float LOW_VOLUME_MIN_SHOULDER_SHARE = 0.1
 const float LOW_VOLUME_MAX_ZONE_FRACTION = 0.15
 const int LOW_VOLUME_CLIFF_SEPARATION_ROWS = 6
 const float LOW_VOLUME_SENSITIVITY = 1.8
+const int FORMATION_MAX_SPAN_BUCKETS = 64
+const int FORMATION_MAX_BUCKETS = 20000
 
 export type ProfileData
     float priceLow
@@ -34,6 +36,19 @@ export type ProfileData
     float maxRowVolume
     float maxAbsRowDelta
     bool isValid
+    array<int> rowBuyTimes
+    array<int> rowSellTimes
+
+export type PrintPeak
+    int buyTime
+    float buyDensity
+    int sellTime
+    float sellDensity
+
+export type FormationIndex
+    float baseBucketSize
+    float bucketSize
+    map<int, PrintPeak> buckets
 
 export type SampleBatch
     array<int> startTimes
@@ -77,6 +92,7 @@ export type OutlierPeak
     bool buySide
     int firstRow
     int lastRow
+    int formedTime
 
 export type OutlierCandidate
     float price
@@ -204,7 +220,7 @@ export buildProfile(array<float> highs, array<float> lows, array<float> volumes,
     int tickRows = sampleCount > 0 ? int(math.round((rawHigh - rawLow) / tickSize)) + 1 : 0
     bool tickGranular = tickRows >= 1 and tickRows <= requestedRows
     int rowCount = tickGranular ? tickRows : requestedRows
-    ProfileData profile = ProfileData.new(na, na, rawLow, rawHigh, rowCount, array.new<float>(rowCount, 0.0), array.new<float>(rowCount, 0.0), 0.0, 0.0, false)
+    ProfileData profile = ProfileData.new(na, na, rawLow, rawHigh, rowCount, array.new<float>(rowCount, 0.0), array.new<float>(rowCount, 0.0), 0.0, 0.0, false, array.new<int>(rowCount, na), array.new<int>(rowCount, na))
     if sampleCount > 0
         float profileLow = na
         float priceSpan = na
@@ -250,6 +266,81 @@ export buildProfile(array<float> highs, array<float> lows, array<float> volumes,
         profile.maxAbsRowDelta := maxAbsRowDelta
         profile.isValid := totalVolume > 0
     profile
+
+export newFormationIndex(float tickSize) =>
+    FormationIndex.new(tickSize, tickSize, map.new<int, PrintPeak>())
+
+export copyFormationIndex(FormationIndex index) =>
+    FormationIndex.new(index.baseBucketSize, index.bucketSize, map.copy(index.buckets))
+
+export clearFormationIndex(FormationIndex index) =>
+    map.clear(index.buckets)
+    index.bucketSize := index.baseBucketSize
+
+formationBucketKey(float price, float bucketSize) =>
+    int(math.floor(price / bucketSize + 0.5))
+
+mergePrintPeaks(PrintPeak current, PrintPeak candidate) =>
+    bool strongerBuy = candidate.buyDensity > current.buyDensity
+    bool strongerSell = candidate.sellDensity < current.sellDensity
+    PrintPeak.new(strongerBuy ? candidate.buyTime : current.buyTime, strongerBuy ? candidate.buyDensity : current.buyDensity, strongerSell ? candidate.sellTime : current.sellTime, strongerSell ? candidate.sellDensity : current.sellDensity)
+
+coarsenFormationIndex(FormationIndex index) =>
+    map<int, PrintPeak> coarseBuckets = map.new<int, PrintPeak>()
+    for [bucketKey, bucketPeak] in index.buckets
+        int coarseKey = int(math.floor(bucketKey / 2.0))
+        PrintPeak existing = map.get(coarseBuckets, coarseKey)
+        map.put(coarseBuckets, coarseKey, na(existing) ? bucketPeak : mergePrintPeaks(existing, bucketPeak))
+    index.buckets := coarseBuckets
+    index.bucketSize *= 2
+
+export recordFormation(FormationIndex index, int sampleTime, float sampleHigh, float sampleLow, float sampleDelta) =>
+    if not na(sampleTime) and not na(sampleHigh) and not na(sampleLow) and not na(sampleDelta) and sampleDelta != 0
+        while (sampleHigh - sampleLow) / index.bucketSize > FORMATION_MAX_SPAN_BUCKETS
+            coarsenFormationIndex(index)
+        float density = sampleDelta / math.max(sampleHigh - sampleLow, index.baseBucketSize)
+        bool buySide = density > 0
+        PrintPeak samplePeak = PrintPeak.new(buySide ? sampleTime : na, buySide ? density : 0.0, buySide ? na : sampleTime, buySide ? 0.0 : density)
+        int firstKey = formationBucketKey(sampleLow, index.bucketSize)
+        int lastKey = formationBucketKey(sampleHigh, index.bucketSize)
+        for bucketKey = firstKey to lastKey
+            PrintPeak existing = map.get(index.buckets, bucketKey)
+            map.put(index.buckets, bucketKey, na(existing) ? samplePeak : mergePrintPeaks(existing, samplePeak))
+        if map.size(index.buckets) > FORMATION_MAX_BUCKETS
+            coarsenFormationIndex(index)
+
+export recordFormationSample(FormationIndex index, SampleBatch samples, int sampleIndex) =>
+    recordFormation(index, array.get(samples.startTimes, sampleIndex), array.get(samples.highs, sampleIndex), array.get(samples.lows, sampleIndex), array.get(samples.deltas, sampleIndex))
+
+export recordFormationBatch(FormationIndex index, SampleBatch samples) =>
+    int sampleCount = array.size(samples.volumes)
+    if sampleCount > 0 and array.size(samples.startTimes) == sampleCount
+        for sampleIndex = 0 to sampleCount - 1
+            recordFormationSample(index, samples, sampleIndex)
+
+export applyFormationTimes(ProfileData profile, FormationIndex index) =>
+    if profile.isValid and map.size(index.buckets) > 0
+        float rowHeight = (profile.priceHigh - profile.priceLow) / profile.rowCount
+        float edgeInset = rowHeight * 0.001
+        for rowIndex = 0 to profile.rowCount - 1
+            float rowLow = profile.priceLow + rowIndex * rowHeight
+            int firstKey = formationBucketKey(rowLow + edgeInset, index.bucketSize)
+            int lastKey = formationBucketKey(rowLow + rowHeight - edgeInset, index.bucketSize)
+            float bestBuyDensity = 0.0
+            float bestSellDensity = 0.0
+            int buyTime = na
+            int sellTime = na
+            for bucketKey = firstKey to lastKey
+                PrintPeak bucketPeak = map.get(index.buckets, bucketKey)
+                if not na(bucketPeak)
+                    if bucketPeak.buyDensity > bestBuyDensity
+                        bestBuyDensity := bucketPeak.buyDensity
+                        buyTime := bucketPeak.buyTime
+                    if bucketPeak.sellDensity < bestSellDensity
+                        bestSellDensity := bucketPeak.sellDensity
+                        sellTime := bucketPeak.sellTime
+            array.set(profile.rowBuyTimes, rowIndex, buyTime)
+            array.set(profile.rowSellTimes, rowIndex, sellTime)
 
 rollingSegmentIndex(int nyMinutes) =>
     switch
@@ -359,7 +450,7 @@ appendRollingBatch(RollingSampleStore store, SampleBatch samples) =>
 rollingMergeThreshold(int lookbackDays) =>
     lookbackDays <= 7 ? ROLLING_SHORT_WINDOW_COMPACT_THRESHOLD : ROLLING_SAMPLE_COMPACT_THRESHOLD
 
-buildRollingProfileData(RollingSampleStore store, RollingProfileWindow window, int requestedRows, float tickSize) =>
+buildRollingProfileData(RollingSampleStore store, RollingProfileWindow window, int requestedRows, float tickSize, bool trackFormation) =>
     requireRollingSampleStoreAligned(store)
     array.clear(store.selectedIndices)
     int sampleCount = array.size(store.volumes)
@@ -370,7 +461,13 @@ buildRollingProfileData(RollingSampleStore store, RollingProfileWindow window, i
             bool sampleInsideRange = window.includeEnd ? sampleEndTime > window.startTime : window.requireFullContainment ? sampleStartTime >= window.startTime and sampleEndTime <= window.endTime : sampleEndTime >= window.startTime and sampleStartTime < window.endTime
             if sampleInsideRange
                 array.push(store.selectedIndices, sampleIndex)
-    buildProfile(store.highs, store.lows, store.volumes, store.deltas, store.selectedIndices, requestedRows, tickSize)
+    ProfileData profile = buildProfile(store.highs, store.lows, store.volumes, store.deltas, store.selectedIndices, requestedRows, tickSize)
+    if trackFormation
+        FormationIndex formation = newFormationIndex(tickSize)
+        for sampleIndex in store.selectedIndices
+            recordFormation(formation, array.get(store.startTimes, sampleIndex), array.get(store.highs, sampleIndex), array.get(store.lows, sampleIndex), array.get(store.deltas, sampleIndex))
+        applyFormationTimes(profile, formation)
+    profile
 
 export newRollingSampleStore() =>
     RollingSampleStore.new(0, array.new<int>(), array.new<int>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<int>())
@@ -392,11 +489,11 @@ export pruneRollingSamples(RollingSampleStore store, int cutoffTime) =>
         clearRollingSamples(store)
     requireRollingSampleStoreAligned(store)
 
-export buildRollingProfile(RollingSampleStore store, SampleBatch currentSamples, bool includeCurrentSamples, RollingProfileWindow window, int requestedRows, float tickSize) =>
+export buildRollingProfile(RollingSampleStore store, SampleBatch currentSamples, bool includeCurrentSamples, RollingProfileWindow window, int requestedRows, float tickSize, bool trackFormation) =>
     int originalSize = array.size(store.volumes)
     if includeCurrentSamples
         appendRollingBatch(store, currentSamples)
-    ProfileData profile = buildRollingProfileData(store, window, requestedRows, tickSize)
+    ProfileData profile = buildRollingProfileData(store, window, requestedRows, tickSize, trackFormation)
     truncateRollingSamples(store, originalSize)
     profile
 
@@ -536,7 +633,8 @@ outlierPeak(ProfileData profile, bool buySide, int firstRow, int lastRow, int an
     float peakPrice = profile.priceLow + (anchorRow + 0.5) * rowHeight
     float zoneLow = profile.priceLow + firstRow * rowHeight
     float zoneHigh = profile.priceLow + (lastRow + 1) * rowHeight
-    OutlierPeak.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, firstRow, lastRow)
+    int formedTime = buySide ? array.get(profile.rowBuyTimes, anchorRow) : array.get(profile.rowSellTimes, anchorRow)
+    OutlierPeak.new(peakPrice, zoneLow, zoneHigh, peakDelta, peakStrength, buySide, firstRow, lastRow, formedTime)
 
 collectSideOutlierPeaks(ProfileData profile, array<float> strengths, bool buySide) =>
     array<OutlierPeak> peaks = array.new<OutlierPeak>()
