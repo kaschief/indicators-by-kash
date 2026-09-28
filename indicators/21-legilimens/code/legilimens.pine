@@ -2,7 +2,7 @@
 
 import midnightpaws87/LegilimensProfileLibrary/5 as legilimensProfile
 import midnightpaws87/LegilimensProfileOrchestrationLibrary/4 as legilimensOrchestration
-import midnightpaws87/LegilimensPresentationLibrary/29 as legilimensPresentation
+import midnightpaws87/LegilimensPresentationLibrary/33 as legilimensPresentation
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INDICATOR SETUP
@@ -146,7 +146,8 @@ const string TOOLTIP_DEVELOPING_CONTENT = "Show developing levels and histogram.
 const string INPUT_LABEL_HOURS = "Hours"
 const string INPUT_LABEL_POSITION = "Position"
 const string TOOLTIP_PROFILE_HOURS = "• Position — places Delta rows inside or outside the left/right edge of the profile.\n• Hours — how far levels and zones extend beyond the profile end. On futures, the Friday–Sunday closure is skipped.\n\nExtend Unmitigated can carry eligible zones beyond this endpoint."
-const string TOOLTIP_EXTEND_UNMITIGATED = "Extends visible Dominant and Strong Delta zones, plus LVN zones, beyond the normal Hours endpoint until their first eligible price touch. Delta uses the tier level; LVN uses the zone midpoint. Touches before that endpoint do not stop the extension.\n\nProfiles\nFixed, Rolling, Asia-Premarket, Globex, Midnight, Weekly and Monthly.\n\nTouch window (New York time)\n• Anytime — all available bars.\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\nTimed windows apply on weekdays, or every day for 24/7 assets. Touches outside the window are ignored.\n\nWeaker Delta tiers, LVN cliffs and separate Highest Delta outlines keep their normal endpoints. Enabling this also makes Delta tier lines dotted."
+const string TOOLTIP_MITIGATION_FILTERS = "Mitigation filters\n• Hide Mitigated — removes zones mitigated before today's daily candle; today's mitigations stay drawn up to the touch. Off keeps every mitigated zone drawn up to its touch.\n• Within ADR — hides unmitigated zones of every extendable profile outside the daily open (Globex for futures) ± 5-day ADR × multiplier, matching the adr indicator's Globex Open. Fixed for the day; Date Focus uses the focused days' bands.\n\nWith Selected Tier Outliers, the Delta rows of hidden zones are hidden too."
+const string TOOLTIP_EXTEND_UNMITIGATED = "Extends visible Dominant and Strong Delta zones, plus LVN zones, beyond the normal Hours endpoint while unmitigated. The first eligible price touch mitigates a zone. Delta uses the tier level; LVN uses the zone midpoint. Touches before that endpoint do not mitigate.\n\nProfiles\nFixed, Rolling, Asia-Premarket, Globex, Midnight, Weekly and Monthly.\n\nTouch window (New York time)\n• Anytime — all available bars.\n• ● ● RTH — 05:00–16:00.\n• ● RTH — 08:30–16:00.\n• RTH — 09:30–16:00.\nTimed windows apply on weekdays, or every day for 24/7 assets. Touches outside the window are ignored.\n\nWeaker Delta tiers, LVN cliffs and separate Highest Delta outlines keep their normal endpoints. Enabling this also makes Delta tier lines dotted."
 
 ROLLING_THROUGH_LIVE = "Live"
 ROLLING_THROUGH_LIVE_MINUS_2H = "Live −2h"
@@ -170,6 +171,8 @@ const string DELTA_ROWS_SELL = "Delta-"
 const string DELTA_ROW_FILTER_OUTLIERS = "Outliers Only"
 const string DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS = "Selected Tier Outliers"
 const string MITIGATION_WINDOW_ANYTIME = "Anytime"
+const int ADR_LOOKBACK_DAYS = 5
+const string ADR_DAILY_TIMEFRAME = "D"
 
 const string DELTA_TIER_VISIBILITY_BUY = "Delta++"
 const string DELTA_TIER_VISIBILITY_SELL = "Delta--"
@@ -190,6 +193,7 @@ PROFILE_POSITION_RIGHT_RIGHT = "Outside →"
 
 PROFILE_ROWS = 400
 const int FOCUS_SEARCH_DEPTH = 250
+const int ADR_BAND_RETAINED_DAYS = FOCUS_SEARCH_DEPTH
 const string FOCUS_CURRENT_PRICE = "Current"
 const string FOCUS_MANUAL_PRICE = "Manual"
 
@@ -289,7 +293,12 @@ fixedSelected = anchorMode == MODE_FIXED
 unmitigatedProfileSelected = fixedSelected or rollingSelected or asiaPremarketSelected or globexSelected or midnightSelected or weeklySelected or monthlySelected
 
 extendUnmitigated = input.bool(false, "Extend Unmitigated", inline="extend_unmitigated", group=GROUP_DISPLAY, active=unmitigatedProfileSelected)
-unmitigatedWindow = input.string(WINDOW_LABEL_RTH, "", options=[MITIGATION_WINDOW_ANYTIME, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="extend_unmitigated", group=GROUP_DISPLAY, active=unmitigatedProfileSelected and extendUnmitigated, tooltip=TOOLTIP_EXTEND_UNMITIGATED)
+extendUnmitigatedActive = unmitigatedProfileSelected and extendUnmitigated
+unmitigatedWindow = input.string(WINDOW_LABEL_RTH, "", options=[MITIGATION_WINDOW_ANYTIME, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="extend_unmitigated", group=GROUP_DISPLAY, active=extendUnmitigatedActive, tooltip=TOOLTIP_EXTEND_UNMITIGATED)
+hideMitigated = input.bool(true, "Hide Mitigated", inline="mitigation_filters", group=GROUP_DISPLAY, active=extendUnmitigatedActive)
+withinAdrEnabled = input.bool(true, "Within ADR", inline="mitigation_filters", group=GROUP_DISPLAY, active=extendUnmitigatedActive)
+withinAdrActive = withinAdrEnabled and extendUnmitigatedActive
+withinAdrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="mitigation_filters", group=GROUP_DISPLAY, active=withinAdrActive, tooltip=TOOLTIP_MITIGATION_FILTERS)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — QUICK FILTER: SHOW ONLY
@@ -339,7 +348,7 @@ rollingDeltaWidthBars = input.int(DELTA_WIDTH_DEFAULT_BARS, INPUT_LABEL_DELTA_WI
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — SESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
-nyEarlyStart = input.string(NY_EARLY_START_0600, "Start", options=[NY_EARLY_START_0600, NY_EARLY_START_0500], group=GROUP_NY_EARLY, active=nyEarlySelected, tooltip="New York start for NY Early and Extended NY Early.")
+nyEarlyStart = input.string(NY_EARLY_START_0500, "Start", options=[NY_EARLY_START_0500, NY_EARLY_START_0600], group=GROUP_NY_EARLY, active=nyEarlySelected, tooltip="New York start for NY Early and Extended NY Early.")
 useNyEarlyAlternateStyles = input.bool(true, "Use Alternate Styles", group=GROUP_NY_EARLY, active=nyEarlySelected, tooltip=TOOLTIP_ALTERNATE_STYLES)
 nyEarlyProfilePosition = input.string(PROFILE_POSITION_RIGHT_LEFT, INPUT_LABEL_POSITION, options=[PROFILE_POSITION_LEFT_LEFT, PROFILE_POSITION_LEFT_RIGHT, PROFILE_POSITION_RIGHT_LEFT, PROFILE_POSITION_RIGHT_RIGHT], inline="ny_early_position", group=GROUP_NY_EARLY, active=nyEarlySelected)
 nyEarlyHours = input.float(3.0, INPUT_LABEL_HOURS, minval=0.0, step=1.0, inline="ny_early_position", group=GROUP_NY_EARLY, active=nyEarlySelected, tooltip=TOOLTIP_PROFILE_HOURS)
@@ -692,6 +701,25 @@ rollingUsesClockCutoff(string throughMode) =>
     not na(rollingClockCutoffMinute(throughMode))
 
 // ───────────────────────────────────────────────────────────────────────────────
+// HELPERS — ADR BAND
+// ───────────────────────────────────────────────────────────────────────────────
+// Union of the bands of every recorded day overlapping [windowStart, windowEnd]; each day runs until the next day's start.
+adrBandBounds(array<int> dayStartTimes, array<float> bandLows, array<float> bandHighs, int windowStart, int windowEnd) =>
+    float unionLow = na
+    float unionHigh = na
+    int dayCount = array.size(dayStartTimes)
+    if dayCount > 0
+        for dayIndex = 0 to dayCount - 1
+            bool startsInWindow = array.get(dayStartTimes, dayIndex) <= windowEnd
+            bool endsAfterWindowStart = dayIndex == dayCount - 1 or array.get(dayStartTimes, dayIndex + 1) > windowStart
+            float dayLow = array.get(bandLows, dayIndex)
+            float dayHigh = array.get(bandHighs, dayIndex)
+            if startsInWindow and endsAfterWindowStart and not na(dayLow) and not na(dayHigh)
+                unionLow := na(unionLow) ? dayLow : math.min(unionLow, dayLow)
+                unionHigh := na(unionHigh) ? dayHigh : math.max(unionHigh, dayHigh)
+    [unionLow, unionHigh]
+
+// ───────────────────────────────────────────────────────────────────────────────
 // PROFILE DATA ADAPTERS
 // ───────────────────────────────────────────────────────────────────────────────
 compactIfNeeded(array<float> highs, array<float> lows, array<float> volumes, array<float> deltas) =>
@@ -841,11 +869,46 @@ utcMonthStart = shiftedCalendarMonthStart(UTC_TIMEZONE, 0)
 futuresMonthStart = shiftedCalendarMonthStart(NY_TIMEZONE, GLOBEX_REOPEN_SHIFT_MS)
 monthlyPeriodStart = isTwentyFourSevenAsset ? utcMonthStart : futuresMonthStart
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DAILY CANDLE
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reads the daily candle exactly as the adr indicator's Globex Open does.
+[dailyCandleOpen, dailyCandleAverageRange, dailyCandleTime] = request.security(chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid), ADR_DAILY_TIMEFRAME, [open, ta.sma(high - low, ADR_LOOKBACK_DAYS)[1], time], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+bool dailyCandleStarted = dailyCandleTime != dailyCandleTime[1]
+var int tradingDayStartTime = na
+if dailyCandleStarted
+    tradingDayStartTime := time
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADR BAND HISTORY
+// ═══════════════════════════════════════════════════════════════════════════════
+var array<int> adrDayStartTimes = array.new<int>()
+var array<float> adrDayBandLows = array.new<float>()
+var array<float> adrDayBandHighs = array.new<float>()
+if withinAdrActive and dailyCandleStarted
+    float adrHalfWidth = dailyCandleAverageRange * withinAdrMultiplier
+    array.push(adrDayStartTimes, time)
+    array.push(adrDayBandLows, dailyCandleOpen - adrHalfWidth)
+    array.push(adrDayBandHighs, dailyCandleOpen + adrHalfWidth)
+    if array.size(adrDayStartTimes) > ADR_BAND_RETAINED_DAYS
+        array.shift(adrDayStartTimes)
+        array.shift(adrDayBandLows)
+        array.shift(adrDayBandHighs)
+
 string focusDateZone = isTwentyFourSevenAsset ? UTC_TIMEZONE : NY_TIMEZONE
 bool focusSearchActive = focusSelected and focusDateInputsValid
 int focusDateCandidate = focusSearchActive and focusUsesDate ? (focusBetweenDates ? focusTradingDateBoundary(focusYear, focusMonth, focusDay, isTwentyFourSevenAsset, true) - 1 : timestamp(focusDateZone, focusYear, focusMonth, focusDay, 12, 0)) : na
 int focusStartDateCandidate = focusSearchActive and focusBetweenDates ? focusTradingDateBoundary(focusStartYear, focusStartMonth, focusStartDay, isTwentyFourSevenAsset, false) : na
-legilimensPresentation.InteractionSettings presentationInteractionSettings = legilimensPresentation.InteractionSettings.new(extendUnmitigated, unmitigatedWindow, focusSearchActive ? math.max(sessionProfileRetention, FOCUS_SEARCH_DEPTH) : sessionProfileRetention)
+float adrBandLow = na
+float adrBandHigh = na
+if withinAdrActive and barstate.islast
+    bool adrUsesFocusDate = focusSearchActive and focusUsesDate
+    int adrWindowEnd = adrUsesFocusDate ? focusDateCandidate : time
+    int adrWindowStart = adrUsesFocusDate and focusBetweenDates ? focusStartDateCandidate : adrWindowEnd
+    [selectedBandLow, selectedBandHigh] = adrBandBounds(adrDayStartTimes, adrDayBandLows, adrDayBandHighs, adrWindowStart, adrWindowEnd)
+    adrBandLow := selectedBandLow
+    adrBandHigh := selectedBandHigh
+legilimensPresentation.InteractionSettings presentationInteractionSettings = legilimensPresentation.InteractionSettings.new(extendUnmitigated, unmitigatedWindow, focusSearchActive ? math.max(sessionProfileRetention, FOCUS_SEARCH_DEPTH) : sessionProfileRetention, hideMitigated ? tradingDayStartTime : na, adrBandLow, adrBandHigh)
 legilimensPresentation.FocusSettings presentationFocusSettings = legilimensPresentation.FocusSettings.new(focusSearchActive ? focusMode : legilimensPresentation.FocusMode.off, focusUsesPrice ? focusDirection : legilimensPresentation.FocusDirection.off, focusAnchorMode == FOCUS_MANUAL_PRICE ? focusManualPrice : close, focusExtraProfiles, FOCUS_SEARCH_DEPTH, focusDateCandidate, focusStartDateCandidate, focusHideNonFocusProfiles)
 legilimensPresentation.PresentationConfig presentationConfig = legilimensPresentation.PresentationConfig.new(presentationLimits, presentationDeltaSettings, presentationLevelSettings, presentationInteractionSettings, showDevelopingShell, extendedNyEarlyModeActive, PROFILE_ROWS, presentationFocusSettings)
 legilimensPresentation.BarContext presentationContext = legilimensPresentation.BarContext.new(time, na(time_close) ? timenow : time_close, bar_index, high, low, syminfo.mintick, barstate.isconfirmed, isTwentyFourSevenAsset, syminfo.type == "futures")

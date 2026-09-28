@@ -150,6 +150,9 @@ export type InteractionSettings
     bool extendUnmitigated
     string mitigationWindow
     int retainedProfiles
+    int mitigatedHiddenBefore
+    float proximityLow
+    float proximityHigh
 
 export enum FocusMode
     off = "Off"
@@ -880,12 +883,21 @@ mitigationWindowBounds(string windowMode, int startTime, int endTime, bool twent
                 cursorTime := timestamp(NY_TIMEZONE, year(cursorTime, NY_TIMEZONE), month(cursorTime, NY_TIMEZONE), dayofmonth(cursorTime, NY_TIMEZONE) + 1, 0, 0)
     array.from(activeStart, activeEnd)
 
-mitigatedZoneEndTime(RenderState state, string sourceName, int profileStartTime, float price, int eligibilityTime, BarContext context) =>
+// An unset band (na bounds) admits every price.
+withinProximityBand(float price, InteractionSettings interactions) =>
+    na(interactions.proximityLow) or na(interactions.proximityHigh) or (price >= interactions.proximityLow and price <= interactions.proximityHigh)
+
+// Returns na when the zone must not be drawn.
+trackedZoneEndTime(RenderState state, string sourceName, int profileStartTime, int eligibilityTime, float price, InteractionSettings interactions, BarContext context) =>
     int zoneEndTime = eligibilityTime
     int stateIndex = mitigatedZoneStateIndex(state, sourceName, profileStartTime, eligibilityTime, price)
     if stateIndex >= 0
         MitigatedZoneState zoneState = array.get(state.mitigatedZoneStates, stateIndex)
-        zoneEndTime := zoneState.available ? na(zoneState.mitigatedTime) ? math.max(eligibilityTime, context.barEndTime) : zoneState.mitigatedTime : eligibilityTime
+        if zoneState.available
+            if na(zoneState.mitigatedTime)
+                zoneEndTime := withinProximityBand(price, interactions) ? math.max(eligibilityTime, context.barEndTime) : na
+            else
+                zoneEndTime := not na(interactions.mitigatedHiddenBefore) and zoneState.mitigatedTime <= interactions.mitigatedHiddenBefore ? na : zoneState.mitigatedTime
     zoneEndTime
 
 firstIntrabarTouchEnd(PriceSamples samples, int eligibilityTime, float price, string windowMode, bool twentyFourSeven) =>
@@ -1365,6 +1377,22 @@ deltaTierLineStyle(PresentationConfig config, string defaultStyle) =>
 highestDeltaMarkerGlyph(string markerGlyph, bool containsHighestDeltaRow, bool buySide) =>
     containsHighestDeltaRow ? markerGlyph + (buySide ? "⁺" : "⁻") : markerGlyph
 
+// Dominant and Strong zones of mitigation-enabled sources extend until mitigated.
+extendsUntilMitigated(RankedOutlierLevel ranked, array<SourceSpec> sources, PresentationConfig config) =>
+    ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
+
+// Drops selections whose tracked zone is hidden so their Delta rows are not drawn either.
+drawnOutlierSelections(RenderState state, array<RankedOutlierLevel> rankedLevels, array<legilimensProfile.RankedOutlierSelection> selections, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
+    array<legilimensProfile.RankedOutlierSelection> drawnSelections = array.new<legilimensProfile.RankedOutlierSelection>()
+    int count = math.min(array.size(rankedLevels), array.size(selections))
+    if count > 0
+        for rankedIndex = 0 to count - 1
+            RankedOutlierLevel ranked = array.get(rankedLevels, rankedIndex)
+            bool zoneHidden = extendsUntilMitigated(ranked, sources, config) and na(trackedZoneEndTime(state, ranked.sourceName, ranked.profileStartTime, ranked.rightTime, ranked.price, config.interactions, context))
+            if not zoneHidden
+                array.push(drawnSelections, array.get(selections, rankedIndex))
+    drawnSelections
+
 renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLevels, bool registrationOnly, array<SourceSpec> sources, BarContext context, PresentationConfig config) =>
     int count = array.size(rankedLevels)
     if count > 0
@@ -1375,7 +1403,7 @@ renderRankedOutlierLevels(RenderState state, array<RankedOutlierLevel> rankedLev
             DeltaTierAppearance appearance = deltaTierAppearance(ranked.buySide, tier, source)
             string lineStyle = deltaTierLineStyle(config, appearanceLineStyle(appearance))
             int levelRank = 2000 - ranked.strengthRank
-            bool extendPriorityZone = ranked.strengthRank <= 2 and mitigationEnabled(sources, ranked.sourceName, config)
+            bool extendPriorityZone = extendsUntilMitigated(ranked, sources, config)
             int direction = ranked.buySide ? 1 : -1
             string markerLabel = (ranked.displayNameOverride != "" ? ranked.displayNameOverride : source.labelName) + formationTimeSuffix(ranked.formedTime, config.delta.showFormationTime)
             int fibBorderWidth = fibLocationBorderWidth(ranked.fibLocationGrade, ranked.buySide, ranked.price, ranked.fibMidpointPrice)
@@ -1518,7 +1546,7 @@ renderSelectedProfile(RenderState state, ProfilePolylineLayout geometry, Profile
         array<legilimensProfile.OutlierPeak> outlierPeaks = profileOutlierPeaks(geometry.analysis, profile, config)
         queueOutlierPeaks(state, profile, source, outlierPeaks, levelDisplayName, levelEndTime, sessionTradingDayKey, historical, config)
         [rankedOutlierLevels, rankedOutlierSelections] = rankPendingOutlierLevels(state, context, config)
-        array<bool> selectedRows = selectedOutlierRowMask(profile, strengths, rankedOutlierSelections, config)
+        array<bool> selectedRows = selectedOutlierRowMask(profile, strengths, drawnOutlierSelections(state, rankedOutlierLevels, rankedOutlierSelections, sources, context, config), config)
         array<ProfilePolylineRegion> regions = profilePolylineRegions(geometry, selectedRows, renderBudgetedHistogram, chartTimes, config)
         processProfilePolylineBatch(state, batch, geometry, historical and not developing, renderBudgetedHistogram, regions, true, config)
         if config.levels.showValueArea
@@ -1823,7 +1851,7 @@ flushPendingMitigatedZones(RenderState state, BarContext context, PresentationCo
     if count > 0
         for pendingIndex = 0 to count - 1
             PendingMitigatedZone pending = array.get(state.pendingMitigatedZones, pendingIndex)
-            int rightTime = mitigatedZoneEndTime(state, pending.sourceName, pending.profileStartTime, pending.price, pending.eligibilityTime, context)
+            int rightTime = trackedZoneEndTime(state, pending.sourceName, pending.profileStartTime, pending.eligibilityTime, pending.price, config.interactions, context)
             if not na(rightTime)
                 renderZoneFill(state, pending.leftTime, rightTime, pending.zoneLow, pending.zoneHigh, pending.zoneColor, pending.zoneBorderWidth, pending.zoneBorderColor, config)
                 if pending.hasLine

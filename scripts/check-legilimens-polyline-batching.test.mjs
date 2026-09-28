@@ -88,6 +88,7 @@ for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_
 for (const name of ['deltaTierFibLocationGrade', 'fibLocationMarkerGlyph', 'fibLocationBorderWidth']) compile(name);
 compile('queueOutlierPeaks', false);
 compile('renderLowVolumeStructures', false);
+compile('extendsUntilMitigated');
 context.levelMarkerTime = value => value;
 context.legilimensProfile.OutlierCandidate = { new: (...values) => values };
 
@@ -1015,7 +1016,7 @@ test('price labels share regular, filtered and mitigated tier endpoints', () => 
   context.appearanceLineWidth = () => 1;
   context.renderZoneFill = () => {};
   context.levelMarkerTime = endTime => endTime + 10;
-  context.mitigatedZoneEndTime = () => 400;
+  context.trackedZoneEndTime = () => 400;
   for (const extended of [false, true]) for (const visible of [false, true]) {
     context.mitigationEnabled = () => extended;
     context.deltaTierSideVisible = () => visible;
@@ -1035,11 +1036,105 @@ test('price labels share regular, filtered and mitigated tier endpoints', () => 
   assert.equal(lvnState.pendingRightLabels.length, 2);
   assert.ok(lvnState.pendingRightLabels.every(item => item.markerTime === 410));
   const hiddenState = { pendingRightLabels: [], pendingMitigatedZones: [...lvnState.pendingMitigatedZones] };
-  context.mitigatedZoneEndTime = () => null;
+  context.trackedZoneEndTime = () => null;
   context.deltaTierSideVisible = () => true;
   context.renderRankedOutlierLevels(hiddenState, [ranked], false, [profileSource], {}, settings);
   context.flushPendingMitigatedZones(hiddenState, {}, settings);
   assert.equal(hiddenState.pendingRightLabels.length, 0, 'undrawn zones must not leave price labels');
+});
+
+test('tracked zones: Hide Mitigated removes or truncates, and the ADR band filters only live unmitigated zones', () => {
+  compile('mitigatedZoneStateIndex');
+  compile('withinProximityBand');
+  compile('trackedZoneEndTime');
+  const zone = (sourceName, price, mitigatedTime, available = true) => ({ sourceName, profileStartTime: 10, eligibilityTime: 100, price, mitigatedTime, available });
+  const state = { mitigatedZoneStates: [
+    zone('Globex', 50, null), zone('Globex', 90, null), zone('Globex', 60, 150), zone('Globex', 95, 150),
+    zone('Globex', 70, null, false), zone('Fixed', 90, null),
+  ] };
+  const barContext = { barEndTime: 300 };
+  const settings = (mitigatedHiddenBefore, proximityLow = null, proximityHigh = null) => ({ mitigatedHiddenBefore, proximityLow, proximityHigh });
+  for (const mitigatedHiddenBefore of [200, 150, 120, null]) {
+    const hidden = mitigatedHiddenBefore !== null && 150 <= mitigatedHiddenBefore;
+    for (const [low, high] of [[null, null], [40, 60]]) {
+      const interactions = settings(mitigatedHiddenBefore, low, high);
+      const endTime = (sourceName, price) => context.trackedZoneEndTime(state, sourceName, 10, 100, price, interactions, barContext);
+      const banded = low !== null;
+      assert.equal(endTime('Globex', 50), 300, 'live unmitigated zone inside the band extends to the current bar');
+      assert.equal(endTime('Globex', 90), banded ? null : 300, 'live unmitigated zone outside the band is hidden');
+      assert.equal(endTime('Fixed', 90), banded ? null : 300, 'the band applies to every extendable profile');
+      assert.equal(endTime('Globex', 60), hidden ? null : 150, 'zones whose touch ended by the trading-day start are hidden; later ones end at the touch');
+      assert.equal(endTime('Globex', 95), hidden ? null : 150, 'the band never filters mitigated zones');
+      assert.equal(endTime('Globex', 70), 100, 'unresolved zones keep their normal endpoint');
+      assert.equal(endTime('Globex', 999), 100, 'untracked zones keep their normal endpoint');
+    }
+  }
+  const originals = { renderZoneFill: context.renderZoneFill, queueLevelMarker: context.queueLevelMarker, trackedZoneEndTime: context.trackedZoneEndTime };
+  const drawn = [];
+  context.renderZoneFill = (renderState, leftTime, rightTime, zoneLow) => drawn.push(zoneLow);
+  context.queueLevelMarker = () => {};
+  context.trackedZoneEndTime = (renderState, sourceName, profileStartTime, eligibilityTime, price) => price > 70 ? null : 300;
+  try {
+    compile('flushPendingMitigatedZones', false);
+    const flushState = { pendingMitigatedZones: [45, 55, 80].map(price => ({ price, zoneLow: price, hasLine: false })) };
+    context.flushPendingMitigatedZones(flushState, barContext, { interactions: settings(200) });
+    assert.deepEqual(drawn, [45, 55]);
+    assert.equal(flushState.pendingMitigatedZones.length, 0);
+  } finally {
+    Object.assign(context, originals);
+  }
+});
+
+test('Delta rows follow tracked zone visibility; weaker tiers and other sources keep theirs', () => {
+  compile('drawnOutlierSelections');
+  const originals = { mitigationEnabled: context.mitigationEnabled, trackedZoneEndTime: context.trackedZoneEndTime };
+  context.mitigationEnabled = (sources, sourceName) => sourceName === 'Globex';
+  const keys = [];
+  context.trackedZoneEndTime = (state, sourceName, profileStartTime, eligibilityTime, price) => { keys.push([sourceName, profileStartTime, eligibilityTime, price]); return price === 60 ? null : 300; };
+  try {
+    const level = (sourceName, strengthRank, price) => ({ sourceName, strengthRank, price, profileStartTime: 10, lineStartTime: 20, rightTime: 100 });
+    const levels = [level('Globex', 1, 50), level('Globex', 2, 60), level('Globex', 3, 60), level('Fixed', 1, 60)];
+    const selections = ['live', 'hidden', 'weaker tier', 'other source'];
+    const drawn = context.drawnOutlierSelections({}, levels, selections, [], {}, { interactions: {} });
+    assert.deepEqual([...drawn], ['live', 'weaker tier', 'other source']);
+    assert.deepEqual(keys, [['Globex', 10, 100, 50], ['Globex', 10, 100, 60]], 'the filter reads the same zone key the draw path registers');
+  } finally {
+    Object.assign(context, originals);
+  }
+  assert.match(source, /selectedOutlierRowMask\(profile, strengths, drawnOutlierSelections\(state, rankedOutlierLevels, rankedOutlierSelections, sources, context, config\), config\)/);
+  assert.match(source, /renderHighestDeltaLevels\(state, profile, source, levelEndTime, outlierPeaks, rankedOutlierSelections, config\)/);
+  assert.match(source, /trackedZoneEndTime\(state, ranked\.sourceName, ranked\.profileStartTime, ranked\.rightTime, ranked\.price, config\.interactions, context\)/);
+  assert.match(source, /PendingMitigatedZone\.new\(ranked\.price, ranked\.zoneLow, ranked\.zoneHigh, ranked\.profileStartTime, ranked\.lineStartTime, ranked\.rightTime, [^\n]*ranked\.sourceName,/);
+  assert.match(source, /trackedZoneEndTime\(state, pending\.sourceName, pending\.profileStartTime, pending\.eligibilityTime, pending\.price, config\.interactions, context\)/);
+});
+
+test('ADR band: day-band union selects today, a focus day, or a Between range', () => {
+  compile('adrBandBounds', true, host);
+  const starts = [100, 200, 300, 400];
+  const lows = [10, null, 30, 40];
+  const highs = [20, null, 35, 60];
+  const bounds = (windowStart, windowEnd) => [...context.adrBandBounds(starts, lows, highs, windowStart, windowEnd)];
+  assert.deepEqual(bounds(450, 450), [40, 60], 'the current bar uses the latest day');
+  assert.deepEqual(bounds(350, 350), [30, 35], 'a focus time uses the day containing it');
+  assert.deepEqual(bounds(150, 350), [10, 35], 'Between unions every overlapping day and skips days without a band');
+  assert.deepEqual(bounds(250, 250), [null, null], 'a day without five completed ranges filters nothing');
+  assert.deepEqual(bounds(50, 50), [null, null], 'times before the first recorded day filter nothing');
+  assert.deepEqual([...context.adrBandBounds([], [], [], 1, 1)], [null, null]);
+});
+
+test('host wires the ADR band for every extendable profile into the presentation library', () => {
+  assert.match(host, /^withinAdrActive = withinAdrEnabled and extendUnmitigatedActive$/m);
+  assert.match(host, /^hideMitigated = input\.bool\(true, "Hide Mitigated", inline="mitigation_filters"/m);
+  assert.match(host, /^withinAdrEnabled = input\.bool\(true, "Within ADR", inline="mitigation_filters"/m);
+  assert.match(host, /request\.security\(chart\.is_standard \? syminfo\.tickerid : ticker\.standard\(syminfo\.tickerid\), ADR_DAILY_TIMEFRAME, \[open, ta\.sma\(high - low, ADR_LOOKBACK_DAYS\)\[1\], time\], gaps=barmerge\.gaps_off, lookahead=barmerge\.lookahead_on\)/);
+  assert.match(host, /^const int ADR_LOOKBACK_DAYS = 5$/m);
+  assert.doesNotMatch(host, /withinAdrLookback|input\.int\([^\n]*Lookback[^\n]*mitigation_filters/);
+  assert.match(host, /InteractionSettings\.new\(extendUnmitigated, unmitigatedWindow, [^\n]+, hideMitigated \? tradingDayStartTime : na, adrBandLow, adrBandHigh\)/);
+  assert.doesNotMatch(host, /NY Midnight|ADR_CALC_|withinAdrCalculation|nyMidnight/, 'Within ADR is Globex Open only');
+  assert.match(host, /^bool dailyCandleStarted = dailyCandleTime != dailyCandleTime\[1\]$/m);
+  assert.match(host, /^if dailyCandleStarted\n    tradingDayStartTime := time$/m);
+  assert.match(host, /^if withinAdrActive and dailyCandleStarted$/m);
+  assert.doesNotMatch(host, /^ +(?=\S)(?!legilimensOrchestration\.).*\b(?:shifted)?[cC]alendar(?:Day|Month)Start\(/m, 'ta.change day-start helpers must not be called from a local block');
 });
 
 test('cache admission, occurrence keys, backward Replay and chart geometry prevent stale reuse', () => {
@@ -1142,8 +1237,8 @@ test('formation time suffix is optional and New York formatted', () => {
   assert.match(source, /string markerLabel = \(ranked.displayNameOverride != "" \? ranked.displayNameOverride : source.labelName\) \+ formationTimeSuffix\(ranked.formedTime, config.delta.showFormationTime\)/);
 });
 
-test('NY Early start applies to NY Early and Extended NY Early and only non-default starts appear in titles', () => {
-  assert.match(host, /nyEarlyStart = input.string\(NY_EARLY_START_0600, "Start", options=\[NY_EARLY_START_0600, NY_EARLY_START_0500\], group=GROUP_NY_EARLY/);
+test('NY Early start applies to NY Early and Extended NY Early and only the 05:00 start appears in titles', () => {
+  assert.match(host, /nyEarlyStart = input.string\(NY_EARLY_START_0500, "Start", options=\[NY_EARLY_START_0500, NY_EARLY_START_0600\], group=GROUP_NY_EARLY/);
   assert.match(host, /nyEarlyStartMinute = nyEarlyStart == NY_EARLY_START_0500 \? NY_EARLY_0500_START_MINUTE : NY_EARLY_0600_START_MINUTE/);
   assert.match(host, /ASIA_PREMARKET_END_MINUTE = 6 \* 60/);
   assert.match(host, /processBoundedNyAnchor\(nyEarlyAnchor, nyEarlyModeActive, sessionProfileRetention, nyEarlyStartMinute, NY_EARLY_END_MINUTE/);
