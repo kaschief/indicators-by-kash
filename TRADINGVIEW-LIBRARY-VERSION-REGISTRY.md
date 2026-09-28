@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-09-27
+Updated: 2026-09-28
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -23,7 +23,7 @@ This is the repository's single source of truth for TradingView library versions
 |---|---|---|---:|---:|
 | RevelioCoreLibrary | `indicators/20-revelio/code/libraries/revelio-core-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 12 | — |
 | RevelioGapsLibrary | `indicators/20-revelio/code/libraries/revelio-gaps-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 13 | — |
-| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 29 | — |
+| RevelioInteractionsLibrary | `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 29 | 30 |
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 5 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
@@ -92,6 +92,7 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | RevelioInteractionsLibrary | 27 | Published · user confirmed | Adds optional small, muted native identities to secondary merged lines; defaults On at size 6 with fixed 50% additional text fading; preserves combined labels, merging, and line fading | `a63cffc890a6c0e41f245c659e79373990db356dbe8c403492ada41287d28c63` |
 | RevelioInteractionsLibrary | 28 | Published · deployed · user approved | Exposes additional secondary-label fading as Fade %, default 50, range 0–100; preserves merging and combined labels | `34424722e266711b4a997fbff5b86635a38bf7dad60497235785aab9e2d8de34` |
 | RevelioInteractionsLibrary | 29 | Published · loaded · tested · approved | Generalizes inline line reminders to explicit spans and placement phases so composite frame edges share shortening, dedupe, merging, fading, and label budgets | `87f0439c46b3a3d504f6e5ac17878dc057e8cabcb76eb255ba930ddf6d53d13f` |
+| RevelioInteractionsLibrary | 30 | Pending publication | Adds a separate merged-line identity to buffered right-edge labels so secondary merged-line labels can show or omit profile age independently of the combined right-edge label | `9976d530cf7e1324e86d9d3d566fe3ea5322cbd4dd1d48029ec92912d201cf41` |
 | RevelioCompositeLibrary | 1 | Superseded before publication | Initial narrow name for the extracted profile-orchestration source | `65b615d84e3dbdf9d86f32868e429fad9110bb81e13aa875c47b6ec33c712d16` |
 | RevelioProfileOrchestrationLibrary | 1 | Published · runtime performance regression | Extracted profile orchestration with corrected maturity typing, literal enum titles required by CE10125, one shared session/domain vocabulary, exported calendar identity, and typed Focus, merge, and developing modes | `7c74ef575dba8f92ac8b3caf57b820c94c9698381c67ba2906550be4cc4c6606` |
 | RevelioProfileOrchestrationLibrary | 2 | Published · host loaded · testing | Event-gates calendar maturity work and removes unused Quarterly transport fields | `a5849c1df3efbec7c32045bbae8890a77d7597709bc49d7ce207e21713f54786` |
@@ -283,6 +284,7 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-27-13 | 2026-09-27 | LegilimensProfileOrchestrationLibrary | 4 | Publish `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` privately as `/4` before Presentation `/29`.  Publication confirmed by the Presentation `/29` compile resolving the `/4` import.  Host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-09-27-14 | 2026-09-27 | LegilimensPresentationLibrary | 29 | Corrected `/29`: formation helpers now precede their callers, and a definition-order test guards every Legilimens Pine file. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/29` after Orchestration `/4`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/5`, Orchestration `/4`, Presentation `/29`. Test the NY Early Start titles, ⁺, `Extended NY` labels, and Delta/LVN Formation Time Off/On.  TradingView rejected the publish with CE10173: `renderStandaloneProfile` still passed `""` to the renamed bool `ProfileRenderItem.primaryPlus`; `/29` was not taken. | `SUPERSEDED_COMPILE_ERROR` |
 | PUB-2026-09-27-15 | 2026-09-27 | LegilimensPresentationLibrary | 29 | Corrected `/29`: `renderStandaloneProfile` passes `false` for `primaryPlus`; a static signature test now checks arity, argument names and literal types for every Legilimens call. Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/29`, then load `indicators/21-legilimens/code/legilimens.pine` with Profile `/5`, Orchestration `/4`, Presentation `/29`.  User confirmed publication.  Host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-09-28-01 | 2026-09-28 | RevelioInteractionsLibrary | 30 | Publish `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` privately as `/30`, then compile `indicators/20-revelio/code/indicator/revelio.pine` against Core `/12`, Gaps `/13`, Interactions `/30` and Profile Orchestration `/10`; verify Label Age Off, Date · Age and Age Only on right-edge labels, reminders, merged-line labels and Touch Marker hover | `CURRENT_PENDING` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
@@ -294,9 +296,9 @@ Entries before this registry was created are reconstructed from the task history
 - Legilimens current handoff (2026-09-27): Published Presentation `/27` implements the user-approved cleanup after the color rollback: one default-off Show Price checkbox at the top of Quick Filter Settings; visible Delta/LVN tiers and cliffs always retain markers and profile-name labels. Show Price only appends the mintick-formatted number to the same label. Range-price controls/rendering, dots display constants/input/derived flags, obsolete library fields and conditional label-budget branches are removed completely. Existing tier filters, marker glyphs/sizes, developing suffixes, colors and zone geometry remain. Source SHA-256 `0e4ed22c32b115c0089b7c63aebe1bef84a18a06324e586df7af50a946a9df52`. Host imports Profile `/4`, Orchestration `/2`, Presentation `/27`; user corrected the release number to `/27`, so the preceding `/26` is recorded as published with its exact fingerprint unverified. All 61 targeted tests, Pine identifier/title checks, registry validation and scoped whitespace checks pass. Independent principal review found no actionable issues and independently reran the 47 affected tests plus registry/whitespace checks. Publication, host loading, testing and approval are user-confirmed by the commit instruction. Live TradingView behavior was not independently observed by Codex. The final host title is `legilimens •`; no library release is pending and no further publication is required. The four-file local commit is authorized; no push is authorized.
 
 - Published chain: Core `/12`, Gaps `/13`, Interactions `/29`, Profile Orchestration `/10`.
-- Revelio pending: none.
+- Revelio pending: Interactions `/30` (separate merged-line identity for Label Age). The development host imports Core `/12`, Gaps `/13`, Interactions `/30` and Profile Orchestration `/10`.
 - Discarded: Interactions `/20`; it remains permanently retired.
-- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/12`, Gaps `/13`, Interactions `/29`, and Profile Orchestration `/10`.
+- Development host: `indicators/20-revelio/code/indicator/revelio.pine`, importing Core `/12`, Gaps `/13`, Interactions `/30`, and Profile Orchestration `/10`.
 - Interactions `/27`: user confirmed publication of the preceding fixed-fade secondary-label source. `/28` was subsequently tested and the user selected size 6 and 65% fading; its library source is unchanged by the host-only UI cleanup.
 - Runtime status: all four libraries are published; the host is loading for testing. Host compile, Replay, Range, and visual approval are not yet confirmed.
 - Host-only changes retained: shared Daily calendar ceiling, Weekly boundary correction, explicit Quick Filter names, Show Only ceiling, and reminders wherever the selected source profile is visible.
@@ -325,7 +327,11 @@ Entries before this registry was created are reconstructed from the task history
 
 ## Pending release notes
 
-None.
+### RevelioInteractionsLibrary `/30`
+
+```text
+Merged-line labels now carry their own identity, so profile age can be shown or hidden on secondary merged lines independently of the combined right-edge label.
+```
 
 ## Latest deployed release notes
 

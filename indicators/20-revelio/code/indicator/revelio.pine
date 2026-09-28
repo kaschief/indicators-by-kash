@@ -2,7 +2,7 @@
 
 import midnightpaws87/RevelioCoreLibrary/12 as revelioCore
 import midnightpaws87/RevelioGapsLibrary/13 as revelioGaps
-import midnightpaws87/RevelioInteractionsLibrary/29 as revelioInteractions
+import midnightpaws87/RevelioInteractionsLibrary/30 as revelioInteractions
 import midnightpaws87/RevelioProfileOrchestrationLibrary/10 as revelioProfiles
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -12,7 +12,7 @@ INDICATOR_MAX_LINES = 500
 INDICATOR_MAX_LABELS = 500
 INDICATOR_MAX_BOXES = 500
 INDICATOR_MAX_POLYLINES = 100
-INDICATOR_TITLE = 'revelio •'
+INDICATOR_TITLE = 'revelio • development'
 
 indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS, max_boxes_count=INDICATOR_MAX_BOXES, max_polylines_count=INDICATOR_MAX_POLYLINES, max_bars_back=5000, dynamic_requests=true)
 
@@ -160,6 +160,9 @@ LEVEL_HIT_HISTORY_THREE_DAYS = "3 Days"
 LEVEL_HIT_HISTORY_ONE_WEEK = "1 Week"
 LEVEL_HIT_UNSELECTED_ANCHOR_SYMBOL = "⁺"
 LEVEL_HIT_ARCHIVED_SYMBOL = "◌"
+LABEL_AGE_DATE = "Date · Age"
+LABEL_AGE_ONLY = "Age Only"
+LABEL_AGE_SEPARATOR = " · "
 LEVEL_HIT_FIRST_SYMBOL = "①"
 LEVEL_HIT_FROM_ABOVE_SYMBOL = "▼"
 LEVEL_HIT_FROM_BELOW_SYMBOL = "▲"
@@ -178,6 +181,7 @@ GROUP_QUICK_FILTER_FOCUS = "⚡ Quick Filter: Intraday Focus"
 GROUP_QUICK_FILTER_TOUCH_MARKERS = "⚡ Quick Filter: Touch Markers"
 GROUP_MANUAL_COMPOSITE = "🧩 Manual Composite"
 GROUP_LABEL_MERGING = "🏷️ Label Merging"
+GROUP_LABEL_AGE = "⏳ Label Age"
 GROUP_RIGHT_EDGE = "↔ Right Edge"
 GROUP_SWEEP = "🧹 Sweep"
 GROUP_RTH = "🗽 RTH"
@@ -503,6 +507,13 @@ labelMergePreset = input.string(LABEL_MERGE_EXTRA_WIDE, "", options=[LABEL_MERGE
 customLabelMergeDistancePercent = input.float(LABEL_MERGE_BALANCED_PERCENT, "%", minval=0.0, maxval=0.5, step=0.001, inline="label_merge", group=GROUP_LABEL_MERGING, active=showLevelText and dedupeLabels and labelMergePreset == OPTION_CUSTOM, tooltip="Merge Overlapping Labels\nCombines nearby right-edge labels and reminders.\n\nDistance\n• Strict — 0.005%.\n• Balanced — 0.010%.\n• Wide — 0.025%.\n• Extra Wide — 0.050%.\n• Custom — use %.\n\nMinimum distance is one tick. Off keeps labels separate. Secondary line paths use at least 85% transparency.")
 showMergedLineLabels = input.bool(true, "Merged Line Labels", group=GROUP_LABEL_MERGING, active=showLevelText and dedupeLabels, tooltip="Small, muted identities on secondary merged lines. Combined labels stay unchanged.")
 shortenLabels = input.bool(true, "Shorten Labels", group=GROUP_LABEL_MERGING, active=showLevelText, tooltip="Uses Profile First ordering. On shortens dated and live profile names while keeping previous profiles explicit: PREV RTH, PREV GLOBEX, LAST WEEK, LAST MONTH and LAST QUARTER. Off keeps full Profile First names. Applies to profile level labels and reminders. Touch Marker hover and Value Gap labels do not change. Shortened labels retain ✓Ⓐ; hover retains ⁺◌ provenance.")
+
+labelAgeStyle = input.string(LABEL_AGE_DATE, "Style", options=[revelioProfiles.OPTION_OFF, LABEL_AGE_DATE, LABEL_AGE_ONLY], group=GROUP_LABEL_AGE, active=showLevelText, tooltip="Shows how long ago each dated profile formed, counted in that profile's own periods: trading days for RTH and Globex (weekends and market holidays skipped; calendar days on 24/7 assets), weeks for Weekly, months for Monthly and quarters for Quarterly.\n\nDate · Age — RTH POC Sep 21 · 5d.\nAge Only — RTH POC 5d.\n\nLive, previous and Manual Composite profiles carry no age.")
+labelAgeActive = showLevelText and labelAgeStyle != revelioProfiles.OPTION_OFF
+labelAgeRightEdge = input.bool(true, "Right Edge", inline="label_age_targets", group=GROUP_LABEL_AGE, active=labelAgeActive)
+labelAgeReminders = input.bool(true, "Reminders", inline="label_age_targets", group=GROUP_LABEL_AGE, active=labelAgeActive and showFullText)
+labelAgeMergedLines = input.bool(false, "Merged Lines", inline="label_age_targets_secondary", group=GROUP_LABEL_AGE, active=labelAgeActive and dedupeLabels and showMergedLineLabels)
+labelAgeTouchHover = input.bool(true, "Touch Hover", inline="label_age_targets_secondary", group=GROUP_LABEL_AGE, active=labelAgeActive, tooltip="Where the age appears.\n\nRight Edge — right-edge level and Touch Marker labels.\nReminders — labels repeated along lines, including swept reminders.\nMerged Lines — small labels on secondary merged lines.\nTouch Hover — Touch Marker tooltips, which always keep the date and spell out the age, for example 5 trading days ago.")
 
 labelMergeDistancePercent = labelMergePreset == LABEL_MERGE_STRICT ? LABEL_MERGE_STRICT_PERCENT : labelMergePreset == LABEL_MERGE_WIDE ? LABEL_MERGE_WIDE_PERCENT : labelMergePreset == LABEL_MERGE_EXTRA_WIDE ? LABEL_MERGE_EXTRA_WIDE_PERCENT : labelMergePreset == OPTION_CUSTOM ? customLabelMergeDistancePercent : LABEL_MERGE_BALANCED_PERCENT
 
@@ -921,6 +932,8 @@ lineReminderRun(int lineStartTime, int lineEndTime) =>
 var bool isTwentyFourSevenAsset = false
 var bool assetClassificationReady = false
 var bool dailyMaturityClassificationApplied = false
+// Each observed trading date receives the next ordinal, so ages skip weekends and holidays without a calendar.
+var map<int, int> tradingDateOrdinals = map.new<int, int>()
 
 sameNyDate(int firstTime, int secondTime) =>
     revelioProfiles.sameCalendarDate(firstTime, secondTime, revelioProfiles.NY_TIMEZONE)
@@ -1006,6 +1019,44 @@ levelHitDayDistance(int hitTime) =>
 levelHitTraceActive(int hitTime, bool tracePresentationActive) =>
     tracePresentationActive and not na(hitTime) and (levelHitHistory == LEVEL_HIT_HISTORY_CURRENT_WINDOW ? sameNyDate(hitTime, time) : levelHitDayDistance(hitTime) < levelHitRetentionDays())
 
+calendarPeriodIndex(int eventTime, bool quarterly, bool useUtcTimezone) =>
+    string timezone = useUtcTimezone ? revelioProfiles.UTC_TIMEZONE : revelioProfiles.NY_TIMEZONE
+    int monthIndex = year(eventTime, timezone) * 12 + month(eventTime, timezone) - 1
+    quarterly ? int(math.floor(monthIndex / 3)) : monthIndex
+
+// Periods elapsed since the profile formed, in the anchor's own unit; na when the profile's trading date was never observed.
+profileAgePeriods(int startTime, SessionStyle style) =>
+    string anchor = style.labelAnchor
+    int periods = na
+    if anchor == revelioProfiles.ANCHOR_RTH or anchor == revelioProfiles.ANCHOR_GLOBEX
+        int dateKey = anchor == revelioProfiles.ANCHOR_RTH ? revelioProfiles.calendarDateSerial(startTime, revelioProfiles.NY_TIMEZONE) : revelioProfiles.autoSweptCycleSerial(startTime, isTwentyFourSevenAsset)
+        if map.contains(tradingDateOrdinals, dateKey)
+            periods := map.size(tradingDateOrdinals) - map.get(tradingDateOrdinals, dateKey)
+    else if anchor == revelioProfiles.ANCHOR_WEEKLY
+        int currentWeekKey = revelioProfiles.resolveStartKey(time, anchor, isTwentyFourSevenAsset, isTwentyFourSevenAsset)
+        int profileWeekKey = revelioProfiles.resolveStartKey(startTime, anchor, isTwentyFourSevenAsset, isTwentyFourSevenAsset)
+        periods := int((currentWeekKey - profileWeekKey) / 7)
+    else
+        bool quarterly = anchor == revelioProfiles.ANCHOR_QUARTERLY
+        periods := calendarPeriodIndex(time, quarterly, isTwentyFourSevenAsset) - calendarPeriodIndex(startTime, quarterly, isTwentyFourSevenAsset)
+    periods
+
+profileAgeUnit(string anchor) =>
+    anchor == revelioProfiles.ANCHOR_WEEKLY ? "w" : anchor == revelioProfiles.ANCHOR_MONTHLY ? "mo" : anchor == revelioProfiles.ANCHOR_QUARTERLY ? "q" : "d"
+
+profileAgeUnitName(string anchor) =>
+    anchor == revelioProfiles.ANCHOR_WEEKLY ? "week" : anchor == revelioProfiles.ANCHOR_MONTHLY ? "month" : anchor == revelioProfiles.ANCHOR_QUARTERLY ? "quarter" : isTwentyFourSevenAsset ? "day" : "trading day"
+
+// Only dated profiles carry an age; live and previous profiles are self-evident and composites span several periods.
+profileAge(int startTime, SessionStyle style, bool manualComposite, bool isLive, bool isLast) =>
+    labelAgeActive and not manualComposite and not isLive and not isLast ? profileAgePeriods(startTime, style) : na
+
+compactAgeText(int agePeriods, SessionStyle style, bool surfaceEnabled) =>
+    surfaceEnabled and not na(agePeriods) ? str.tostring(agePeriods) + profileAgeUnit(style.labelAnchor) : ""
+
+spelledAgeText(int agePeriods, SessionStyle style) =>
+    labelAgeTouchHover and not na(agePeriods) ? str.tostring(agePeriods) + " " + profileAgeUnitName(style.labelAnchor) + (agePeriods == 1 ? "" : "s") + " ago" : ""
+
 levelHitSourceProfileKey(int startTime, int endTime, SessionStyle style) =>
     style.labelAnchor + "|" + str.tostring(startTime) + "|" + str.tostring(endTime)
 
@@ -1042,8 +1093,8 @@ manualCompositeAnchorName(int memberCount, SessionStyle style) =>
 manualCompositeIdentityText(int startKey, int endKey, int memberCount, SessionStyle style, string levelName) =>
     manualCompositeAnchorName(memberCount, style) + (levelName == "" ? "" : " " + levelName) + " " + manualCompositeRangeText(startKey, endKey, style)
 
-levelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, bool plainPrevious) =>
-    string dateText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
+levelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, bool plainPrevious, string ageText) =>
+    string dateText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone) + (ageText == "" ? "" : LABEL_AGE_SEPARATOR + ageText)
     string sourceSuffix = calendarRthIdentitySuffix(style)
     string previousText = (plainPrevious and isLast ? plainPreviousLabel(style.labelLast) : style.labelLast) + sourceSuffix
     string nameText = manualComposite ? manualCompositeIdentityText(manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, levelName) : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? previousText + " " + levelName : profileAnchorName(false, style) + " " + levelName + " " + dateText
@@ -1062,10 +1113,13 @@ compactProfilePrefix(SessionStyle style, bool isLive, bool isLast) =>
 profileCompactPrefix(bool manualComposite, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast) =>
     manualComposite ? manualCompositeAnchorName(manualCompositeMemberCount, style) : compactProfilePrefix(style, isLive, isLast) + calendarRthIdentitySuffix(style)
 
-levelLabelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, string displaySuffix, bool archived, bool unselectedAnchor) =>
-    string periodText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
-    string periodContext = manualComposite ? "" : revelioProfiles.periodContextText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
-    string periodMember = manualComposite ? "" : revelioProfiles.periodMemberText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
+levelLabelIdentity(int startTime, int endTime, bool manualComposite, int manualCompositeStartKey, int manualCompositeEndKey, int manualCompositeMemberCount, SessionStyle style, bool isLive, bool isLast, string levelName, bool sweptDenote, string displaySuffix, bool archived, bool unselectedAnchor, string ageText) =>
+    bool aged = ageText != ""
+    string dateText = manualComposite ? manualCompositeRangeText(manualCompositeStartKey, manualCompositeEndKey, style) : revelioProfiles.periodDateText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
+    string periodText = not aged ? dateText : labelAgeStyle == LABEL_AGE_ONLY ? ageText : dateText + LABEL_AGE_SEPARATOR + ageText
+    // Aged labels list each period in full because members sharing a month or year still differ in age.
+    string periodContext = manualComposite or aged ? "" : revelioProfiles.periodContextText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
+    string periodMember = manualComposite or aged ? "" : revelioProfiles.periodMemberText(startTime, style.periodLabelMode, style.useUtcLabelTimezone)
     string anchorName = manualComposite ? manualCompositeAnchorName(manualCompositeMemberCount, style) : profileAnchorName(false, style)
     string sourceSuffix = calendarRthIdentitySuffix(style)
     string baseText = manualComposite ? manualCompositeIdentityText(manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, levelName) : isLive ? style.labelLive + sourceSuffix + " " + levelName : isLast ? style.labelLast + sourceSuffix + " " + levelName : anchorName + " " + levelName + " " + periodText
@@ -1106,7 +1160,7 @@ renderManualCompositeFrame(array<revelioCore.Profile> profiles, revelioCore.Prof
         if showFullText
             revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(fromTime, profile.priceHigh, "From", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=style.valueAreaLastColor, size=6, color=style.levelLabelBgColor))
             revelioInteractions.trackLabel(drawnLabels, INDICATOR_MAX_LABELS, label.new(throughTime, profile.priceHigh, "Through", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_down, textcolor=style.valueAreaLastColor, size=6, color=style.levelLabelBgColor))
-            revelioInteractions.LabelIdentity frameIdentity = levelLabelIdentity(profile.startTime, profile.endTime, true, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, false, "", false, "", false, false)
+            revelioInteractions.LabelIdentity frameIdentity = levelLabelIdentity(profile.startTime, profile.endTime, true, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, false, "", false, "", false, false, "")
             color reminderTextColor = revelioInteractions.fadeColor(style.valueAreaLastColor, ANCHOR_REMINDER_FADE_PERCENT / 100.0)
             float placementPhase = lineReminderPlacementPhase("")
             int frameRank = levelLabelRank("", style, false, false)
@@ -1128,10 +1182,12 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     color labelTextColor = sweptDenote ? revelioInteractions.fadeColor(labelColor, SWEPT_LABEL_TEXT_FADE_PERCENT / 100.0) : labelColor
     int labelRank = levelLabelRank(levelName, style, isLive, isLast)
     int effectiveLineWidth = lineWidth
+    int agePeriods = profileAge(startTime, style, manualComposite, isLive, isLast)
+    string reminderAge = compactAgeText(agePeriods, style, labelAgeReminders)
     // Swept levels are tagged by the swept-line reminders below, never here, or they draw the same name twice.
     if showFullText and not isLive and not sweptDenote
         int visibleEndTime = extendRight ? time : endTime
-        revelioInteractions.LabelIdentity anchorLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, false, isLast, levelName, false, "", false, false)
+        revelioInteractions.LabelIdentity anchorLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, false, isLast, levelName, false, "", false, false, reminderAge)
         color anchorReminderTextColor = revelioInteractions.fadeColor(labelTextColor, ANCHOR_REMINDER_FADE_PERCENT / 100.0)
         queueBoundedLineReminder(price, anchorEndTime, visibleEndTime, lineReminderPlacementPhase(levelName), anchorLabelIdentity, anchorReminderTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth)
     if sweptDenote
@@ -1154,13 +1210,16 @@ drawLevel(int startTime, int endTime, float price, color lineColor, int lineWidt
     if extendRight or sweptDenote or hitTraceActive
         if showLevelText
             string priceText = str.tostring(price, format.mintick)
-            revelioInteractions.LabelIdentity labelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, sweptDenote, displaySuffix, hitTraceActive and archivedTouch, false)
+            string rightEdgeAge = compactAgeText(agePeriods, style, labelAgeRightEdge)
+            string mergedLineAge = compactAgeText(agePeriods, style, labelAgeMergedLines)
+            revelioInteractions.LabelIdentity labelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, sweptDenote, displaySuffix, hitTraceActive and archivedTouch, false, rightEdgeAge)
+            revelioInteractions.LabelIdentity mergedLineIdentity = mergedLineAge == rightEdgeAge ? labelIdentity : levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, sweptDenote, displaySuffix, hitTraceActive and archivedTouch, false, mergedLineAge)
             string touchKey = isLive ? "" : levelHitKey(levelHitSourceProfileKey(startTime, anchorEndTime, style), levelName)
             // Buffer the right-edge label instead of drawing it; flushPendingLabels merges coincident prices.
-            array.push(pendingLabels, revelioInteractions.PendingLabel.new(price, bar_index + style.levelLabelOffset, anchorEndTime, touchKey, labelIdentity, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth, activeLine, primaryLineRetained ? primaryLine : na, primaryLineRetained ? lineColor : na, continuationLine, continuationLineColor, carrierLine, carrierLineColor))
+            array.push(pendingLabels, revelioInteractions.PendingLabel.new(price, bar_index + style.levelLabelOffset, anchorEndTime, touchKey, labelIdentity, priceText, style.showPrice, hitTraceActive, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, labelRank, effectiveLineWidth, activeLine, primaryLineRetained ? primaryLine : na, primaryLineRetained ? lineColor : na, continuationLine, continuationLineColor, carrierLine, carrierLineColor, mergedLineIdentity))
         // Last and live profiles are self-evident, so only older completed profiles carry a date.
         if showFullText and sweptDenote
-            revelioInteractions.LabelIdentity reminderLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, false, displaySuffix, false, false)
+            revelioInteractions.LabelIdentity reminderLabelIdentity = levelLabelIdentity(startTime, anchorEndTime, manualComposite, manualCompositeStartKey, manualCompositeEndKey, manualCompositeMemberCount, style, isLive, isLast, levelName, false, displaySuffix, false, false, reminderAge)
             array.push(pendingReminders, revelioInteractions.PendingReminder.new(price, endTime, reminderLabelIdentity, labelTextColor, style.levelLabelBgColor, style.levelLabelSize, levelName, labelRank, effectiveLineWidth))
 
 // Scale visible opacity so fading respects the base transparency.
@@ -1484,12 +1543,13 @@ profileLevelHitPresentation(revelioCore.Profile profile, int profileIndex, int p
     bool sweptContinuationVisible = revelioCore.autoSweptMaskContains(sweptVisibilityMask, autoLevel)
     bool sweptDenote = sweptContinuationVisible and not na(breachTime)
     [_, extendsRight] = levelEndpoint(profile.endTime, breachTime, style.extensionMode)
+    int agePeriods = profileAge(profile.startTime, style, profile.manualComposite, false, isMostRecentCompleted)
 // Marker dots stay high-visibility on aged profiles, so value-area dots always use the strong color.
     color lineColor = levelName == LABEL_POC ? style.pocColor : style.valueAreaLastColor
     color baseLabelColor = levelName == LABEL_POC ? style.pocLabelColor : style.valueAreaLabelColor
     color labelColor = sweptDenote ? revelioInteractions.fadeColor(baseLabelColor, SWEPT_LABEL_TEXT_FADE_PERCENT / 100.0) : baseLabelColor
     int lineWidth = levelName == LABEL_POC ? style.pocWidth : style.valueAreaWidth
-    revelioInteractions.LevelHitPresentation.new(levelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, true), levelLabelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, "", false, false), lineColor, labelColor, style.levelLabelBgColor, style.showPrice, levelHitCircleSizeForAnchor(style.labelAnchor), style.levelLabelSize, style.levelLabelOffset, lineWidth, levelLabelRank(levelName, style, false, isMostRecentCompleted), levelHitAnchorPriority(style.labelAnchor), extendsRight or sweptDenote)
+    revelioInteractions.LevelHitPresentation.new(levelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, true, spelledAgeText(agePeriods, style)), levelLabelIdentity(profile.startTime, profile.endTime, profile.manualComposite, profile.manualCompositeStartKey, profile.manualCompositeEndKey, profile.manualCompositeMemberCount, style, false, isMostRecentCompleted, levelName, sweptDenote, "", false, false, compactAgeText(agePeriods, style, labelAgeRightEdge)), lineColor, labelColor, style.levelLabelBgColor, style.showPrice, levelHitCircleSizeForAnchor(style.labelAnchor), style.levelLabelSize, style.levelLabelOffset, lineWidth, levelLabelRank(levelName, style, false, isMostRecentCompleted), levelHitAnchorPriority(style.labelAnchor), extendsRight or sweptDenote)
 
 registerProfileLevelHitPresentations(map<string, revelioInteractions.LevelHitPresentation> presentations, revelioCore.Profile profile, int profileIndex, int profileCount, RenderBudgetAnchor anchor, bool surfaceSweptLevels) =>
     if profile.isValid and time > profile.endTime
@@ -2100,6 +2160,11 @@ if not assetClassificationReady
 dailyMaturityCalendarReset = assetClassificationReady and not dailyMaturityClassificationApplied
 if dailyMaturityCalendarReset
     dailyMaturityClassificationApplied := true
+
+// time_tradingday assigns evening Globex bars to the next session and extended-hours bars to their own day.
+tradingDateKey = int(time_tradingday / revelioProfiles.MS_PER_DAY)
+if not map.contains(tradingDateOrdinals, tradingDateKey)
+    map.put(tradingDateOrdinals, tradingDateKey, map.size(tradingDateOrdinals) + 1)
 
 // Select the RTH day mask by asset class; time() requires constant session strings.
 rthInSessionWeekday = not na(time(timeframe.period, revelioProfiles.RTH_SESSION, revelioProfiles.NY_TIMEZONE))
