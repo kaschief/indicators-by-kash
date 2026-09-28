@@ -509,7 +509,7 @@ customLabelMergeDistancePercent = input.float(LABEL_MERGE_BALANCED_PERCENT, "%",
 showMergedLineLabels = input.bool(true, "Merged Line Labels", group=GROUP_LABEL_MERGING, active=showLevelText and dedupeLabels, tooltip="Small, muted identities on secondary merged lines. Combined labels stay unchanged.")
 shortenLabels = input.bool(true, "Shorten Labels", group=GROUP_LABEL_MERGING, active=showLevelText, tooltip="Uses Profile First ordering. On shortens dated and live profile names while keeping previous profiles explicit: PREV RTH, PREV GLOBEX, LAST WEEK, LAST MONTH and LAST QUARTER. Off keeps full Profile First names. Applies to profile level labels and reminders. Touch Marker hover and Value Gap labels do not change. Shortened labels retain ✓Ⓐ; hover retains ⁺◌ provenance.")
 
-labelAgeStyle = input.string(LABEL_AGE_DATE, "Style", options=[revelioProfiles.OPTION_OFF, LABEL_AGE_DATE, LABEL_AGE_ONLY], group=GROUP_LABEL_AGE, tooltip="Shows how long ago each dated profile formed, counted in that profile's own sessions: trading days for RTH and Globex, weeks for Weekly, months for Monthly and quarters for Quarterly. Weekends never count. A short holiday session counts as its own day unless Merge Short Session folds it into another session, in which case the merged session counts once.\n\n" + LABEL_AGE_DATE + " — RTH POC Sep 21" + DETAIL_SEPARATOR + "5d.\n" + LABEL_AGE_ONLY + " — RTH POC 5d.\n\nLive, previous and Manual Composite profiles carry no age.")
+labelAgeStyle = input.string(LABEL_AGE_DATE, "Style", options=[revelioProfiles.OPTION_OFF, LABEL_AGE_DATE, LABEL_AGE_ONLY], group=GROUP_LABEL_AGE, tooltip="Shows how long ago each dated profile formed, counted in that profile's own sessions: trading days for RTH and Globex, weeks for Weekly, months for Monthly and quarters for Quarterly. Weekends never count except on 24/7 assets, which count calendar days. A short holiday session counts as its own day unless Merge Short Session folds it into another session, in which case the merged session counts once.\n\n" + LABEL_AGE_DATE + " — RTH POC Sep 21" + DETAIL_SEPARATOR + "5d.\n" + LABEL_AGE_ONLY + " — RTH POC 5d.\n\nLive, previous and Manual Composite profiles carry no age.")
 labelAgeActive = labelAgeStyle != revelioProfiles.OPTION_OFF
 labelAgeRightEdge = input.bool(true, "Right Edge", inline="label_age_targets", group=GROUP_LABEL_AGE, active=labelAgeActive and showLevelText)
 labelAgeReminders = input.bool(true, "Reminders", inline="label_age_targets", group=GROUP_LABEL_AGE, active=labelAgeActive and showFullText)
@@ -618,6 +618,7 @@ type RenderBudgetAnchor
     bool surfaceSweptLevels
     array<bool> histogramSelections
     array<bool> levelSelections
+    array<int> profileAges
 
 type HistogramBatch
     array<chart.point> outside
@@ -1019,6 +1020,7 @@ levelHitTraceActive(int hitTime, bool tracePresentationActive) =>
     tracePresentationActive and not na(hitTime) and (levelHitHistory == LEVEL_HIT_HISTORY_CURRENT_WINDOW ? sameNyDate(hitTime, time) : levelHitDayDistance(hitTime) < levelHitRetentionDays())
 
 // Ages count the anchor's own completed profiles, so merged short sessions count once and unmerged ones count separately.
+// A Manual Composite contributes one period per member because its members are not retained as separate profiles.
 // The current period adds one until its daily session completes; calendar periods are always in progress.
 // Live, previous and Manual Composite profiles stay na.
 profileAgeSeries(RenderBudgetAnchor anchor) =>
@@ -1028,17 +1030,18 @@ profileAgeSeries(RenderBudgetAnchor anchor) =>
         string anchorName = anchor.style.labelAnchor
         bool dailyAnchor = anchorName == revelioProfiles.ANCHOR_RTH or anchorName == revelioProfiles.ANCHOR_GLOBEX
         int currentTradingDate = int(time_tradingday / revelioProfiles.MS_PER_DAY)
-        int currentPeriodOffset = na
-        int newerProfiles = 0
+        revelioCore.Profile newestProfile = array.last(anchor.profiles)
+        int latestTradingDate = revelioProfiles.autoSweptCycleSerial(newestProfile.endTime - 1, isTwentyFourSevenAsset)
+        int currentPeriodOffset = not dailyAnchor or latestTradingDate < currentTradingDate ? 1 : 0
+        int newerPeriods = 0
         for profileIndex = profileCount - 1 to 0
             revelioCore.Profile profile = array.get(anchor.profiles, profileIndex)
-            if not profile.manualComposite
-                if na(currentPeriodOffset)
-                    int latestTradingDate = revelioProfiles.autoSweptCycleSerial(profile.endTime - 1, isTwentyFourSevenAsset)
-                    currentPeriodOffset := not dailyAnchor or latestTradingDate < currentTradingDate ? 1 : 0
+            if profile.manualComposite
+                newerPeriods += math.max(1, profile.manualCompositeMemberCount)
+            else
                 if profileIndex < profileCount - 1
-                    array.set(ages, profileIndex, newerProfiles + currentPeriodOffset)
-                newerProfiles += 1
+                    array.set(ages, profileIndex, newerPeriods + currentPeriodOffset)
+                newerPeriods += 1
     ages
 
 profileAgeUnit(string anchor) =>
@@ -1558,12 +1561,11 @@ registerProfileLevelHitPresentations(map<string, revelioInteractions.LevelHitPre
 registerAnchorLevelHitPresentations(map<string, revelioInteractions.LevelHitPresentation> presentations, RenderBudgetAnchor anchor, int fromIndex, bool active, bool selectedOnly, bool surfaceSweptLevels) =>
     int profileCount = array.size(anchor.profiles)
     if active and profileCount > 0
-        array<int> profileAges = profileAgeSeries(anchor)
         for profileIndex = 0 to profileCount - 1
             revelioCore.Profile profile = array.get(anchor.profiles, profileIndex)
             bool retainedForTrace = profileIndex >= math.max(0, fromIndex) or profile.manualComposite
             if retainedForTrace and (not selectedOnly or renderBudgetProfileAllowed(anchor, profileIndex))
-                registerProfileLevelHitPresentations(presentations, profile, profileIndex, profileCount, anchor, surfaceSweptLevels, array.get(profileAges, profileIndex))
+                registerProfileLevelHitPresentations(presentations, profile, profileIndex, profileCount, anchor, surfaceSweptLevels, array.get(anchor.profileAges, profileIndex))
     true
 
 registerRenderedLevelHitKey(map<string, bool> renderedLevelHitKeys, revelioCore.Profile profile, SessionStyle style, string levelName, bool isLive) =>
@@ -1975,7 +1977,6 @@ renderAnchor(RenderBudgetAnchor anchor, revelioCore.Profile liveProfile, bool sh
     HistogramBatch batch = newHistogramBatch()
     if anchor.levelsEnabled
         int profileCount = array.size(anchor.profiles)
-        array<int> profileAges = profileAgeSeries(anchor)
         if profileCount > 0
             for profileIndex = 0 to profileCount - 1
                 if renderBudgetProfileAllowed(anchor, profileIndex)
@@ -1983,7 +1984,7 @@ renderAnchor(RenderBudgetAnchor anchor, revelioCore.Profile liveProfile, bool sh
                     bool levelsAllowed = profileIndex < array.size(anchor.levelSelections) and array.get(anchor.levelSelections, profileIndex)
                     // Focused profiles draw whole or not at all.
                     bool focusWholeProfile = not anchor.restrictToFocus or not anchor.histogramEnabled or histogramAllowed
-                    renderProfile(array.get(anchor.profiles, profileIndex), anchor, profileIndex == profileCount - 1, anchorSurfacesSweptLevels(anchor, profileIndex), false, histogramAllowed, levelsAllowed and focusWholeProfile, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys, batch, array.get(profileAges, profileIndex))
+                    renderProfile(array.get(anchor.profiles, profileIndex), anchor, profileIndex == profileCount - 1, anchorSurfacesSweptLevels(anchor, profileIndex), false, histogramAllowed, levelsAllowed and focusWholeProfile, touchLabelsActive, archivedLevelHitKeys, renderedLevelHitKeys, batch, array.get(anchor.profileAges, profileIndex))
         flushHistogramBatch(batch, anchor.style, true)
         if showDeveloping and not na(liveProfile)
             renderProfile(liveProfile, anchor, false, false, true, true, true, false, archivedLevelHitKeys, renderedLevelHitKeys, batch, na)
@@ -2721,6 +2722,8 @@ if barstate.islast
     array.push(renderBudgetAnchors, RenderBudgetAnchor.new(weeklyState.profiles, weeklyAutoSweptState, weeklyStyle, weeklyFilterEnabled, weeklyHistogramActive, array.new<bool>(), false, false, array.new<bool>(), array.new<bool>()))
     array.push(renderBudgetAnchors, RenderBudgetAnchor.new(monthlyState.profiles, monthlyAutoSweptState, monthlyStyle, monthlyFilterEnabled, monthlyHistogramActive, array.new<bool>(), false, false, array.new<bool>(), array.new<bool>()))
     array.push(renderBudgetAnchors, RenderBudgetAnchor.new(quarterlyState.profiles, quarterlyAutoSweptState, quarterlyStyle, quarterlyFilterEnabled, quarterlyHistogramActive, array.new<bool>(), false, false, array.new<bool>(), array.new<bool>()))
+    for budgetAnchor in renderBudgetAnchors
+        budgetAnchor.profileAges := profileAgeSeries(budgetAnchor)
     bool touchLabelsActive = showFullText and levelHitShowLabels and levelHitDetectionActive
     registerAnchorLevelHitPresentations(levelHitPresentations, array.get(renderBudgetAnchors, 0), rthHitTraceFromIndex, rthHitTraceSourceActive, false, false)
     registerAnchorLevelHitPresentations(levelHitPresentations, array.get(renderBudgetAnchors, 1), globexHitTraceFromIndex, globexHitTraceSourceActive, false, false)
