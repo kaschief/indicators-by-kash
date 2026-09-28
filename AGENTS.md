@@ -418,8 +418,8 @@ Do not include unrelated files, and do not push unless the user separately reque
 - Keep the subject in the repository's required `type(scope): summary` format; allowed types are `feat`, `fix`, `perf`, `docs`, `style`, `refactor`, `test`, and `chore`
 - Add a blank line between the subject and body
 - Separate body paragraphs with real blank lines. When using `git commit`, pass the subject and each paragraph with separate `-m` arguments; never put literal `\n` sequences in a `-m` argument.
-- Summarize the user-facing changes and the important implementation or refactoring work
-- Include relevant validation performed and any intentionally deferred follow-ups
+- Write the body as a few short bullets describing the user-visible changes
+- Never include validation, test results, check counts, library version lists or registry notes in the body; report those in chat instead (enforced by `.husky/commit-msg`)
 - Keep the body concise, factual, and useful to someone reviewing history later
 - After committing, inspect the rendered commit message and amend immediately if it contains literal `\n` text or missing paragraph spacing.
 
