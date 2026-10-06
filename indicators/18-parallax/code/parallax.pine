@@ -14,6 +14,7 @@ const string GROUP_LOOKBACK   = "Lookback"
 const string GROUP_HTF_PROFILES = "HTF Profiles"
 const string GROUP_INTRADAY_PROFILES = "Intraday Profiles"
 const string GROUP_LIQUIDITY_DEPTH = "Liquidity Depth"
+const string GROUP_DAILY_RING = "Daily Ring"
 const string GROUP_DAILY_BOUNDARY_EXCEEDED = "Daily Boundary Exceeded"
 const string GROUP_FORECAST   = "Forecast"
 const string GROUP_FIB_HISTORY  = "Fibonacci: History"
@@ -217,6 +218,11 @@ const string WEEKLY_PROFILE_LABEL_SIZE = LBL_LARGE
 const string DAILY_PROFILE_LABEL_SIZE = LBL_LARGE
 const string INTRADAY_PROFILE_LABEL_SIZE = LBL_SMALL
 const color DAILY_PROFILE_COLOR = color.new(color.rgb(206, 147, 216), 90)
+const color DAILY_RING_COLOR = color.rgb(206, 147, 216)
+const int DAILY_RING_WIDTH = 2
+const string DAILY_RING_OFF = "Off"
+const string DAILY_RING_WITH_PROFILE = "With Profile"
+const string DAILY_RING_ONLY = "Ring Only"
 const float FIB_LABEL_TRANSPARENCY_REDUCTION = 55.0
 const float FIB_LABEL_TRANSPARENCY_MAX = 12.0
 
@@ -229,6 +235,7 @@ const string NY_AM_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindo
 const string NY_PM_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n12:00–16:00 NY."
 const string IVB_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:00 NY."
 const string IVB_PLUS_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:30 NY."
+const string DAILY_RING_TOOLTIP = "Ring\nOutlines today's Daily profile (Globex or Midnight): outer high to outer low, start to end.\n\nWith Profile\nAdds the ring; the Daily profile is unchanged.\n\nRing Only\nHides the Daily zones, name, LD, forecast, history and Boundary Exceeded. Other profiles are unchanged.\n\nColor\nRing outline color.\n\nFib\nRing Only: keeps the Daily Fib preset inside the ring."
 const string FORECAST_SLOT_TOOLTIP = "Show\nProjects selected next envelopes.\n\nProfiles\nSelect any enabled HTF, Daily or Intraday profile."
 const string LIQUIDITY_DEPTH_TOOLTIP = "Forecast LD\nProjects depth before a selected profile edge is breached.\n\nProfiles\nNormal LD appears only after an in-window outer-edge breach. Through 30m and on Range charts."
 const string FIB_HISTORY_TOOLTIP = "History\nShared number of completed profiles.\n\nProfiles\nSelect which profiles show saved Fib levels.\n\nTrailing\nExpands current and saved Fib anchors to profile extremes.\n\nLatest Only\nHides all saved Fib levels."
@@ -350,6 +357,9 @@ type ScheduledProfileConfig
     int fibLabelOffset
     string slotLabelSize
     int fibFade
+    bool ringVisible = false
+    bool ringOnly = false
+    color ringColor
 
 type ScheduledProfileChartState
     float runHigh
@@ -357,6 +367,7 @@ type ScheduledProfileChartState
 
 type SlotState
     array<box> histBoxes
+    box ringOutline
     box fillUp
     box fillLo
     line innH
@@ -531,6 +542,14 @@ useMidnight = input.bool(false, "", inline="daily_profile", group=GROUP_HTF_PROF
 dailyProfileColor = input.color(DAILY_PROFILE_COLOR, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow)
 dailyProfileHistory = input.int(DAILY_PROFILE_HISTORY_DEFAULT, "", inline="daily_profile", group=GROUP_HTF_PROFILES, minval=SLOT_HISTORY_MIN, maxval=SLOT_HISTORY_MAX, active=dailyProfileShow)
 dailyProfileFibPreset = input.string(FIB_PRESET_OFF, "", inline="daily_profile", group=GROUP_HTF_PROFILES, active=dailyProfileShow, options=[FIB_PRESET_OFF, FIB_PRESET_DEFAULT, FIB_PRESET_ALTERNATIVE])
+
+// DAILY RING
+
+dailyRingMode = input.string(DAILY_RING_OFF, "", options=[DAILY_RING_OFF, DAILY_RING_WITH_PROFILE, DAILY_RING_ONLY], inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow)
+bool dailyRingVisible = dailyRingMode != DAILY_RING_OFF
+bool dailyProfileRingOnly = dailyRingMode == DAILY_RING_ONLY
+dailyRingColor = input.color(DAILY_RING_COLOR, "", inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow and dailyRingVisible)
+dailyRingFib = input.bool(false, "Fib", inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow and dailyProfileRingOnly and dailyProfileFibPreset != FIB_PRESET_OFF, tooltip=DAILY_RING_TOOLTIP)
 
 // DAILY BOUNDARY EXCEEDED
 
@@ -749,6 +768,8 @@ int slot2FibHistoryLimit = slot2FibHistory ? fibHistoryAmount : 0
 int weeklyProfileFibHistoryLimit = weeklyProfileFibHistory ? fibHistoryAmount : 0
 int monthlyProfileFibHistoryLimit = monthlyProfileFibHistory ? fibHistoryAmount : 0
 int dailyProfileFibHistoryLimit = dailyProfileFibHistory ? fibHistoryAmount : 0
+// Ring is today-only, so it keeps no completed Daily profiles.
+int dailyProfileEffectiveHistory = dailyProfileRingOnly ? SLOT_HISTORY_MIN : dailyProfileHistory
 int overnightFibHistoryLimit = overnightFibHistory ? fibHistoryAmount : 0
 int nyEarlyFibHistoryLimit = nyEarlyFibHistory ? fibHistoryAmount : 0
 int nyAmFibHistoryLimit = nyAmFibHistory ? fibHistoryAmount : 0
@@ -767,7 +788,7 @@ var FibLevelSet slot1FibLevelSet = resolve_fib_level_set(slot1FibPreset, disable
 var FibLevelSet slot2FibLevelSet = resolve_fib_level_set(slot2FibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
 var FibLevelSet weeklyProfileFibLevelSet = resolve_fib_level_set(weeklyProfileFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
 var FibLevelSet monthlyProfileFibLevelSet = resolve_fib_level_set(monthlyProfileFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
-var FibLevelSet dailyProfileFibLevelSet = resolve_fib_level_set(dailyProfileFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
+var FibLevelSet dailyProfileFibLevelSet = resolve_fib_level_set(dailyProfileRingOnly and not dailyRingFib ? FIB_PRESET_OFF : dailyProfileFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
 var FibLevelSet overnightFibLevelSet = resolve_fib_level_set(overnightFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
 var FibLevelSet nyEarlyFibLevelSet = resolve_fib_level_set(nyEarlyFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
 var FibLevelSet nyAmFibLevelSet = resolve_fib_level_set(nyAmFibPreset, disabledFibLevelSet, defaultFibLevelSet, alternativeFibLevelSet)
@@ -841,11 +862,12 @@ var ScheduledProfileConfig dailyProfileConfig = ScheduledProfileConfig.new(
      sourceLabel=dailyProfileLabel,
      startMinute=dailyProfileStartMinute, endMinute=dailyProfileStartMinute, fullPeriod=true,
      forecastLeadMinutes=DAILY_PROFILE_DURATION_MINUTES, samplingSchedule=effectiveDailySchedule, forecastSchedule=effectiveDailySchedule,
-     enabled=dailyProfileShow, slotColor=dailyProfileColor, sampleLookback=htfSlotLookback, historyLimit=dailyProfileHistory, fibHistoryLimit=dailyProfileFibHistoryLimit, liquidityDepthEnabled=dailyLiquidityDepth,
-     fibLevelSet=dailyProfileFibLevelSet, forecastEnabled=forecastDaily,
-     fibLabelsEnabled=fibLabelDaily, fibLabelSize=fibLabelSizeDaily,
+     enabled=dailyProfileShow, slotColor=dailyProfileColor, sampleLookback=htfSlotLookback, historyLimit=dailyProfileEffectiveHistory, fibHistoryLimit=dailyProfileFibHistoryLimit, liquidityDepthEnabled=dailyLiquidityDepth and not dailyProfileRingOnly,
+     fibLevelSet=dailyProfileFibLevelSet, forecastEnabled=forecastDaily and not dailyProfileRingOnly,
+     fibLabelsEnabled=fibLabelDaily and (dailyRingFib or not dailyProfileRingOnly), fibLabelSize=fibLabelSizeDaily,
      fibLabelPosition=fibLabelPosDaily, fibLabelOffset=fibLabelOffDaily,
-     slotLabelSize=DAILY_PROFILE_LABEL_SIZE, fibFade=SCHEDULED_PROFILE_FIB_FADE)
+     slotLabelSize=DAILY_PROFILE_LABEL_SIZE, fibFade=SCHEDULED_PROFILE_FIB_FADE,
+     ringVisible=dailyRingVisible, ringOnly=dailyProfileRingOnly, ringColor=dailyRingColor)
 dailyProfileConfig.samplingSchedule := effectiveDailySchedule
 dailyProfileConfig.forecastSchedule := effectiveDailySchedule
 
@@ -913,7 +935,7 @@ time_option_minutes(string timeOption) =>
     int(str.tonumber(str.substring(timeOption, 0, 2))) * MINUTES_PER_HOUR + int(str.tonumber(str.substring(timeOption, 3, 5)))
 
 var ProfileEdgeQualificationConfig dailyProfileEdgeQualificationConfig = ProfileEdgeQualificationConfig.new(
-     enabled=dailyBoundaryExceededEnabled,
+     enabled=dailyBoundaryExceededEnabled and not dailyProfileRingOnly,
      historyEnabled=dailyBoundaryExceededHistory,
      cutoffMinute=time_option_minutes(dailyBoundaryExceededCutoff),
      outlineColor=color.orange,
@@ -2074,7 +2096,8 @@ update_slot(SlotState s, bool valid, bool transitionNow, int zoneStartT, int zon
 
 draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int curRightT, int curRightIndex, float htfO, float htfH, float htfL, color slotColor, string identifierText, string fibLabelPrefix,
                    float medHO, float meanHO, float medOL, float meanOL,
-                   string slotLabelSize, FibLevelSet fibLevelSet, FibPalette fibPalette, int fibTransparencyBoost, bool labelSlotEnabled, string fibLabelSize, string fibLabelPos, int fibLabelOffsetMs, int fibLabelOffsetBars) =>
+                   string slotLabelSize, FibLevelSet fibLevelSet, FibPalette fibPalette, int fibTransparencyBoost, bool labelSlotEnabled, string fibLabelSize, string fibLabelPos, int fibLabelOffsetMs, int fibLabelOffsetBars,
+                   bool zonesVisible = true) =>
     // Null after delete so toggling a feature off mid-period leaves no dangling handle.
     if not na(s.fillUp)
         box.delete(s.fillUp)
@@ -2102,19 +2125,31 @@ draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int c
     if valid and not na(medHO) and not na(medOL)
         [innerHigh, outerHigh, innerLow, outerLow] = compute_levels(htfO, medHO, meanHO, medOL, meanOL)
 
-        color fillClr = zone_fill_color(slotColor)
-        s.fillUp := make_zone_box(true, curLeftT, curLeftIndex, outerHigh, curRightT, curRightIndex, innerHigh, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
-        s.fillLo := make_zone_box(true, curLeftT, curLeftIndex, innerLow, curRightT, curRightIndex, outerLow, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
+        if zonesVisible
+            color fillClr = zone_fill_color(slotColor)
+            s.fillUp := make_zone_box(true, curLeftT, curLeftIndex, outerHigh, curRightT, curRightIndex, innerHigh, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
+            s.fillLo := make_zone_box(true, curLeftT, curLeftIndex, innerLow, curRightT, curRightIndex, outerLow, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
 
-        s.innH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerHigh, slotColor, line.style_solid, 1)
-        s.innL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerLow, slotColor, line.style_solid, 1)
-        s.outH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerHigh, slotColor, line.style_solid, 1)
-        s.outL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerLow, slotColor, line.style_solid, 1)
+            s.innH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerHigh, slotColor, line.style_solid, 1)
+            s.innL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerLow, slotColor, line.style_solid, 1)
+            s.outH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerHigh, slotColor, line.style_solid, 1)
+            s.outL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerLow, slotColor, line.style_solid, 1)
 
         if fibLevelSet.lineCount > 0
             float fibAnchorHigh = fibTrailing ? math.max(outerHigh, htfH) : outerHigh
             float fibAnchorLow  = fibTrailing ? math.min(outerLow,  htfL) : outerLow
             draw_slot_fib(s, curLeftT, curLeftIndex, curRightT, curRightIndex, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, fibLevelSet, fibPalette, fibLabelPrefix, labelSlotEnabled, fibLabelSize, fibLabelPos, fibLabelOffsetMs, fibLabelOffsetBars)
+
+// Outline only: the same outer edges Daily LD and Boundary Exceeded use, so the ring never sits inside the zones.
+draw_slot_ring(SlotState s, bool visible, int leftT, int leftIndex, int rightT, int rightIndex, float profileOpen,
+               float medHO, float meanHO, float medOL, float meanOL, color ringColor) =>
+    if not na(s.ringOutline)
+        box.delete(s.ringOutline)
+        s.ringOutline := na
+    if visible and not na(medHO) and not na(medOL)
+        [ringHigh, ringLow] = liquidity_depth_anchors(profileOpen, medHO, meanHO, medOL, meanOL)
+        s.ringOutline := box.new(drawing_x(leftT, leftIndex, true), ringHigh, drawing_x(rightT, rightIndex, true), ringLow,
+             xloc=drawing_xloc(true), bgcolor=na, border_color=ringColor, border_width=DAILY_RING_WIDTH)
 
 draw_slot_forecast(SlotState s, bool valid, int forecastLeftT, int forecastRightT,
                    float htfO, float htfH, float htfL, color slotColor, string identifierText, string slotLabelSize,
@@ -2169,6 +2204,11 @@ draw_scheduled_profile_current(SlotState slot, ScheduledProfileConfig profileCon
                            string identifierText, int currentRightIndex,
                            FibPalette fibPalette, bool fibLabelsEnabled, int labelOffsetMilliseconds, int labelOffsetBars) =>
     int sessionRightIndex = not na(profileRuntime.endIndex) ? profileRuntime.endIndex : currentRightIndex
+    draw_slot_ring(slot, currentVisible and profileConfig.ringVisible,
+         profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex, profileRuntime.sessionOpen,
+         profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow,
+         profileConfig.ringColor)
+    // Ring Only drops the zones; Fib draws only when the ring keeps a Fib preset.
     draw_slot_current(slot, currentVisible,
          profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex,
          profileRuntime.sessionOpen, profileRuntime.currentHigh, profileRuntime.currentLow,
@@ -2176,7 +2216,7 @@ draw_scheduled_profile_current(SlotState slot, ScheduledProfileConfig profileCon
          profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow,
          profileConfig.slotLabelSize, profileConfig.fibLevelSet, fibPalette, profileConfig.fibFade,
          fibLabelsEnabled, profileConfig.fibLabelSize, profileConfig.fibLabelPosition,
-         labelOffsetMilliseconds, labelOffsetBars)
+         labelOffsetMilliseconds, labelOffsetBars, not profileConfig.ringOnly)
 
 draw_scheduled_profile_forecast(SlotState slot, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, string identifierText) =>
     ScheduledProfileForecastData forecastData = profileRuntime.forecast
@@ -2343,6 +2383,7 @@ int forecastZoneCount = (s1ForecastVisible ? 1 : 0) + (s2ForecastVisible ? 1 : 0
 int scheduledProfileCurrentLineReserve = 0
 int scheduledProfileCurrentLabelReserve = 0
 int scheduledProfileQualificationBoxReserve = 0
+int scheduledProfileRingBoxReserve = 0
 for profileIndex = 0 to array.size(scheduledProfiles) - 1
     ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
     ScheduledProfileConfig profileConfig = profile.config
@@ -2365,10 +2406,11 @@ for profileIndex = 0 to array.size(scheduledProfiles) - 1
     scheduledProfileCurrentLabelReserve += profileRuntime.valid ? labelsPerZone : 0
     scheduledProfileCurrentLabelReserve += depthActive ? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0
     scheduledProfileCurrentLabelReserve += forecastDepthVisible ? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0
+    scheduledProfileRingBoxReserve += profileConfig.ringVisible and profileRuntime.valid ? 1 : 0
     ProfileEdgeQualification edgeQualification = profile.edgeQualification
     if not na(edgeQualification) and edgeQualification.config.enabled and profileRuntime.valid
         scheduledProfileQualificationBoxReserve += latestOnly or not edgeQualification.config.historyEnabled ? 1 : profileConfig.historyLimit
-int currentBoxReserve = (currentBoxZoneCount + forecastZoneCount) * 2 + scheduledProfileQualificationBoxReserve
+int currentBoxReserve = (currentBoxZoneCount + forecastZoneCount) * 2 + scheduledProfileQualificationBoxReserve + scheduledProfileRingBoxReserve
 int availableHistoryBoxZones = int(math.max(0, INDICATOR_MAX_BOXES - currentBoxReserve) / 2)
 array<int> boxHistZoneCaps = allocate_history_zone_caps(availableHistoryBoxZones, historyBudgetValids, boxHistoryZoneRequests, HTF_PROFILE_COUNT, SLOT_HISTORY_MAX)
 int s1BoxHistZoneCap = array.get(boxHistZoneCaps, 0)
