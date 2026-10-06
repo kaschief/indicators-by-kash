@@ -173,6 +173,12 @@ const string DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS = "Selected Tier Outliers"
 const string MITIGATION_WINDOW_ANYTIME = "Anytime"
 const int ADR_LOOKBACK_DAYS = 5
 const string ADR_DAILY_TIMEFRAME = "D"
+const color DEFAULT_ALL_TIME_HIGH_COLOR = color.rgb(41, 98, 255)
+const string ALL_TIME_HIGH_HISTORY_TIMEFRAME = "D"
+const float ALL_TIME_HIGH_MARKER_PROFILE_FRACTION = 0.25
+const int ALL_TIME_HIGH_MARKER_SEGMENTS = 4
+const int ALL_TIME_HIGH_MARKER_START_TRANSPARENCY = 30
+const int ALL_TIME_HIGH_MARKER_END_TRANSPARENCY = 90
 
 const string DELTA_TIER_VISIBILITY_BUY = "Delta++"
 const string DELTA_TIER_VISIBILITY_SELL = "Delta--"
@@ -225,6 +231,7 @@ GROUP_WEEKLY = MODE_WEEKLY
 GROUP_MONTHLY = MODE_MONTHLY
 GROUP_QUICK_FILTER_SHOW_ONLY = "⚡ Quick Filter: Show Only"
 GROUP_QUICK_FILTER_SETTINGS = "⚡ Quick Filter: Settings"
+GROUP_ALL_TIME_HIGH_MARKER = "All-Time High Marker"
 GROUP_FOCUS = "🎯 Focus"
 GROUP_DELTA = "Delta"
 GROUP_APPEARANCE = "🖼️ Profile Appearance"
@@ -317,6 +324,14 @@ minimumDeltaTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRE
 deltaRowFilter = input.string(DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS, "", options=[OPTION_ALL, DELTA_ROW_FILTER_OUTLIERS, DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS], inline="delta_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, tooltip="• Show Minimum Delta Tiers — displays the chosen strength tier and all stronger tiers. Strong⁺ includes Dominant and Strong.\n• Row filter — controls the Delta histogram: All shows every nonzero row; Outliers Only shows unusually strong rows; Selected Tier Outliers shows only rows included in the visible selected tiers.\n\nSelected Tier Outliers needs Delta tiers and at least one tier side enabled.")
 showMinimumLvnTiers = input.bool(true, "Show Minimum LVN Tiers", inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS)
 minimumLvnTierStrength = input.string(TIER_THRESHOLD_4, "", options=[TIER_THRESHOLD_5, TIER_THRESHOLD_4, TIER_THRESHOLD_3, TIER_THRESHOLD_2, TIER_THRESHOLD_1], inline="lvn_tier_filter", group=GROUP_QUICK_FILTER_SETTINGS, active=showMinimumLvnTiers, tooltip="Shows the chosen LVN strength tier and all stronger tiers, including selected low-volume zones and cliff levels. For example, Strong⁺ shows the two strongest available structures. Turning this off hides those zones, levels and markers.")
+
+// ═════════════════════════════════════════════════
+// INPUTS — ALL-TIME HIGH MARKER
+// ═════════════════════════════════════════════════
+allTimeHighShow = input.bool(true, "Enable", inline="ath_display", group=GROUP_ALL_TIME_HIGH_MARKER)
+allTimeHighColor = input.color(DEFAULT_ALL_TIME_HIGH_COLOR, "", inline="ath_display", group=GROUP_ALL_TIME_HIGH_MARKER, active=allTimeHighShow)
+allTimeHighBufferPercent = input.int(20, "Buffer %", minval=0, maxval=500, inline="ath_display", group=GROUP_ALL_TIME_HIGH_MARKER, active=allTimeHighShow,
+     tooltip="A quiet fading line at the left edge of the leftmost latest visible profile marks the all-time high. Buffer: it appears only when the ATH is no further above today's Globex high than this percentage of today's Globex high-to-low range. The New All-Time High alert is available in the alert dialog regardless of this toggle.")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS — DEVELOPING PROFILES
@@ -531,7 +546,7 @@ visibleLvnTierCount = visibleTierCount(minimumLvnTierStrength)
 mergeDistancePercent = mergeDistancePreset == LABEL_MERGE_STRICT ? LABEL_MERGE_STRICT_PERCENT : mergeDistancePreset == LABEL_MERGE_WIDE ? LABEL_MERGE_WIDE_PERCENT : mergeDistancePreset == LABEL_MERGE_EXTRA_WIDE ? LABEL_MERGE_EXTRA_WIDE_PERCENT : mergeDistancePreset == LABEL_MERGE_CUSTOM ? customMergeDistancePercent : LABEL_MERGE_BALANCED_PERCENT
 
 showFocusAnchorGuide = focusUsesPrice and focusDateInputsValid and profileChartAllowed
-legilimensPresentation.ObjectLimits presentationLimits = legilimensPresentation.ObjectLimits.new(INDICATOR_MAX_LINES - (showFocusAnchorGuide ? 1 : 0), INDICATOR_MAX_LABELS - (showFocusAnchorGuide ? 1 : 0), INDICATOR_MAX_BOXES, INDICATOR_MAX_POLYLINES)
+legilimensPresentation.ObjectLimits presentationLimits = legilimensPresentation.ObjectLimits.new(INDICATOR_MAX_LINES - (showFocusAnchorGuide ? 1 : 0) - (allTimeHighShow ? ALL_TIME_HIGH_MARKER_SEGMENTS : 0), INDICATOR_MAX_LABELS - (showFocusAnchorGuide ? 1 : 0) - (allTimeHighShow ? 1 : 0), INDICATOR_MAX_BOXES, INDICATOR_MAX_POLYLINES)
 legilimensPresentation.DeltaSettings presentationDeltaSettings = legilimensPresentation.DeltaSettings.new(deltaHistogramRows, deltaRowFilter, showDeltaTiers, visibleDeltaTierCount, deltaTierSideVisibility, deltaTierLineStyleSetting, showHighestDeltaLevels, 3, showMinimumLvnTiers, visibleLvnTierCount, matchLowVolumeFibStyling, showPrice, 90, 50, showHistogram, histogramWidthPercent, showDeltaFormationTime, showLvnFormationTime)
 legilimensPresentation.LevelSettings presentationLevelSettings = legilimensPresentation.LevelSettings.new(showValueAreaLevels, showPocLevel, showProfileMidpointLine, midpointLabelPosition == "Right edge", mergeOverlaps, mergeDistancePercent)
 sessionProfileRetention = legilimensPresentation.maximumProfileCapacity(presentationLimits, presentationDeltaSettings, presentationLevelSettings)
@@ -563,6 +578,8 @@ type ColorRow
 var legilimensPresentation.RenderState presentationState = legilimensPresentation.newRenderState()
 var line focusAnchorGuide = na
 var label focusAnchorLabel = na
+var array<line> allTimeHighMarkerSegments = array.new<line>()
+var label allTimeHighMarkerLabel = na
 var int firstProfileChartTime = time
 var int rollingFocusOldestStart = na
 var int rollingFocusEndTime = na
@@ -752,6 +769,27 @@ buildCurrentRollingProfile(legilimensProfile.RollingSampleStore store, legilimen
 selectSessionProfiles(int historyCount, bool currentPeriodActive, bool showDevelopingProfile, legilimensOrchestration.AnchorState state, legilimensProfile.SampleBatch currentSamples, bool includeCurrentSamples, int developingEndTime) =>
     legilimensOrchestration.selectProfiles(historyCount, currentPeriodActive, not showDevelopingProfile, state, currentSamples, includeCurrentSamples, developingEndTime, PROFILE_ROWS, syminfo.mintick)
 
+drawAllTimeHighMarker(array<line> segments, int startTime, int endTime, float price, color markerColor) =>
+    float segmentDuration = (endTime - startTime) * ALL_TIME_HIGH_MARKER_PROFILE_FRACTION / ALL_TIME_HIGH_MARKER_SEGMENTS
+    float transparencyStep = (ALL_TIME_HIGH_MARKER_END_TRANSPARENCY - ALL_TIME_HIGH_MARKER_START_TRANSPARENCY) / float(ALL_TIME_HIGH_MARKER_SEGMENTS - 1)
+    for segmentIndex = 0 to ALL_TIME_HIGH_MARKER_SEGMENTS - 1
+        int segmentStart = startTime + int(segmentDuration * segmentIndex)
+        int segmentEnd = startTime + int(segmentDuration * (segmentIndex + 1))
+        color segmentColor = color.new(markerColor, ALL_TIME_HIGH_MARKER_START_TRANSPARENCY + transparencyStep * segmentIndex)
+        array.push(segments, line.new(segmentStart, price, segmentEnd, price, xloc=xloc.bar_time, color=segmentColor, width=1))
+    label.new(startTime, price, "ATH", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_right, size=size.small,
+         color=color.new(color.white, 100), textcolor=color.new(markerColor, ALL_TIME_HIGH_MARKER_START_TRANSPARENCY),
+         tooltip="All-time high: " + str.tostring(price, format.mintick))
+
+allTimeHighWithinBuffer(float allTimeHighPrice, float dayHigh, float dayLow, int bufferPercent) =>
+    allTimeHighPrice <= dayHigh + (dayHigh - dayLow) * bufferPercent / 100.0
+
+clearAllTimeHighMarker(array<line> segments, label markerLabel) =>
+    for segment in segments
+        line.delete(segment)
+    array.clear(segments)
+    label.delete(markerLabel)
+
 // Scheduled decision dates: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (2026-09-16).
 fomcDecisionDateAllowed(int decisionTime) =>
     var array<int> decisionDates = array.from(
@@ -874,6 +912,15 @@ monthlyPeriodStart = isTwentyFourSevenAsset ? utcMonthStart : futuresMonthStart
 // ═══════════════════════════════════════════════════════════════════════════════
 // Reads the daily candle exactly as the adr indicator's Globex Open does.
 [dailyCandleOpen, dailyCandleAverageRange, dailyCandleTime] = request.security(chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid), ADR_DAILY_TIMEFRAME, [open, ta.sma(high - low, ADR_LOOKBACK_DAYS)[1], time], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// Unconfirmed high/low are only read on the last bar.
+[priorSessionsAllTimeHigh, globexHigh, globexLow] = request.security(ticker.standard(syminfo.tickerid), ALL_TIME_HIGH_HISTORY_TIMEFRAME, [ta.max(high)[1], high, low], lookahead=barmerge.lookahead_on)
+var float allTimeHigh = na
+float priorAllTimeHigh = na(allTimeHigh) ? priorSessionsAllTimeHigh : math.max(allTimeHigh, nz(priorSessionsAllTimeHigh, allTimeHigh))
+bool isNewAllTimeHigh = not na(priorAllTimeHigh) and high > priorAllTimeHigh
+allTimeHigh := math.max(nz(priorAllTimeHigh, high), high)
+
+alertcondition(isNewAllTimeHigh, "New All-Time High", "{{ticker}} printed a new all-time high: {{high}}")
 bool dailyCandleStarted = dailyCandleTime != dailyCandleTime[1]
 var int tradingDayStartTime = na
 if dailyCandleStarted
@@ -1427,19 +1474,44 @@ if barstate.islast
         array.push(presentationBindings, legilimensPresentation.SelectionBinding.new(selectedSessionProfiles, selectedPresentationSource))
 
     bool hideDevelopingExtendedCounterpart = groupedNyProfilesActive and extendedNyEarlyInSession and not legilimensPresentation.developingProfileVisible(extendedNyEarlyPresentationSource, presentationConfig)
-    if rollingSelected and not na(rollingProfile) and rollingProfile.data.isValid
+    bool rollingProfileRendered = rollingSelected and not na(rollingProfile) and rollingProfile.data.isValid
+    bool fixedProfileRendered = fixedRangeEnabled and not na(fixedProfile) and fixedProfile.data.isValid
+    if rollingProfileRendered
         legilimensPresentation.renderStandaloneProfile(presentationState, rollingProfile, not rollingUsesClockCutoff(rollingWindowThrough), rollingPresentationSource, presentationSources, presentationContext, presentationConfig)
     else
         legilimensPresentation.renderSelections(presentationState, presentationBindings, hideDevelopingExtendedCounterpart, nyEarlyAnchor.startTime, presentationSources, presentationContext, presentationConfig)
     legilimensPresentation.flushFrame(presentationState, presentationContext, presentationConfig)
 
-    if fixedRangeEnabled and not na(fixedProfile) and fixedProfile.data.isValid
+    if fixedProfileRendered
         legilimensPresentation.renderStandaloneProfile(presentationState, fixedProfile, time < fixedRangeEnd, fixedPresentationSource, presentationSources, presentationContext, presentationConfig)
         legilimensPresentation.flushFrame(presentationState, presentationContext, presentationConfig)
+    array<legilimensOrchestration.Profile> latestVisibleProfiles = array.new<legilimensOrchestration.Profile>()
+    if rollingProfileRendered
+        array.push(latestVisibleProfiles, rollingProfile)
+    else
+        for binding in presentationBindings
+            int selectedCount = array.size(binding.selection.profiles)
+            if selectedCount > 0
+                array.push(latestVisibleProfiles, array.get(binding.selection.profiles, selectedCount - 1))
+    if fixedProfileRendered
+        array.push(latestVisibleProfiles, fixedProfile)
+    legilimensOrchestration.Profile markerProfile = na
+    for profile in latestVisibleProfiles
+        if na(markerProfile) or profile.startTime < markerProfile.startTime
+            markerProfile := profile
+
+    // Recreated each update so drawing-limit cleanup never removes it.
+    clearAllTimeHighMarker(allTimeHighMarkerSegments, allTimeHighMarkerLabel)
+    allTimeHighMarkerLabel := na
+    if allTimeHighShow and not na(markerProfile) and allTimeHighWithinBuffer(allTimeHigh, globexHigh, globexLow, allTimeHighBufferPercent)
+        allTimeHighMarkerLabel := drawAllTimeHighMarker(allTimeHighMarkerSegments, markerProfile.startTime, markerProfile.endTime, allTimeHigh, allTimeHighColor)
+
     if showColorTable
         array<ColorRow> colorRows = array.new<ColorRow>()
         if showOnlyEnabled and showOnlyTimeframeAllowed
             addColorRow(colorRows, "Hidden Candles", hiddenCandleColor, "")
+        if allTimeHighShow
+            addColorRow(colorRows, "All-Time High", allTimeHighColor, "")
         if not na(colorTable)
             table.delete(colorTable)
         colorTable := table.new(position.top_right, 4, array.size(colorRows) + 1, bgcolor=color.rgb(255, 255, 255), border_width=1, border_color=color.rgb(128, 128, 128), frame_width=1, frame_color=color.rgb(128, 128, 128))

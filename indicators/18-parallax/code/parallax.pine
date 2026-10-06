@@ -25,6 +25,7 @@ const string GROUP_FIB_LABELS   = "Fibonacci: Labels"
 const string GROUP_ADVANCED   = "Advanced"
 const string GROUP_TABLE      = "Color Reference Table"
 const string GROUP_QUICK_FILTER_SETTINGS = "⚡ Quick Filter Settings"
+const string GROUP_ALL_TIME_HIGH = "All-Time High Marker"
 
 // TIME AND CALENDAR
 
@@ -92,6 +93,12 @@ const color DEFAULT_HIDDEN_CANDLE_COLOR = color.new(color.rgb(245, 245, 245), 25
 const color DEFAULT_LIQUIDITY_DEPTH_EXTENSION_COLOR = color.new(color.rgb(247, 82, 95), 32)
 const color DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND = color.new(color.rgb(255, 255, 255), 50)
 const color DEFAULT_LIQUIDITY_DEPTH_LABEL_TEXT = color.new(color.rgb(156, 156, 156), 0)
+const color DEFAULT_ALL_TIME_HIGH_COLOR = color.rgb(41, 98, 255)
+const string ALL_TIME_HIGH_HISTORY_TIMEFRAME = "D"
+const float ALL_TIME_HIGH_MARKER_PROFILE_FRACTION = 0.25
+const int ALL_TIME_HIGH_MARKER_SEGMENTS = 4
+const int ALL_TIME_HIGH_MARKER_START_TRANSPARENCY = 30
+const int ALL_TIME_HIGH_MARKER_END_TRANSPARENCY = 90
 
 // Grayscale tier palette: dark = closest, light = farthest.
 const color SLOT1_COLOR = color.rgb(74,  74,  74)
@@ -510,6 +517,13 @@ showOnlyEnabled = input.bool(false, "Show Only", inline="show_only", group=GROUP
 hiddenCandleColor = input.color(DEFAULT_HIDDEN_CANDLE_COLOR, "", inline="show_only", group=GROUP_QUICK_FILTER_SETTINGS, active=showOnlyEnabled)
 visibleWindow = input.string(WINDOW_LABEL_RTH, "", options=[WINDOW_LABEL_OVERNIGHT, WINDOW_LABEL_FROM_0500, WINDOW_LABEL_FROM_0830, WINDOW_LABEL_RTH], inline="show_only", group=GROUP_QUICK_FILTER_SETTINGS, active=showOnlyEnabled)
 showOnlyMostRecent = input.bool(false, "Most Recent Only", inline="show_only", group=GROUP_QUICK_FILTER_SETTINGS, active=showOnlyEnabled, tooltip="Dims outside the selected NY window. ≤1H and Range.\nMost Recent Only — current NY date only.")
+
+// ALL-TIME HIGH
+
+allTimeHighShow = input.bool(true, "Enable", inline="ath_display", group=GROUP_ALL_TIME_HIGH)
+allTimeHighColor = input.color(DEFAULT_ALL_TIME_HIGH_COLOR, "", inline="ath_display", group=GROUP_ALL_TIME_HIGH, active=allTimeHighShow)
+allTimeHighBufferPercent = input.int(20, "Buffer %", minval=0, maxval=500, inline="ath_display", group=GROUP_ALL_TIME_HIGH, active=allTimeHighShow,
+     tooltip="A quiet fading line at the left edge of today's Daily profile marks the all-time high. Buffer: it appears only when the ATH is no further above today's high than this percentage of today's high-to-low range. The New All-Time High alert is available in the alert dialog regardless of this toggle.")
 
 // HTF PROFILES
 
@@ -2559,6 +2573,48 @@ hideThisBar = showOnlyEnabled and showOnlyTimeframeAllowed and not (showOnlyInVi
 
 plotcandle(hideThisBar ? open : na, high, low, close, title="Hidden Candles", color=hiddenCandleColor, bordercolor=hiddenCandleColor, wickcolor=hiddenCandleColor, editable=false, display=display.pane, force_overlay=true)
 
+// ALL-TIME HIGH
+
+float priorSessionsAllTimeHigh = request.security(ticker.standard(syminfo.tickerid), ALL_TIME_HIGH_HISTORY_TIMEFRAME, ta.max(high)[1], lookahead=barmerge.lookahead_on)
+
+var float allTimeHigh = na
+float priorAllTimeHigh = na(allTimeHigh) ? priorSessionsAllTimeHigh : math.max(allTimeHigh, nz(priorSessionsAllTimeHigh, allTimeHigh))
+bool isNewAllTimeHigh = not na(priorAllTimeHigh) and high > priorAllTimeHigh
+allTimeHigh := math.max(nz(priorAllTimeHigh, high), high)
+
+alertcondition(isNewAllTimeHigh, "New All-Time High", "{{ticker}} printed a new all-time high: {{high}}")
+
+draw_all_time_high_marker(array<line> segments, int startTime, int endTime, float price, color markerColor) =>
+    float segmentDuration = (endTime - startTime) * ALL_TIME_HIGH_MARKER_PROFILE_FRACTION / ALL_TIME_HIGH_MARKER_SEGMENTS
+    float transparencyStep = (ALL_TIME_HIGH_MARKER_END_TRANSPARENCY - ALL_TIME_HIGH_MARKER_START_TRANSPARENCY) / float(ALL_TIME_HIGH_MARKER_SEGMENTS - 1)
+    for segmentIndex = 0 to ALL_TIME_HIGH_MARKER_SEGMENTS - 1
+        int segmentStart = startTime + int(segmentDuration * segmentIndex)
+        int segmentEnd = startTime + int(segmentDuration * (segmentIndex + 1))
+        color segmentColor = color.new(markerColor, ALL_TIME_HIGH_MARKER_START_TRANSPARENCY + transparencyStep * segmentIndex)
+        array.push(segments, line.new(segmentStart, price, segmentEnd, price, xloc=xloc.bar_time, color=segmentColor, width=1))
+    label.new(startTime, price, "ATH", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_right, size=size.small,
+         color=color.new(color.white, 100), textcolor=color.new(markerColor, ALL_TIME_HIGH_MARKER_START_TRANSPARENCY),
+         tooltip="All-time high: " + str.tostring(price, format.mintick))
+
+all_time_high_within_buffer(float allTimeHighPrice, float dayHigh, float dayLow, int bufferPercent) =>
+    allTimeHighPrice <= dayHigh + (dayHigh - dayLow) * bufferPercent / 100.0
+
+clear_all_time_high_marker(array<line> segments, label markerLabel) =>
+    for segment in segments
+        line.delete(segment)
+    array.clear(segments)
+    label.delete(markerLabel)
+
+var array<line> allTimeHighMarkerSegments = array.new<line>()
+var label allTimeHighMarkerLabel = na
+
+// Recreated each update so drawing-limit cleanup never removes it.
+if barstate.islast
+    clear_all_time_high_marker(allTimeHighMarkerSegments, allTimeHighMarkerLabel)
+    allTimeHighMarkerLabel := na
+    if allTimeHighShow and not na(dailyProfileRuntime.startTime) and all_time_high_within_buffer(allTimeHigh, dailyProfileRuntime.currentHigh, dailyProfileRuntime.currentLow, allTimeHighBufferPercent)
+        allTimeHighMarkerLabel := draw_all_time_high_marker(allTimeHighMarkerSegments, dailyProfileRuntime.startTime, dailyProfileRuntime.endTime, allTimeHigh, allTimeHighColor)
+
 // COLOR REFERENCE TABLE
 
 addRow(table tbl, int row, string name, color clr) =>
@@ -2573,6 +2629,7 @@ if showTable and barstate.islast
         activeColorInputCount += profile.config.enabled ? 1 : 0
     activeColorInputCount += fibInputsActive ? 9 : 0
     activeColorInputCount += showOnlyEnabled ? 1 : 0
+    activeColorInputCount += allTimeHighShow ? 1 : 0
     int colorTableRowCount = 1 + activeColorInputCount
     var table colorTable = table.new(position.top_right, 3, colorTableRowCount, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
     table.cell(colorTable, 0, 0, "Setting", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
@@ -2620,6 +2677,10 @@ if showTable and barstate.islast
 
     if showOnlyEnabled
         addRow(colorTable, row, "Hidden Candles", hiddenCandleColor)
+        row += 1
+
+    if allTimeHighShow
+        addRow(colorTable, row, "All-Time High", allTimeHighColor)
         row += 1
 
 // parallax •
