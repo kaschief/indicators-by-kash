@@ -151,7 +151,7 @@ for (const [name, prefix, startConstant, startClock, beforeStart, straddlingStar
 
   test(`${name} sampling, lifecycle and selection share its session boundaries`, () => {
     assert.ok(host.includes(`${prefix}Samples = selectNySessionSamples(barSamples, ${prefix}ModeActive, ${startConstant}, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false, ${prefix}SampleSessionStarts)`));
-    assert.ok(host.includes(`${prefix}CurrentSessionStart = activeNySessionStart(boundedSessionEvaluationTime, ${prefix}ModeActive, ${startConstant}, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false)`));
+    assert.ok(host.includes(`${prefix}CurrentSessionStart = activeNySessionStart(sessionClockTime, ${prefix}ModeActive, ${startConstant}, AFTERNOON_END_MINUTE, isTwentyFourSevenAsset, false)`));
     assert.ok(host.includes(`processKeyedBoundedNyAnchor(${prefix}Anchor, ${prefix}ModeActive, sessionProfileRetention, ${startConstant}, AFTERNOON_END_MINUTE, ${prefix}InSession, ${prefix}CurrentSessionStart, ${prefix}SampleSessionStarts, ${prefix}Samples.endTimes, ${prefix}Samples,`));
     assert.ok(host.includes(`selectSessionProfiles(priorProfilesToShow, ${prefix}InSession, legilimensPresentation.developingProfileVisible(${prefix}PresentationSource, presentationConfig), ${prefix}Anchor, keyedNoSamples, false, ${prefix}Anchor.lastBarTime)`));
   });
@@ -173,4 +173,25 @@ test('empty NY session bars use New York boundaries through DST and exclude clos
   const saturday = Date.parse('2026-09-05T07:00:00-04:00');
   assert.equal(context.boundedNySessionStart(saturday, true, false, null, 360, 540, false), -1);
   assert.equal(context.boundedNySessionStart(saturday, true, false, null, 360, 540, true), Date.parse('2026-09-05T06:00:00-04:00'));
+});
+
+test('session clock follows the replay candle instead of the wall clock', () => {
+  const body = host.match(/^candleClockTime\(\) =>\n\s+(.+)$/m)?.[1];
+  assert.ok(body, 'Missing candleClockTime');
+  assert.ok(!host.includes('str.contains(syminfo.tickerid, "replay")'));
+  const expression = body.replace(/\bna\(/g, 'isNa(');
+  const clock = (state) => vm.runInNewContext(expression, {
+    ...state, barstate: { isrealtime: state.realtime }, isNa: value => value == null,
+    math: Math, nz: (value, fallback) => value ?? fallback,
+  });
+  const open = Date.parse('2025-01-29T13:40:00-05:00');
+  const close = open + 5 * 60_000;
+  assert.equal(clock({ realtime: false, time: open, time_close: close, timenow: 0 }), close);
+  assert.equal(clock({ realtime: true, time: open, time_close: close, timenow: open + 60_000 }), open + 60_000);
+  assert.equal(clock({ realtime: true, time: open, time_close: close, timenow: open - 3_600_000 }), open);
+  assert.equal(clock({ realtime: true, time: open, time_close: close, timenow: Date.parse('2026-10-07T16:00:00-04:00') }), close);
+  assert.equal(clock({ realtime: true, time: open, time_close: null, timenow: open + 60_000 }), open + 60_000);
+  for (const name of ['fomc', 'overnightNine', 'nyAfternoon', 'allDayToAfternoon']) {
+    assert.ok(host.includes(`${name}CurrentSessionStart = activeNySessionStart(sessionClockTime, `), name);
+  }
 });
