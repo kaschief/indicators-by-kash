@@ -174,7 +174,6 @@ const string MITIGATION_WINDOW_ANYTIME = "Anytime"
 const int ADR_LOOKBACK_DAYS = 5
 const string ADR_DAILY_TIMEFRAME = "D"
 const color DEFAULT_ALL_TIME_HIGH_COLOR = color.rgb(41, 98, 255)
-const string ALL_TIME_HIGH_HISTORY_TIMEFRAME = "D"
 const float ALL_TIME_HIGH_MARKER_PROFILE_FRACTION = 0.25
 const int ALL_TIME_HIGH_MARKER_SEGMENTS = 4
 const int ALL_TIME_HIGH_MARKER_START_TRANSPARENCY = 30
@@ -916,21 +915,34 @@ monthlyPeriodStart = isTwentyFourSevenAsset ? utcMonthStart : futuresMonthStart
 // ═══════════════════════════════════════════════════════════════════════════════
 // DAILY CANDLE
 // ═══════════════════════════════════════════════════════════════════════════════
-// Reads the daily candle exactly as the adr indicator's Globex Open does.
-[dailyCandleOpen, dailyCandleAverageRange, dailyCandleTime] = request.security(chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid), ADR_DAILY_TIMEFRAME, [open, ta.sma(high - low, ADR_LOOKBACK_DAYS)[1], time], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
-
+// Reads the daily candle as the adr indicator's Globex Open does. Bar Replay can omit the developing
+// candle, so the trading day rolls on the chart session and falls back to the day's own bars.
 // Unconfirmed high/low are only read on the last bar.
-[priorSessionsAllTimeHigh, globexHigh, globexLow] = request.security(ticker.standard(syminfo.tickerid), ALL_TIME_HIGH_HISTORY_TIMEFRAME, [ta.max(high)[1], high, low], lookahead=barmerge.lookahead_on)
+[dailyCandleTradingDay, dailyCandleOpen, dailyCandleHigh, dailyCandleLow, averageRangeThroughCandle, averageRangeBeforeCandle, priorSessionsAllTimeHigh] = request.security(ticker.standard(syminfo.tickerid), ADR_DAILY_TIMEFRAME, [time_tradingday, open, high, low, ta.sma(high - low, ADR_LOOKBACK_DAYS), ta.sma(high - low, ADR_LOOKBACK_DAYS)[1], ta.max(high)[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 var float allTimeHigh = na
 float priorAllTimeHigh = na(allTimeHigh) ? priorSessionsAllTimeHigh : math.max(allTimeHigh, nz(priorSessionsAllTimeHigh, allTimeHigh))
 bool isNewAllTimeHigh = not na(priorAllTimeHigh) and high > priorAllTimeHigh
 allTimeHigh := math.max(nz(priorAllTimeHigh, high), high)
 
 alertcondition(isNewAllTimeHigh, "New All-Time High", "{{ticker}} printed a new all-time high: {{high}}")
-bool dailyCandleStarted = dailyCandleTime != dailyCandleTime[1]
+bool tradingDayStarted = ta.change(time("D")) != 0
 var int tradingDayStartTime = na
-if dailyCandleStarted
+var float tradingDayOpen = na
+var float tradingDayHigh = na
+var float tradingDayLow = na
+if tradingDayStarted
     tradingDayStartTime := time
+    tradingDayOpen := open
+    tradingDayHigh := high
+    tradingDayLow := low
+else
+    tradingDayHigh := math.max(tradingDayHigh, high)
+    tradingDayLow := math.min(tradingDayLow, low)
+bool dailyCandleCurrent = dailyCandleTradingDay == time_tradingday
+float currentDayOpen = dailyCandleCurrent ? dailyCandleOpen : tradingDayOpen
+float currentDayHigh = dailyCandleCurrent ? dailyCandleHigh : tradingDayHigh
+float currentDayLow = dailyCandleCurrent ? dailyCandleLow : tradingDayLow
+float currentDayAverageRange = dailyCandleCurrent ? averageRangeBeforeCandle : averageRangeThroughCandle
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADR BAND HISTORY
@@ -938,11 +950,11 @@ if dailyCandleStarted
 var array<int> adrDayStartTimes = array.new<int>()
 var array<float> adrDayBandLows = array.new<float>()
 var array<float> adrDayBandHighs = array.new<float>()
-if withinAdrActive and dailyCandleStarted
-    float adrHalfWidth = dailyCandleAverageRange * withinAdrMultiplier
+if withinAdrActive and tradingDayStarted
+    float adrHalfWidth = currentDayAverageRange * withinAdrMultiplier
     array.push(adrDayStartTimes, time)
-    array.push(adrDayBandLows, dailyCandleOpen - adrHalfWidth)
-    array.push(adrDayBandHighs, dailyCandleOpen + adrHalfWidth)
+    array.push(adrDayBandLows, currentDayOpen - adrHalfWidth)
+    array.push(adrDayBandHighs, currentDayOpen + adrHalfWidth)
     if array.size(adrDayStartTimes) > ADR_BAND_RETAINED_DAYS
         array.shift(adrDayStartTimes)
         array.shift(adrDayBandLows)
@@ -1508,7 +1520,7 @@ if barstate.islast
     // Recreated each update so drawing-limit cleanup never removes it.
     clearAllTimeHighMarker(allTimeHighMarkerSegments, allTimeHighMarkerLabel)
     allTimeHighMarkerLabel := na
-    if allTimeHighShow and not na(markerProfile) and allTimeHighNearToday(allTimeHigh, globexHigh, globexLow, allTimeHighBufferPercent, dailyCandleOpen, dailyCandleAverageRange)
+    if allTimeHighShow and not na(markerProfile) and allTimeHighNearToday(allTimeHigh, currentDayHigh, currentDayLow, allTimeHighBufferPercent, currentDayOpen, currentDayAverageRange)
         allTimeHighMarkerLabel := drawAllTimeHighMarker(allTimeHighMarkerSegments, markerProfile.startTime, markerProfile.endTime, allTimeHigh, allTimeHighColor)
 
     if showColorTable

@@ -1117,7 +1117,7 @@ string htfTickerId = chart.is_range ? ticker.standard(syminfo.tickerid) : syminf
 
 fetch_htf_open(string tickerId, string tf, simple bool enabled, simple int historyLimit) =>
     if enabled
-        request.security(tickerId, tf, open, lookahead=barmerge.lookahead_on, calc_bars_count=historyLimit + 2)
+        request.security(tickerId, tf, [time, open], lookahead=barmerge.lookahead_on, calc_bars_count=historyLimit + 2)
 
 calculate_htf_stats(int historyOffset, int sampleLookback) =>
     [ta.median(high - open, sampleLookback)[historyOffset], ta.sma(high - open, sampleLookback)[historyOffset],
@@ -1330,10 +1330,10 @@ simple int nyPmSourceRequestBars = scheduled_profile_request_bars(nyPmShow, intr
 simple int ivbSourceRequestBars = scheduled_profile_request_bars(ivbShow, intradayProfileLookback, ivbRequestHistory)
 simple int ivbPlusSourceRequestBars = scheduled_profile_request_bars(ivbPlusShow, intradayProfileLookback, ivbPlusRequestHistory)
 
-s1O = fetch_htf_open(htfTickerId, s1Safe, slot1Show, htfOpenRequestHistory)
-s2O = fetch_htf_open(htfTickerId, s2Safe, slot2Show, htfOpenRequestHistory)
-weeklyProfileOpen = fetch_htf_open(htfTickerId, weeklyProfileSafe, weeklyProfileShow, htfOpenRequestHistory)
-monthlyProfileOpen = fetch_htf_open(htfTickerId, monthlyProfileSafe, monthlyProfileShow, htfOpenRequestHistory)
+[s1RequestedTime, s1RequestedOpen] = fetch_htf_open(htfTickerId, s1Safe, slot1Show, htfOpenRequestHistory)
+[s2RequestedTime, s2RequestedOpen] = fetch_htf_open(htfTickerId, s2Safe, slot2Show, htfOpenRequestHistory)
+[weeklyProfileRequestedTime, weeklyProfileRequestedOpen] = fetch_htf_open(htfTickerId, weeklyProfileSafe, weeklyProfileShow, htfOpenRequestHistory)
+[monthlyProfileRequestedTime, monthlyProfileRequestedOpen] = fetch_htf_open(htfTickerId, monthlyProfileSafe, monthlyProfileShow, htfOpenRequestHistory)
 
 [s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL] = fetch_htf_stats(htfTickerId, s1Safe, slot1Show, htfSlotLookback)
 [s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL] = fetch_htf_stats(htfTickerId, s2Safe, slot2Show, htfSlotLookback)
@@ -1410,12 +1410,16 @@ var ScheduledProfileChartState ivbPlusChartState = ScheduledProfileChartState.ne
      ivbPlusChartState, scheduledProfileTrackOnChart, ivbPlusData.startTime, ivbPlusData.endTime, ivbPlusData.profileHigh, ivbPlusData.profileLow)
 
 var float s1RunHigh = na
+var float s1PeriodOpen = na
 var float s1RunLow  = na
 var float s2RunHigh = na
+var float s2PeriodOpen = na
 var float s2RunLow  = na
 var float weeklyProfileRunHigh = na
+var float weeklyProfilePeriodOpen = na
 var float weeklyProfileRunLow = na
 var float monthlyProfileRunHigh = na
+var float monthlyProfilePeriodOpen = na
 var float monthlyProfileRunLow = na
 int s1PeriodChange = ta.change(time(s1Safe))
 int s2PeriodChange = ta.change(time(s2Safe))
@@ -1424,6 +1428,7 @@ int monthlyProfilePeriodChange = ta.change(time(monthlyProfileSafe))
 
 if s1Valid
     if na(s1RunHigh) or s1PeriodChange != 0
+        s1PeriodOpen := open
         s1RunHigh := high
         s1RunLow  := low
     else
@@ -1432,6 +1437,7 @@ if s1Valid
 
 if s2Valid
     if na(s2RunHigh) or s2PeriodChange != 0
+        s2PeriodOpen := open
         s2RunHigh := high
         s2RunLow  := low
     else
@@ -1440,6 +1446,7 @@ if s2Valid
 
 if weeklyProfileValid
     if na(weeklyProfileRunHigh) or weeklyProfilePeriodChange != 0
+        weeklyProfilePeriodOpen := open
         weeklyProfileRunHigh := high
         weeklyProfileRunLow := low
     else
@@ -1448,6 +1455,7 @@ if weeklyProfileValid
 
 if monthlyProfileValid
     if na(monthlyProfileRunHigh) or monthlyProfilePeriodChange != 0
+        monthlyProfilePeriodOpen := open
         monthlyProfileRunHigh := high
         monthlyProfileRunLow := low
     else
@@ -1946,12 +1954,14 @@ slot_forecast_right_time(string safe, int currentRightTime) =>
     nz(calendarRightTime, fixedDurationRightTime)
 
 // Resolves a slot's rollover, dual-coordinate anchors, and effective open/run-high/low.
-resolve_slot_timing(string safe, float normOpen, float normRunHigh, float normRunLow,
+resolve_slot_timing(string safe, int requestedTime, float requestedOpen, float periodOpen, float normRunHigh, float normRunLow,
                     bool nNewDay, int nDayStart, int nDayStartIndex, int nDayEnd, float nOpen, float nRunHigh, float nRunLow,
                     bool nNewWeek, int nWeekStart, int nWeekStartIndex, float nwOpen, float nwRunHigh, float nwRunLow) =>
     bool isDaily   = timeframe.in_seconds(safe) == SECS_DAY
     bool isWeekly  = timeframe.in_seconds(safe) == SECS_WEEK
     int  normStart = time(safe)
+    // Bar Replay can omit the developing HTF candle; open from the period's first chart bar instead.
+    float normOpen = not na(requestedTime) and requestedTime < normStart ? periodOpen : requestedOpen
     int  fixedDurationRight = normStart + timeframe.in_seconds(safe) * MS_PER_SEC
     int  calendarRight = timeframe.in_seconds(safe) >= SECS_4_WEEKS ? time_close(timeframe=safe) : na
     int  normRight = nz(calendarRight, fixedDurationRight)
@@ -2269,10 +2279,10 @@ update_intraday_profile_runtime(ScheduledProfileRuntime profileRuntime, Schedule
 
 // DISPATCH — every bar maintains state per slot
 
-[s1Trans, s1StartT, s1StartIndex, s1CurRightT, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1O, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[s2Trans, s2StartT, s2StartIndex, s2CurRightT, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2O, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[weeklyProfileTransition, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow] = resolve_slot_timing(weeklyProfileSafe, weeklyProfileOpen, weeklyProfileRunHigh, weeklyProfileRunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
-[monthlyProfileTransition, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow] = resolve_slot_timing(monthlyProfileSafe, monthlyProfileOpen, monthlyProfileRunHigh, monthlyProfileRunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s1Trans, s1StartT, s1StartIndex, s1CurRightT, s1OEff, s1RHi, s1RLo] = resolve_slot_timing(s1Safe, s1RequestedTime, s1RequestedOpen, s1PeriodOpen, s1RunHigh, s1RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[s2Trans, s2StartT, s2StartIndex, s2CurRightT, s2OEff, s2RHi, s2RLo] = resolve_slot_timing(s2Safe, s2RequestedTime, s2RequestedOpen, s2PeriodOpen, s2RunHigh, s2RunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[weeklyProfileTransition, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow] = resolve_slot_timing(weeklyProfileSafe, weeklyProfileRequestedTime, weeklyProfileRequestedOpen, weeklyProfilePeriodOpen, weeklyProfileRunHigh, weeklyProfileRunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
+[monthlyProfileTransition, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow] = resolve_slot_timing(monthlyProfileSafe, monthlyProfileRequestedTime, monthlyProfileRequestedOpen, monthlyProfilePeriodOpen, monthlyProfileRunHigh, monthlyProfileRunLow, nativeNewDay, nativeDayStart, nativeDayStartIndex, nativeDayStart + SECS_DAY * MS_PER_SEC, nativeOpen, nativeRunHigh, nativeRunLow, nativeNewWeek, nativeWeekStartT, nativeWeekStartIndex, nativeWeekOpen, nativeWeekRunHigh, nativeWeekRunLow)
 
 string s1ForecastLabel = get_tf_display_label(s1Safe)
 string s2ForecastLabel = get_tf_display_label(s2Safe)
@@ -2381,7 +2391,8 @@ int s1LabelsPerZone = fib_label_count_per_zone(slot1FibLevelSet, fibPalette, fib
 int s2LabelsPerZone = fib_label_count_per_zone(slot2FibLevelSet, fibPalette, fibLabel2On, fibLabelPos2)
 int weeklyProfileLabelsPerZone = fib_label_count_per_zone(weeklyProfileFibLevelSet, fibPalette, fibLabelWeeklyOn, fibLabelPosWeekly)
 int monthlyProfileLabelsPerZone = fib_label_count_per_zone(monthlyProfileFibLevelSet, fibPalette, fibLabelMonthlyOn, fibLabelPosMonthly)
-int profileVisibilityTime = barstate.isrealtime ? timenow : nz(time_close, time)
+// Bar Replay reports its edge candle as realtime while timenow does not follow the replay; clamp the clock to the candle.
+int profileVisibilityTime = barstate.isrealtime ? math.max(time, na(time_close) ? timenow : math.min(timenow, time_close)) : nz(time_close, time)
 
 int s1HistoryZoneRequest = history_zone_request(latestOnly, slot1History)
 int s2HistoryZoneRequest = history_zone_request(latestOnly, slot2History)

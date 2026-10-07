@@ -1126,14 +1126,17 @@ test('host wires the ADR band for every extendable profile into the presentation
   assert.match(host, /^withinAdrActive = withinAdrEnabled and extendUnmitigatedActive$/m);
   assert.match(host, /^hideMitigated = input\.bool\(true, "Hide Mitigated", inline="mitigation_filters"/m);
   assert.match(host, /^withinAdrEnabled = input\.bool\(true, "Within ADR", inline="mitigation_filters"/m);
-  assert.match(host, /request\.security\(chart\.is_standard \? syminfo\.tickerid : ticker\.standard\(syminfo\.tickerid\), ADR_DAILY_TIMEFRAME, \[open, ta\.sma\(high - low, ADR_LOOKBACK_DAYS\)\[1\], time\], gaps=barmerge\.gaps_off, lookahead=barmerge\.lookahead_on\)/);
+  assert.match(host, /request\.security\(ticker\.standard\(syminfo\.tickerid\), ADR_DAILY_TIMEFRAME, \[time_tradingday, open, high, low, ta\.sma\(high - low, ADR_LOOKBACK_DAYS\), ta\.sma\(high - low, ADR_LOOKBACK_DAYS\)\[1\], ta\.max\(high\)\[1\]\], gaps=barmerge\.gaps_off, lookahead=barmerge\.lookahead_on\)/);
   assert.match(host, /^const int ADR_LOOKBACK_DAYS = 5$/m);
   assert.doesNotMatch(host, /withinAdrLookback|input\.int\([^\n]*Lookback[^\n]*mitigation_filters/);
   assert.match(host, /InteractionSettings\.new\(extendUnmitigated, unmitigatedWindow, [^\n]+, hideMitigated \? tradingDayStartTime : na, adrBandLow, adrBandHigh\)/);
   assert.doesNotMatch(host, /NY Midnight|ADR_CALC_|withinAdrCalculation|nyMidnight/, 'Within ADR is Globex Open only');
-  assert.match(host, /^bool dailyCandleStarted = dailyCandleTime != dailyCandleTime\[1\]$/m);
-  assert.match(host, /^if dailyCandleStarted\n    tradingDayStartTime := time$/m);
-  assert.match(host, /^if withinAdrActive and dailyCandleStarted$/m);
+  assert.match(host, /^bool tradingDayStarted = ta\.change\(time\("D"\)\) != 0$/m, 'Replay can omit the developing daily candle');
+  assert.match(host, /^if tradingDayStarted\n    tradingDayStartTime := time\n    tradingDayOpen := open$/m);
+  assert.match(host, /^bool dailyCandleCurrent = dailyCandleTradingDay == time_tradingday$/m);
+  assert.match(host, /^float currentDayOpen = dailyCandleCurrent \? dailyCandleOpen : tradingDayOpen$/m);
+  assert.match(host, /^float currentDayAverageRange = dailyCandleCurrent \? averageRangeBeforeCandle : averageRangeThroughCandle$/m);
+  assert.match(host, /^if withinAdrActive and tradingDayStarted$/m);
   assert.doesNotMatch(host, /^ +(?=\S)(?!legilimensOrchestration\.).*\b(?:shifted)?[cC]alendar(?:Day|Month)Start\(/m, 'ta.change day-start helpers must not be called from a local block');
 });
 

@@ -597,3 +597,14 @@ test('history budget allocators stop at the deepest requested layer', () => {
   assert.match(fibAllocator, /for layer = 1 to requestedLayers/);
   assert.doesNotMatch(fibAllocator, /for layer = 1 to maxHistoryZones/);
 });
+
+test('Bar Replay keeps HTF opens and Hide Completed on the replay candle', () => {
+  assert.match(functionBody('fetch_htf_open'), /request\.security\(tickerId, tf, \[time, open\]/);
+  assert.match(functionBody('resolve_slot_timing'), /float normOpen = not na\(requestedTime\) and requestedTime < normStart \? periodOpen : requestedOpen/);
+  for (const prefix of ['s1', 's2', 'weeklyProfile', 'monthlyProfile']) {
+    assert.match(source, new RegExp(`\\[${prefix}RequestedTime, ${prefix}RequestedOpen\\] = fetch_htf_open\\(`));
+    assert.match(source, new RegExp(`${prefix}PeriodChange != 0\\n        ${prefix}PeriodOpen := open`));
+    assert.match(source, new RegExp(`resolve_slot_timing\\(${prefix}Safe, ${prefix}RequestedTime, ${prefix}RequestedOpen, ${prefix}PeriodOpen, `));
+  }
+  assert.match(source, /^int profileVisibilityTime = barstate\.isrealtime \? math\.max\(time, na\(time_close\) \? timenow : math\.min\(timenow, time_close\)\) : nz\(time_close, time\)$/m);
+});
