@@ -379,6 +379,10 @@ withinSessionCutoff(int currentMinutes, int startMinutes, int cutoffMinutes) =>
 requestRangeSnapshot(string tickerId, string period, int lookback) =>
     request.security(tickerId, period, [open, ta.sma(high - low, lookback)[1], time, time_close, open[1], high[1], low[1], ta.sma(high - low, lookback)[2]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 
+// Bar Replay can omit the developing daily candle.
+requestGlobexSnapshot(string tickerId, int lookback) =>
+    request.security(tickerId, "D", [time_tradingday, open, ta.sma(high - low, lookback), ta.sma(high - low, lookback)[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
 // ═══════════════════════════════════════════════════════════════════════════
 // LEVEL DRAWING METHODS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -431,7 +435,7 @@ method deleteLabels(LevelPair this) =>
         this.lblUpper := na
         this.lblLower := na
 
-method extend(LevelPair this, int t2) =>
+method extendTo(LevelPair this, int t2) =>
     if not na(this)
         if not na(this.upper)
             line.set_x2(this.upper, t2)
@@ -455,10 +459,10 @@ method deleteLabels(PeriodLevels this) =>
         for pair in this.pairs
             pair.deleteLabels()
 
-method extend(PeriodLevels this, int t2) =>
+method extendTo(PeriodLevels this, int t2) =>
     if not na(this) and not na(this.pairs)
         for pair in this.pairs
-            pair.extend(t2)
+            pair.extendTo(t2)
 
 method updateLabels(PeriodLevels this, int t) =>
     if not na(this) and not na(this.pairs)
@@ -521,7 +525,7 @@ method sync(PeriodProjectionState this, bool enabled, int startTime, int endTime
         if na(this.drawnStartTime) or startTime != this.drawnStartTime
             if not na(this.current)
                 if not na(completedPeriodEndTime)
-                    this.current.extend(completedPeriodEndTime)
+                    this.current.extendTo(completedPeriodEndTime)
                 if historyDepth > 0
                     this.current.deleteLabels()
                     array.unshift(this.history, this.current)
@@ -540,7 +544,7 @@ method sync(PeriodProjectionState this, bool enabled, int startTime, int endTime
             this.currentObservation.lowPrice := math.min(this.currentObservation.lowPrice, observedLow)
             this.currentObservation.averageRange := averageRange
 
-    this.current.extend(endTime)
+    this.current.extendTo(endTime)
     this.current.updateLabels(endTime)
 
 var array<LevelConfig> adrConfigs = buildRangeConfigs("ADR", calcType == CALC_GLOBEX_OPEN ? " • G" : "", adrLookback, adrMultiplier, LineStyleConfig.new(true, adrColor, adrStyle, adrWidth), LineStyleConfig.new(showAdrThirds, adrThirdsColor, adrThirdsStyle, adrThirdsWidth), LineStyleConfig.new(showAdrTwoThirds, adrTwoThirdsColor, adrTwoThirdsStyle, adrTwoThirdsWidth))
@@ -569,7 +573,9 @@ amrRequestPeriod = "M"
 htfTickerId = chart.is_standard ? syminfo.tickerid : ticker.standard(syminfo.tickerid)
 [weeklyOpen, averageWeeklyRange, weeklyStartTime, weeklyEndTime, previousWeeklyOpen, previousWeeklyHigh, previousWeeklyLow, previousAverageWeeklyRange] = requestRangeSnapshot(htfTickerId, awrRequestPeriod, awrLookback)
 [monthlyOpen, averageMonthlyRange, monthlyStartTime, monthlyEndTime, previousMonthlyOpen, previousMonthlyHigh, previousMonthlyLow, previousAverageMonthlyRange] = requestRangeSnapshot(htfTickerId, amrRequestPeriod, amrLookback)
-[globexOpen, averageGlobexRange, globexStartTime, globexEndTime, _, _, _, _] = requestRangeSnapshot(htfTickerId, "D", adrLookback)
+[globexTradingDay, globexOpen, averageGlobexRangeThroughCandle, averageGlobexRangeBeforeCandle] = requestGlobexSnapshot(htfTickerId, adrLookback)
+globexCandleCurrent = globexTradingDay == time_tradingday
+averageGlobexRange = globexCandleCurrent ? averageGlobexRangeBeforeCandle : averageGlobexRangeThroughCandle
 
 adrActive = adrEnabled and adrChartSupported
 awrActive = awrEnabled and awrChartSupported
@@ -596,17 +602,18 @@ var AlertState alertHit = AlertState.new()
 dailyState.beginBar()
 float observedPeriodHigh = high
 float observedPeriodLow = low
-selectedAdrStartTime = calcType == CALC_GLOBEX_OPEN ? globexStartTime : nyDayTimestamp(time)
-selectedAdrEndTime = calcType == CALC_GLOBEX_OPEN ? globexEndTime : nextNyDayTimestamp(selectedAdrStartTime)
+useGlobexCandleOpen = calcType == CALC_GLOBEX_OPEN and globexCandleCurrent
+selectedAdrStartTime = calcType == CALC_GLOBEX_OPEN ? time("D") : nyDayTimestamp(time)
+selectedAdrEndTime = calcType == CALC_GLOBEX_OPEN ? time_close("D") : nextNyDayTimestamp(selectedAdrStartTime)
 
 if chart.is_range or chart.is_standard
-    selectedAdrOpen = calcType == CALC_GLOBEX_OPEN ? globexOpen : open
+    selectedAdrOpen = useGlobexCandleOpen ? globexOpen : open
     dailyState.observe(time, selectedAdrStartTime, selectedAdrOpen, high, low, syminfo.type == "futures", judasHitToday, calcType, averageGlobexRange, adrLookback, nyRanges, completedDays)
 else
     [standardBarOpen, standardBarHigh, standardBarLow] = request.security(htfTickerId, timeframe.period, [open, high, low], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
     observedPeriodHigh := standardBarHigh
     observedPeriodLow := standardBarLow
-    selectedAdrOpen = calcType == CALC_GLOBEX_OPEN ? globexOpen : standardBarOpen
+    selectedAdrOpen = useGlobexCandleOpen ? globexOpen : standardBarOpen
     dailyState.observe(time, selectedAdrStartTime, selectedAdrOpen, standardBarHigh, standardBarLow, syminfo.type == "futures", judasHitToday, calcType, averageGlobexRange, adrLookback, nyRanges, completedDays)
 
 isNewAdrPeriod = dailyState.rolledThisBar
