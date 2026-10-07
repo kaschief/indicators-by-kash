@@ -226,7 +226,7 @@ const string DAILY_PROFILE_LABEL_SIZE = LBL_LARGE
 const string INTRADAY_PROFILE_LABEL_SIZE = LBL_SMALL
 const color DAILY_PROFILE_COLOR = color.new(color.rgb(206, 147, 216), 90)
 const color DAILY_RING_COLOR = color.rgb(206, 147, 216)
-const int DAILY_RING_WIDTH = 2
+const int DAILY_RING_DEFAULT_WIDTH = 2
 const string DAILY_RING_OFF = "Off"
 const string DAILY_RING_WITH_PROFILE = "With Profile"
 const string DAILY_RING_ONLY = "Ring Only"
@@ -242,7 +242,7 @@ const string NY_AM_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindo
 const string NY_PM_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n12:00–16:00 NY."
 const string IVB_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:00 NY."
 const string IVB_PLUS_SLOT_TOOLTIP = INTRADAY_PROFILE_CONTROLS_TOOLTIP + "\n\nWindow\n09:00–10:30 NY."
-const string DAILY_RING_TOOLTIP = "Ring\nOutlines today's Daily profile (Globex or Midnight): outer high to outer low, start to end.\n\nWith Profile\nAdds the ring; the Daily profile is unchanged.\n\nRing Only\nHides the Daily zones, name, LD, forecast, history and Boundary Exceeded. Other profiles are unchanged.\n\nColor\nRing outline color.\n\nFib\nRing Only: keeps the Daily Fib preset inside the ring."
+const string DAILY_RING_TOOLTIP = "Ring\nOutlines today's Daily profile (Globex or Midnight): outer high to outer low, start to end.\n\nWith Profile\nAdds the ring; the Daily profile is unchanged.\n\nRing Only\nHides the Daily zones, name, LD, forecast, history and Boundary Exceeded. Other profiles are unchanged.\n\nColor • Width\nRing outline color and line width.\n\nFib\nRing Only: keeps the Daily Fib preset inside the ring."
 const string FORECAST_SLOT_TOOLTIP = "Show\nProjects selected next envelopes.\n\nProfiles\nSelect any enabled HTF, Daily or Intraday profile."
 const string LIQUIDITY_DEPTH_TOOLTIP = "Forecast LD\nProjects depth before a selected profile edge is breached.\n\nProfiles\nNormal LD appears only after an in-window outer-edge breach. Through 30m and on Range charts."
 const string FIB_HISTORY_TOOLTIP = "History\nShared number of completed profiles.\n\nProfiles\nSelect which profiles show saved Fib levels.\n\nTrailing\nExpands current and saved Fib anchors to profile extremes.\n\nLatest Only\nHides all saved Fib levels."
@@ -367,6 +367,7 @@ type ScheduledProfileConfig
     bool ringVisible = false
     bool ringOnly = false
     color ringColor
+    int ringWidth
 
 type ScheduledProfileChartState
     float runHigh
@@ -563,6 +564,7 @@ dailyRingMode = input.string(DAILY_RING_OFF, "", options=[DAILY_RING_OFF, DAILY_
 bool dailyRingVisible = dailyRingMode != DAILY_RING_OFF
 bool dailyProfileRingOnly = dailyRingMode == DAILY_RING_ONLY
 dailyRingColor = input.color(DAILY_RING_COLOR, "", inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow and dailyRingVisible)
+dailyRingWidth = input.int(DAILY_RING_DEFAULT_WIDTH, "", options=[1, 2, 3, 4], inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow and dailyRingVisible)
 dailyRingFib = input.bool(false, "Fib", inline="daily_ring", group=GROUP_DAILY_RING, active=dailyProfileShow and dailyProfileRingOnly and dailyProfileFibPreset != FIB_PRESET_OFF, tooltip=DAILY_RING_TOOLTIP)
 
 // DAILY BOUNDARY EXCEEDED
@@ -881,7 +883,7 @@ var ScheduledProfileConfig dailyProfileConfig = ScheduledProfileConfig.new(
      fibLabelsEnabled=fibLabelDaily and (dailyRingFib or not dailyProfileRingOnly), fibLabelSize=fibLabelSizeDaily,
      fibLabelPosition=fibLabelPosDaily, fibLabelOffset=fibLabelOffDaily,
      slotLabelSize=DAILY_PROFILE_LABEL_SIZE, fibFade=SCHEDULED_PROFILE_FIB_FADE,
-     ringVisible=dailyRingVisible, ringOnly=dailyProfileRingOnly, ringColor=dailyRingColor)
+     ringVisible=dailyRingVisible, ringOnly=dailyProfileRingOnly, ringColor=dailyRingColor, ringWidth=dailyRingWidth)
 dailyProfileConfig.samplingSchedule := effectiveDailySchedule
 dailyProfileConfig.forecastSchedule := effectiveDailySchedule
 
@@ -2156,14 +2158,14 @@ draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int c
 
 // Outline only: the same outer edges Daily LD and Boundary Exceeded use, so the ring never sits inside the zones.
 draw_slot_ring(SlotState s, bool visible, int leftT, int leftIndex, int rightT, int rightIndex, float profileOpen,
-               float medHO, float meanHO, float medOL, float meanOL, color ringColor) =>
+               float medHO, float meanHO, float medOL, float meanOL, color ringColor, int ringWidth) =>
     if not na(s.ringOutline)
         box.delete(s.ringOutline)
         s.ringOutline := na
     if visible and not na(medHO) and not na(medOL)
         [ringHigh, ringLow] = liquidity_depth_anchors(profileOpen, medHO, meanHO, medOL, meanOL)
         s.ringOutline := box.new(drawing_x(leftT, leftIndex, true), ringHigh, drawing_x(rightT, rightIndex, true), ringLow,
-             xloc=drawing_xloc(true), bgcolor=na, border_color=ringColor, border_width=DAILY_RING_WIDTH)
+             xloc=drawing_xloc(true), bgcolor=na, border_color=ringColor, border_width=ringWidth)
 
 draw_slot_forecast(SlotState s, bool valid, int forecastLeftT, int forecastRightT,
                    float htfO, float htfH, float htfL, color slotColor, string identifierText, string slotLabelSize,
@@ -2221,7 +2223,7 @@ draw_scheduled_profile_current(SlotState slot, ScheduledProfileConfig profileCon
     draw_slot_ring(slot, currentVisible and profileConfig.ringVisible,
          profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex, profileRuntime.sessionOpen,
          profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow,
-         profileConfig.ringColor)
+         profileConfig.ringColor, profileConfig.ringWidth)
     // Ring Only drops the zones; Fib draws only when the ring keeps a Fib preset.
     draw_slot_current(slot, currentVisible,
          profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex,
