@@ -42,7 +42,7 @@ const renderCode = [
 
 function harness(preserve = true) {
   const env = {
-    all_lines: [], pending_label_events: [], INDICATOR_MAX_LINES: 500, NUM_LIQUIDITY_DEPTH_LEVELS: 3,
+    all_lines: [], pending_label_events: [], drawingLineLimit: 500, NUM_LIQUIDITY_DEPTH_LEVELS: 3,
     showUnmitigatedOnly: true, preserveMitigatedContext: preserve, forecastLiquidityDepth: false,
     showLabels: true, time: 1000, bar_index: 1000, LINE_WIDTH_1: 1,
     array: { size: a => a.length, get: (a, i) => a[i], push: (a, v) => a.push(v) },
@@ -122,7 +122,7 @@ test('other foreground drawings consume capacity before preserved history', () =
   assert.ok(preservedCall > source.lastIndexOf('draw_intraday_closes(sixteen_hundred_close,'));
   assert.ok(preservedCall > source.lastIndexOf('middle_line = line.new('));
   assert.ok(source.indexOf('flush_label_events(pending_label_events, all_labels)', preservedCall) > preservedCall);
-  assert.match(body('flush_label_events'), /INDICATOR_MAX_LABELS - array.size\(drawn\)/);
+  assert.match(body('flush_label_events'), /drawingLabelLimit - array.size\(drawn\)/);
 });
 
 test('preservation off retains hiding and Show Last bounds the completed pass', () => {
