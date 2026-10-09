@@ -7,14 +7,12 @@ library("RevelioInteractionsLibrary", overlay=true)
 export type LevelHitEvent
     int hitTime
     int barTime
-    int contactTime
     float price
     string sourceProfileKey
     string key
     bool focusOnly
     bool archivedSwept
     bool unselectedAnchor
-    int approachDirection
 
 //@type Structured fields for one profile-level label identity.
 export type LabelIdentity
@@ -101,7 +99,6 @@ export type PresentationConfig
     int maxLabels
     string nameSeparator
     string brandBullet
-    string detailSeparator
     int mergedLineFadePercent
     bool showMergedLineLabels
     int mergedLineLabelSize
@@ -114,11 +111,6 @@ export type PresentationConfig
     string valueAreaLowName
     string unselectedAnchorSymbol
     string archivedSymbol
-    string firstHitSymbol
-    string fromAboveSymbol
-    string fromBelowSymbol
-    string fromAboveText
-    string fromBelowText
     string newYorkTimezone
     int currentTime
     int currentBarIndex
@@ -344,7 +336,7 @@ levelHitArchivedSwept(LevelHitEvent hitEvent, LevelHitPresentation presentation)
     hitEvent.archivedSwept and not presentation.lineVisibleAtLiveEdge
 
 //@function Composes nearby right-edge labels and fades secondary line paths.
-export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool shortenLabels, map<string, int> touchClusters, map<int, LevelHitPresentation> touchGroupPresentations, map<int, int> firstHitDirections, array<label> drawnLabels, PresentationConfig config) =>
+export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool shortenLabels, map<string, int> touchClusters, map<int, LevelHitPresentation> touchGroupPresentations, array<label> drawnLabels, PresentationConfig config) =>
     int pendingCount = array.size(pendingLabels)
     if pendingCount > 0
         map<int, int> touchGroupLabelClusters = map.new<int, int>()
@@ -363,8 +355,6 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
         array<int> clusterDominantPending = array.new<int>()
         array<bool> clusterDominantHasActiveLine = array.new<bool>()
         array<int> clusterDominantTouchGroup = array.new<int>()
-        array<bool> clusterFirstHit = array.new<bool>()
-        array<int> clusterFirstHitDirection = array.new<int>()
         array<int> pendingCluster = array.new<int>(pendingCount, -1)
         array<int> identityCluster = array.new<int>()
         array<string> identityName = array.new<string>()
@@ -376,8 +366,6 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
         for pendingIndex = 0 to pendingCount - 1
             PendingLabel pending = array.get(pendingLabels, pendingIndex)
             int touchGroup = pending.touchKey != "" and map.contains(touchClusters, pending.touchKey) ? map.get(touchClusters, pending.touchKey) : -1
-            bool firstHit = touchGroup >= 0 and map.contains(firstHitDirections, touchGroup)
-            int firstHitDirection = firstHit ? map.get(firstHitDirections, touchGroup) : 0
             // Preserve the original merge decision for every preset, Custom percentage and Merge Off.
             int foundIndex = touchGroup >= 0 and map.contains(touchGroupLabelClusters, touchGroup) ? map.get(touchGroupLabelClusters, touchGroup) : nearestLabelCluster(pending.price, dedupe, clusterPrice, config)
             if foundIndex >= 0
@@ -385,11 +373,6 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.set(clusterWantPrice, foundIndex, array.get(clusterWantPrice, foundIndex) or pending.wantPrice)
                 array.set(clusterHitTrace, foundIndex, array.get(clusterHitTrace, foundIndex) or pending.hitTrace)
                 array.set(clusterSize, foundIndex, largerTextSize(array.get(clusterSize, foundIndex), pending.textSize))
-                if firstHit
-                    bool clusterAlreadyFirstHit = array.get(clusterFirstHit, foundIndex)
-                    int mergedFirstHitDirection = clusterAlreadyFirstHit and array.get(clusterFirstHitDirection, foundIndex) != firstHitDirection ? 0 : firstHitDirection
-                    array.set(clusterFirstHit, foundIndex, true)
-                    array.set(clusterFirstHitDirection, foundIndex, mergedFirstHitDirection)
                 bool pendingHasActiveLine = not na(pending.activeLine)
                 bool dominantHasActiveLine = array.get(clusterDominantHasActiveLine, foundIndex)
                 bool pendingPrecedes = (pendingHasActiveLine and not dominantHasActiveLine) or (pendingHasActiveLine == dominantHasActiveLine and identityPrecedes(pending.effectiveLineWidth, pending.rank, pendingIndex, array.get(clusterDominantWidth, foundIndex), array.get(clusterDominantRank, foundIndex), array.get(clusterDominantOrder, foundIndex)))
@@ -429,8 +412,6 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.push(clusterDominantPending, pendingIndex)
                 array.push(clusterDominantHasActiveLine, not na(pending.activeLine))
                 array.push(clusterDominantTouchGroup, pending.hitTrace and touchGroup >= 0 and map.contains(touchGroupPresentations, touchGroup) ? touchGroup : -1)
-                array.push(clusterFirstHit, firstHit)
-                array.push(clusterFirstHitDirection, firstHitDirection)
                 foundIndex := array.size(clusterPrice) - 1
             if touchGroup >= 0
                 map.put(touchGroupLabelClusters, touchGroup, foundIndex)
@@ -465,11 +446,7 @@ export flushPendingLabels(array<PendingLabel> pendingLabels, bool dedupe, bool s
                 array.set(clusterRendered, clusterIndex, true)
                 string body = composedClusterIdentities(shortenLabels, clusterIndex, config.nameSeparator, pendingCount, identityCluster, identityName, identityLabel, identityPriority, identityWidth, identityRank, identityOrder)
                 string labelText = array.get(clusterWantPrice, clusterIndex) ? (body == "" ? array.get(clusterPriceText, clusterIndex) : body + " " + config.brandBullet + " " + array.get(clusterPriceText, clusterIndex)) : body
-                int firstHitDirection = array.get(clusterFirstHitDirection, clusterIndex)
-                string directionSymbol = firstHitDirection < 0 ? config.fromAboveSymbol : firstHitDirection > 0 ? config.fromBelowSymbol : ""
-                string firstHitBadge = config.firstHitSymbol + (directionSymbol != "" ? " " + directionSymbol : "")
-                string hitPrefix = "●" + (array.get(clusterFirstHit, clusterIndex) ? " " + firstHitBadge : "") + " "
-                string finalText = array.get(clusterHitTrace, clusterIndex) ? hitPrefix + labelText : labelText
+                string finalText = array.get(clusterHitTrace, clusterIndex) ? "● " + labelText : labelText
                 color finalTextColor = array.get(clusterColor, clusterIndex)
                 int finalTextSize = array.get(clusterSize, clusterIndex)
                 int dominantTouchGroup = array.get(clusterDominantTouchGroup, clusterIndex)
@@ -679,31 +656,6 @@ export levelHitEventGroups(array<LevelHitEvent> events, map<string, bool> render
                 array.set(eventGroups, eventIndex, groupIndex)
     eventGroups
 
-//@function Registers the approach direction of the earliest current-window Touch Marker cluster.
-export registerFirstLevelHitDirections(array<LevelHitEvent> events, array<int> eventGroups, map<int, int> firstHitDirections, PresentationConfig config) =>
-    map.clear(firstHitDirections)
-    int eventCount = array.size(events)
-    if eventCount > 0
-        array<int> groupContactTimes = array.new<int>(eventCount, na)
-        array<int> groupDirections = array.new<int>(eventCount, 0)
-        int earliestContactTime = na
-        for eventIndex = 0 to eventCount - 1
-            int groupIndex = array.get(eventGroups, eventIndex)
-            LevelHitEvent hitEvent = array.get(events, eventIndex)
-            if groupIndex >= 0 and sameDate(hitEvent.contactTime, config.currentTime, config.newYorkTimezone)
-                int groupContactTime = array.get(groupContactTimes, groupIndex)
-                if na(groupContactTime) or hitEvent.contactTime < groupContactTime
-                    array.set(groupContactTimes, groupIndex, hitEvent.contactTime)
-                    array.set(groupDirections, groupIndex, hitEvent.approachDirection)
-                else if hitEvent.contactTime == groupContactTime and hitEvent.approachDirection != array.get(groupDirections, groupIndex)
-                    array.set(groupDirections, groupIndex, 0)
-                earliestContactTime := na(earliestContactTime) ? hitEvent.contactTime : math.min(earliestContactTime, hitEvent.contactTime)
-        if not na(earliestContactTime)
-            for groupIndex = 0 to eventCount - 1
-                if array.get(groupContactTimes, groupIndex) == earliestContactTime
-                    map.put(firstHitDirections, groupIndex, array.get(groupDirections, groupIndex))
-    true
-
 //@function Maps each visible level identity to its shared marker group.
 export registerLevelHitLabelClusters(array<LevelHitEvent> events, array<int> eventGroups, map<string, int> touchClusters) =>
     map.clear(touchClusters)
@@ -762,12 +714,11 @@ levelHitTimeText(int hitTime, string newYorkTimezone) =>
     twoDigitText(hour(hitTime, newYorkTimezone)) + ":" + twoDigitText(minute(hitTime, newYorkTimezone)) + " NY"
 
 //@function Renders one Touch Marker circle per visible same-candle hit cluster.
-export renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups, map<string, LevelHitPresentation> presentations, map<int, LevelHitPresentation> groupPresentations, map<int, int> firstHitDirections, array<label> drawnLabels, PresentationConfig config) =>
+export renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups, map<string, LevelHitPresentation> presentations, map<int, LevelHitPresentation> groupPresentations, array<label> drawnLabels, PresentationConfig config) =>
     int eventCount = array.size(events)
     if eventCount > 0
         array<int> groupBarTimes = array.new<int>()
         array<int> groupHitTimes = array.new<int>()
-        array<int> groupContactTimes = array.new<int>()
         array<float> groupPrices = array.new<float>()
         array<int> identityGroup = array.new<int>()
         array<string> identityName = array.new<string>()
@@ -781,13 +732,9 @@ export renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups
             if groupIndex >= 0 and map.contains(presentations, hitEvent.key)
                 LevelHitPresentation presentation = map.get(presentations, hitEvent.key)
                 bool archived = levelHitArchivedSwept(hitEvent, presentation)
-                if groupIndex < array.size(groupBarTimes)
-                    if hitEvent.contactTime < array.get(groupContactTimes, groupIndex)
-                        array.set(groupContactTimes, groupIndex, hitEvent.contactTime)
-                else
+                if groupIndex >= array.size(groupBarTimes)
                     array.push(groupBarTimes, hitEvent.barTime)
                     array.push(groupHitTimes, hitEvent.hitTime)
-                    array.push(groupContactTimes, hitEvent.contactTime)
                     array.push(groupPrices, hitEvent.price)
                 array.push(identityGroup, groupIndex)
                 string annotatedIdentity = presentation.identity + (hitEvent.unselectedAnchor ? " " + config.unselectedAnchorSymbol : "") + (archived ? " " + config.archivedSymbol : "")
@@ -799,18 +746,11 @@ export renderLevelHitCircles(array<LevelHitEvent> events, array<int> eventGroups
         if array.size(groupBarTimes) > 0
             for groupIndex = array.size(groupBarTimes) - 1 to 0
                 int barTime = array.get(groupBarTimes, groupIndex)
-                bool firstHit = map.contains(firstHitDirections, groupIndex)
-                int hitTime = firstHit ? array.get(groupContactTimes, groupIndex) : array.get(groupHitTimes, groupIndex)
+                int hitTime = array.get(groupHitTimes, groupIndex)
                 float hitPrice = array.get(groupPrices, groupIndex)
                 if map.contains(groupPresentations, groupIndex)
                     LevelHitPresentation groupPresentation = map.get(groupPresentations, groupIndex)
                     string identities = orderedClusterIdentities(groupIndex, "\n", eventCount, identityGroup, identityName, identityPriority, identityWidth, identityRank, identityOrder)
-                    string hitTimeText = levelHitTimeText(hitTime, config.newYorkTimezone)
-                    string tooltipFooter = "Hit " + hitTimeText
-                    if firstHit
-                        int firstHitDirection = map.get(firstHitDirections, groupIndex)
-                        string directionText = firstHitDirection < 0 ? config.fromAboveText : firstHitDirection > 0 ? config.fromBelowText : ""
-                        tooltipFooter := config.firstHitSymbol + " FIRST" + (directionText != "" ? config.detailSeparator + directionText : "") + config.detailSeparator + hitTimeText
-                    string tooltipText = identities + "\n" + tooltipFooter
+                    string tooltipText = identities + "\nHit " + levelHitTimeText(hitTime, config.newYorkTimezone)
                     trackLabel(drawnLabels, config.maxLabels, label.new(barTime, hitPrice, "●", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_none, color=na, textcolor=color.new(groupPresentation.lineColor, 0), size=groupPresentation.circleSize, tooltip=tooltipText))
     true
