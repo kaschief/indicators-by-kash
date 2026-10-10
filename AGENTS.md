@@ -186,6 +186,10 @@ is_displacement_candle(htf2_o2, htf2_c2, htf2_o3, htf2_c3, htf2_o4, htf2_c4) // 
 - Split unrelated concepts into separate paragraphs instead of one continuous block.
 - Optimize for quick scanning in TradingView's narrow tooltip panel.
 
+## Width Inputs Are Dropdowns
+
+- Every width input (line, border, box) uses `options=` as a dropdown, never a free number field.
+
 ## Never Convert Color Formats Without Permission
 
 **NEVER convert color constants between formats without explicit permission.**
