@@ -1,0 +1,433 @@
+//@version=6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INDICATOR VISUAL LIMITS (Must be declared before indicator() function)
+// ═══════════════════════════════════════════════════════════════════════════════
+INDICATOR_MAX_LINES = 500               // Maximum lines allowed by indicator
+INDICATOR_MAX_LABELS = 500              // Maximum labels allowed by indicator
+INDICATOR_TITLE = 'Untagged Opens° [Pro+] v1.2'
+
+indicator(INDICATOR_TITLE, overlay=true, max_lines_count=INDICATOR_MAX_LINES, max_labels_count=INDICATOR_MAX_LABELS)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT CONSTANTS (Must be declared before input declarations)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Input default values
+DEFAULT_LOOKBACK_BARS = 100             // Default historical range to scan
+DEFAULT_MAX_UNTAGGED_PER_SIDE = 3       // Default untagged levels per side
+DEFAULT_MAX_TAGGED_PER_SIDE = 5        // Default tagged levels per side
+DEFAULT_ACTIVE_WIDTH = 2                // Default thickness for active lines
+DEFAULT_TAGGED_WIDTH = 1                // Default thickness for tagged lines
+DEFAULT_TAGGED_OPACITY = 70             // Default opacity for tagged levels
+DEFAULT_EXTENSION_BARS = 0              // Default line extension
+
+// Input minimum values
+MIN_LOOKBACK_BARS = 20                  // Minimum historical range required
+MIN_LEVELS_PER_SIDE = 1                 // Minimum levels per side
+MIN_LINE_WIDTH = 1                      // Minimum line thickness for visibility
+MIN_OPACITY = 0                         // Minimum opacity (invisible)
+MIN_EXTENSION_BARS = 0                  // Minimum extension bars
+
+// Input maximum values
+MAX_LOOKBACK_BARS = 500                 // Maximum historical range to scan
+MAX_UNTAGGED_PER_SIDE = 15              // Maximum untagged levels per side for chart clarity
+MAX_TAGGED_PER_SIDE = 15                // Maximum tagged levels per side for historical context
+MAX_LINE_WIDTH = 5                      // Maximum line thickness
+MAX_OPACITY = 95                        // Maximum opacity (near opaque)
+MAX_EXTENSION_BARS = 50                 // Maximum bars to extend lines forward
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === 👁️ VISIBILITY ===
+enable_upside_targets = input.bool(true, 'Enable BSL Targets', group='👁️ Visibility', inline='sides', tooltip='Show untagged bearish opens above current price\nBSL targets are potential magnets - opens from red bars that have not been touched yet')
+enable_downside_targets = input.bool(true, 'Enable SSL Targets', group='👁️ Visibility', inline='sides', tooltip='Show untagged bullish opens below current price\nSSL targets are potential magnets - opens from green bars that have not been touched yet')
+enable_tagged_levels = input.bool(true, 'Enable Tagged Levels', group='👁️ Visibility', inline='tagged', tooltip='Display recently tagged opens with reduced opacity for historical context\nTagged levels show completed open-to-hit segments with dashed lines and transparency\nHelps visualize where price has already been and how long levels lasted')
+
+// === 📏 RANGE ===
+lookback_bars = input.int(DEFAULT_LOOKBACK_BARS, 'Lookback Bars', minval=MIN_LOOKBACK_BARS, maxval=MAX_LOOKBACK_BARS, group='📏 Range', tooltip='Historical range to scan for untagged opens (20-500 bars)\nLarger values show more historical context but may impact performance\nRecommended: 100-200 for most timeframes')
+max_levels_per_side = input.int(DEFAULT_MAX_UNTAGGED_PER_SIDE, 'Max Untagged Per Side', minval=MIN_LEVELS_PER_SIDE, maxval=MAX_UNTAGGED_PER_SIDE, group='📏 Range', inline='limits1', tooltip='Maximum untagged targets to display per side (1-15 max)\nShows closest untagged opens above (BSL) and below (SSL) current price\nRecommended: 3-5 to avoid chart clutter')
+max_tagged_per_side = input.int(DEFAULT_MAX_TAGGED_PER_SIDE, 'Max Tagged Per Side', minval=MIN_LEVELS_PER_SIDE, maxval=MAX_TAGGED_PER_SIDE, group='📏 Range', inline='limits2', tooltip='Maximum tagged (completed) levels to display per side (1-15 max)\nShows most recently tagged opens for historical context\nTagged levels appear with reduced opacity and stop where they were hit')
+
+// === 🎨 LINES ===
+upside_color = input.color(color.red, 'BSL', group='🎨 Lines', inline='colors', tooltip='Color for BSL targets (bearish opens above current price)\nRed represents potential targets - opens from red bars waiting to be hit')
+downside_color = input.color(color.green, 'SSL', group='🎨 Lines', inline='colors', tooltip='Color for SSL targets (bullish opens below current price)\nGreen represents potential targets - opens from green bars waiting to be hit')
+line_width = input.int(DEFAULT_ACTIVE_WIDTH, 'Active Width', minval=MIN_LINE_WIDTH, maxval=MAX_LINE_WIDTH, group='🎨 Lines', inline='active_style', tooltip='Thickness of untagged target lines (1-5 max)\nThicker lines emphasize active magnetic levels\nRecommended: 2-3 for optimal visibility without clutter')
+line_style_input = input.string('Solid', 'Active Style', options=['Solid', 'Dashed', 'Dotted'], group='🎨 Lines', inline='active_style', tooltip='Visual style for active untagged target lines\nSolid lines provide maximum visibility for important magnetic levels\nRecommended: Solid for active targets, reserve dashed/dotted for special cases')
+tagged_width = input.int(DEFAULT_TAGGED_WIDTH, 'Tagged Width', minval=MIN_LINE_WIDTH, maxval=MAX_LINE_WIDTH, group='🎨 Lines', inline='tagged_style', tooltip='Thickness of tagged (completed) level lines (1-5 max)\nThinner lines keep historical context subtle while maintaining visibility\nRecommended: 1-2 to differentiate from active targets')
+tagged_style_input = input.string('Dashed', 'Tagged Style', options=['Solid', 'Dashed', 'Dotted'], group='🎨 Lines', inline='tagged_style', tooltip='Visual style for tagged (completed) level lines\nDashed style clearly differentiates historical levels from active targets\nRecommended: Dashed for completed levels, dotted for subtle context')
+tagged_opacity = input.int(DEFAULT_TAGGED_OPACITY, 'Tagged Opacity %', minval=MIN_OPACITY, maxval=MAX_OPACITY, group='🎨 Lines', inline='tagged_style', tooltip='Transparency level for tagged levels (0=invisible, 95=nearly opaque)\nControls how prominent historical levels appear on chart\n• 50-70%: Subtle historical context (recommended)\n• 70-85%: Moderate emphasis on completed levels\n• 85-95%: Strong historical reference')
+
+// === 🏷️ LABELS ===
+show_labels = input.bool(true, 'Show Labels', group='🏷️ Labels', inline='label_main', tooltip='Display timeframe labels on untagged target lines\nLabels show current chart timeframe (e.g., "15m open levels")\nHelps identify which timeframe generated the magnetic opens')
+label_text_size = input.string('Small', 'Size', options=['Tiny', 'Small', 'Normal', 'Large'], group='🏷️ Labels', inline='label_main', tooltip='Size of timeframe label text\nSmaller text reduces visual clutter while maintaining readability\nRecommended: Small for most setups, Tiny for busy charts')
+upside_label_color = input.color(color.white, 'BSL', group='🏷️ Labels', inline='colors', tooltip='Text color for BSL target labels\nIndependent of line color - allows custom styling for optimal readability\nRecommended: White or contrasting color against your chart background')
+downside_label_color = input.color(color.white, 'SSL', group='🏷️ Labels', inline='colors', tooltip='Text color for SSL target labels\nIndependent of line color - allows custom styling for optimal readability\nRecommended: White or contrasting color against your chart background')
+
+// === ✨ LINE EXTENSION ===
+extension_bars = input.int(DEFAULT_EXTENSION_BARS, 'Extend Beyond Current', minval=MIN_EXTENSION_BARS, maxval=MAX_EXTENSION_BARS, group='✨ Line Extension', inline='ext_bars', tooltip='Number of bars to extend untagged target lines beyond current bar (0-50 max)\n• 0 = Lines end at current bar (clean look)\n• 5-10 = Short extension for immediate reference\n• 20+ = Long extension for forward planning\nTagged levels always end where they were hit (not affected by this setting)')
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS & PERFORMANCE LIMITS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Performance optimization limits
+MAX_TAGGING_SCAN_BARS = 50              // Limit tagging check to recent bars for performance
+MAX_TARGET_SCAN_BARS = 100              // Limit target scan range for optimal performance
+
+// Line style constants
+STYLE_SOLID = 'Solid'
+STYLE_DASHED = 'Dashed'
+STYLE_DOTTED = 'Dotted'
+
+// Label size constants
+SIZE_TINY = 'Tiny'
+SIZE_SMALL = 'Small'
+SIZE_NORMAL = 'Normal'
+SIZE_LARGE = 'Large'
+
+// Timeframe suffixes
+SUFFIX_MINUTE = 'm'
+SUFFIX_HOUR = 'H'
+SUFFIX_DAY = '1D'
+SUFFIX_WEEK = '1W'
+SUFFIX_MONTH = '1M'
+SUFFIX_QUARTER = '3M'
+SUFFIX_SEMI = '6M'
+SUFFIX_YEAR = '12M'
+
+// Label text template
+LABEL_TEXT_TEMPLATE = ' open levels'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GLOBAL VARIABLES - PARALLEL ARRAYS AS SPECIFIED
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<float> opens = array.new<float>()
+var array<int> bars = array.new<int>()
+var array<bool> is_bullish = array.new<bool>()
+var array<bool> is_tagged = array.new<bool>()
+var array<int> tagged_bars = array.new<int>()  // NEW: Track when each open was tagged
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+get_line_style(style_input) =>
+    switch style_input
+        STYLE_SOLID => line.style_solid
+        STYLE_DASHED => line.style_dashed
+        STYLE_DOTTED => line.style_dotted
+        => line.style_solid
+
+get_label_size() =>
+    switch label_text_size
+        SIZE_TINY => size.tiny
+        SIZE_SMALL => size.small
+        SIZE_NORMAL => size.normal
+        SIZE_LARGE => size.large
+        => size.small
+
+// Get current chart timeframe tag (like LTF pattern)
+get_chart_tf_tag() =>
+    chart_tf = timeframe.period
+    chart_tf_seconds = timeframe.in_seconds(chart_tf)
+    chart_tf_minutes = chart_tf_seconds / 60
+
+    if chart_tf_minutes < 1440  // Less than 1 day (intraday)
+        if chart_tf_minutes % 60 == 0
+            str.tostring(chart_tf_minutes / 60) + SUFFIX_HOUR  // Hours: 1H, 4H, etc.
+        else
+            str.tostring(chart_tf_minutes) + SUFFIX_MINUTE       // Minutes: 15m, 30m, etc.
+    else if chart_tf_minutes == 1440
+        SUFFIX_DAY  // Daily
+    else if chart_tf_minutes == 10080
+        SUFFIX_WEEK  // Weekly
+    else if chart_tf == SUFFIX_MONTH
+        SUFFIX_MONTH  // Monthly
+    else if chart_tf == SUFFIX_QUARTER
+        SUFFIX_QUARTER  // Quarterly
+    else if chart_tf == SUFFIX_SEMI
+        SUFFIX_SEMI  // Semiannual
+    else if chart_tf == SUFFIX_YEAR
+        SUFFIX_YEAR // Yearly
+    else
+        chart_tf  // Fallback
+
+// Create simple label text like LTF pattern
+create_label_text() =>
+    get_chart_tf_tag() + LABEL_TEXT_TEMPLATE
+
+// ADDED: Missing label creation function from LTF pattern
+bg_none() => color.new(color.white, 100)
+
+create_end_label(end_bar, target_price, label_text_color, label_text) =>
+    lab = label.new(x=end_bar, y=target_price, text=label_text, style=label.style_label_left, textcolor=label_text_color, size=get_label_size(), xloc=xloc.bar_index)
+    label.set_color(lab, bg_none())
+    lab
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE ALGORITHM - DATA COLLECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// 1. Record every bar's open when the bar CONFIRMS (as per your specification)
+if barstate.isconfirmed
+    array.push(opens, open)
+    array.push(bars, bar_index)
+    array.push(is_bullish, close > open)  // Current bar's direction NOW that it's confirmed
+    array.push(is_tagged, false)         // Start as untagged
+    array.push(tagged_bars, int(na))     // NEW: No tagged bar initially
+
+    // Maintain lookback limit for performance
+    while array.size(opens) > lookback_bars
+        array.shift(opens)
+        array.shift(bars)
+        array.shift(is_bullish)
+        array.shift(is_tagged)
+        array.shift(tagged_bars)  // NEW: Keep arrays in sync
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE ALGORITHM - TAGGING SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// 2. Check if THIS BAR tags any previously untagged opens (PERFORMANCE OPTIMIZED)
+if array.size(opens) > 0
+    // OPTIMIZATION: Limit tagging check to recent bars only for better performance
+    scan_limit = math.min(MAX_TAGGING_SCAN_BARS, array.size(opens))
+    start_index = math.max(0, array.size(opens) - scan_limit)
+
+    for i = start_index to array.size(opens) - 1
+        if not array.get(is_tagged, i)
+            open_price = array.get(opens, i)
+            bar_is_bullish = array.get(is_bullish, i)
+            open_bar_index = array.get(bars, i)
+
+            // Only check opens that are OLDER than current bar
+            if open_bar_index < bar_index
+                should_tag = false
+
+                if bar_is_bullish
+                    // Bullish opens: Tagged when ANY subsequent low <= open_price
+                    should_tag := low <= open_price
+                else
+                    // Bearish opens: Tagged when ANY subsequent high >= open_price
+                    should_tag := high >= open_price
+
+                if should_tag
+                    array.set(is_tagged, i, true)
+                    array.set(tagged_bars, i, bar_index)  // NEW: Record when it was tagged
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUAL SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<line> all_lines = array.new<line>()
+var array<label> all_labels = array.new<label>()
+
+// Clean up previous lines and labels
+if barstate.islast
+    while array.size(all_lines) > 0
+        old_line = array.shift(all_lines)
+        if not na(old_line)
+            line.delete(old_line)
+
+    while array.size(all_labels) > 0
+        old_label = array.shift(all_labels)
+        if not na(old_label)
+            label.delete(old_label)
+
+// Create new visuals on last bar
+if barstate.islast and array.size(opens) > 0
+
+    upside_targets = array.new<int>()
+    downside_targets = array.new<int>()
+    upside_tagged = array.new<int>()    // NEW: Tagged levels above price
+    downside_tagged = array.new<int>()  // NEW: Tagged levels below price
+    current_price = close
+
+    // Find UNTAGGED targets and TAGGED levels on the CORRECT SIDE of current price
+    // OPTIMIZATION: Only scan recent opens for target identification
+    target_scan_limit = math.min(MAX_TARGET_SCAN_BARS, array.size(opens))
+    target_start_index = math.max(0, array.size(opens) - target_scan_limit)
+
+    for i = target_start_index to array.size(opens) - 1
+        open_price = array.get(opens, i)
+        bar_is_bullish = array.get(is_bullish, i)
+        is_level_tagged = array.get(is_tagged, i)
+
+        if not is_level_tagged
+            // UNTAGGED LEVELS - Same logic as v1.1
+            if not bar_is_bullish and open_price > current_price
+                // BSL Targets: UNTAGGED BEARISH opens ABOVE current price
+                array.push(upside_targets, i)
+            else if bar_is_bullish and open_price < current_price
+                // SSL Targets: UNTAGGED BULLISH opens BELOW current price
+                array.push(downside_targets, i)
+        else if enable_tagged_levels
+            // NEW: TAGGED LEVELS - Show recent tagged levels for context
+            if not bar_is_bullish and open_price > current_price
+                // Tagged BSL: TAGGED BEARISH opens ABOVE current price
+                array.push(upside_tagged, i)
+            else if bar_is_bullish and open_price < current_price
+                // Tagged SSL: TAGGED BULLISH opens BELOW current price
+                array.push(downside_tagged, i)
+
+    // Sort untagged targets by proximity (nearest first) - Same as v1.1
+    if array.size(upside_targets) > 1
+        for i = 1 to array.size(upside_targets) - 1
+            current_idx = array.get(upside_targets, i)
+            current_price_val = array.get(opens, current_idx)
+            current_distance = math.abs(current_price_val - current_price)
+
+            j = i - 1
+            while j >= 0
+                compare_idx = array.get(upside_targets, j)
+                compare_price_val = array.get(opens, compare_idx)
+                compare_distance = math.abs(compare_price_val - current_price)
+
+                if compare_distance <= current_distance
+                    break
+
+                array.set(upside_targets, j + 1, compare_idx)
+                j := j - 1
+
+            array.set(upside_targets, j + 1, current_idx)
+
+    if array.size(downside_targets) > 1
+        for i = 1 to array.size(downside_targets) - 1
+            current_idx = array.get(downside_targets, i)
+            current_price_val = array.get(opens, current_idx)
+            current_distance = math.abs(current_price_val - current_price)
+
+            j = i - 1
+            while j >= 0
+                compare_idx = array.get(downside_targets, j)
+                compare_price_val = array.get(opens, compare_idx)
+                compare_distance = math.abs(compare_price_val - current_price)
+
+                if compare_distance <= current_distance
+                    break
+
+                array.set(downside_targets, j + 1, compare_idx)
+                j := j - 1
+
+            array.set(downside_targets, j + 1, current_idx)
+
+    // NEW: Sort tagged levels by recency (most recently tagged first)
+    if array.size(upside_tagged) > 1
+        for i = 1 to array.size(upside_tagged) - 1
+            current_idx = array.get(upside_tagged, i)
+            current_tagged_bar = array.get(tagged_bars, current_idx)
+
+            j = i - 1
+            while j >= 0
+                compare_idx = array.get(upside_tagged, j)
+                compare_tagged_bar = array.get(tagged_bars, compare_idx)
+
+                if compare_tagged_bar >= current_tagged_bar
+                    break
+
+                array.set(upside_tagged, j + 1, compare_idx)
+                j := j - 1
+
+            array.set(upside_tagged, j + 1, current_idx)
+
+    if array.size(downside_tagged) > 1
+        for i = 1 to array.size(downside_tagged) - 1
+            current_idx = array.get(downside_tagged, i)
+            current_tagged_bar = array.get(tagged_bars, current_idx)
+
+            j = i - 1
+            while j >= 0
+                compare_idx = array.get(downside_tagged, j)
+                compare_tagged_bar = array.get(tagged_bars, compare_idx)
+
+                if compare_tagged_bar >= current_tagged_bar
+                    break
+
+                array.set(downside_tagged, j + 1, compare_idx)
+                j := j - 1
+
+            array.set(downside_tagged, j + 1, current_idx)
+
+    // Draw untagged BSL targets (same as v1.1)
+    if enable_upside_targets and array.size(upside_targets) > 0
+        levels_to_show = math.min(array.size(upside_targets), max_levels_per_side)
+
+        for i = 0 to levels_to_show - 1
+            target_idx = array.get(upside_targets, i)
+            target_price = array.get(opens, target_idx)
+            target_bar = array.get(bars, target_idx)
+
+            // Calculate end bar for line extension: current price + optional extension
+            end_bar = bar_index + extension_bars
+            target_line = line.new(target_bar, target_price, end_bar, target_price, xloc=xloc.bar_index)
+            line.set_color(target_line, upside_color)
+            line.set_style(target_line, get_line_style(line_style_input))
+            line.set_width(target_line, line_width)
+            array.push(all_lines, target_line)
+
+            // Simple labels like LTF
+            if show_labels
+                label_text = create_label_text()
+                target_label = create_end_label(end_bar, target_price, upside_label_color, label_text)
+                array.push(all_labels, target_label)
+
+    // Draw untagged SSL targets (same as v1.1)
+    if enable_downside_targets and array.size(downside_targets) > 0
+        levels_to_show = math.min(array.size(downside_targets), max_levels_per_side)
+
+        for i = 0 to levels_to_show - 1
+            target_idx = array.get(downside_targets, i)
+            target_price = array.get(opens, target_idx)
+            target_bar = array.get(bars, target_idx)
+
+            // Calculate end bar for line extension: current price + optional extension
+            end_bar = bar_index + extension_bars
+            target_line = line.new(target_bar, target_price, end_bar, target_price, xloc=xloc.bar_index)
+            line.set_color(target_line, downside_color)
+            line.set_style(target_line, get_line_style(line_style_input))
+            line.set_width(target_line, line_width)
+            array.push(all_lines, target_line)
+
+            // Simple labels like LTF
+            if show_labels
+                label_text = create_label_text()
+                target_label = create_end_label(end_bar, target_price, downside_label_color, label_text)
+                array.push(all_labels, target_label)
+
+    // NEW: Draw tagged BSL levels (with opacity)
+    if enable_tagged_levels and array.size(upside_tagged) > 0
+        levels_to_show = math.min(array.size(upside_tagged), max_tagged_per_side)
+
+        for i = 0 to levels_to_show - 1
+            tagged_idx = array.get(upside_tagged, i)
+            tagged_price = array.get(opens, tagged_idx)
+            tagged_bar = array.get(bars, tagged_idx)
+            tagged_end_bar = array.get(tagged_bars, tagged_idx)  // End at the bar where it was tagged
+
+            tagged_line = line.new(tagged_bar, tagged_price, tagged_end_bar, tagged_price, xloc=xloc.bar_index)
+            line.set_color(tagged_line, color.new(upside_color, tagged_opacity))  // Apply opacity
+            line.set_style(tagged_line, get_line_style(tagged_style_input))       // Use tagged style
+            line.set_width(tagged_line, tagged_width)                             // Use tagged width
+            array.push(all_lines, tagged_line)
+
+    // NEW: Draw tagged SSL levels (with opacity)
+    if enable_tagged_levels and array.size(downside_tagged) > 0
+        levels_to_show = math.min(array.size(downside_tagged), max_tagged_per_side)
+
+        for i = 0 to levels_to_show - 1
+            tagged_idx = array.get(downside_tagged, i)
+            tagged_price = array.get(opens, tagged_idx)
+            tagged_bar = array.get(bars, tagged_idx)
+            tagged_end_bar = array.get(tagged_bars, tagged_idx)  // End at the bar where it was tagged
+
+            tagged_line = line.new(tagged_bar, tagged_price, tagged_end_bar, tagged_price, xloc=xloc.bar_index)
+            line.set_color(tagged_line, color.new(downside_color, tagged_opacity))  // Apply opacity
+            line.set_style(tagged_line, get_line_style(tagged_style_input))         // Use tagged style
+            line.set_width(tagged_line, tagged_width)                               // Use tagged width
+            array.push(all_lines, tagged_line)
+
+// Untagged Opens° [Pro+] v1.2 - Added tagged levels display with opacity

@@ -1,0 +1,631 @@
+//@version=6
+INDICATOR_MAX_BOXES = 500
+INDICATOR_MAX_LABELS = 500
+INDICATOR_MAX_LINES = 500
+INDICATOR_TITLE='ranges •'
+SHORT_TITLE="ranges •"
+
+indicator(title=INDICATOR_TITLE, shorttitle=SHORT_TITLE, overlay=true, max_boxes_count=INDICATOR_MAX_BOXES, max_labels_count=INDICATOR_MAX_LABELS, max_lines_count=INDICATOR_MAX_LINES)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const string TIMEZONE = "America/New_York"
+
+// 30s Range time constants (minutes from midnight)
+const int OR30_START_MIN = 570   // 09:30 = 9*60 + 30
+const int CR30_NORMAL_MIN = 950  // 15:50 = 15*60 + 50 (normal close day)
+const int RTH_START_MIN = 570    // 09:30 = RTH start
+const int RTH_NORMAL_CLOSE_MIN = 960  // 16:00 = normal RTH close
+const int EARLY_CLOSE_THRESHOLD_MIN = 840  // 14:00 = if last candle before this, it's early close
+const int CR30_OFFSET_MIN = 10   // CR30 is captured 10 minutes before close
+
+// Pre-open proximity window (minutes from midnight)
+const int PRE_OPEN_START_MIN = 540  // 09:00 = 9*60
+const int PRE_OPEN_END_MIN = 600    // 10:00 = 10*60
+
+// Day of week constants
+const int DOW_SUNDAY = 1
+const int DOW_MONDAY = 2
+
+// Session time constants (minutes from midnight)
+const int SESSION_START_MIN = 1080  // 18:00 = 18*60
+
+// Extend mode options
+const string EXTEND_NEXT_OCCURRENCE = "Next Occurrence"
+
+// Quick filter options
+const string FILTER_ALL = "All"
+const string FILTER_30S = "OR + CR"
+const string FILTER_MONDAY = "Monday"
+const string FILTER_PROXIMITY = "Proximity Only"
+
+// Milliseconds
+const int MS_PER_DAY = 24 * 60 * 60 * 1000
+
+// Color defaults
+const color DEFAULT_OR30_COLOR = color.new(color.rgb(165, 214, 167), 95)
+const color DEFAULT_OR30_BOUNDARY_COLOR = color.rgb(165, 214, 167)
+const color DEFAULT_OR30_LABEL_COLOR = color.rgb(77, 208, 225)
+const color DEFAULT_CR30_COLOR = color.new(color.rgb(206, 147, 216), 95)
+const color DEFAULT_CR30_BOUNDARY_COLOR = color.rgb(206, 147, 216)
+const color DEFAULT_CR30_LABEL_COLOR = color.rgb(156, 156, 156)
+const color DEFAULT_MONDAY_COLOR = color.new(color.rgb(249, 121, 246), 97)
+const color DEFAULT_MONDAY_BOUNDARY_COLOR = color.rgb(41, 98, 255)
+const color DEFAULT_MONDAY_LABEL_COLOR = color.rgb(41, 98, 255)
+
+// Input groups
+const string GROUP_COLOR_TABLE = "Color Reference Table"
+const string GROUP_ALERTS = "Alerts"
+const string GROUP_PRE_OPEN = "Pre-Open Proximity"
+
+// Alert messages
+const string ALERT_HIGH_BREACHED = " High Breached"
+const string ALERT_LOW_BREACHED = " Low Breached"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+quickFilter = input.string(FILTER_PROXIMITY, "Quick Filter", options=[FILTER_ALL, FILTER_30S, FILTER_MONDAY, FILTER_PROXIMITY])
+
+i_showOR30 = input.bool(true, "Opening Range 30s", inline="or30", tooltip="Show the first 30 seconds of RTH (09:30:00-09:30:30)")
+or30Limit = input.int(20, "", minval=1, maxval=50, inline="or30")
+or30Color = input.color(DEFAULT_OR30_COLOR, "", inline="or30")
+or30BoundaryColor = input.color(DEFAULT_OR30_BOUNDARY_COLOR, "Border", inline="or30b")
+or30LabelColor = input.color(DEFAULT_OR30_LABEL_COLOR, "Label", inline="or30b")
+
+i_showCR30 = input.bool(true, "Closing Range 30s", inline="cr30", tooltip="Show the 30-second candle at 15:50:00")
+cr30Limit = input.int(20, "", minval=1, maxval=50, inline="cr30")
+cr30Color = input.color(DEFAULT_CR30_COLOR, "", inline="cr30")
+cr30BoundaryColor = input.color(DEFAULT_CR30_BOUNDARY_COLOR, "Border", inline="cr30b")
+cr30LabelColor = input.color(DEFAULT_CR30_LABEL_COLOR, "Label", inline="cr30b")
+
+i_showMonday = input.bool(true, "Monday Range", inline="monday", tooltip="Monday session high/low (Sun 18:00 - Mon 18:00 ET)")
+mondayLimit = input.int(5, "", minval=1, maxval=20, inline="monday")
+mondayColor = input.color(DEFAULT_MONDAY_COLOR, "", inline="monday")
+mondayBoundaryColor = input.color(DEFAULT_MONDAY_BOUNDARY_COLOR, "Border", inline="mondayb")
+mondayLabelColor = input.color(DEFAULT_MONDAY_LABEL_COLOR, "Label", inline="mondayb")
+
+extendMode = input.string("7 Days", "Extend", options=[EXTEND_NEXT_OCCURRENCE, "2 Days", "3 Days", "5 Days", "7 Days", "10 Days"], tooltip="Next Occurrence: extends until next range. N Days: extends at least that many trading days, skipping weekends (or to next occurrence if longer).")
+showLabels = input.bool(false, "Show Labels", tooltip="Show date labels on all ranges")
+
+// Pre-Open Proximity
+showPreOpenProximity = input.bool(true, "Show", group=GROUP_PRE_OPEN, inline="prox", tooltip="During 9:00-10:00 ET, highlights bars if price is inside any prior OR30 or CR30")
+proximityBgColor = input.color(color.new(color.rgb(252, 203, 205), 85), "", group=GROUP_PRE_OPEN, inline="prox")
+showProximityHistorical = input.bool(false, "Show Historical", group=GROUP_PRE_OPEN, tooltip="Show background on all historical bars. When off, only highlights the current bar.")
+useProximityBuffer = input.bool(true, "Include Nearby", group=GROUP_PRE_OPEN, tooltip="Also detect when price is near (within 25% of range height) a range, not just inside")
+
+// Alerts
+alertOR30 = input.bool(true, "Opening Range 30s", group=GROUP_ALERTS)
+alertCR30 = input.bool(true, "Closing Range 30s", group=GROUP_ALERTS)
+alertMonday = input.bool(true, "Monday Range", group=GROUP_ALERTS)
+
+// Color Reference Table
+showColorTable = input.bool(false, "Show Color Reference Table", group=GROUP_COLOR_TABLE, tooltip="Display a reference table showing all range colors and their RGB values")
+
+
+// Apply quick filter to show toggles
+// For Proximity Only: capture ranges (for proximity check) but hide drawings
+isProximityOnly = quickFilter == FILTER_PROXIMITY
+showOR30 = i_showOR30 and (quickFilter == FILTER_ALL or quickFilter == FILTER_30S)
+showCR30 = i_showCR30 and (quickFilter == FILTER_ALL or quickFilter == FILTER_30S)
+showMonday = i_showMonday and (quickFilter == FILTER_ALL or quickFilter == FILTER_MONDAY)
+// Capture ranges for proximity checking even in Proximity Only mode
+captureOR30 = showOR30 or (isProximityOnly and showPreOpenProximity)
+captureCR30 = showCR30 or (isProximityOnly and showPreOpenProximity)
+// Monday: always capture if input enabled (for alerts), display controlled separately
+captureMonday = i_showMonday
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type RangeData
+    box rangeBox
+    line topLine
+    line bottomLine
+    line eqLine
+    label dateLabel
+    float high
+    float low
+    int startTime
+    int endTime
+    int dayNum
+    bool highBreached
+    bool lowBreached
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var array<RangeData> or30Array = array.new<RangeData>()
+var array<RangeData> cr30Array = array.new<RangeData>()
+var array<RangeData> mondayArray = array.new<RangeData>()
+
+// Monday Range tracking (builds throughout Monday)
+var float currentMondayHigh = na
+var float currentMondayLow = na
+var int currentMondayStart = na
+var int currentMondayWeekNum = na
+var RangeData liveMondayRange = na
+
+// Early close detection: track last RTH candle and CR30 candidate per day
+var int lastRTHCandleDay = na
+var int lastRTHCandleMin = na
+var int lastRTHCandleTime = na
+var float lastRTHCandleHigh = na
+var float lastRTHCandleLow = na
+var int pendingCR30Day = na  // Day for which we need to capture CR30
+// CR30 candidate: stores the candle ~10 min before current "last" candle (for early close)
+var int cr30CandidateTime = na
+var float cr30CandidateHigh = na
+var float cr30CandidateLow = na
+var int cr30CandidateMin = na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+getMonthName(int monthNum) =>
+    switch monthNum
+        1 => "𝙹𝚊𝚗"
+        2 => "𝙵𝚎𝚋"
+        3 => "𝙼𝚊𝚛"
+        4 => "𝙰𝚙𝚛"
+        5 => "𝙼𝚊𝚢"
+        6 => "𝙹𝚞𝚗"
+        7 => "𝙹𝚞𝚕"
+        8 => "𝙰𝚞𝚐"
+        9 => "𝚂𝚎𝚙"
+        10 => "𝙾𝚌𝚝"
+        11 => "𝙽𝚘𝚟"
+        => "𝙳𝚎𝚌"
+
+getDayName(int dow) =>
+    switch dow
+        1 => "𝚂𝚞𝚗"
+        2 => "𝙼𝚘𝚗"
+        3 => "𝚃𝚞𝚎"
+        4 => "𝚆𝚎𝚍"
+        5 => "𝚃𝚑𝚞"
+        6 => "𝙵𝚛𝚒"
+        => "𝚂𝚊𝚝"
+
+// Calculate timestamp N trading days after startTime (skips weekends)
+addTradingDays(int startTime, int tradingDays) =>
+    dow = dayofweek(startTime, TIMEZONE)
+    int calendarDays = switch tradingDays
+        2 => (dow >= 2 and dow <= 4) ? 2 : 4   // Mon-Wed: 2 cal, Thu/Fri: 4 cal (skip weekend)
+        3 => (dow == 2 or dow == 3) ? 3 : 5    // Mon/Tue: 3 cal, Wed-Fri: 5 cal
+        5 => 7                                  // 5 trading days = 7 cal (1 weekend)
+        7 => (dow >= 2 and dow <= 4) ? 9 : 11   // Mon-Wed: 9 cal, Thu/Fri: 11 cal
+        10 => 14                                // 10 trading days = 14 cal (2 weekends)
+        => tradingDays
+    startTime + (calendarDays * MS_PER_DAY)
+
+deleteRange(RangeData r) =>
+    if not na(r.rangeBox)
+        box.delete(r.rangeBox)
+    if not na(r.topLine)
+        line.delete(r.topLine)
+    if not na(r.bottomLine)
+        line.delete(r.bottomLine)
+    if not na(r.eqLine)
+        line.delete(r.eqLine)
+    if not na(r.dateLabel)
+        label.delete(r.dateLabel)
+
+createRange(float highPrice, float lowPrice, int startTime, color boxColor, color borderColor, color lblColor, string labelPrefix, bool includeDayName = true, bool hidden = false) =>
+    // When hidden or labels off, use fully transparent colors
+    effectiveBoxColor = hidden ? na : boxColor
+    effectiveBorderColor = hidden ? na : borderColor
+    effectiveLblColor = (hidden or not showLabels) ? na : lblColor
+
+    // Create box (right edge will be updated later)
+    rangeBox = box.new(startTime, highPrice, startTime, lowPrice, xloc=xloc.bar_time, bgcolor=effectiveBoxColor, border_color=na)
+
+    // Boundary lines
+    topLine = line.new(startTime, highPrice, startTime, highPrice, xloc=xloc.bar_time, color=effectiveBorderColor, style=line.style_solid, width=1)
+    bottomLine = line.new(startTime, lowPrice, startTime, lowPrice, xloc=xloc.bar_time, color=effectiveBorderColor, style=line.style_solid, width=1)
+
+    // EQ line (midpoint, dotted)
+    eqPrice = (highPrice + lowPrice) / 2
+    eqLine = line.new(startTime, eqPrice, startTime, eqPrice, xloc=xloc.bar_time, color=effectiveBorderColor, style=line.style_dotted, width=1)
+
+    // Date label
+    rangeMonth = month(startTime, TIMEZONE)
+    rangeDayNum = dayofmonth(startTime, TIMEZONE)
+    monthName = getMonthName(rangeMonth)
+    labelStr = includeDayName ? labelPrefix + "\n" + getDayName(dayofweek(startTime, TIMEZONE)) + ", " + monthName + " " + str.tostring(rangeDayNum) : labelPrefix + "\n" + monthName + " " + str.tostring(rangeDayNum)
+    dateLabel = label.new(startTime, lowPrice, labelStr, xloc=xloc.bar_time, color=color.new(color.rgb(255, 255, 255), 100), textcolor=effectiveLblColor, style=label.style_label_up, size=size.small, textalign=text.align_center)
+
+    RangeData.new(
+         rangeBox = rangeBox,
+         topLine = topLine,
+         bottomLine = bottomLine,
+         eqLine = eqLine,
+         dateLabel = dateLabel,
+         high = highPrice,
+         low = lowPrice,
+         startTime = startTime,
+         endTime = na,
+         dayNum = dayofmonth(startTime, TIMEZONE),
+         highBreached = false,
+         lowBreached = false
+     )
+
+// Close a range permanently (when next occurrence is detected)
+closeRange(RangeData r, int endTime) =>
+    r.endTime := endTime
+    box.set_right(r.rangeBox, endTime)
+    line.set_x2(r.topLine, endTime)
+    line.set_x2(r.bottomLine, endTime)
+    line.set_x2(r.eqLine, endTime)
+    centerTime = math.round((r.startTime + endTime) / 2)
+    label.set_x(r.dateLabel, centerTime)
+
+// Extend range to a specific time (updates visuals only, doesn't set endTime)
+extendRangeTo(RangeData r, int targetTime) =>
+    box.set_right(r.rangeBox, targetTime)
+    line.set_x2(r.topLine, targetTime)
+    line.set_x2(r.bottomLine, targetTime)
+    line.set_x2(r.eqLine, targetTime)
+    centerTime = math.round((r.startTime + targetTime) / 2)
+    label.set_x(r.dateLabel, centerTime)
+
+// Update range high/low (for live expanding ranges)
+updateRangeHighLow(RangeData r, float newHigh, float newLow, int rightTime) =>
+    r.high := newHigh
+    r.low := newLow
+    eqPrice = (newHigh + newLow) / 2
+    box.set_top(r.rangeBox, newHigh)
+    box.set_bottom(r.rangeBox, newLow)
+    box.set_right(r.rangeBox, rightTime)
+    line.set_y1(r.topLine, newHigh)
+    line.set_y2(r.topLine, newHigh)
+    line.set_x2(r.topLine, rightTime)
+    line.set_y1(r.bottomLine, newLow)
+    line.set_y2(r.bottomLine, newLow)
+    line.set_x2(r.bottomLine, rightTime)
+    line.set_y1(r.eqLine, eqPrice)
+    line.set_y2(r.eqLine, eqPrice)
+    line.set_x2(r.eqLine, rightTime)
+    label.set_y(r.dateLabel, newLow)
+    centerTime = math.round((r.startTime + rightTime) / 2)
+    label.set_x(r.dateLabel, centerTime)
+
+// Reset range to normal styling
+resetRangeStyle(RangeData r, color normalBoxColor, color normalBorderColor) =>
+    box.set_bgcolor(r.rangeBox, normalBoxColor)
+    line.set_width(r.topLine, 1)
+    line.set_width(r.bottomLine, 1)
+
+// Set range to bold styling
+setBoldStyle(RangeData r, color boldBoxColor) =>
+    box.set_bgcolor(r.rangeBox, boldBoxColor)
+    line.set_width(r.topLine, 3)
+    line.set_width(r.bottomLine, 3)
+
+// Capture a range if conditions are met (reusable for any range type)
+captureRange(array<RangeData> rangeArray, int targetMin, bool capture, int ltfMinutes, int ltfSeconds, int ltfDay, int ltfTime, float ltfHigh, float ltfLow, color boxColor, color borderColor, color lblColor, string labelPrefix, int limit, bool hidden = false) =>
+    if capture and ltfMinutes == targetMin and ltfSeconds == 0
+        alreadyExists = array.size(rangeArray) > 0 ? array.get(rangeArray, array.size(rangeArray) - 1).dayNum == ltfDay : false
+        if not alreadyExists
+            // Reset previous most recent to normal styling before creating new one
+            if array.size(rangeArray) > 0
+                prevRange = array.get(rangeArray, array.size(rangeArray) - 1)
+                if not hidden
+                    resetRangeStyle(prevRange, boxColor, borderColor)
+                closeRange(prevRange, ltfTime)
+            // Create new range and style it bold
+            newRange = createRange(ltfHigh, ltfLow, ltfTime, boxColor, borderColor, lblColor, labelPrefix, true, hidden)
+            if not hidden
+                setBoldStyle(newRange, color.new(borderColor, 70))
+            array.push(rangeArray, newRange)
+            if array.size(rangeArray) > limit
+                deleteRange(array.shift(rangeArray))
+
+// Update all ranges based on extend mode
+updateRangeExtensions(array<RangeData> rangeArray) =>
+    if array.size(rangeArray) > 0
+        for i = 0 to array.size(rangeArray) - 1
+            r = array.get(rangeArray, i)
+            if extendMode == EXTEND_NEXT_OCCURRENCE
+                // Extend only the most recent (unclosed) to present
+                if i == array.size(rangeArray) - 1 and na(r.endTime)
+                    extendRangeTo(r, time)
+            else
+                // N Days mode: extend to the LONGER of (next occurrence, start + N trading days)
+                days = int(str.tonumber(str.split(extendMode, " ").get(0)))
+                minEnd = addTradingDays(r.startTime, days)
+                targetEnd = na(r.endTime) ? minEnd : math.max(minEnd, r.endTime)
+                // Cap at present if target is in the future
+                extendRangeTo(r, math.min(targetEnd, time))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 30S DATA CAPTURE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+[cached_30s_times, cached_30s_highs, cached_30s_lows] = request.security_lower_tf(syminfo.tickerid, "30S", [time, high, low])
+
+// Helper: capture CR30 for early close day using CR30 candidate data
+captureCR30ForDay(int candleMin, int candleTime, float candleHigh, float candleLow, int candleDay) =>
+    // candleMin is the CR30 candidate (already ~10 min before close)
+    alreadyExists = array.size(cr30Array) > 0 ? array.get(cr30Array, array.size(cr30Array) - 1).dayNum == candleDay : false
+    if captureCR30 and not alreadyExists and candleMin >= RTH_START_MIN
+        // Reset previous most recent to normal styling (only if not hidden)
+        if array.size(cr30Array) > 0
+            prevRange = array.get(cr30Array, array.size(cr30Array) - 1)
+            if not isProximityOnly
+                resetRangeStyle(prevRange, cr30Color, cr30BoundaryColor)
+            closeRange(prevRange, candleTime)
+        // Create new range and style it bold
+        newRange = createRange(candleHigh, candleLow, candleTime, cr30Color, cr30BoundaryColor, cr30LabelColor, "𝙲𝚕𝚘𝚜𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎", true, isProximityOnly)
+        if not isProximityOnly
+            setBoldStyle(newRange, color.new(cr30BoundaryColor, 70))
+        array.push(cr30Array, newRange)
+        if array.size(cr30Array) > cr30Limit
+            deleteRange(array.shift(cr30Array))
+
+if (captureOR30 or captureCR30) and not na(cached_30s_times) and array.size(cached_30s_times) > 0
+    for i = 0 to array.size(cached_30s_times) - 1
+        ltfTime = array.get(cached_30s_times, i)
+        ltfMinutes = hour(ltfTime, TIMEZONE) * 60 + minute(ltfTime, TIMEZONE)
+        ltfSeconds = second(ltfTime, TIMEZONE)
+        ltfDay = dayofmonth(ltfTime, TIMEZONE)
+        ltfHigh = array.get(cached_30s_highs, i)
+        ltfLow = array.get(cached_30s_lows, i)
+
+        // OR30: capture at 9:30 as usual
+        captureRange(or30Array, OR30_START_MIN, captureOR30, ltfMinutes, ltfSeconds, ltfDay, ltfTime, ltfHigh, ltfLow, or30Color, or30BoundaryColor, or30LabelColor, "𝙾𝚙𝚎𝚗𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎", or30Limit, isProximityOnly)
+
+        // CR30: Normal day capture at 15:50
+        captureRange(cr30Array, CR30_NORMAL_MIN, captureCR30, ltfMinutes, ltfSeconds, ltfDay, ltfTime, ltfHigh, ltfLow, cr30Color, cr30BoundaryColor, cr30LabelColor, "𝙲𝚕𝚘𝚜𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎", cr30Limit, isProximityOnly)
+
+        // Track last RTH candle for early close detection (only during RTH: 9:30-16:00)
+        isInRTH = ltfMinutes >= RTH_START_MIN and ltfMinutes < RTH_NORMAL_CLOSE_MIN
+        if isInRTH
+            // New day detected - check if previous day was early close (missed CR30)
+            if ltfDay != lastRTHCandleDay and not na(lastRTHCandleDay)
+                // Previous day's last candle was before 15:50 (early close)
+                if lastRTHCandleMin < CR30_NORMAL_MIN and pendingCR30Day == lastRTHCandleDay
+                    // Use CR30 candidate (candle ~10 min before last candle) if available
+                    if not na(cr30CandidateMin)
+                        captureCR30ForDay(cr30CandidateMin, cr30CandidateTime, cr30CandidateHigh, cr30CandidateLow, lastRTHCandleDay)
+                    pendingCR30Day := na
+                // Reset CR30 candidate for new day
+                cr30CandidateTime := na
+                cr30CandidateHigh := na
+                cr30CandidateLow := na
+                cr30CandidateMin := na
+
+            // Update CR30 candidate: keep it ~10 min behind the last candle
+            // If gap between current candle and candidate is > 10 min, advance candidate to previous "last"
+            if ltfDay == lastRTHCandleDay and not na(lastRTHCandleMin)
+                gapToCandidate = na(cr30CandidateMin) ? 999 : (ltfMinutes - cr30CandidateMin)
+                if gapToCandidate > CR30_OFFSET_MIN
+                    // Advance candidate to what was the previous "last" candle
+                    cr30CandidateTime := lastRTHCandleTime
+                    cr30CandidateHigh := lastRTHCandleHigh
+                    cr30CandidateLow := lastRTHCandleLow
+                    cr30CandidateMin := lastRTHCandleMin
+
+            // Update last RTH candle tracking
+            lastRTHCandleDay := ltfDay
+            lastRTHCandleMin := ltfMinutes
+            lastRTHCandleTime := ltfTime
+            lastRTHCandleHigh := ltfHigh
+            lastRTHCandleLow := ltfLow
+
+            // Mark this day as pending CR30 (will be captured at 15:50 or on early close detection)
+            if ltfMinutes == OR30_START_MIN
+                pendingCR30Day := ltfDay
+
+            // Clear pending if we captured CR30 normally
+            if ltfMinutes == CR30_NORMAL_MIN
+                pendingCR30Day := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MONDAY RANGE CAPTURE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Monday session = Sunday 18:00 to Monday 18:00 ET
+if captureMonday
+    currentDow = dayofweek(time, TIMEZONE)
+    currentMinutes = hour(time, TIMEZONE) * 60 + minute(time, TIMEZONE)
+    currentWeek = weekofyear(time, TIMEZONE)
+
+    // Check if we're in Monday session (Sunday >= 18:00 or Monday < 18:00)
+    inMondaySession = (currentDow == DOW_SUNDAY and currentMinutes >= SESSION_START_MIN) or (currentDow == DOW_MONDAY and currentMinutes < SESSION_START_MIN)
+
+    if inMondaySession
+        // In Monday session: track high/low and show live range
+        if na(currentMondayWeekNum) or currentWeek != currentMondayWeekNum
+            // New Monday session - create live range
+            currentMondayHigh := high
+            currentMondayLow := low
+            currentMondayStart := time
+            currentMondayWeekNum := currentWeek
+            liveMondayRange := createRange(high, low, time, mondayColor, mondayBoundaryColor, mondayLabelColor, "𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎", false, not showMonday)
+        else
+            // Continue tracking - expand range if new high/low
+            // Note: No breach alerts during session - range is still forming
+            currentMondayHigh := math.max(currentMondayHigh, high)
+            currentMondayLow := math.min(currentMondayLow, low)
+            if not na(liveMondayRange)
+                updateRangeHighLow(liveMondayRange, currentMondayHigh, currentMondayLow, time)
+    else if not na(liveMondayRange)
+        // First bar after Monday session ends: finalize the range
+        // Close previous completed Monday range if exists
+        if array.size(mondayArray) > 0
+            closeRange(array.get(mondayArray, array.size(mondayArray) - 1), currentMondayStart)
+
+        // Move live range to completed array
+        array.push(mondayArray, liveMondayRange)
+
+        if array.size(mondayArray) > mondayLimit
+            deleteRange(array.shift(mondayArray))
+
+        // Reset tracking vars
+        liveMondayRange := na
+        currentMondayHigh := na
+        currentMondayLow := na
+        currentMondayStart := na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UPDATE RANGE EXTENSIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+updateRangeExtensions(or30Array)
+updateRangeExtensions(cr30Array)
+
+// Monday Range: each extends to the next Monday's start, most recent extends to current time
+// PROOF no overlap is possible:
+// - For i < last: extends to mondayArray[i+1].startTime (next completed range)
+// - For i == last AND liveMondayRange exists: extends to liveMondayRange.startTime (current building range)
+// - For i == last AND no liveMondayRange: extends to current time (nothing after it)
+// - liveMondayRange: extends to current time (still building)
+if array.size(mondayArray) > 0
+    for i = 0 to array.size(mondayArray) - 1
+        r = array.get(mondayArray, i)
+        if i < array.size(mondayArray) - 1
+            // Extend to next Monday's start time
+            nextRange = array.get(mondayArray, i + 1)
+            extendRangeTo(r, nextRange.startTime)
+        else if not na(liveMondayRange)
+            // Last in array but live range exists - extend to live range's start
+            extendRangeTo(r, liveMondayRange.startTime)
+        else
+            // Most recent and no live range - extend to current time
+            extendRangeTo(r, time)
+
+// Live Monday Range extends to current time
+if not na(liveMondayRange)
+    extendRangeTo(liveMondayRange, time)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+checkRangeAlerts(array<RangeData> rangeArray, bool enableAlert, string rangeName) =>
+    if enableAlert and array.size(rangeArray) > 0
+        for i = 0 to array.size(rangeArray) - 1
+            r = array.get(rangeArray, i)
+            // High breached (price crosses above)
+            if not r.highBreached and high > r.high
+                r.highBreached := true
+                alert(rangeName + ALERT_HIGH_BREACHED, alert.freq_once_per_bar)
+            // Low breached (price crosses below)
+            if not r.lowBreached and low < r.low
+                r.lowBreached := true
+                alert(rangeName + ALERT_LOW_BREACHED, alert.freq_once_per_bar)
+
+checkRangeAlerts(or30Array, alertOR30, "𝙾𝚙𝚎𝚗𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎")
+checkRangeAlerts(cr30Array, alertCR30, "𝙲𝚕𝚘𝚜𝚒𝚗𝚐 𝚁𝚊𝚗𝚐𝚎")
+
+// Monday: only alert on most recent range, skip during active session
+if alertMonday and na(liveMondayRange) and array.size(mondayArray) > 0
+    r = array.get(mondayArray, array.size(mondayArray) - 1)
+    if not r.highBreached and high > r.high
+        r.highBreached := true
+        alert("𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎" + ALERT_HIGH_BREACHED, alert.freq_once_per_bar)
+    if not r.lowBreached and low < r.low
+        r.lowBreached := true
+        alert("𝙼𝚘𝚗𝚍𝚊𝚢 𝚁𝚊𝚗𝚐𝚎" + ALERT_LOW_BREACHED, alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COLOR REFERENCE TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+addColorRow(table tbl, int row, string name, string colorType, color clr) =>
+    table.cell(tbl, 0, row, name, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 1, row, colorType, text_size=size.small, text_color=color.black)
+    table.cell(tbl, 2, row, str.format("R:{0} G:{1} B:{2}", int(color.r(clr)), int(color.g(clr)), int(color.b(clr))), text_size=size.small, text_color=color.black)
+    table.cell(tbl, 3, row, str.tostring(int(color.t(clr))), text_size=size.small, text_color=color.black)
+
+if showColorTable and barstate.islast
+    var table colorTable = table.new(position.top_right, 4, 14, bgcolor=color.white, border_width=1, border_color=color.gray, frame_width=1, frame_color=color.gray)
+
+    // Header row
+    table.cell(colorTable, 0, 0, "Range", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 1, 0, "Type", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 2, 0, "RGB", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(colorTable, 3, 0, "Trans", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+
+    int currentRow = 1
+
+    if showOR30
+        addColorRow(colorTable, currentRow, "Opening Range", "Fill", or30Color)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Opening Range", "Border", or30BoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Opening Range", "Label", or30LabelColor)
+        currentRow += 1
+
+    if showCR30
+        addColorRow(colorTable, currentRow, "Closing Range", "Fill", cr30Color)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Closing Range", "Border", cr30BoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Closing Range", "Label", cr30LabelColor)
+        currentRow += 1
+
+    if showMonday
+        addColorRow(colorTable, currentRow, "Monday Range", "Fill", mondayColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Monday Range", "Border", mondayBoundaryColor)
+        currentRow += 1
+        addColorRow(colorTable, currentRow, "Monday Range", "Label", mondayLabelColor)
+        currentRow += 1
+
+    if showPreOpenProximity
+        addColorRow(colorTable, currentRow, "Proximity", "Background", proximityBgColor)
+        currentRow += 1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRE-OPEN PROXIMITY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Check if we're in the pre-open/NYAM window (9:00-10:00 ET)
+currentMinutes = hour(time, TIMEZONE) * 60 + minute(time, TIMEZONE)
+isPreOpenWindow = currentMinutes >= PRE_OPEN_START_MIN and currentMinutes <= PRE_OPEN_END_MIN
+
+// Check if price is inside (or near) any OR30 or CR30 range (within last 5 trading days = ~7 calendar days)
+isInsideOrNearRange(array<RangeData> rangeArray, bool excludeToday) =>
+    result = false
+    rangeName = ""
+    fiveTradingDaysAgo = time - (7 * MS_PER_DAY)
+    todayDate = dayofmonth(time, TIMEZONE)
+    todayMonth = month(time, TIMEZONE)
+    if array.size(rangeArray) > 0
+        for i = 0 to array.size(rangeArray) - 1
+            r = array.get(rangeArray, i)
+            rangeDay = dayofmonth(r.startTime, TIMEZONE)
+            rangeMonth = month(r.startTime, TIMEZONE)
+            isSameDay = rangeDay == todayDate and rangeMonth == todayMonth
+            // Skip today's range if excludeToday is true
+            if excludeToday and isSameDay
+                continue
+            // Only consider ranges from last 5 trading days
+            if r.startTime >= fiveTradingDaysAgo
+                // Check if bar overlaps with range (high or low touches/enters range)
+                rangeHeight = r.high - r.low
+                buffer = useProximityBuffer ? rangeHeight * 0.25 : 0.0
+                barOverlapsRange = high >= (r.low - buffer) and low <= (r.high + buffer)
+                if barOverlapsRange
+                    result := true
+                    rangeName := str.tostring(rangeMonth) + "/" + str.tostring(rangeDay)
+                    break
+    [result, rangeName]
+
+[insideOR30, or30Date] = isInsideOrNearRange(or30Array, true)   // Exclude today's OR (only care about previous days)
+[insideCR30, cr30Date] = isInsideOrNearRange(cr30Array, false)  // Include all CRs (yesterday's is relevant)
+
+// Pre-open proximity: highlight bars when inside a range during 9:00-10:00
+insideAny = insideOR30 or insideCR30
+showProximityBg = showPreOpenProximity and isPreOpenWindow and insideAny and (showProximityHistorical or barstate.islast)
+bgcolor(showProximityBg ? proximityBgColor : na)
+
+// ranges •

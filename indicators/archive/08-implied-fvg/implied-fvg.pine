@@ -1,0 +1,226 @@
+//@version=6
+indicator("implied fvg •", overlay=true, max_boxes_count=200)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Main toggles
+show_implied_fvgs = input.bool(true, "Show Implied FVGs", group="Detection", inline="det1", tooltip="Show Advanced Implied FVGs using wick overlap validation + body gap method")
+focus_mode = input.bool(false, "Focus Mode (IFVG only)", group="Detection", inline="det1", tooltip="Hide anything else this script might add later")
+
+// Box extension
+extend_bars = input.int(2, "Extend N bars to right", minval=0, maxval=50, group="Detection", inline="det2", tooltip="Extend boxes N bars to the right (anchored at C1)")
+
+// Displacement filter
+displacement_multiplier = input.float(1.25, "Displacement Multiplier", minval=1.0, maxval=5.0, step=0.1, group="Detection", inline="det2", tooltip="C2 body must be this multiple of recent average body size for Implied FVGs")
+lookback_candles = input.int(4, "Lookback Candles", minval=3, maxval=5, group="Detection", inline="det3", tooltip="Number of recent candles to average for displacement comparison")
+
+// Colors & Styling
+bull_color = input.color(color.new(color.blue, 85), "Bullish IFVG", group="Colors & Styling", inline="color1", tooltip="Color for bullish Implied FVGs")
+bear_color = input.color(color.new(color.orange, 85), "Bearish IFVG", group="Colors & Styling", inline="color1", tooltip="Color for bearish Implied FVGs")
+border_color = input.color(color.blue, "Border Color", group="Colors & Styling", inline="color2", tooltip="Border color for IFVG boxes")
+border_width = input.int(1, "Border Width", minval=1, maxval=3, group="Colors & Styling", inline="color2", tooltip="Border width for IFVG boxes")
+
+// Text settings
+text_size = input.string("Tiny", "Label Size", options=["Tiny", "Small", "Normal", "Large"], group="Text Settings", inline="text1", tooltip="Size of IFVG labels")
+text_color = input.color(color.white, "Label Color", group="Text Settings", inline="text1", tooltip="Color of IFVG labels")
+
+// Debug settings
+show_debug_info = input.bool(false, "Show Debug Info", group="Debug", inline="debug1", tooltip="Show additional debug information in tooltips")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GLOBAL VARIABLES & STORAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Storage arrays (keep last 20 IFVGs only)
+var array<box> ifvg_boxes = array.new_box()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Text size conversion
+get_text_size(size_string) =>
+    switch size_string
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        => size.tiny
+
+// Body helpers
+bodyTop(o, c) => math.max(o, c)
+bodyBot(o, c) => math.min(o, c)
+
+// FVG Detection for pre-filtering
+is_bullish_fvg() => low > high[2]
+is_bearish_fvg() => high < low[2]
+
+// Displacement filter: Check if C2 shows real strength
+is_displacement_candle() =>
+    // Calculate C2 body size
+    c2_body_size = math.abs(close[1] - open[1])
+
+    // Calculate average body size of recent candles (efficient: last 3-5 only)
+    total_body_size = 0.0
+    for i = 2 to (1 + lookback_candles)
+        total_body_size += math.abs(close[i] - open[i])
+
+    average_body_size = total_body_size / lookback_candles
+
+    // Require C2 body >= multiplier * average (avoid division by zero)
+    if average_body_size > 0
+        c2_body_size >= (displacement_multiplier * average_body_size)
+    else
+        false
+
+// Advanced Implied FVG Detection (Nine Method: Wick Validation + Body Gap Zone)
+detect_implied_fvg() =>
+    // Pre-filter: Check for visible FVGs first
+    has_bull_fvg = is_bullish_fvg()
+    has_bear_fvg = is_bearish_fvg()
+
+    // Pre-filter: Check displacement candle strength (1.25x automatic)
+    if not is_displacement_candle()
+        [false, float(na), float(na), bool(na), ""]
+    else
+        debug_info = ""
+        result_found = false
+        result_bottom = float(na)
+        result_top = float(na)
+        result_bullish = bool(na)
+
+        // ---- BULLISH IFVG DETECTION ----
+        if not has_bull_fvg and not result_found
+            // Step 1: Bullish wick validation
+            c1_top = bodyTop(open[2], close[2])
+            c3_bot = bodyBot(open, close)
+
+            // Check if both wicks exist
+            bull_wicks_present = (high[2] > c1_top) and (c3_bot > low)
+
+            if bull_wicks_present
+                // Compute overlap with STRICT rule (> not >=)
+                overlap_lo = math.max(c1_top, low)
+                overlap_hi = math.min(high[2], c3_bot)
+                has_bull_overlap = overlap_hi > overlap_lo
+
+                if show_debug_info
+                    debug_info := "BULLISH TEST:\\nC1 upper wick: " + str.tostring(c1_top, "#.####") + " to " + str.tostring(high[2], "#.####") +
+                                 "\\nC3 lower wick: " + str.tostring(low, "#.####") + " to " + str.tostring(c3_bot, "#.####") +
+                                 "\\nOverlap: " + str.tostring(overlap_lo, "#.####") + " to " + str.tostring(overlap_hi, "#.####") +
+                                 "\\nValid: " + str.tostring(has_bull_overlap)
+
+                if has_bull_overlap and c1_top < c3_bot
+                    if show_debug_info
+                        debug_info := debug_info + "\\n\\nBULLISH ZONE: " + str.tostring(c1_top, "#.####") + " to " + str.tostring(c3_bot, "#.####")
+
+                    result_found := true
+                    result_bottom := c1_top
+                    result_top := c3_bot
+                    result_bullish := true
+
+        // ---- BEARISH IFVG DETECTION ----
+        if not has_bear_fvg and not result_found
+            // Step 1: Bearish wick validation
+            c1_bot = bodyBot(open[2], close[2])
+            c3_top = bodyTop(open, close)
+
+            // Check if both wicks exist
+            bear_wicks_present = (c1_bot > low[2]) and (high > c3_top)
+
+            if bear_wicks_present
+                // Compute overlap with STRICT rule (> not >=)
+                overlap_lo = math.max(low[2], c3_top)
+                overlap_hi = math.min(c1_bot, high)
+                has_bear_overlap = overlap_hi > overlap_lo
+
+                if show_debug_info
+                    debug_info := "BEARISH TEST:\\nC1 lower wick: " + str.tostring(low[2], "#.####") + " to " + str.tostring(c1_bot, "#.####") +
+                                 "\\nC3 upper wick: " + str.tostring(c3_top, "#.####") + " to " + str.tostring(high, "#.####") +
+                                 "\\nOverlap: " + str.tostring(overlap_lo, "#.####") + " to " + str.tostring(overlap_hi, "#.####") +
+                                 "\\nValid: " + str.tostring(has_bear_overlap)
+
+                if has_bear_overlap and c3_top < c1_bot
+                    if show_debug_info
+                        debug_info := debug_info + "\\n\\nBEARISH ZONE: " + str.tostring(c3_top, "#.####") + " to " + str.tostring(c1_bot, "#.####")
+
+                    result_found := true
+                    result_bottom := c3_top
+                    result_top := c1_bot
+                    result_bullish := false
+
+        // Return final result
+        if result_found
+            [true, result_bottom, result_top, result_bullish, debug_info]
+        else
+            [false, float(na), float(na), bool(na), debug_info]
+
+// Create and manage IFVG boxes
+create_ifvg_box(z_low, z_high, is_bullish, debug_info) =>
+    // All boxes anchored at C1 (bar_index - 2)
+    left_bar = bar_index - 2
+    right_bar = bar_index + extend_bars
+
+    // Choose colors and labels based on direction
+    box_color = is_bullish ? bull_color : bear_color
+    label_text = is_bullish ? "IFVG (Nine)+" : "IFVG (Nine)-"
+
+    // Build tooltip
+    base_tooltip = (is_bullish ? "Bullish" : "Bearish") + " Implied FVG\\n" +
+                   "Zone: " + str.tostring(z_low, "#.####") + " to " + str.tostring(z_high, "#.####") +
+                   "\\nRange: " + str.tostring(z_high - z_low, "#.####")
+
+    full_tooltip = show_debug_info and str.length(debug_info) > 0 ?
+                   base_tooltip + "\\n\\n" + debug_info : base_tooltip
+
+    new_box = box.new(
+         left=left_bar,
+         right=right_bar,
+         bottom=z_low,
+         top=z_high,
+         bgcolor=box_color,
+         border_color=border_color,
+         border_width=border_width,
+         text=label_text,
+         text_halign=text.align_center,
+         text_valign=text.align_center,
+         text_color=text_color,
+         text_size=get_text_size(text_size)
+     )
+
+    // Add to storage and maintain limit of 20
+    array.push(ifvg_boxes, new_box)
+    if array.size(ifvg_boxes) > 20
+        box.delete(array.shift(ifvg_boxes))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN IFVG DETECTION LOGIC - NINE METHOD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Process on confirmed bars only
+if barstate.isconfirmed and show_implied_fvgs
+    // Nine Method IFVG Detection with wick validation + body gap zones
+    [is_valid_ifvg, ifvg_bottom, ifvg_top, is_ifvg_bullish, debug_info] = detect_implied_fvg()
+
+    if is_valid_ifvg
+        create_ifvg_box(ifvg_bottom, ifvg_top, is_ifvg_bullish, debug_info)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ifvg_bull_formed = false
+ifvg_bear_formed = false
+
+if barstate.isconfirmed and show_implied_fvgs
+    [is_valid, bottom, top, is_bull, debug] = detect_implied_fvg()
+    if is_valid
+        if is_bull
+            ifvg_bull_formed := true
+        else
+            ifvg_bear_formed := true
+
+alertcondition(ifvg_bull_formed, title='IFVG+', message='Bullish Implied FVG detected at {{interval}} | Price: {{close}}')
+alertcondition(ifvg_bear_formed, title='IFVG-', message='Bearish Implied FVG detected at {{interval}} | Price: {{close}}')
