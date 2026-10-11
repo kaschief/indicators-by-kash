@@ -71,6 +71,8 @@ Every indicator below solves a real trading problem within those limits.
 
 ### Parallax
 
+![Parallax on a 15-minute NQ chart](indicators/18-parallax/screenshot.png)
+
 **The problem:** Deviations and ADR answer "how far does price usually travel?" for one period at a time. A trader looking at several timeframes needs that answer for all of them together.
 
 **What it does:** draws the expected travel range from the open for many periods at once: the week, the month, the day, two higher timeframes chosen to suit the chart, and six intraday sessions. It also:
@@ -84,6 +86,8 @@ Every indicator below solves a real trading problem within those limits.
 
 ### Elder Wand
 
+![Elder Wand on a 15-minute NQ chart](indicators/19-elderwand/screenshot.png)
+
 **The problem:** many traders and institutions measure price against VWAP: the average price paid, weighted by volume, from a starting point such as the start of the day, week or year.
 
 **What it does:** draws VWAPs from many starting points at once, with bands showing how far price usually strays from them.
@@ -93,6 +97,8 @@ Every indicator below solves a real trading problem within those limits.
 - When two starting points produce the same line (for example on the first day of a month), they are merged so nothing is drawn twice.
 
 ### Revelio
+
+![Revelio on a 15-minute NQ chart](indicators/20-revelio/screenshot.png)
 
 **The problem:** the prices where the most trading happened act as reference points later, because many participants hold positions there. To see them you need a volume profile: how much traded at each price, not just over time.
 
@@ -104,6 +110,8 @@ Every indicator below solves a real trading problem within those limits.
 **What was hard:** a profile needs much finer data than the chart shows, sometimes second by second. Revelio picks the finest data available for the chart and still reaches back months for quarterly profiles. The code is organized into separately published libraries, Pine's equivalent of modules.
 
 ### Legilimens
+
+![Legilimens on a 15-minute NQ chart](indicators/21-legilimens/screenshot.png)
 
 **The problem:** volume shows how much traded, but not whether buyers or sellers were more aggressive. That difference, called delta, shows where one side took control.
 
