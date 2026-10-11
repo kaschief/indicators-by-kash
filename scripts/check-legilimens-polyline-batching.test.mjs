@@ -32,7 +32,7 @@ const context = vm.createContext({
     profileValueLevels: (volumes, count, low, high) => [0, Math.floor(count / 3), Math.floor(count * 2 / 3), (low + high) / 2, low, high],
   },
 });
-for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'NY_EARLY_END_MINUTE', 'PRIMARY_PLUS_MARKER', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
+for (const name of ['FIB_LOCATION_UNKNOWN', 'STYLE_DOTTED', 'STYLE_DASHED', 'SOURCE_FIXED', 'SOURCE_ROLLING', 'SOURCE_NY_EARLY', 'SOURCE_EXTENDED_NY_EARLY', 'SOURCE_IVB', 'SOURCE_ASIA_PREMARKET', 'SOURCE_FOMC', 'SOURCE_OVERNIGHT_NINE', 'SOURCE_RTH', 'SOURCE_NY_AFTERNOON', 'SOURCE_ALL_DAY_TO_AFTERNOON', 'AFTERNOON_END_MINUTE', 'SOURCE_GLOBEX', 'SOURCE_MIDNIGHT', 'NY_EARLY_END_MINUTE', 'PRIMARY_PLUS_MARKER', 'PROFILE_FRAME_BOX_COUNT', 'PROFILE_HEADING_LABEL_COUNT', 'PROFILE_POLYLINE_LAYER_COUNT', 'PROFILE_POLYLINE_POINT_LIMIT', 'OPTION_OFF', 'OPTION_ALL', 'DELTA_ROWS_BUY', 'DELTA_ROWS_SELL', 'DELTA_ROW_FILTER_OUTLIERS', 'DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS', 'DELTA_ROW_FILTER_HIGHEST', 'PROFILE_POSITION_LEFT_LEFT', 'PROFILE_POSITION_LEFT_RIGHT', 'PROFILE_POSITION_RIGHT_LEFT', 'PROFILE_POSITION_RIGHT_RIGHT']) {
   const expression = source.match(new RegExp(`^const (?:int|string) ${name} = (.+)$`, 'm'))?.[1] ?? host.match(new RegExp(`^(?:const (?:int|string) )?${name} = (.+)$`, 'm'))?.[1];
   assert.ok(expression, name);
   context[name] = vm.runInContext(expression, context);
@@ -80,7 +80,7 @@ function compile(name, returnsValue = true, inputSource = source) {
   while (blocks.length) { output.push('}'); blocks.pop(); }
   vm.runInContext(`function ${name}(${parameters}) {\n${output.join('\n')}\n}`, context, { filename: `${name}.pine-adapter.js` });
 }
-for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaMarkerGlyph', 'formationTimeSuffix', 'priceFormationTime', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaRowMask', 'highestDeltaMarkerGlyph', 'formationTimeSuffix', 'priceFormationTime', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
 
 for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_LOCATION_\w+|LEVEL_MARKER_GLYPH|LOW_VOLUME_LEVEL_RANK|LOW_VOLUME_LINE_WIDTH) = (.+)$/gm)) {
   context[name] = vm.runInContext(value, context);
@@ -210,6 +210,20 @@ test('selected-tier subsets never exceed the outlier reservation and preserve ab
   assert.ok(rendered.state.drawnPolylines.length <= context.profilePolylineCost({ drawnPolylines: [] }, items, true, settings));
   assert.equal(items[0].geometry.pointCounts[3], 0);
   assert.equal(items[0].geometry.pointCounts[5], 0);
+});
+
+test('Highest Only reserves and draws exactly the largest positive and negative Delta rows', () => {
+  const settings = config({ rowFilter: context.DELTA_ROW_FILTER_HIGHEST });
+  const value = profile(0);
+  value.data.rowDeltas[7] = -30;
+  const highestRows = Array.from(context.highestDeltaRowMask(value));
+  assert.deepEqual(highestRows.flatMap((selected, row) => selected ? [row] : []), [2, 7]);
+  const [item] = prepare([value], settings, spec(), highestRows);
+  for (let layer = 0; layer < 6; layer++) {
+    const actual = item.regions.filter(region => region.layerIndex === layer).reduce((sum, region) => sum + region.points.length + 3, 0);
+    assert.equal(actual === 3 ? 0 : actual, item.geometry.pointCounts[layer]);
+  }
+  assert.equal(item.regions.reduce((sum, region) => sum + (region.layerIndex >= 2 ? region.points.length / 4 : 0), 0), 2);
 });
 
 test('empty delta and hidden content consume no objects; histogram remains optional', () => {
@@ -424,15 +438,50 @@ test('a merged tier keeps the highest-row flag from any member, including a nonr
   const [ranked] = context.rankPendingOutlierLevels(state, { tickSize: .25 }, { levels: { mergeOverlaps: true, mergeDistancePercent: 0 }, delta: { visibleTierCount: 5 } });
   assert.deepEqual(Array.from(ranked, item => item.containsHighestDeltaRow), [true, true, false]);
   assert.equal(state.pendingOutlierLevels.length, 0);
+  const superscripts = { highestDeltaCaps: false };
+  const caps = { highestDeltaCaps: true };
   for (const glyph of ['●', '◆', '✦']) {
-    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[0].containsHighestDeltaRow, ranked[0].buySide), glyph + '⁺');
-    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[1].containsHighestDeltaRow, ranked[1].buySide), glyph + '⁻');
-    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[2].containsHighestDeltaRow, ranked[2].buySide), glyph);
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[0].containsHighestDeltaRow, ranked[0].buySide, superscripts), glyph + '⁺');
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[1].containsHighestDeltaRow, ranked[1].buySide, superscripts), glyph + '⁻');
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[2].containsHighestDeltaRow, ranked[2].buySide, superscripts), glyph);
+    assert.equal(context.highestDeltaMarkerGlyph(glyph, ranked[0].containsHighestDeltaRow, ranked[0].buySide, caps), glyph, 'Caps replaces the superscript');
   }
 });
 
+test('a ranked tier carries the summed delta magnitude of every merged member', () => {
+  const { state } = queuedPeaks([3, -4, 12, -6, -20, 5], [peak(true, 0), peak(true, 2), peak(false, 3, 4), peak(true, 5)]);
+  const magnitudes = state.pendingOutlierLevels.map(item => Math.abs(item.delta));
+  const group = (memberIndices, buySide) => ({ memberIndices, representativeIndex: memberIndices[0], price: 101, zoneLow: 100, zoneHigh: 106, buySide, firstRow: 0, lastRow: 5, strengthRank: 1 });
+  context.legilimensProfile.rankOutlierCandidates = () => [group([0, 1], true), group([2], false)];
+  const [ranked] = context.rankPendingOutlierLevels(state, { tickSize: .25 }, { levels: { mergeOverlaps: true, mergeDistancePercent: 0 }, delta: { visibleTierCount: 5 } });
+  assert.deepEqual(Array.from(ranked, item => item.deltaMagnitude), [magnitudes[0] + magnitudes[1], magnitudes[2]]);
+});
+
+for (const name of ['DOMINANT_BASELINE_SESSIONS', 'DOMINANT_BASELINE_MIN_SESSIONS']) {
+  context[name] = Number(source.match(new RegExp(`^const int ${name} = (.+)$`, 'm'))[1]);
+}
+context.array.median = values => { const sorted = [...values].sort((a, b) => a - b); const middle = sorted.length >> 1; return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; };
+compile('dominantDeltaBaseline');
+compile('deltaHistoryRatioSuffix');
+
+test('Show Delta Ratio divides by the median Dominant of the prior sessions only', () => {
+  const sessions = (count, magnitude) => Array.from({ length: count }, (_, index) => [[(index + 1) * 10, magnitude(index, true)], [(index + 1) * 10, magnitude(index, false)]]).flat();
+  const stateFor = samples => ({ dominantDeltaHistories: new Map([['Globex', { endTimes: samples.map(([end]) => end), magnitudes: samples.map(([, value]) => value) }]]) });
+  const state = stateFor(sessions(30, (index, buy) => index < 10 ? 1000 : buy ? 100 : 300));
+  assert.equal(context.dominantDeltaBaseline(state, 'Globex', 300), 200, 'last 20 sessions only, both sides pooled');
+  assert.equal(context.dominantDeltaBaseline(state, 'Globex', 100), 1000, 'sessions ending after the profile start are excluded');
+  assert.equal(context.dominantDeltaBaseline(state, 'Globex', 40), null, 'fewer than the minimum sessions stays blank');
+  assert.equal(context.dominantDeltaBaseline(state, 'Weekly', 300), null, 'no history for the source stays blank');
+  assert.equal(context.dominantDeltaBaseline(stateFor([[10, 50], [20, 50], [30, 50], [40, 50], [50, 50]]), 'Globex', 50), 50, 'one-sided sessions still count once each');
+  assert.equal(context.deltaHistoryRatioSuffix(state, { sourceName: 'Globex', profileStartTime: 300, deltaMagnitude: 300 }), ' · 1.5×');
+  assert.equal(context.deltaHistoryRatioSuffix(state, { sourceName: 'Globex', profileStartTime: 40, deltaMagnitude: 300 }), '');
+  assert.match(source, /string ratioSuffix = config.delta.showDeltaHistoryRatio and not registrationOnly \? deltaHistoryRatioSuffix\(state, ranked\) : ""/);
+  assert.match(host, /^showDeltaHistoryRatio = input\.bool\(false, "Show Delta Ratio", inline="label_details"/m);
+  assert.match(host, /matchLowVolumeFibStyling, showPrice, showDeltaHistoryRatio, /);
+});
+
 test('regular and extended tier markers share the decorated glyph without adding drawing objects', () => {
-  assert.match(source, /string markerGlyph = highestDeltaMarkerGlyph\(baseMarkerGlyph, ranked.containsHighestDeltaRow, ranked.buySide\)/);
+  assert.match(source, /string markerGlyph = highestDeltaMarkerGlyph\(baseMarkerGlyph, ranked.containsHighestDeltaRow, ranked.buySide, config.delta\)/);
   assert.match(source, /PendingMitigatedZone.new\([^\n]+markerGlyph, markerLabel/);
   assert.match(source, /queueLevelMarker\(state, ranked.price, ranked.markerTime, markerGlyph, markerLabel/);
   assert.match(source, /queueLevelMarker\(state, pending.price, levelMarkerTime\(rightTime\), pending.markerGlyph/);
@@ -1095,14 +1144,18 @@ test('Delta rows follow tracked zone visibility; weaker tiers and other sources 
     const level = (sourceName, strengthRank, price) => ({ sourceName, strengthRank, price, profileStartTime: 10, lineStartTime: 20, rightTime: 100 });
     const levels = [level('Globex', 1, 50), level('Globex', 2, 60), level('Globex', 3, 60), level('Fixed', 1, 60)];
     const selections = ['live', 'hidden', 'weaker tier', 'other source'];
-    const drawn = context.drawnOutlierSelections({}, levels, selections, [], {}, { interactions: {} });
+    const drawn = context.drawnOutlierSelections({}, levels, selections, [], {}, { interactions: {}, delta: { extendHighestDeltaRows: false } });
     assert.deepEqual([...drawn], ['live', 'weaker tier', 'other source']);
     assert.deepEqual(keys, [['Globex', 10, 100, 50], ['Globex', 10, 100, 60]], 'the filter reads the same zone key the draw path registers');
+    const highestWeakTier = [level('Globex', 3, 60)].map(item => ({ ...item, containsHighestDeltaRow: true }));
+    assert.deepEqual([...context.drawnOutlierSelections({}, highestWeakTier, ['highest'], [], {}, { interactions: {}, delta: { extendHighestDeltaRows: false } })], ['highest'], 'a weaker highest tier keeps its normal endpoint unless opted in');
+    assert.deepEqual([...context.drawnOutlierSelections({}, highestWeakTier, ['highest'], [], {}, { interactions: {}, delta: { extendHighestDeltaRows: true } })], [], 'Extend Highest Too tracks a weaker highest tier like Dominant and Strong');
   } finally {
     Object.assign(context, originals);
   }
-  assert.match(source, /selectedOutlierRowMask\(profile, strengths, drawnOutlierSelections\(state, rankedOutlierLevels, rankedOutlierSelections, sources, context, config\), config\)/);
-  assert.match(source, /renderHighestDeltaLevels\(state, profile, source, levelEndTime, outlierPeaks, rankedOutlierSelections, config\)/);
+  assert.match(source, /selectedDeltaRowMask\(profile, strengths, drawnOutlierSelections\(state, rankedOutlierLevels, rankedOutlierSelections, sources, context, config\), config\)/);
+  assert.match(source, /renderHighestDeltaLevels\(state, profile, source, levelEndTime, sessionTradingDayKey, historical, outlierPeaks, rankedOutlierSelections, false, sources, config\)/);
+  assert.match(source, /renderHighestDeltaLevels\(state, profile, source, levelEndTime, sessionTradingDayKey, true, outlierPeaks, rankedSelections, true, sources, config\)/, 'finalized profiles register highest outlines for tracking');
   assert.match(source, /trackedZoneEndTime\(state, ranked\.sourceName, ranked\.profileStartTime, ranked\.rightTime, ranked\.price, config\.interactions, context\)/);
   assert.match(source, /PendingMitigatedZone\.new\(ranked\.price, ranked\.zoneLow, ranked\.zoneHigh, ranked\.profileStartTime, ranked\.lineStartTime, ranked\.rightTime, [^\n]*ranked\.sourceName,/);
   assert.match(source, /trackedZoneEndTime\(state, pending\.sourceName, pending\.profileStartTime, pending\.eligibilityTime, pending\.price, config\.interactions, context\)/);
@@ -1124,8 +1177,8 @@ test('ADR band: day-band union selects today, a focus day, or a Between range', 
 
 test('host wires the ADR band for every extendable profile into the presentation library', () => {
   assert.match(host, /^withinAdrActive = withinAdrEnabled and extendUnmitigatedActive$/m);
-  assert.match(host, /^hideMitigated = input\.bool\(true, "Hide Mitigated", inline="mitigation_filters"/m);
-  assert.match(host, /^withinAdrEnabled = input\.bool\(true, "Within ADR", inline="mitigation_filters"/m);
+  assert.match(host, /^hideMitigated = input\.bool\(true, "Hide Pre-Today Mitigated", inline="mitigation_filters"/m);
+  assert.match(host, /^withinAdrEnabled = input\.bool\(true, "Only Within ADR", inline="mitigation_filters"/m);
   assert.match(host, /request\.security\(ticker\.standard\(syminfo\.tickerid\), ADR_DAILY_TIMEFRAME, \[time_tradingday, open, high, low, ta\.sma\(high - low, ADR_LOOKBACK_DAYS\), ta\.sma\(high - low, ADR_LOOKBACK_DAYS\)\[1\], ta\.max\(high\)\[1\]\], gaps=barmerge\.gaps_off, lookahead=barmerge\.lookahead_on\)/);
   assert.match(host, /^const int ADR_LOOKBACK_DAYS = 5$/m);
   assert.doesNotMatch(host, /withinAdrLookback|input\.int\([^\n]*Lookback[^\n]*mitigation_filters/);
@@ -1237,7 +1290,7 @@ test('formation time suffix is optional and New York formatted', () => {
   } finally {
     context.str = originalStr;
   }
-  assert.match(source, /string markerLabel = \(ranked.displayNameOverride != "" \? ranked.displayNameOverride : source.labelName\) \+ formationTimeSuffix\(ranked.formedTime, config.delta.showFormationTime\)/);
+  assert.match(source, /string baseMarkerLabel = \(ranked.displayNameOverride != "" \? ranked.displayNameOverride : source.labelName\) \+ formationTimeSuffix\(ranked.formedTime, config.delta.showFormationTime\)/);
 });
 
 test('NY Early start applies to NY Early and Extended NY Early and only the 05:00 start appears in titles', () => {
@@ -1269,4 +1322,17 @@ test('LVN formation time uses the dominant print at the structure price and is o
   assert.match(host, /showLvnFormationTime = input.bool\(false, "LVN", inline="formation_time"/);
   assert.match(host, /trackFormationTimes = showDeltaFormationTime or showLvnFormationTime/);
   assert.match(host, /setFormationTracking\(anchor, trackFormationTimes, syminfo.mintick\)/);
+});
+
+test('highest Delta rows: Border width, Caps label and Highest Only histogram rows', () => {
+  assert.match(source, /string markerLabel = ranked.containsHighestDeltaRow and config.delta.highestDeltaCaps \? str.upper\(baseMarkerLabel\) : baseMarkerLabel/);
+  assert.match(source, /int zoneBorderWidth = ranked.containsHighestDeltaRow \? config.delta.highestDeltaBorderWidth : fibLocationBorderWidth\(/);
+  assert.match(source, /renderZoneFill\(state, profile.endTime, levelEndTime, zoneLow, zoneHigh, clearFill, config.delta.highestDeltaBorderWidth, outlineColor, config\)/);
+  assert.match(source, /if pending.markerGlyph != ""\n\s+queueLevelMarker/, 'extended hollow outlines draw no marker');
+  assert.match(source, /config.delta.rowFilter == DELTA_ROW_FILTER_HIGHEST \? highestDeltaRowMask\(profile\)/);
+  assert.match(host, /^showHighestDeltaLevels = input\.bool\(true, "Mark Highest Delta Rows", inline="highest_delta", group=GROUP_QUICK_FILTER_SETTINGS\)$/m);
+  assert.match(host, /^highestDeltaBorderWidth = input\.int\(3, "Border", options=\[1, 2, 3, 4, 5\], inline="highest_delta"/m);
+  assert.match(host, /^extendHighestDeltaRows = input\.bool\(false, "Extend Highest Too", inline="highest_delta", group=GROUP_QUICK_FILTER_SETTINGS, active=showHighestDeltaLevels and extendUnmitigatedActive/m);
+  assert.match(host, /options=\[OPTION_ALL, DELTA_ROW_FILTER_OUTLIERS, DELTA_ROW_FILTER_SELECTED_TIER_OUTLIERS, DELTA_ROW_FILTER_HIGHEST\]/);
+  assert.match(host, /showHighestDeltaLevels, highestDeltaBorderWidth, highestDeltaCaps, extendHighestDeltaRows, showMinimumLvnTiers/);
 });

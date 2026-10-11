@@ -1,6 +1,6 @@
 # TradingView Library Version Registry
 
-Updated: 2026-10-09
+Updated: 2026-10-11
 
 This is the repository's single source of truth for TradingView library versions and publication history. The compact current-state table is authoritative; the host import and pending source fingerprint are verified from it rather than duplicated in extra columns.
 
@@ -27,7 +27,7 @@ This is the repository's single source of truth for TradingView library versions
 | RevelioProfileOrchestrationLibrary | `indicators/20-revelio/code/libraries/revelio-profile-orchestration-library.pine` | `indicators/20-revelio/code/indicator/revelio.pine` | 10 | — |
 | LegilimensProfileLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 5 | — |
 | LegilimensProfileOrchestrationLibrary | `indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 4 | — |
-| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 33 | — |
+| LegilimensPresentationLibrary | `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` | `indicators/21-legilimens/code/legilimens.pine` | 35 | — |
 <!-- VERSION_REGISTRY_CURRENT_END -->
 
 Development hosts are recorded per library in the current-state table.
@@ -154,6 +154,8 @@ Development import rule: import `Pending` when present; otherwise import `Publis
 | LegilimensPresentationLibrary | 31 | Published · loaded · tested · runtime rejected | One status-aware tracked-zone endpoint: the proximity band applies only to live unmitigated zones of `InteractionSettings.proximitySourceKey`; mitigated zones follow Hide Mitigated only | `261f89d7c9c139cc6a3a7be2acbf3371ca9c6a59af4fb0534e74d12251fbfa68` |
 | LegilimensPresentationLibrary | 32 | Published · user confirmed · superseded before approval | `InteractionSettings.mitigatedHiddenBefore` replaces `hideMitigated`: only zones whose mitigating touch ended at or before the host-supplied trading-day start are hidden; zones mitigated today stay drawn up to the touch | `c0efc098f9346f0fdc197e72ef83b53a9dad3d56603e4f4e92464d36771de060` |
 | LegilimensPresentationLibrary | 33 | Published · loaded · tested · approved | Delta histogram rows under Selected Tier Outliers follow their tracked zone: rows of Dominant/Strong zones hidden by Hide Mitigated or the proximity band are not drawn; the proximity band now applies to tracked zones of every extendable profile (`proximitySourceKey` removed); `trackedZoneEndTime` takes key fields and `extendsUntilMitigated` is shared | `30882a9a37b1be79bfaae31665c013f0f8101956fee1ae65627a01fc642df21b` |
+| LegilimensPresentationLibrary | 34 | Published · user confirmed | Highest Delta rows: host-selected border width and optional Caps label (replacing ⁺/⁻) on the tier holding the row; hollow outlines use the same width; optional Extend Highest Too tracks highest rows (hollow outlines and weaker tiers) with Extend Unmitigated; Highest Only Delta row filter shows each profile's largest positive and negative row | `d9f34dc874ac7235e0b5dbc50c5fd606dd5f94cc1e761837728921dc2624e05d` |
+| LegilimensPresentationLibrary | 35 | Published · user confirmed | `DeltaSettings.showDeltaHistoryRatio`: finalized profiles record each side's Dominant delta magnitude per source (`RenderState.dominantDeltaHistories`); visible Delta tier labels append `· N.N×`, the tier's summed zone delta divided by the median pooled Dominant of the up to 20 sessions that ended before the profile started (blank below 5); `RankedOutlierLevel.deltaMagnitude`; `rankedProfileOutlierLevels` shared by zone registration and history recording | `67a583708254c0fc3df2fc2a31b37260b64323f5c49170bd041bc29390300345` |
 
 ## Publication-instruction log
 
@@ -299,9 +301,15 @@ Entries before this registry was created are reconstructed from the task history
 | PUB-2026-09-28-06 | 2026-09-28 | LegilimensPresentationLibrary | 33 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/33`, then load `indicators/21-legilimens/code/legilimens.pine` (`legilimens • development`) with Profile `/5`, Orchestration `/4`, Presentation `/33`. On NQ with Extend Unmitigated On (Globex, then Weekly and Fixed) and the Delta row filter on Selected Tier Outliers: Hide Mitigated and Within ADR share one row and default On; zones and delta bars of every extendable profile outside the ADR band or mitigated before today are hidden, while bars of drawn zones, weaker tiers, and non-extendable or developing profiles remain.  User confirmed publication after principal review; host loading, testing and approval are user-confirmed by the commit instruction. | `PUBLISHED_LOADED_TESTED_APPROVED` |
 | PUB-2026-10-09-01 | 2026-10-09 | RevelioInteractionsLibrary | 32 | Publish `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` privately as `/32`, then compile `indicators/20-revelio/code/indicator/revelio.pine` (`revelio • development`) against Core `/12`, Gaps `/13`, Interactions `/32` and Profile Orchestration `/10`; verify Marks Every Touch/Fresh Only, Label Color Touched Level/Strongest Line on merged POC labels, the reorganized Touch Markers rows, and that First Hit is gone. User confirmed publication; before testing, the user dropped Strongest Line because a purple label would point at a blue dot. | `PUBLISHED_SUPERSEDED` |
 | PUB-2026-10-09-02 | 2026-10-09 | RevelioInteractionsLibrary | 33 | Publish `indicators/20-revelio/code/libraries/revelio-interactions-library.pine` privately as `/33`, then compile `indicators/20-revelio/code/indicator/revelio.pine` (`revelio • development`) against Core `/12`, Gaps `/13`, Interactions `/33` and Profile Orchestration `/10`; verify Marks Every Touch/Fresh Only, merged labels taking the touched level's color, the reorganized Touch Markers rows, and that First Hit is gone | `PUBLISHED_LOADED_TESTED_APPROVED` |
+| PUB-2026-10-09-03 | 2026-10-09 | LegilimensPresentationLibrary | 34 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/34`, then load `indicators/21-legilimens/code/legilimens.pine` (`legilimens • development`) with Profile `/5`, Orchestration `/4`, Presentation `/34`. On NQ verify Mark Highest Delta Rows: Border 1–5 changes the highest tier's border and the hollow outline; Caps uppercases the highest tier label and drops ⁺/⁻; Extend Highest Too (with Extend Unmitigated On) extends hollow outlines and weaker highest tiers until touched; the Highest Only row filter draws only each profile's largest positive and negative Delta row; renamed Hide Pre-Today Mitigated and Only Within ADR behave as before. User confirmed publication on 2026-10-10; loading and testing not yet reported. | `PUBLISHED_USER_CONFIRMED` |
+| PUB-2026-10-11-01 | 2026-10-11 | LegilimensPresentationLibrary | 35 | Publish `indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine` privately as `/35`, then load `indicators/21-legilimens/code/legilimens.pine` (`legilimens • development`) with Profile `/5`, Orchestration `/4`, Presentation `/35`. On NQ with Quick Filter Show Delta Ratio On: Delta tier labels read e.g. `Globex · 1.4×`, between formation time and price when those are on; ratios appear once 5 prior sessions of that profile are loaded; Fixed and Rolling show none; LVN labels, drawings and the /34 Highest Delta behavior are unchanged; Off restores the previous labels. | `PUBLISHED_USER_CONFIRMED` |
 <!-- VERSION_REGISTRY_INSTRUCTIONS_END -->
 
 ## Current handoff
+
+- Legilimens current handoff (2026-10-11): Presentation `/35` is published (user confirmed 2026-10-11) and the work is approved by the user's commit instruction; no release is pending. The host imports Profile `/5`, Orchestration `/4`, Presentation `/35` and is titled `legilimens •`. Quick Filter Settings puts Show Price and Show Delta Ratio (default Off) on one row. With it On, each visible Delta tier label appends its zone delta as a multiple of the median Dominant (both sides pooled) of the same profile's 20 sessions that ended before it; blank until 5 are loaded; not shown for Fixed or Rolling. TradingView behavior is user-confirmed, not independently observed.
+
+- Legilimens superseded handoff (2026-10-09): Presentation `/34` was reserved and awaiting publication; the development host imports Profile `/5`, Orchestration `/4`, Presentation `/34` and is titled `legilimens • development`. Mark Highest Delta Rows moves to Quick Filter Settings with Border width (1–5, default 3), Caps (default On) and Extend Highest Too (default Off, active only with Extend Unmitigated). The Delta row filter adds Highest Only. Hide Mitigated and Within ADR are renamed Hide Pre-Today Mitigated and Only Within ADR. Local adapter tests pass; TradingView compile and visual checks are pending.
 
 - Legilimens approved handoff (2026-09-28): Presentation `/33` is published, loaded, tested and approved by the user's commit instruction; no release is pending; `/32` is published and superseded before approval; `/30` is superseded and `/31` was tested and rejected because Hide Mitigated removed same-day mitigations. The development host imports Profile `/5`, Orchestration `/4`, Presentation `/33` and the final host title is `legilimens •`. With Extend Unmitigated On, Hide Mitigated and Within ADR share one settings row, both default On. Hide Mitigated removes zones mitigated before the current trading day (the start of the symbol's daily candle); zones mitigated today and all mitigated zones when Off stay drawn up to the touch. Mitigation windows and touch rules are unchanged. Within ADR (every extendable profile; × multiplier; fixed 5-day lookback; Globex Open only, no NY Midnight option) hides live unmitigated zones outside the Globex open ± ADR × multiplier, reading the daily candle as the `adr` indicator's Globex Open does. Each day's band is recorded (up to 250 days); Date Focus uses the focused day's band, or the union across a Between range. Delta histogram rows (Selected Tier Outliers) of hidden zones are hidden with them. Weaker Delta tiers, LVN cliffs and Highest Delta outlines are unaffected. Host-only: NY Early Start now defaults to 05:00, listed first; titles still show the start only for 05:00 (`NY Early 05:00`).
 
@@ -344,9 +352,19 @@ Entries before this registry was created are reconstructed from the task history
 
 ## Pending release notes
 
-None.
+### LegilimensPresentationLibrary `/35`
+
+```text
+legilimens • New Show Delta Ratio option shows each Delta tier's size against a typical Dominant for that profile (e.g. Globex · 1.4×), so levels from different days can be compared.
+```
 
 ## Latest deployed release notes
+
+### LegilimensPresentationLibrary `/34`
+
+```text
+legilimens • Highest Delta rows get adjustable border, optional caps, Extend Highest Too and a Highest Only histogram filter.
+```
 
 ### RevelioInteractionsLibrary `/33`
 
