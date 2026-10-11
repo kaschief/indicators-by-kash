@@ -27,6 +27,8 @@ Every indicator below solves a real trading problem within those limits.
 
 ### Pulse
 
+![Pulse on three NQ timeframes, with its settings open](indicators/09-pulse/screenshot.webp)
+
 **The problem:** many traders place stop orders just beyond yesterday's high or last week's low, so price is often drawn to those levels, runs through them, and turns around. A trader wants to see every such level at once, know which have already been taken, and know how far past them price usually travels.
 
 **What it does:** marks prior daily, weekly, monthly and session highs and lows, ends each one when price takes it out, and projects how far beyond it price tends to run, calibrated for each instrument.
@@ -37,6 +39,8 @@ Every indicator below solves a real trading problem within those limits.
 
 ### Gaps
 
+![Gaps on a 15-minute NQ chart](indicators/13-gaps/screenshot.webp)
+
 **The problem:** price often jumps between one session's close and the next session's open, and those gaps tend to get filled later. Tracking which gaps are still open, and how much of each has been filled, across days and weeks is tedious and easy to get wrong.
 
 **What it does:** finds three kinds of opening gap, shows how much of each has been filled as price moves through it, and keeps the nearest unfilled gaps visible at the edge of the chart.
@@ -46,6 +50,8 @@ Every indicator below solves a real trading problem within those limits.
 - A gap only gets drawings while it's on screen, so many gaps fit within the drawing limit.
 
 ### Deviations
+
+![Deviations on a 5-minute NQ chart](indicators/14-deviations/screenshot.webp)
 
 **The problem:** how far is price likely to travel today? The range of an early session is a useful ruler for the moves that follow it.
 
@@ -59,6 +65,8 @@ Every indicator below solves a real trading problem within those limits.
 - Confirmations only use data that was complete at that moment, so the history never shows a signal the trader couldn't have seen live.
 
 ### ADR
+
+![ADR on a 1-hour NQ chart](indicators/15-adr/screenshot.webp)
 
 **The problem:** every market has a typical daily range. Once the day has covered it, a further extension is less likely. An early move of about a third of that range is often a fake-out before the real move.
 
