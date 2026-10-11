@@ -1,206 +1,180 @@
 # indicators • by kash
 
-Nine active TradingView indicators written in Pine Script v6.
+A suite of custom trading indicators for TradingView, designed, built and used by me for day trading US stock-index futures. Each one answers a question a trader would otherwise work out by hand, chart after chart, and draws the answer directly on the price chart.
 
-Most of this is an exercise in working inside hard constraints. Pine Script runs your whole script once per price bar, gives you only arrays and user-defined types to work with, and caps how many lines, labels, and boxes you can draw on a chart. Building stateful, multi-timeframe tools on top of that means doing your own memory management, deduplication, and object-budget accounting.
+They are written in Pine Script, TradingView's own programming language.
 
-## What the indicators do
+## Why this is harder than it looks
 
-| Folder | Indicator | One line |
-|--------|-----------|----------|
-| 06 | Kash OS | Provides chart furniture and time dividers |
-| 09 | Pulse | Tracks liquidity pools with per-instrument sweep-depth calibration |
-| 13 | Gaps | Detects multiple gap types with floating display and fill tracking |
-| 14 | Deviations | Plots statistical expansion levels for intraday sessions |
-| 15 | ADR | Shows daily, weekly, and monthly ranges with early-sweep detection |
-| 18 | Parallax | Projects higher-timeframe expansion zones and Fibonacci levels |
-| 19 | Elder Wand | Draws anchored VWAP structures and statistical bands |
-| 20 | Revelio | Builds session profiles, value gaps, and level interactions |
-| 21 | Legilimens | Builds configurable volume and delta profiles |
+Pine Script runs inside TradingView with tight rules:
+
+- **The script runs once for every bar on the chart**, from the oldest to the newest, then again each time the price updates. Any memory of what happened earlier has to be designed and kept by hand.
+- **There's a fixed limit on drawings.** A script can only show a few hundred lines, boxes and labels. Go over the limit and TradingView quietly deletes the oldest ones, so a tool can lose information without any warning.
+- **Data from other timeframes is rationed.** A script can only make a limited number of requests for other timeframes, such as hourly or one-minute data on a daily chart. Careless use also lets future data leak into the past. This is called "repainting": the history looks better than what the trader actually saw live.
+- **Charts aren't always based on time.** On Range charts a new bar forms after a fixed price move, not after a fixed number of minutes. Any logic built on times of day has to work there too, as well as in Bar Replay, where history is played back bar by bar.
+
+Every indicator below solves a real trading problem within those limits.
+
+## The indicators
+
+### Kash OS
+
+**The problem:** every chart needs the same reference points: where each day, week and month begins, and the round-number prices people watch. In futures, though, the trading day starts at 6 p.m. New York time, not at midnight.
+
+**What it does:** draws day, week and month dividers on whichever boundary the trader chooses, labels the days of the week, and lays a grid of round-number prices around the current price.
+
+**What was hard:** keeping the dividers exact across daylight-saving changes, weekend gaps, and markets with different hours (crypto trades every day, futures don't), while clearing away old dividers so the chart stays clean.
+
+### Pulse
+
+**The problem:** many traders place stop orders just beyond yesterday's high or last week's low, so price is often drawn to those levels, runs through them, and turns around. A trader wants to see every such level at once, know which have already been taken, and know how far past them price usually travels.
+
+**What it does:** marks prior daily, weekly, monthly and session highs and lows, ends each one when price takes it out, and projects how far beyond it price tends to run, calibrated for each instrument.
+
+**What was hard:**
+- Telling a real break from a brief spike in thin overnight trading. A break during those hours is treated as provisional and only confirmed once the main session begins.
+- Dozens of levels often sit at nearly the same price. Their labels are grouped and ranked so the most important one shows, within the drawing limit.
+
+### Gaps
+
+**The problem:** price often jumps between one session's close and the next session's open, and those gaps tend to get filled later. Tracking which gaps are still open, and how much of each has been filled, across days and weeks is tedious and easy to get wrong.
+
+**What it does:** finds three kinds of opening gap, shows how much of each has been filled as price moves through it, and keeps the nearest unfilled gaps visible at the edge of the chart.
+
+**What was hard:**
+- On Range charts, bars don't line up with the clock, so there is no bar for "the 4:15 close". Gaps rebuilds each session from one-minute data behind the scenes and uses the chart's bars only for drawing.
+- A gap only gets drawings while it's on screen, so many gaps fit within the drawing limit.
+
+### Deviations
+
+**The problem:** how far is price likely to travel today? The range of an early session is a useful ruler for the moves that follow it.
+
+**What it does:** measures the range of five key trading sessions and projects zones at chosen multiples of each one. It also tracks:
+- when those zones are reached
+- when price pulls back
+- how far price usually runs past the opening 30 minutes
+
+**What was hard:**
+- Five sessions, some crossing midnight, each with its own life cycle. The code runs as a fixed series of stages (detect, track, finalize, confirm, display), so adding a session means adding settings, not new code.
+- Confirmations only use data that was complete at that moment, so the history never shows a signal the trader couldn't have seen live.
+
+### ADR
+
+**The problem:** every market has a typical daily range. Once the day has covered it, a further extension is less likely. An early move of about a third of that range is often a fake-out before the real move.
+
+**What it does:** draws the average daily, weekly and monthly range from each period's open, split into thirds. It flags the early fake-out when it happens and shows how often recent days stayed inside each band.
+
+**What was hard:**
+- The levels have to be fixed at the open and never drift as the day goes on.
+- They have to agree between live trading, Bar Replay and non-standard chart types.
+- Each alert is sent only once per level per day.
+
+### Parallax
+
+**The problem:** Deviations and ADR answer "how far does price usually travel?" for one period at a time. A trader looking at several timeframes needs that answer for all of them together.
+
+**What it does:** draws the expected travel range from the open for many periods at once: the week, the month, the day, two higher timeframes chosen to suit the chart, and six intraday sessions. It also:
+- marks key ratios inside each range
+- forecasts the next period's range
+- flags days that break out of the expected range early
+
+**What was hard:**
+- TradingView rations the data requests a script can make, so all six intraday sessions are computed in a single request instead of six.
+- Each layer of drawings gets its own share of the drawing limit, reserved up front, so a busy chart never silently loses lines.
+
+### Elder Wand
+
+**The problem:** many traders and institutions measure price against VWAP: the average price paid, weighted by volume, from a starting point such as the start of the day, week or year.
+
+**What it does:** draws VWAPs from many starting points at once, with bands showing how far price usually strays from them.
+
+**What was hard:**
+- Smooth curves need a special drawing type that TradingView caps at 100 per script, so long histories are thinned to fit.
+- When two starting points produce the same line (for example on the first day of a month), they are merged so nothing is drawn twice.
+
+### Revelio
+
+**The problem:** the prices where the most trading happened act as reference points later, because many participants hold positions there. To see them you need a volume profile: how much traded at each price, not just over time.
+
+**What it does:**
+- Builds volume profiles for each session, week, month and quarter.
+- Marks the busiest price and the range holding most of the activity, and tracks when those levels are revisited or broken.
+- Finds days whose busy ranges don't overlap, since those gaps often get filled later.
+
+**What was hard:** a profile needs much finer data than the chart shows, sometimes second by second. Revelio picks the finest data available for the chart and still reaches back months for quarterly profiles. The code is organized into separately published libraries, Pine's equivalent of modules.
+
+### Legilimens
+
+**The problem:** volume shows how much traded, but not whether buyers or sellers were more aggressive. That difference, called delta, shows where one side took control.
+
+**What it does:** builds a volume and delta profile for a chosen window, such as the New York morning, the overnight session or a Federal Reserve announcement day. It ranks the prices where buying or selling was unusually strong, and marks thin-volume areas where price tends to move quickly.
+
+**What was hard:**
+- TradingView doesn't provide trade-by-trade buy and sell data by default. Legilimens estimates delta from very fine-grained bars.
+- It ranks prices to separate real outliers from noise.
+- Like Revelio, it is organized into libraries.
+
+### Aegis
+
+**The problem:** before a trade, a trader needs to know exactly how much money is at risk, especially when entering in several pieces at different prices.
+
+**What it does:** plans a trade with up to three entries, a stop and a target, and shows the average entry, the risk and the reward, both in money and as a reward-to-risk ratio.
+
+**What was hard:**
+- Given a maximum loss, Aegis works backwards to place the stop at a valid price, taking all the entries and quantities into account.
+- It updates a fixed handful of drawings in place instead of recreating them.
+
+## How it's built
+
+- **Pine Script v6** throughout. The two largest indicators, Revelio and Legilimens, are split into libraries that are published and versioned on TradingView.
+- **Custom checks.** Pine has no test framework of its own, so the repo has its own checks, written in JavaScript for Node:
+  - A checker that rejects names Pine reserves for itself. It was added after one of those names broke a real build.
+  - A checker for indicator titles, so work in progress is never released by mistake.
+  - A checker that keeps library versions in sync with the indicators that use them.
+  - Tests that run the indicators' core calculations outside TradingView, so mistakes are caught before they reach a chart.
+- **Written code-quality rules:**
+  - One clear setting rather than several that could contradict each other.
+  - Shared logic written once.
+  - No leftover code when a feature is removed.
+  - Every drawing counted against the limit.
+- **Tested on real charts.** Every change is checked in TradingView on standard charts, Range charts and Bar Replay before it's done.
+
+## Archive
+
+Earlier indicators that are complete but no longer actively developed.
+
+**Gaps, zones and order flow**
+
+- **MBZ Core:** finds five kinds of price gaps and marks the zones where price returns to a gap and is pushed back out. *Hard part:* grouping zones that form on the same bar, when Pine can't nest one list inside another.
+- **SIF Core:** marks the candle that first entered a gap, once price later closes all the way through that gap. *Hard part:* remembering the candidate candle until the gap is either crossed or invalidated.
+- **Implied FVG:** finds a subtle type of gap that only appears when one candle is unusually large compared with the ones before it.
+- **FVG Atlas:** scans for gaps on up to six larger timeframes at once and shows them on a smaller chart. *Hard part:* reading the larger timeframes without repainting, while still checking live whether each gap has been filled.
+- **Spectra:** a panel under the chart showing volume and buying-versus-selling pressure, colored by how unusual each bar is. *Hard part:* fitting a grid of values into the drawing limit by drawing only the bars on screen.
+
+**Liquidity and targets**
+
+- **MBZ Prime:** marks reversals that happen right after price takes out a prior high or low. *Hard part:* making each level identical on every chart timeframe, so a 1-minute chart and a 1-hour chart agree.
+- **MBZ SIF Relay:** runs MBZ and SIF on four timeframes at once and passes the larger timeframes' zones down to the chart in view. *Hard part:* storing history in a form that didn't run out of memory during Bar Replay.
+- **LTF Algo:** marks failed breakouts and the price targets they leave behind. *Hard part:* storing prices as whole price steps instead of decimals, so the same level is never drawn twice.
+- **HTF Algo:** applies the same idea to monthly, weekly, daily and hourly candles, keeping only levels within a day's typical range.
+- **Untagged Opens:** draws past candle openings that price hasn't come back to yet, as possible targets.
+- **Hunter:** flags the first sign that a run of candles in one direction is reversing, optionally only on the right side of a key reference price.
+
+**Time and range models**
+
+- **DTT Intraday and DTT Weekly:** split the day into 15 named sessions, or the week into 4, and project each session's likely range from past behavior. *Hard part:* basing the projection on the middle half of past results rather than the average, so one extreme session doesn't distort it.
+- **Ranges:** draws the opening and closing ranges of the trading day and the Monday range. *Hard part:* still finding the closing range on half-days, when the market closes early.
+- **Chop:** a panel that tells trending markets from choppy ones.
+- **News:** shows scheduled economic announcements on the chart, rated by expected impact.
 
 ## Repository layout
 
 ```
-indicators-by-kash/
-├── indicators/
-│   ├── 06-kash-os/code/kash-os.pine
-│   ├── 09-pulse/code/pulse.pine
-│   ├── 13-gaps/code/gaps.pine
-│   ├── 14-deviations/code/deviations.pine
-│   ├── 15-adr/code/adr.pine
-│   ├── 18-parallax/code/parallax.pine
-│   ├── 19-elderwand/code/elderwand.pine
-│   ├── 20-revelio/code/...
-│   └── 21-legilimens/code/legilimens.pine
-├── PORTFOLIO.md
-└── README.md
+indicators/
+├── 06-kash-os/  09-pulse/  13-gaps/  14-deviations/  15-adr/
+├── 18-parallax/  19-elderwand/  20-revelio/  21-legilimens/  24-aegis/
+└── archive/
+scripts/        checks and tests
 ```
 
-Active indicator sources live directly under each indicator's `code` folder. Revelio keeps its host and library sources in `code/indicator` and `code/libraries`.
-
-## Running them
-
-Each file is a standalone Pine Script v6 indicator. To run one:
-
-1. Open the Pine Script Editor in [TradingView](https://tradingview.com).
-2. Paste the contents of a `.pine` file, replacing anything already there.
-3. Save, then Add to chart.
-
-## Selected indicator details
-
-The notes below include historical indicators whose source remains available in Git history.
-
-### 1. MBZ Core — gap classification and fill tracking
-
-When price moves quickly it leaves behind ranges where no trading happened. Markets tend to revisit those ranges, but a gap left by a large order behaves differently from one left by a thin, panicky move, so it's worth telling them apart. MBZ Core detects five distinct gap types (Fair Value Gaps, Implied FVGs, Volume Imbalances, True Gaps, RDRB), each with its own detection rule, and tracks how much of each has been filled against configurable thresholds (55%, 85%, 100%).
-
-What made it interesting to build:
-- Each gap type needed its own detection logic, but they share a single priority hierarchy (FVG > Implied > RDRB > True Gap > VI) so a lower-priority gap is suppressed when a higher-priority one sits at the same price.
-- Stacked zones at the same level used to render on top of each other and become unreadable. I offset them with a small hash on the bar index (`bar_index % 13`) so overlapping zones stay visually distinct.
-- Pine caps the number of drawable objects. Rather than silently dropping zones near that cap, I added explicit capacity tiers (4×, 8×, 12×) that grow the internal arrays on request, so the user chooses the depth-versus-performance tradeoff instead of the tool making it invisibly.
-
-### 2. MBZ Prime — session liquidity tracker
-
-Every session (daily, weekly, monthly, Asia, London, New York) leaves a high and a low. The ones that haven't been traded back through are levels price often returns to. MBZ Prime tracks all of them at once across three macro timeframes and six intraday sessions, and tries to be honest about what counts as a real revisit versus a thin overnight spike.
-
-What made it interesting to build:
-- State lives in arrays of 360 entries (roughly 18 months) holding each session's high, low, and revisit status.
-- A touch outside the 05:00–16:00 NY window is marked provisional rather than confirmed, so a low-volume 2am wick doesn't invalidate a level that should still be live during the trading day. This provisional/confirmed pattern ended up reused across several indicators.
-- Display rules are gated by `timeframe.in_seconds()` so daily levels only show on 15m and higher, finer levels only on 5m and lower, without the user configuring anything.
-- It supports two different session-time conventions, toggled by one input, sharing all the same code rather than duplicating it.
-
-### 3. MBZ SIF Relay — higher-timeframe zone relay
-
-A trader on a 1-minute chart still wants to see where the 15m and 1h zones are. This pulls zone data from the relevant higher timeframes and draws it on whatever chart you're on, scaled and color-coded correctly.
-
-What made it interesting to build:
-- One central function maps each lower timeframe to its correct higher-timeframe pair (1m → 15m + 1h, 5m → 1h + 4h, and so on), so the pairing logic lives in exactly one place.
-- `request.security()` fetches the higher-timeframe zone data and it gets rendered natively on the current chart.
-- Time math uses pre-computed millisecond constants (`TF_5M_MS = 300000`) rather than recomputing durations, which avoids drift in time comparisons.
-- When it's near the object cap it warns the user instead of quietly failing to draw.
-
-### 4. SIF Core — immediate-reversal gap detector
-
-The gaps worth the most attention are the ones that get closed almost as soon as they open. SIF Core looks for a gap that forms and then gets reversed on the same candle or within a few bars, and tracks whether the reversal was immediate or took several bars.
-
-What made it interesting to build:
-- Each candidate stores a `formation_time`, which is what makes same-bar detection work correctly without lookahead, on both historical and live bars.
-- Multiple reversals from the same source gap get consolidated into one zone with a count instead of stacking up.
-- It reuses MBZ Core's five-tier gap hierarchy rather than reimplementing it.
-- Body reversals and wick-only reversals render as separate boxes at different opacities so they're distinguishable.
-
-### 5. LTF Algo — failed-breakout detector
-
-When price runs at a swing high or low, fails to break through, and turns back, there are usually resting orders on the other side that price tends to move toward. LTF Algo flags that failure as it happens and projects the target, updating live.
-
-What made it interesting to build:
-- Prices are stored as integer tick counts (`price / syminfo.mintick`) rather than floats. Float comparison was producing phantom duplicate levels on forex and crypto; integer tick math removed them.
-- Every input is hashed each bar. If any setting changes, all state resets, so stale levels from an old configuration can never linger on the chart.
-- Reference caps scale with timeframe automatically (80 on 1m up to 400 on 1D) so the chart is neither cluttered on high timeframes nor starved on low ones.
-- Fill detection runs on the unconfirmed bar so a touch shows immediately rather than waiting for the candle to close.
-
-### 6. HTF Algo — multi-timeframe level aggregator
-
-The big reference levels are spread across many timeframes and session windows. HTF Algo collects them: highs/lows from eight timeframes (1M down to 1h), specific time-based prices (the 16:00 NY close), and a few named session ranges, then filters to what's realistically in reach for the day using Average Daily Range.
-
-What made it interesting to build:
-- Eight fully independent timeframe slots, each managing its own arrays, fill state, and eligible-level sets.
-- The ADR filter computes the average daily range, applies a user multiplier (0.4–2.0×), and clips displayed levels to that window.
-- A `TimePriceLevel` type stores up to 50 historical time/price pairs per session with individual revisit flags and timestamps, giving a full history rather than just the latest value.
-- Sessions that cross midnight (one runs 21:30–01:29) needed dedicated handling with provisional state and same-day awareness.
-- Levels within 0.005% of each other are merged so natural clustering on high timeframes doesn't turn into noise.
-
-### 7. Untagged Opens — open-price tracker
-
-Each bar opens at a price. When price leaves an open behind and hasn't come back to it, that open is a level worth watching. This tracks every un-revisited open, draws them, and marks them once price returns.
-
-What made it interesting to build:
-- Open price, bar index, direction, tag status, and tag time are kept in parallel arrays that stay in sync, updated every bar.
-- Revisit checks are capped to the most recent 50 bars so the work per bar stays bounded as history grows.
-- An insertion sort keeps both nearest-to-price ordering and recency ordering current without rebuilding the arrays each bar.
-- Levels are only recorded on confirmed bars so a forming candle can't corrupt the set.
-
-### 8. Pulse — liquidity pool and sweep-depth tracker
-
-Pulse tracks the session highs and lows, key opening prices, and intraday closes where stop orders tend to cluster, across daily/weekly/monthly, all five intraday sessions, premarket and overnight ranges, and a handful of specific open and close times. Beyond just where each level is, it estimates how far price typically pushes past it, calibrated per instrument.
-
-What made it interesting to build:
-- An asset registry initialized on the first bar holds per-instrument depth distances (L1/L2/L3) for several futures and crypto symbols, looked up once and cached for constant-time access afterward.
-- A `LiquidityPool` type bundles highs, lows, breach times, session boundaries, and nested depth-level arrays into one structure, so a pool moves through the code as a single value.
-- A single "mode" input overrides all the individual pool toggles, so switching between preset views is one dropdown rather than twenty checkboxes.
-- Day dividers and labels are rendered as a separate concern from the pools, with their own timeframe gate.
-
-### 9. DTT Intraday — 15-session intraday model
-
-A standard Asia/London/NY split is too coarse for short-term work, so this divides the 24-hour cycle into 15 named sessions, each with its own typical range and key internal timestamps. For each one it estimates the expected price expansion so you can see whether a session is moving normally or stretching.
-
-What made it interesting to build:
-- The range projection uses the interquartile range (Q3 − Q1) of historical session expansions rather than a mean. A single outlier session would skew an average; the IQR ignores the tails. I made the same choice in DTT Weekly.
-- Projection multipliers are parsed from a comma-separated string input (e.g. `"1, 2, 2.5, 4"`) and generate the extension lines dynamically, so there are no hardcoded levels.
-- The equilibrium snapshot for each session is taken at a fixed clock minute rather than at a price condition, so it's consistent regardless of volatility.
-
-### 10. DTT Weekly — four-session weekly model
-
-The same framework as DTT Intraday but applied to the trading week, split into four sessions (the longest spans 77 hours). Same statistical tooling, operating across days instead of hours.
-
-What made it interesting to build:
-- Day-of-week detection uses Pine's `dayofweek` with named day constants for readability.
-- The 77-hour session spans 4.5 calendar days and needed cross-day boundary handling the shorter sessions don't.
-- Same IQR-based projection as the intraday version, recalibrated for a weekly lookback (1–30 weeks). Only the lookback length changed; the math was reused as-is.
-- Fibonacci levels re-anchor as each multi-day session builds, so they're meaningful from the session's open, not only at its close.
-
-### 11. Gaps — multi-type gap detector with floating display
-
-Tracks five gap types at once (weekly opens, daily opens, regular-hours gaps, balanced price ranges, fair value gaps) and shows how filled each one is. Its distinctive feature is a "floating" mode that keeps unfilled gaps compactly near current price instead of stranded far off-screen at their origin.
-
-What made it interesting to build:
-- Floating mode computes a bar-offset display position for each unfilled gap and reverts it to its true historical position once filled.
-- Fill tracking measures how far the candle body penetrates the gap, logging wick-only touches separately with a distinct marker.
-- Gap classification uses NY-timezone hour crossings (16:59, 18:00, midnight) so it stays correct even on instruments that trade nearly around the clock.
-- Lookback is capped at 20 days and 100 bars per type so performance doesn't degrade as history accumulates.
-
-### 12. Deviations — statistical expansion levels
-
-Each intraday session tends to expand a typical amount from its reference point. Deviations measures that and plots where price is statistically likely to stall (midpoint, 1×, 1.5×, 2× of range), across 13 sessions at once, with touch alerts and a simple directional read from the prior session's close.
-
-What made it interesting to build:
-- A `SessionConfig` type separates each session's configuration (mode, times, colors, rules, extension settings) from its runtime state, so adding or changing a session is data, not new code.
-- It stores separate high/low values for candle bodies and full wick ranges, allowing analysis at two levels of precision.
-- It uses the same provisional/confirmed revisit logic as MBZ Prime and HTF Algo.
-- Midnight-crossing sessions set a single flag that adjusts all the downstream day-tracking logic, instead of scattering special cases through the code.
-
-### 13. ADR — Average Daily Range with early-sweep detection
-
-Every instrument has a typical daily range, which tells you roughly where price is likely to exhaust. ADR maps that range and subdivides it. The interesting subdivision is the 1/3 mark, where price often sweeps early in the session before reversing toward the real target. ADR makes that level prominent and detects the early sweep (a "Judas Swing") so it's something to watch for rather than get caught in.
-
-What made it interesting to build:
-- Two range-definition modes (NY midnight-to-midnight, or the daily candle) for traders who define the day differently.
-- A `LevelConfig` type holds multiplier, label, color, style, and width per level, so level management is data-driven rather than repeated blocks.
-- An `AlertState` type tracks per-level, per-day alert status to prevent duplicate alerts firing on the same level in the same session.
-- Past 10–20 days of ADR levels render faded, giving a volatility baseline without crowding the current day.
-
-### 14. FVG Atlas — multi-timeframe Fair Value Gap scanner
-
-Fair Value Gaps are among the most-watched patterns. FVG Atlas scans for them across up to six higher timeframes at once, tracks fill percentage per gap, and makes higher-timeframe gaps visually heavier than smaller ones.
-
-What made it interesting to build:
-- `Fvg`, `FvgBox`, `FvgStore`, and `HtfSettings` types keep detection, storage, and display separate, so how a gap is found is decoupled from how it's drawn.
-- Mitigation is checked in two phases: confirmed higher-timeframe candles with `lookahead_on`, and the current forming candle with `lookahead_off`, which gives real-time accuracy without lookahead bias leaking into historical bars.
-- Each gap tracks the deepest body penetration seen (`max_body_fill`) as a continuous fill measure rather than a binary filled/unfilled flag.
-- Visual weight is derived from the timeframe ranking, so a 4h-plus gap on a sub-4h chart is emphasized automatically.
-
-## Patterns that show up across the suite
-
-A handful of decisions recur because the same problems recur. These are the ones I'd point to as the real takeaways.
-
-**Integer tick math instead of floats.** Price comparisons and deduplication are done in tick units (`price / syminfo.mintick`). Float comparison produced phantom duplicate levels on forex and crypto; integer ticks eliminated them. Used everywhere prices are compared.
-
-**Provisional vs. confirmed state.** Overnight touches are held as provisional until the 05:00–16:00 NY window confirms them, so thin off-hours moves don't invalidate levels that should still be live. The same small state machine appears in MBZ Prime, HTF Algo, and Deviations.
-
-**Input hashing for state resets.** LTF Algo and HTF Algo hash all settings every bar and wipe state when anything changes, so an old configuration never leaves stale objects on the chart.
-
-**Explicit object-budget management.** Pine caps drawable objects. Instead of silently dropping work near the cap, the capacity tiers (4×/8×/12×) grow arrays on request and warn when limits are close, leaving the depth-versus-performance call to the user.
-
-**IQR instead of averages.** The range models (DTT Intraday, DTT Weekly, ADR, Deviations) use the interquartile range and range subdivisions rather than means, so one outlier session doesn't distort the expected range.
-
-**Parameterized, not duplicated.** Detection and calculation functions take the data they operate on as parameters rather than being copied per timeframe or session. Only genuinely per-context state (each session's own arrays) is separate, so a fix to shared logic applies everywhere at once.
+To try an indicator, open the Pine Editor in TradingView, paste in a `.pine` file, save it and add it to a chart.
