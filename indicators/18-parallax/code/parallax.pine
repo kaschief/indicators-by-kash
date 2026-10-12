@@ -52,6 +52,7 @@ const int NATIVE_SHIFT_MS = 6 * SECS_HOUR * MS_PER_SEC
 const int TIME_HISTORY_BUFFER_SIZE = 5000
 const int BAR_INDEX_DRAWING_LOOKBACK = TIME_HISTORY_BUFFER_SIZE - 1
 const int BAR_INDEX_DRAWING_LOOKAHEAD = 500
+const float RANGE_EXTENSION_UNIT_SECONDS = 900.0
 const int INTRADAY_LIQUIDITY_DEPTH_MAX_TIMEFRAME = 30 * SECS_MIN
 
 // QUICK FILTER WINDOWS
@@ -250,8 +251,9 @@ const string LIQUIDITY_DEPTH_TOOLTIP = "Forecast LD\nProjects depth before a sel
 const string FIB_HISTORY_TOOLTIP = "History\nShared number of completed profiles.\n\nProfiles\nSelect which profiles show saved Fib levels.\n\nTrailing\nExpands current and saved Fib anchors to profile extremes.\n\nLatest Only\nHides all saved Fib levels."
 const string FIB_PRESET_ROW_TOOLTIP = "Each value selects Off or line width 1–5."
 const string FIB_PALETTE_ROW_TOOLTIP = "Shared color and Key-label flag."
-const string FL_ROW_TOOLTIP = "Enable • size • position • bar offset.\nCenter places one label at the line midpoint; offset applies to Left, Right and Both.\nRange: right-edge offsets apply once a candle reaches the projected endpoint."
+const string FL_ROW_TOOLTIP = "Enable • size • position • bar offset.\nCenter places one label at the line midpoint; offset applies to Left, Right and Both."
 const string FL_HEAD_TOOLTIP = "Levels\nOff, Key or All.\n\nHistory\nHTF, Daily and Intraday profile history."
+const string RANGE_LINE_LENGTH_TOOLTIP = "Range charts only.\n\nBars a live profile reaches past the last candle. Monthly uses the full length; shorter profiles step down by duration."
 const string HOLIDAY_MODE_TOOLTIP = "Slots 1–2 and Weekly.\n\nOff\nTradingView Daily and Weekly periods.\n\nExtend\nMerges shortened Daily periods.\n\nNative\nUses custom NY Daily and Weekly periods."
 
 max_bars_back(time, TIME_HISTORY_BUFFER_SIZE)
@@ -798,6 +800,8 @@ fibLabelSuperscript = input.bool(false, "Superscript", group=GROUP_FIB_LABELS, a
 
 holidayMode = input.string(HOLIDAY_NATIVE, "HTF Holiday Handling", options=[HOLIDAY_OFF, HOLIDAY_EXTEND, HOLIDAY_NATIVE], group=GROUP_ADVANCED,
      tooltip=HOLIDAY_MODE_TOOLTIP)
+rangeLineLength = input.int(100, "Range Line Length", options=[50, 100, 200], group=GROUP_ADVANCED,
+     tooltip=RANGE_LINE_LENGTH_TOOLTIP)
 
 // COLOR REFERENCE TABLE
 
@@ -1010,6 +1014,9 @@ scheduled_profile_duration_minutes(ScheduledProfileConfig config) =>
         int rawDuration = config.endMinute - config.startMinute
         rawDuration > 0 ? rawDuration : rawDuration + MINUTES_PER_DAY
 
+scheduled_profile_duration_seconds(ScheduledProfileConfig config) =>
+    scheduled_profile_duration_minutes(config) * SECS_MIN
+
 scheduled_profile_source_aligned(ScheduledProfileConfig config) =>
     int sourceMinutes = int(sessionSourceSeconds / SECS_MIN)
     config.startMinute % sourceMinutes == 0 and config.endMinute % sourceMinutes == 0
@@ -1059,7 +1066,7 @@ next_scheduled_profile_bounds(int referenceTime, ScheduledProfileConfig config) 
     [nextStart, scheduled_profile_timestamp(referenceTime, config.endMinute, endDayOffset)]
 
 scheduled_profile_valid(ScheduledProfileConfig config) =>
-    int durationSeconds = scheduled_profile_duration_minutes(config) * SECS_MIN
+    int durationSeconds = scheduled_profile_duration_seconds(config)
     config.enabled and (chart.is_range or timeframe.in_seconds(timeframe.period) < durationSeconds)
 
 scheduled_profile_current_visible(ScheduledProfileConfig config, ScheduledProfileRuntime profileRuntime, bool hideCompletedProfiles, int referenceTime) =>
@@ -1592,6 +1599,19 @@ drawing_x(int timeX, int indexX, bool timeBased) =>
 drawing_xloc(bool timeBased) =>
     (timeBased or not chart.is_range) ? xloc.bar_time : xloc.bar_index
 
+// Range charts have no fixed bar duration, so TradingView places future timestamps far past the
+// last candle. Live edges are drawn by bar count instead, on a log scale of profile duration.
+range_extension_bars(int durationSeconds, int monthlyBars) =>
+    float monthlyScale = math.log(1 + timeframe.in_seconds(MONTHLY_TIMEFRAME) / RANGE_EXTENSION_UNIT_SECONDS)
+    math.max(1, int(math.round(monthlyBars * math.log(1 + durationSeconds / RANGE_EXTENSION_UNIT_SECONDS) / monthlyScale)))
+
+range_projected_right_index(int rightTime, int extensionBars) =>
+    chart.is_range and not na(rightTime) and rightTime > time ? bar_index + extensionBars : na
+
+// A forecast always sits past its profile's live edge so it never overlaps current drawings.
+range_forecast_edges(int extensionBars) =>
+    [bar_index + extensionBars, bar_index + 2 * extensionBars]
+
 make_zone_box(bool timeBased, int leftT, int leftIndex, float top, int rightT, int rightIndex, float bottom, color fillClr, color slotColor, string txt, string slotLabelSize, int textTransparency) =>
     box.new(drawing_x(leftT, leftIndex, timeBased), top, drawing_x(rightT, rightIndex, timeBased), bottom,
          bgcolor=fillClr, border_color=na, xloc=drawing_xloc(timeBased),
@@ -1633,13 +1653,12 @@ offset_fib_label_time(int anchorT, int anchorIndex, int direction, int offsetBar
                     result := chartTime
     result
 
-resolve_fib_label_edge(bool rangeChart, bool timeBasedLines, int anchorTime, int anchorIndex, int direction, int offsetBars, int fallbackOffsetMs, int referenceTime) =>
+resolve_fib_label_edge(bool rangeChart, bool timeBasedLines, int anchorTime, int anchorIndex, int direction, int offsetBars, int fallbackOffsetMs) =>
     int labelTime = anchorTime
     int labelIndex = anchorIndex
     bool labelTimeBased = timeBasedLines
     if rangeChart
-        bool futureRightEdge = timeBasedLines and direction > 0 and anchorTime > referenceTime
-        labelTimeBased := timeBasedLines and (offsetBars == 0 or na(anchorIndex) or futureRightEdge)
+        labelTimeBased := timeBasedLines and (offsetBars == 0 or na(anchorIndex))
         if not labelTimeBased
             labelIndex := anchorIndex + direction * offsetBars
     else
@@ -1744,9 +1763,9 @@ update_profile_edge_qualification_state(ProfileEdgeQualificationState qualificat
                 qualificationState.currentDirty := true
     qualificationState.currentDirty or qualificationState.historyDirty
 
-make_profile_edge_qualification_outline(ProfileEdgeQualificationSnapshot qualificationSnapshot, bool timeBased, color outlineColor, int outlineWidth) =>
+make_profile_edge_qualification_outline(ProfileEdgeQualificationSnapshot qualificationSnapshot, bool timeBased, int rightIndex, color outlineColor, int outlineWidth) =>
     box.new(drawing_x(qualificationSnapshot.profileStartTime, qualificationSnapshot.profileStartIndex, timeBased), qualificationSnapshot.outerHigh,
-         drawing_x(qualificationSnapshot.profileEndTime, qualificationSnapshot.profileEndIndex, timeBased), qualificationSnapshot.outerLow,
+         drawing_x(qualificationSnapshot.profileEndTime, rightIndex, timeBased), qualificationSnapshot.outerLow,
          xloc=drawing_xloc(timeBased), bgcolor=na, border_color=outlineColor, border_width=outlineWidth)
 
 update_profile_edge_qualification_outline(box outline, ProfileEdgeQualificationSnapshot qualificationSnapshot, bool timeBased) =>
@@ -1756,21 +1775,26 @@ update_profile_edge_qualification_outline(box outline, ProfileEdgeQualificationS
     box.set_bottom(outline, qualificationSnapshot.outerLow)
     outline
 
-draw_profile_edge_qualification_state(ProfileEdgeQualificationState qualificationState, ProfileEdgeQualificationConfig qualificationConfig) =>
+draw_profile_edge_qualification_state(ProfileEdgeQualificationState qualificationState, ProfileEdgeQualificationConfig qualificationConfig, int projectedRightIndex) =>
     if qualificationState.historyDirty
         while array.size(qualificationState.historyOutlines) > 0
             box.delete(array.pop(qualificationState.historyOutlines))
         if qualificationConfig.enabled
             for qualificationSnapshot in qualificationState.history
                 if qualificationSnapshot.qualified
-                    array.push(qualificationState.historyOutlines, make_profile_edge_qualification_outline(qualificationSnapshot, false, qualificationConfig.outlineColor, qualificationConfig.outlineWidth))
+                    array.push(qualificationState.historyOutlines, make_profile_edge_qualification_outline(qualificationSnapshot, false, qualificationSnapshot.profileEndIndex, qualificationConfig.outlineColor, qualificationConfig.outlineWidth))
         qualificationState.historyDirty := false
-    if qualificationState.currentDirty
+    // Range charts rebuild every update: the projected edge moves with each new candle and the
+    // outline switches between index and time coordinates when the profile completes.
+    if qualificationState.currentDirty or chart.is_range
         ProfileEdgeQualificationSnapshot currentSnapshot = qualificationState.currentSnapshot
         bool currentOutlineVisible = qualificationConfig.enabled and currentSnapshot.qualified and profile_edge_snapshot_has_bounds(currentSnapshot)
         if currentOutlineVisible
+            if chart.is_range and not na(qualificationState.currentOutline)
+                box.delete(qualificationState.currentOutline)
+                qualificationState.currentOutline := na
             if na(qualificationState.currentOutline)
-                qualificationState.currentOutline := make_profile_edge_qualification_outline(currentSnapshot, true, qualificationConfig.outlineColor, qualificationConfig.outlineWidth)
+                qualificationState.currentOutline := make_profile_edge_qualification_outline(currentSnapshot, na(projectedRightIndex), nz(projectedRightIndex, currentSnapshot.profileEndIndex), qualificationConfig.outlineColor, qualificationConfig.outlineWidth)
             else
                 update_profile_edge_qualification_outline(qualificationState.currentOutline, currentSnapshot, true)
         else if not na(qualificationState.currentOutline)
@@ -1880,7 +1904,7 @@ make_liquidity_depth_label(bool timeBased, int startTime, int startIndex, int en
          xloc=drawing_xloc(timeBased), yloc=yloc.price, style=label.style_label_center,
          textcolor=DEFAULT_LIQUIDITY_DEPTH_LABEL_TEXT, size=6, color=DEFAULT_LIQUIDITY_DEPTH_LABEL_BACKGROUND)
 
-draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessionState, LiquidityDepthSideState sideState, bool isHigh, float depthStep, color profileColor, string profileName, bool forecastEnabled) =>
+draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessionState, LiquidityDepthSideState sideState, bool isHigh, float depthStep, color profileColor, string profileName, bool forecastEnabled, int projectedRightIndex) =>
     if sideState.activated or forecastEnabled
         int startTime = sessionState.sessionStartTime
         int startIndex = sessionState.sessionStartIndex
@@ -1889,15 +1913,17 @@ draw_liquidity_depth_side(SlotState slotState, LiquidityDepthSessionState sessio
             int storedEndTime = array.get(sideState.endTimes, levelIndex)
             int storedEndIndex = array.get(sideState.endIndices, levelIndex)
             bool endAtSession = na(storedEndTime) or storedEndTime >= sessionState.sessionEndTime
+            bool endProjected = endAtSession and not na(projectedRightIndex)
+            bool timeBased = endAtSession and not endProjected
             int endTime = liquidity_depth_end_time(sessionState.sessionEndTime, storedEndTime)
-            int endIndex = endAtSession ? nz(sessionState.lastEligibleIndex, bar_index) : storedEndIndex
+            int endIndex = endProjected ? projectedRightIndex : endAtSession ? nz(sessionState.lastEligibleIndex, bar_index) : storedEndIndex
             float levelPrice = liquidity_depth_price(anchorPrice, isHigh, levelIndex, depthStep)
             color levelColor = liquidity_depth_level_color(levelIndex, profileColor)
-            array.push(slotState.liquidityDepthLines, make_horizontal_line(endAtSession, startTime, startIndex, endTime, endIndex, levelPrice, levelColor, liquidity_depth_level_style(levelIndex), liquidity_depth_level_width(levelIndex)))
-            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(endAtSession, startTime, startIndex, anchorPrice, levelPrice, profileColor))
-            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(endAtSession, startTime, startIndex, endTime, endIndex, levelPrice, liquidity_depth_label_text(levelIndex, profileName)))
+            array.push(slotState.liquidityDepthLines, make_horizontal_line(timeBased, startTime, startIndex, endTime, endIndex, levelPrice, levelColor, liquidity_depth_level_style(levelIndex), liquidity_depth_level_width(levelIndex)))
+            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(timeBased, startTime, startIndex, anchorPrice, levelPrice, profileColor))
+            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(timeBased, startTime, startIndex, endTime, endIndex, levelPrice, liquidity_depth_label_text(levelIndex, profileName)))
 
-draw_liquidity_depth_profile(SlotState slotState, LiquidityDepthProfileState profileState, ScheduledProfileConfig profileConfig, bool depthActive, bool currentVisible, float depthStep, int historyCap, bool forecastEnabled) =>
+draw_liquidity_depth_profile(SlotState slotState, LiquidityDepthProfileState profileState, ScheduledProfileConfig profileConfig, bool depthActive, bool currentVisible, float depthStep, int historyCap, bool forecastEnabled, int projectedRightIndex) =>
     while array.size(slotState.liquidityDepthLines) > 0
         line.delete(array.pop(slotState.liquidityDepthLines))
     while array.size(slotState.liquidityDepthLabels) > 0
@@ -1905,17 +1931,17 @@ draw_liquidity_depth_profile(SlotState slotState, LiquidityDepthProfileState pro
     if depthActive
         string profileName = liquidity_depth_profile_name(profileConfig.sourceLabel)
         if currentVisible and not na(profileState.currentSession)
-            draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
-            draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
+            draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled, projectedRightIndex)
+            draw_liquidity_depth_side(slotState, profileState.currentSession, profileState.currentSession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled, projectedRightIndex)
         int count = math.min(historyCap, array.size(profileState.history))
         if count > 0
             for historyOffset = 0 to count - 1
                 int historyIndex = array.size(profileState.history) - 1 - historyOffset
                 LiquidityDepthSessionState historySession = array.get(profileState.history, historyIndex)
-                draw_liquidity_depth_side(slotState, historySession, historySession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
-                draw_liquidity_depth_side(slotState, historySession, historySession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled)
+                draw_liquidity_depth_side(slotState, historySession, historySession.highSide, true, depthStep, profileConfig.slotColor, profileName, forecastEnabled, na)
+                draw_liquidity_depth_side(slotState, historySession, historySession.lowSide, false, depthStep, profileConfig.slotColor, profileName, forecastEnabled, na)
 
-draw_liquidity_depth_forecast(SlotState slotState, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, bool depthActive, float depthStep, bool forecastEnabled) =>
+draw_liquidity_depth_forecast(SlotState slotState, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, bool depthActive, float depthStep, bool forecastEnabled, int extensionBars) =>
     ScheduledProfileForecastData forecastData = profileRuntime.forecast
     bool forecastReady = forecastEnabled and depthActive and profileRuntime.forecastVisible and
          not na(forecastData) and
@@ -1928,6 +1954,10 @@ draw_liquidity_depth_forecast(SlotState slotState, ScheduledProfileConfig profil
              forecastData.medianHighOpen, forecastData.meanHighOpen,
              forecastData.medianOpenLow, forecastData.meanOpenLow)
         string profileName = liquidity_depth_profile_name(profileConfig.sourceLabel)
+        [forecastLeftIndex, forecastRightIndex] = range_forecast_edges(extensionBars)
+        bool timeBased = not chart.is_range
+        int forecastStartTime = profileRuntime.forecastStartTime
+        int forecastEndTime = profileRuntime.forecastEndTime
         for levelIndex = 0 to NUM_LIQUIDITY_DEPTH_LEVELS - 1
             float highLevelPrice = liquidity_depth_price(forecastOuterHigh, true, levelIndex, depthStep)
             float lowLevelPrice = liquidity_depth_price(forecastOuterLow, false, levelIndex, depthStep)
@@ -1935,12 +1965,12 @@ draw_liquidity_depth_forecast(SlotState slotState, ScheduledProfileConfig profil
             string lineStyle = liquidity_depth_level_style(levelIndex)
             int lineWidth = liquidity_depth_level_width(levelIndex)
             string labelText = liquidity_depth_label_text(levelIndex, profileName)
-            array.push(slotState.liquidityDepthLines, make_horizontal_line(true, profileRuntime.forecastStartTime, na, profileRuntime.forecastEndTime, na, highLevelPrice, levelColor, lineStyle, lineWidth))
-            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(true, profileRuntime.forecastStartTime, na, forecastOuterHigh, highLevelPrice, profileConfig.slotColor))
-            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(true, profileRuntime.forecastStartTime, na, profileRuntime.forecastEndTime, na, highLevelPrice, labelText))
-            array.push(slotState.liquidityDepthLines, make_horizontal_line(true, profileRuntime.forecastStartTime, na, profileRuntime.forecastEndTime, na, lowLevelPrice, levelColor, lineStyle, lineWidth))
-            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(true, profileRuntime.forecastStartTime, na, forecastOuterLow, lowLevelPrice, profileConfig.slotColor))
-            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(true, profileRuntime.forecastStartTime, na, profileRuntime.forecastEndTime, na, lowLevelPrice, labelText))
+            array.push(slotState.liquidityDepthLines, make_horizontal_line(timeBased, forecastStartTime, forecastLeftIndex, forecastEndTime, forecastRightIndex, highLevelPrice, levelColor, lineStyle, lineWidth))
+            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(timeBased, forecastStartTime, forecastLeftIndex, forecastOuterHigh, highLevelPrice, profileConfig.slotColor))
+            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(timeBased, forecastStartTime, forecastLeftIndex, forecastEndTime, forecastRightIndex, highLevelPrice, labelText))
+            array.push(slotState.liquidityDepthLines, make_horizontal_line(timeBased, forecastStartTime, forecastLeftIndex, forecastEndTime, forecastRightIndex, lowLevelPrice, levelColor, lineStyle, lineWidth))
+            array.push(slotState.liquidityDepthLines, make_liquidity_depth_connector(timeBased, forecastStartTime, forecastLeftIndex, forecastOuterLow, lowLevelPrice, profileConfig.slotColor))
+            array.push(slotState.liquidityDepthLabels, make_liquidity_depth_label(timeBased, forecastStartTime, forecastLeftIndex, forecastEndTime, forecastRightIndex, lowLevelPrice, labelText))
 
 format_fib_ratio(string ratioText, bool superscript) =>
     string formatted = ratioText
@@ -1957,8 +1987,8 @@ push_fib_lines(array<line> target, bool timeBasedLines, int leftT, int leftIndex
     if not na(anchorHigh) and not na(anchorLow)
         float fibRange = anchorHigh - anchorLow
         bool keyOnly = fibLabelLevels == FL_KEY
-        [rightLabelTime, rightLabelIndex, rightLabelTimeBased] = resolve_fib_label_edge(chart.is_range, timeBasedLines, rightT, rightIndex, 1, labelOffsetBars, labelOffsetMs, time)
-        [leftLabelTime, leftLabelIndex, leftLabelTimeBased] = resolve_fib_label_edge(chart.is_range, timeBasedLines, leftT, leftIndex, -1, labelOffsetBars, labelOffsetMs, time)
+        [rightLabelTime, rightLabelIndex, rightLabelTimeBased] = resolve_fib_label_edge(chart.is_range, timeBasedLines, rightT, rightIndex, 1, labelOffsetBars, labelOffsetMs)
+        [leftLabelTime, leftLabelIndex, leftLabelTimeBased] = resolve_fib_label_edge(chart.is_range, timeBasedLines, leftT, leftIndex, -1, labelOffsetBars, labelOffsetMs)
 
         for levelIndex = 0 to array.size(fibPalette.ratios) - 1
             if array.get(fibLevelSet.visibleLevels, levelIndex)
@@ -1984,8 +2014,8 @@ push_fib_lines(array<line> target, bool timeBasedLines, int leftT, int leftIndex
                         int centerX = line.get_x1(fibLine) + int((line.get_x2(fibLine) - line.get_x1(fibLine)) / 2)
                         array.push(labelTarget, make_fib_label(centerX, centerX, price, lblText, label.style_none, txtClr, labelSize, timeBasedLines))
 
-draw_slot_fib(SlotState s, int leftT, int leftIndex, int rightT, int rightIndex, float anchorHigh, float anchorLow, int transparencyBoost, FibLevelSet fibLevelSet, FibPalette fibPalette, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs, int labelOffsetBars) =>
-    push_fib_lines(s.fibLines, true, leftT, leftIndex, rightT, rightIndex, anchorHigh, anchorLow, transparencyBoost, fibLevelSet, fibPalette, s.fibLabels, tfLabel, drawLabels, labelSize, labelPos, labelOffsetMs, labelOffsetBars)
+draw_slot_fib(SlotState s, bool timeBased, int leftT, int leftIndex, int rightT, int rightIndex, float anchorHigh, float anchorLow, int transparencyBoost, FibLevelSet fibLevelSet, FibPalette fibPalette, string tfLabel, bool drawLabels, string labelSize, string labelPos, int labelOffsetMs, int labelOffsetBars) =>
+    push_fib_lines(s.fibLines, timeBased, leftT, leftIndex, rightT, rightIndex, anchorHigh, anchorLow, transparencyBoost, fibLevelSet, fibPalette, s.fibLabels, tfLabel, drawLabels, labelSize, labelPos, labelOffsetMs, labelOffsetBars)
 
 slot_forecast_right_time(string safe, int currentRightTime) =>
     int fixedDurationRightTime = currentRightTime + timeframe.in_seconds(safe) * MS_PER_SEC
@@ -2159,7 +2189,7 @@ update_slot(SlotState s, bool valid, bool transitionNow, int zoneStartT, int zon
                         label.delete(array.shift(s.histFibLabels))
                 push_fib_lines(s.histFibLines, false, historyLeftTime, historyLeftIndex, historyRightTime, historyRightIndex, historyAnchorHigh, historyAnchorLow, fibFade, fibLevelSet, fibPalette, s.histFibLabels, htfLabel, histLabelsEnabled and histLabelCap >= histLabelsPerZone, histLabelSize, histLabelPos, histLabelOffsetMs, histLabelOffsetBars)
 
-draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int curRightT, int curRightIndex, float htfO, float htfH, float htfL, color slotColor, string identifierText, string fibLabelPrefix,
+draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int curRightT, int sessionRightIndex, int projectedRightIndex, float htfO, float htfH, float htfL, color slotColor, string identifierText, string fibLabelPrefix,
                    float medHO, float meanHO, float medOL, float meanOL,
                    string slotLabelSize, FibLevelSet fibLevelSet, FibPalette fibPalette, int fibTransparencyBoost, bool labelSlotEnabled, string fibLabelSize, string fibLabelPos, int fibLabelOffsetMs, int fibLabelOffsetBars,
                    bool zonesVisible = true) =>
@@ -2189,34 +2219,38 @@ draw_slot_current(SlotState s, bool valid, int curLeftT, int curLeftIndex, int c
 
     if valid and not na(medHO) and not na(medOL)
         [innerHigh, outerHigh, innerLow, outerLow] = compute_levels(htfO, medHO, meanHO, medOL, meanOL)
+        bool timeBased = na(projectedRightIndex)
+        int curRightIndex = nz(projectedRightIndex, sessionRightIndex)
 
         if zonesVisible
             color fillClr = zone_fill_color(slotColor)
-            s.fillUp := make_zone_box(true, curLeftT, curLeftIndex, outerHigh, curRightT, curRightIndex, innerHigh, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
-            s.fillLo := make_zone_box(true, curLeftT, curLeftIndex, innerLow, curRightT, curRightIndex, outerLow, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
+            s.fillUp := make_zone_box(timeBased, curLeftT, curLeftIndex, outerHigh, curRightT, curRightIndex, innerHigh, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
+            s.fillLo := make_zone_box(timeBased, curLeftT, curLeftIndex, innerLow, curRightT, curRightIndex, outerLow, fillClr, slotColor, identifierText, slotLabelSize, LABEL_TEXT_TRANSPARENCY)
 
-            s.innH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerHigh, slotColor, line.style_solid, 1)
-            s.innL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, innerLow, slotColor, line.style_solid, 1)
-            s.outH := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerHigh, slotColor, line.style_solid, 1)
-            s.outL := make_horizontal_line(true, curLeftT, curLeftIndex, curRightT, curRightIndex, outerLow, slotColor, line.style_solid, 1)
+            s.innH := make_horizontal_line(timeBased, curLeftT, curLeftIndex, curRightT, curRightIndex, innerHigh, slotColor, line.style_solid, 1)
+            s.innL := make_horizontal_line(timeBased, curLeftT, curLeftIndex, curRightT, curRightIndex, innerLow, slotColor, line.style_solid, 1)
+            s.outH := make_horizontal_line(timeBased, curLeftT, curLeftIndex, curRightT, curRightIndex, outerHigh, slotColor, line.style_solid, 1)
+            s.outL := make_horizontal_line(timeBased, curLeftT, curLeftIndex, curRightT, curRightIndex, outerLow, slotColor, line.style_solid, 1)
 
         if fibLevelSet.lineCount > 0
             float fibAnchorHigh = fibTrailing ? math.max(outerHigh, htfH) : outerHigh
             float fibAnchorLow  = fibTrailing ? math.min(outerLow,  htfL) : outerLow
-            draw_slot_fib(s, curLeftT, curLeftIndex, curRightT, curRightIndex, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, fibLevelSet, fibPalette, fibLabelPrefix, labelSlotEnabled, fibLabelSize, fibLabelPos, fibLabelOffsetMs, fibLabelOffsetBars)
+            draw_slot_fib(s, timeBased, curLeftT, curLeftIndex, curRightT, curRightIndex, fibAnchorHigh, fibAnchorLow, fibTransparencyBoost, fibLevelSet, fibPalette, fibLabelPrefix, labelSlotEnabled, fibLabelSize, fibLabelPos, fibLabelOffsetMs, fibLabelOffsetBars)
 
 // Outline only: the same outer edges LD and Boundary Exceeded use, so the ring never sits inside the zones.
-draw_slot_ring(SlotState s, bool visible, int leftT, int leftIndex, int rightT, int rightIndex, float profileOpen,
+draw_slot_ring(SlotState s, bool visible, int leftT, int leftIndex, int rightT, int sessionRightIndex, int projectedRightIndex, float profileOpen,
                float medHO, float meanHO, float medOL, float meanOL, color ringColor, int ringWidth) =>
     if not na(s.ringOutline)
         box.delete(s.ringOutline)
         s.ringOutline := na
     if visible and not na(medHO) and not na(medOL)
         [ringHigh, ringLow] = liquidity_depth_anchors(profileOpen, medHO, meanHO, medOL, meanOL)
-        s.ringOutline := box.new(drawing_x(leftT, leftIndex, true), ringHigh, drawing_x(rightT, rightIndex, true), ringLow,
-             xloc=drawing_xloc(true), bgcolor=na, border_color=ringColor, border_width=ringWidth)
+        bool timeBased = na(projectedRightIndex)
+        int rightIndex = nz(projectedRightIndex, sessionRightIndex)
+        s.ringOutline := box.new(drawing_x(leftT, leftIndex, timeBased), ringHigh, drawing_x(rightT, rightIndex, timeBased), ringLow,
+             xloc=drawing_xloc(timeBased), bgcolor=na, border_color=ringColor, border_width=ringWidth)
 
-draw_slot_forecast(SlotState s, bool valid, int forecastLeftT, int forecastRightT,
+draw_slot_forecast(SlotState s, bool valid, int forecastLeftT, int forecastRightT, int extensionBars,
                    float htfO, float htfH, float htfL, color slotColor, string identifierText, string slotLabelSize,
                    float medHO, float meanHO, float medOL, float meanOL) =>
     if not na(s.forecastFillUp)
@@ -2242,14 +2276,16 @@ draw_slot_forecast(SlotState s, bool valid, int forecastLeftT, int forecastRight
         [forecastInnerHigh, forecastOuterHigh, forecastInnerLow, forecastOuterLow] = compute_forecast_levels(htfO, htfH, htfL, medHO, meanHO, medOL, meanOL)
         color fillColor = forecast_zone_fill_color(slotColor)
         color borderColor = forecast_border_color(slotColor)
+        [forecastLeftIndex, forecastRightIndex] = range_forecast_edges(extensionBars)
+        bool timeBased = not chart.is_range
 
-        s.forecastFillUp := make_zone_box(true, forecastLeftT, na, forecastOuterHigh, forecastRightT, na, forecastInnerHigh, fillColor, slotColor, identifierText, slotLabelSize, FORECAST_LABEL_TEXT_TRANSPARENCY)
-        s.forecastFillLo := make_zone_box(true, forecastLeftT, na, forecastInnerLow, forecastRightT, na, forecastOuterLow, fillColor, slotColor, identifierText, slotLabelSize, FORECAST_LABEL_TEXT_TRANSPARENCY)
+        s.forecastFillUp := make_zone_box(timeBased, forecastLeftT, forecastLeftIndex, forecastOuterHigh, forecastRightT, forecastRightIndex, forecastInnerHigh, fillColor, slotColor, identifierText, slotLabelSize, FORECAST_LABEL_TEXT_TRANSPARENCY)
+        s.forecastFillLo := make_zone_box(timeBased, forecastLeftT, forecastLeftIndex, forecastInnerLow, forecastRightT, forecastRightIndex, forecastOuterLow, fillColor, slotColor, identifierText, slotLabelSize, FORECAST_LABEL_TEXT_TRANSPARENCY)
 
-        s.forecastInnH := make_horizontal_line(true, forecastLeftT, na, forecastRightT, na, forecastInnerHigh, borderColor, line.style_dashed, 1)
-        s.forecastInnL := make_horizontal_line(true, forecastLeftT, na, forecastRightT, na, forecastInnerLow, borderColor, line.style_dashed, 1)
-        s.forecastOutH := make_horizontal_line(true, forecastLeftT, na, forecastRightT, na, forecastOuterHigh, borderColor, line.style_dashed, 1)
-        s.forecastOutL := make_horizontal_line(true, forecastLeftT, na, forecastRightT, na, forecastOuterLow, borderColor, line.style_dashed, 1)
+        s.forecastInnH := make_horizontal_line(timeBased, forecastLeftT, forecastLeftIndex, forecastRightT, forecastRightIndex, forecastInnerHigh, borderColor, line.style_dashed, 1)
+        s.forecastInnL := make_horizontal_line(timeBased, forecastLeftT, forecastLeftIndex, forecastRightT, forecastRightIndex, forecastInnerLow, borderColor, line.style_dashed, 1)
+        s.forecastOutH := make_horizontal_line(timeBased, forecastLeftT, forecastLeftIndex, forecastRightT, forecastRightIndex, forecastOuterHigh, borderColor, line.style_dashed, 1)
+        s.forecastOutL := make_horizontal_line(timeBased, forecastLeftT, forecastLeftIndex, forecastRightT, forecastRightIndex, forecastOuterLow, borderColor, line.style_dashed, 1)
 
 update_scheduled_profile(SlotState slot, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime,
                      FibPalette fibPalette, int boxHistoryCap, int fibHistoryCap,
@@ -2266,15 +2302,15 @@ update_scheduled_profile(SlotState slot, ScheduledProfileConfig profileConfig, S
          profileConfig.fibLabelPosition, labelOffsetMilliseconds, labelOffsetBars)
 
 draw_scheduled_profile_current(SlotState slot, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, bool currentVisible,
-                           string identifierText, int currentRightIndex,
+                           string identifierText, int currentRightIndex, int projectedRightIndex,
                            FibPalette fibPalette, bool fibLabelsEnabled, int labelOffsetMilliseconds, int labelOffsetBars) =>
-    int sessionRightIndex = not na(profileRuntime.endIndex) ? profileRuntime.endIndex : currentRightIndex
+    int sessionRightIndex = nz(profileRuntime.endIndex, currentRightIndex)
     draw_slot_ring(slot, currentVisible and profileConfig.ringVisible,
-         profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex, profileRuntime.sessionOpen,
+         profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex, projectedRightIndex, profileRuntime.sessionOpen,
          profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow,
          profileConfig.ringColor, profileConfig.ringWidth)
     draw_slot_current(slot, currentVisible,
-         profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex,
+         profileRuntime.startTime, profileRuntime.startIndex, profileRuntime.endTime, sessionRightIndex, projectedRightIndex,
          profileRuntime.sessionOpen, profileRuntime.currentHigh, profileRuntime.currentLow,
          profileConfig.slotColor, identifierText, profileConfig.sourceLabel,
          profileRuntime.medianHighOpen, profileRuntime.meanHighOpen, profileRuntime.medianOpenLow, profileRuntime.meanOpenLow,
@@ -2282,10 +2318,10 @@ draw_scheduled_profile_current(SlotState slot, ScheduledProfileConfig profileCon
          fibLabelsEnabled, profileConfig.fibLabelSize, profileConfig.fibLabelPosition,
          labelOffsetMilliseconds, labelOffsetBars, not profileConfig.ringOnly)
 
-draw_scheduled_profile_forecast(SlotState slot, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, string identifierText) =>
+draw_scheduled_profile_forecast(SlotState slot, ScheduledProfileConfig profileConfig, ScheduledProfileRuntime profileRuntime, string identifierText, int extensionBars) =>
     ScheduledProfileForecastData forecastData = profileRuntime.forecast
     draw_slot_forecast(slot, profileRuntime.forecastVisible,
-         profileRuntime.forecastStartTime, profileRuntime.forecastEndTime,
+         profileRuntime.forecastStartTime, profileRuntime.forecastEndTime, extensionBars,
          forecastData.referenceOpen, forecastData.referenceHigh, forecastData.referenceLow,
          profileConfig.slotColor, identifierText, profileConfig.slotLabelSize,
          forecastData.medianHighOpen, forecastData.meanHighOpen,
@@ -2586,12 +2622,20 @@ update_scheduled_profile(ivbPlusSlot, ivbPlusConfig, ivbPlusRuntime,
 int currentRightIndex = chart.is_range ? bar_index + 1 : bar_index
 
 if barstate.islast
-    draw_slot_current(slot1, s1Valid, s1StartT, s1StartIndex, s1CurRightT, currentRightIndex, s1OEff, s1RHi, s1RLo, slot1Color, s1IdentifierText, s1Label, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL, SLOT1_LABEL_SIZE, slot1FibLevelSet, fibPalette, SLOT1_FIB_FADE, fibLabel1On, fibLabelSize1, fibLabelPos1, fibLabelOff1 * chartBarMs, fibLabelOff1)
-    draw_slot_current(slot2, s2Valid, s2StartT, s2StartIndex, s2CurRightT, currentRightIndex, s2OEff, s2RHi, s2RLo, slot2Color, s2IdentifierText, s2Label, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL, SLOT2_LABEL_SIZE, slot2FibLevelSet, fibPalette, SLOT2_FIB_FADE, fibLabel2On, fibLabelSize2, fibLabelPos2, fibLabelOff2 * chartBarMs, fibLabelOff2)
-    draw_slot_ring(weeklyProfileSlot, weeklyProfileValid and weeklyRing, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, currentRightIndex, weeklyProfileEffectiveOpen, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL, weeklyRingColor, ringLineWidth)
-    draw_slot_current(weeklyProfileSlot, weeklyProfileValid, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, currentRightIndex, weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, weeklyProfileIdentifierText, WEEKLY_PROFILE_NAME, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileFibLevelSet, fibPalette, WEEKLY_PROFILE_FIB_FADE, fibLabelWeeklyOn, fibLabelSizeWeekly, fibLabelPosWeekly, fibLabelOffWeekly * chartBarMs, fibLabelOffWeekly, not weeklyRingOnly)
-    draw_slot_ring(monthlyProfileSlot, monthlyProfileValid and monthlyRing, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, currentRightIndex, monthlyProfileEffectiveOpen, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL, monthlyRingColor, ringLineWidth)
-    draw_slot_current(monthlyProfileSlot, monthlyProfileValid, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, currentRightIndex, monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow, monthlyProfileColor, monthlyProfileIdentifierText, MONTHLY_PROFILE_NAME, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL, MONTHLY_PROFILE_LABEL_SIZE, monthlyProfileFibLevelSet, fibPalette, MONTHLY_PROFILE_FIB_FADE, fibLabelMonthlyOn, fibLabelSizeMonthly, fibLabelPosMonthly, fibLabelOffMonthly * chartBarMs, fibLabelOffMonthly, not monthlyRingOnly)
+    int s1ExtensionBars = range_extension_bars(timeframe.in_seconds(s1Safe), rangeLineLength)
+    int s2ExtensionBars = range_extension_bars(timeframe.in_seconds(s2Safe), rangeLineLength)
+    int weeklyProfileExtensionBars = range_extension_bars(timeframe.in_seconds(WEEKLY_TIMEFRAME), rangeLineLength)
+    int monthlyProfileExtensionBars = range_extension_bars(timeframe.in_seconds(MONTHLY_TIMEFRAME), rangeLineLength)
+    int s1ProjectedRightIndex = range_projected_right_index(s1CurRightT, s1ExtensionBars)
+    int s2ProjectedRightIndex = range_projected_right_index(s2CurRightT, s2ExtensionBars)
+    int weeklyProfileProjectedRightIndex = range_projected_right_index(weeklyProfileRightTime, weeklyProfileExtensionBars)
+    int monthlyProfileProjectedRightIndex = range_projected_right_index(monthlyProfileRightTime, monthlyProfileExtensionBars)
+    draw_slot_current(slot1, s1Valid, s1StartT, s1StartIndex, s1CurRightT, currentRightIndex, s1ProjectedRightIndex, s1OEff, s1RHi, s1RLo, slot1Color, s1IdentifierText, s1Label, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL, SLOT1_LABEL_SIZE, slot1FibLevelSet, fibPalette, SLOT1_FIB_FADE, fibLabel1On, fibLabelSize1, fibLabelPos1, fibLabelOff1 * chartBarMs, fibLabelOff1)
+    draw_slot_current(slot2, s2Valid, s2StartT, s2StartIndex, s2CurRightT, currentRightIndex, s2ProjectedRightIndex, s2OEff, s2RHi, s2RLo, slot2Color, s2IdentifierText, s2Label, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL, SLOT2_LABEL_SIZE, slot2FibLevelSet, fibPalette, SLOT2_FIB_FADE, fibLabel2On, fibLabelSize2, fibLabelPos2, fibLabelOff2 * chartBarMs, fibLabelOff2)
+    draw_slot_ring(weeklyProfileSlot, weeklyProfileValid and weeklyRing, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, currentRightIndex, weeklyProfileProjectedRightIndex, weeklyProfileEffectiveOpen, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL, weeklyRingColor, ringLineWidth)
+    draw_slot_current(weeklyProfileSlot, weeklyProfileValid, weeklyProfileStartTime, weeklyProfileStartIndex, weeklyProfileRightTime, currentRightIndex, weeklyProfileProjectedRightIndex, weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, weeklyProfileIdentifierText, WEEKLY_PROFILE_NAME, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileFibLevelSet, fibPalette, WEEKLY_PROFILE_FIB_FADE, fibLabelWeeklyOn, fibLabelSizeWeekly, fibLabelPosWeekly, fibLabelOffWeekly * chartBarMs, fibLabelOffWeekly, not weeklyRingOnly)
+    draw_slot_ring(monthlyProfileSlot, monthlyProfileValid and monthlyRing, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, currentRightIndex, monthlyProfileProjectedRightIndex, monthlyProfileEffectiveOpen, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL, monthlyRingColor, ringLineWidth)
+    draw_slot_current(monthlyProfileSlot, monthlyProfileValid, monthlyProfileStartTime, monthlyProfileStartIndex, monthlyProfileRightTime, currentRightIndex, monthlyProfileProjectedRightIndex, monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow, monthlyProfileColor, monthlyProfileIdentifierText, MONTHLY_PROFILE_NAME, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL, MONTHLY_PROFILE_LABEL_SIZE, monthlyProfileFibLevelSet, fibPalette, MONTHLY_PROFILE_FIB_FADE, fibLabelMonthlyOn, fibLabelSizeMonthly, fibLabelPosMonthly, fibLabelOffMonthly * chartBarMs, fibLabelOffMonthly, not monthlyRingOnly)
     for profileIndex = 0 to array.size(scheduledProfiles) - 1
         ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
         ScheduledProfileConfig profileConfig = profile.config
@@ -2601,20 +2645,23 @@ if barstate.islast
         bool fibLabelsEnabled = fibLabelsOn and profileConfig.fibLabelsEnabled
         bool depthActive = scheduled_profile_liquidity_depth_active(profileConfig, profileRuntime)
         int labelOffsetBars = profileConfig.fibLabelOffset
-        draw_scheduled_profile_current(slotState, profileConfig, profileRuntime, currentVisible, profile.identifierText, currentRightIndex,
+        int extensionBars = range_extension_bars(scheduled_profile_duration_seconds(profileConfig), rangeLineLength)
+        int projectedRightIndex = range_projected_right_index(profileRuntime.endTime, extensionBars)
+        draw_scheduled_profile_current(slotState, profileConfig, profileRuntime, currentVisible, profile.identifierText, currentRightIndex, projectedRightIndex,
              fibPalette, fibLabelsEnabled, labelOffsetBars * chartBarMs, labelOffsetBars)
-        draw_liquidity_depth_profile(slotState, profile.liquidityDepthState, profileConfig, depthActive, currentVisible, dailyLiquidityDepthDistance, array.get(scheduledProfileDepthHistoryCaps, profileIndex), forecastLiquidityDepth)
-        draw_liquidity_depth_forecast(slotState, profileConfig, profileRuntime, depthActive, dailyLiquidityDepthDistance, forecastLiquidityDepth)
+        draw_liquidity_depth_profile(slotState, profile.liquidityDepthState, profileConfig, depthActive, currentVisible, dailyLiquidityDepthDistance, array.get(scheduledProfileDepthHistoryCaps, profileIndex), forecastLiquidityDepth, projectedRightIndex)
+        draw_liquidity_depth_forecast(slotState, profileConfig, profileRuntime, depthActive, dailyLiquidityDepthDistance, forecastLiquidityDepth, extensionBars)
         ProfileEdgeQualification edgeQualification = profile.edgeQualification
         if not na(edgeQualification)
-            draw_profile_edge_qualification_state(edgeQualification.state, edgeQualification.config)
-    draw_slot_forecast(slot1, s1ForecastVisible, s1CurRightT, slot_forecast_right_time(s1Safe, s1CurRightT), s1OEff, s1RHi, s1RLo, slot1Color, s1ForecastIdentifierText, SLOT1_LABEL_SIZE, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL)
-    draw_slot_forecast(slot2, s2ForecastVisible, s2CurRightT, slot_forecast_right_time(s2Safe, s2CurRightT), s2OEff, s2RHi, s2RLo, slot2Color, s2ForecastIdentifierText, SLOT2_LABEL_SIZE, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL)
-    draw_slot_forecast(weeklyProfileSlot, weeklyProfileForecastVisible, weeklyProfileRightTime, slot_forecast_right_time(WEEKLY_TIMEFRAME, weeklyProfileRightTime), weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, WEEKLY_PROFILE_NAME, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL)
-    draw_slot_forecast(monthlyProfileSlot, monthlyProfileForecastVisible, monthlyProfileRightTime, slot_forecast_right_time(MONTHLY_TIMEFRAME, monthlyProfileRightTime), monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow, monthlyProfileColor, MONTHLY_PROFILE_NAME, MONTHLY_PROFILE_LABEL_SIZE, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL)
+            draw_profile_edge_qualification_state(edgeQualification.state, edgeQualification.config, projectedRightIndex)
+    draw_slot_forecast(slot1, s1ForecastVisible, s1CurRightT, slot_forecast_right_time(s1Safe, s1CurRightT), s1ExtensionBars, s1OEff, s1RHi, s1RLo, slot1Color, s1ForecastIdentifierText, SLOT1_LABEL_SIZE, s1NormMedHO, s1NormMeanHO, s1NormMedOL, s1NormMeanOL)
+    draw_slot_forecast(slot2, s2ForecastVisible, s2CurRightT, slot_forecast_right_time(s2Safe, s2CurRightT), s2ExtensionBars, s2OEff, s2RHi, s2RLo, slot2Color, s2ForecastIdentifierText, SLOT2_LABEL_SIZE, s2NormMedHO, s2NormMeanHO, s2NormMedOL, s2NormMeanOL)
+    draw_slot_forecast(weeklyProfileSlot, weeklyProfileForecastVisible, weeklyProfileRightTime, slot_forecast_right_time(WEEKLY_TIMEFRAME, weeklyProfileRightTime), weeklyProfileExtensionBars, weeklyProfileEffectiveOpen, weeklyProfileHigh, weeklyProfileLow, weeklyProfileColor, WEEKLY_PROFILE_NAME, WEEKLY_PROFILE_LABEL_SIZE, weeklyProfileMedHO, weeklyProfileMeanHO, weeklyProfileMedOL, weeklyProfileMeanOL)
+    draw_slot_forecast(monthlyProfileSlot, monthlyProfileForecastVisible, monthlyProfileRightTime, slot_forecast_right_time(MONTHLY_TIMEFRAME, monthlyProfileRightTime), monthlyProfileExtensionBars, monthlyProfileEffectiveOpen, monthlyProfileHigh, monthlyProfileLow, monthlyProfileColor, MONTHLY_PROFILE_NAME, MONTHLY_PROFILE_LABEL_SIZE, monthlyProfileMedHO, monthlyProfileMeanHO, monthlyProfileMedOL, monthlyProfileMeanOL)
     for profileIndex = 0 to array.size(scheduledProfiles) - 1
         ScheduledProfile profile = array.get(scheduledProfiles, profileIndex)
-        draw_scheduled_profile_forecast(profile.drawingState, profile.config, profile.runtimeState, profile.identifierText)
+        int extensionBars = range_extension_bars(scheduled_profile_duration_seconds(profile.config), rangeLineLength)
+        draw_scheduled_profile_forecast(profile.drawingState, profile.config, profile.runtimeState, profile.identifierText, extensionBars)
 
 showOnlyTimeframeAllowed = chart.is_range or timeframe.in_seconds(timeframe.period) <= SHOW_ONLY_MAX_TIMEFRAME_SECONDS
 activeShowOnlySession = visibleWindow == WINDOW_LABEL_FROM_0500 ? SESSION_WINDOW_FROM_0500 : visibleWindow == WINDOW_LABEL_FROM_0830 ? SESSION_WINDOW_FROM_0830 : visibleWindow == WINDOW_LABEL_RTH ? SESSION_WINDOW_RTH : SESSION_WINDOW_OVERNIGHT

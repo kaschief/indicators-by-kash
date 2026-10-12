@@ -199,8 +199,8 @@ test('LD is wired to Daily and the six intraday scheduled profiles only', () => 
 test('normal LD requires a breach while Forecast LD projects unbreached sides', () => {
   const body = functionBody('draw_liquidity_depth_side');
   assert.match(body, /if sideState\.activated or forecastEnabled/);
-  assert.match(functionBody('draw_liquidity_depth_profile'), /draw_liquidity_depth_side\([^\n]+forecastEnabled\)/);
-  assert.match(source, /draw_liquidity_depth_profile\([^\n]+forecastLiquidityDepth\)/);
+  assert.match(functionBody('draw_liquidity_depth_profile'), /draw_liquidity_depth_side\([^\n]+forecastEnabled, (?:projectedRightIndex|na)\)/);
+  assert.match(source, /draw_liquidity_depth_profile\([^\n]+forecastLiquidityDepth, projectedRightIndex\)/);
 });
 
 test('every open LD level reaches its session end while stopped levels retain their own endpoint', () => {
@@ -244,17 +244,27 @@ test('Forecast LD for the next intraday occurrence uses upcoming bounds and fore
   assert.match(body, /compute_forecast_levels\(\n             forecastData\.referenceOpen, forecastData\.referenceHigh, forecastData\.referenceLow,/);
   assert.match(body, /liquidity_depth_price\(forecastOuterHigh, true/);
   assert.match(body, /liquidity_depth_price\(forecastOuterLow, false/);
-  assert.match(body, /make_horizontal_line\(true, profileRuntime\.forecastStartTime, na, profileRuntime\.forecastEndTime, na/);
+  assert.match(body, /\[forecastLeftIndex, forecastRightIndex\] = range_forecast_edges\(extensionBars\)/);
+  assert.match(body, /int forecastStartTime = profileRuntime\.forecastStartTime/);
+  assert.match(body, /int forecastEndTime = profileRuntime\.forecastEndTime/);
+  assert.match(body, /bool timeBased = not chart\.is_range/);
+  assert.match(body, /make_horizontal_line\(timeBased, forecastStartTime, forecastLeftIndex, forecastEndTime, forecastRightIndex/);
   assert.doesNotMatch(body, /profileState\.currentSession|sessionStartTime|sessionEndTime/);
   assert.match(source, /forecastDepthVisible \? LIQUIDITY_DEPTH_LINES_PER_SESSION : 0/);
   assert.match(source, /forecastDepthVisible \? LIQUIDITY_DEPTH_LABELS_PER_SESSION : 0/);
 });
 
-test('open LD lines, connectors and labels share the profile time coordinates on Range charts', () => {
+test('open LD lines, connectors and labels share one coordinate system, projected while live on Range charts', () => {
   const body = functionBody('draw_liquidity_depth_side');
-  assert.match(body, /make_horizontal_line\(endAtSession, startTime, startIndex, endTime, endIndex,/);
-  assert.match(body, /make_liquidity_depth_connector\(endAtSession, startTime, startIndex,/);
-  assert.match(body, /make_liquidity_depth_label\(endAtSession, startTime, startIndex, endTime, endIndex,/);
+  assert.match(body, /bool endProjected = endAtSession and not na\(projectedRightIndex\)/);
+  assert.match(body, /bool timeBased = endAtSession and not endProjected/);
+  assert.match(body, /int endIndex = endProjected \? projectedRightIndex : endAtSession \? nz\(sessionState\.lastEligibleIndex, bar_index\) : storedEndIndex/);
+  assert.match(body, /make_horizontal_line\(timeBased, startTime, startIndex, endTime, endIndex,/);
+  assert.match(body, /make_liquidity_depth_connector\(timeBased, startTime, startIndex,/);
+  assert.match(body, /make_liquidity_depth_label\(timeBased, startTime, startIndex, endTime, endIndex,/);
+  const profileBody = functionBody('draw_liquidity_depth_profile');
+  assert.match(profileBody, /currentSession\.highSide, true, [^\n]+forecastEnabled, projectedRightIndex\)/);
+  assert.match(profileBody, /historySession\.highSide, true, [^\n]+forecastEnabled, na\)/);
   for (const helper of ['make_liquidity_depth_connector', 'make_liquidity_depth_label']) {
     assert.match(functionBody(helper), /xloc=drawing_xloc\(timeBased\)/);
     assert.doesNotMatch(functionBody(helper), /drawing_x(?:loc)?\([^\n]*false\)/);
@@ -319,7 +329,7 @@ test('Daily Boundary Exceeded controls configure reusable profile-edge qualifica
 
   const outlineBody = functionBody('make_profile_edge_qualification_outline');
   assert.match(outlineBody, /drawing_x\(qualificationSnapshot\.profileStartTime, qualificationSnapshot\.profileStartIndex, timeBased\), qualificationSnapshot\.outerHigh/);
-  assert.match(outlineBody, /drawing_x\(qualificationSnapshot\.profileEndTime, qualificationSnapshot\.profileEndIndex, timeBased\), qualificationSnapshot\.outerLow/);
+  assert.match(outlineBody, /drawing_x\(qualificationSnapshot\.profileEndTime, rightIndex, timeBased\), qualificationSnapshot\.outerLow/);
   assert.match(outlineBody, /xloc=drawing_xloc\(timeBased\)/);
   assert.match(outlineBody, /bgcolor=na, border_color=outlineColor, border_width=outlineWidth/);
   assert.match(source, /scheduledProfileQualificationBoxReserve \+= latestOnly or not edgeQualification\.config\.historyEnabled \? 1 : profileConfig\.historyLimit/);
@@ -393,7 +403,8 @@ test('profile-edge rendering updates current geometry without rebuilding unchang
   assert.match(updateBody, /currentBoundsChanged = currentSnapshot\.qualified/);
   assert.match(updateBody, /qualificationState\.currentDirty := qualificationState\.currentDirty or currentBoundsChanged/);
   assert.match(drawBody, /^if qualificationState\.historyDirty/);
-  assert.match(drawBody, /if qualificationState\.currentDirty/);
+  assert.match(drawBody, /if qualificationState\.currentDirty or chart\.is_range/);
+  assert.match(drawBody, /make_profile_edge_qualification_outline\(currentSnapshot, na\(projectedRightIndex\), nz\(projectedRightIndex, currentSnapshot\.profileEndIndex\),/);
   assert.match(drawBody, /if qualificationSnapshot\.qualified/);
   assert.match(drawBody, /make_profile_edge_qualification_outline\(qualificationSnapshot, false,/);
   assert.match(drawBody, /update_profile_edge_qualification_outline\(qualificationState\.currentOutline, currentSnapshot, true\)/);
@@ -469,7 +480,7 @@ test('presentation follows Pulse Today tiers and dual chart coordinates', () => 
   assert.match(functionBody('liquidity_depth_level_style'), /levelIndex == 0 \? line\.style_dashed : line\.style_dotted/);
   assert.match(functionBody('liquidity_depth_profile_name'), /sourceLabel == OVERNIGHT_CHART_LABEL \? OVERNIGHT_SLOT_NAME : sourceLabel/);
   assert.match(functionBody('make_liquidity_depth_connector'), /color\.new\(profileColor, 80\).*width=1, style=line\.style_dashed/s);
-  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(endAtSession,/);
+  assert.match(functionBody('draw_liquidity_depth_side'), /make_horizontal_line\(timeBased,/);
   assert.match(functionBody('make_liquidity_depth_label'), /drawing_x\(labelTime, labelIndex, timeBased\)/);
 });
 
@@ -607,4 +618,43 @@ test('Bar Replay keeps HTF opens and Hide Completed on the replay candle', () =>
     assert.match(source, new RegExp(`resolve_slot_timing\\(${prefix}Safe, ${prefix}RequestedTime, ${prefix}RequestedOpen, ${prefix}PeriodOpen, `));
   }
   assert.match(source, /^int profileVisibilityTime = barstate\.isrealtime \? math\.max\(time, na\(time_close\) \? timenow : math\.min\(timenow, time_close\)\) : nz\(time_close, time\)$/m);
+});
+
+test('Range charts cap live profile edges by bar count on a duration log scale', () => {
+  const unitSeconds = Number(source.match(/^const float RANGE_EXTENSION_UNIT_SECONDS = ([\d.]+)$/m)?.[1]);
+  const lookahead = Number(source.match(/^const int BAR_INDEX_DRAWING_LOOKAHEAD = (\d+)$/m)?.[1]);
+  const lengthInput = source.match(/^rangeLineLength = input\.int\((\d+), "Range Line Length", options=\[([\d, ]+)\]/m);
+  assert.ok(unitSeconds > 0 && lookahead > 0 && lengthInput);
+  const lengths = lengthInput[2].split(',').map(Number);
+  assert.deepEqual(lengths, [50, 100, 200]);
+  assert.equal(Number(lengthInput[1]), 100);
+
+  assert.match(functionBody('range_extension_bars'),
+    /math\.max\(1, int\(math\.round\(monthlyBars \* math\.log\(1 \+ durationSeconds \/ RANGE_EXTENSION_UNIT_SECONDS\) \/ monthlyScale\)\)\)/);
+  assert.match(functionBody('range_projected_right_index'),
+    /^chart\.is_range and not na\(rightTime\) and rightTime > time \? bar_index \+ extensionBars : na$/);
+  assert.match(functionBody('range_forecast_edges'), /^\[bar_index \+ extensionBars, bar_index \+ 2 \* extensionBars\]$/);
+
+  const monthSeconds = 2628003;
+  const bars = (seconds, monthlyBars) => Math.max(1, Math.round(monthlyBars * Math.log(1 + seconds / unitSeconds) / Math.log(1 + monthSeconds / unitSeconds)));
+  const hour = 3600;
+  const durations = [hour, 1.5 * hour, 3 * hour, 4 * hour, 7 * hour, 24 * hour, 7 * 24 * hour, monthSeconds];
+  for (const monthlyBars of lengths) {
+    const counts = durations.map(seconds => bars(seconds, monthlyBars));
+    assert.equal(counts.at(-1), monthlyBars, 'Monthly uses the full Range Line Length');
+    counts.slice(1).forEach((count, index) => assert.ok(count > counts[index], `profile ${index + 1} reaches past profile ${index} at ${monthlyBars}`));
+    assert.ok(2 * monthlyBars <= lookahead, 'forecasts stay inside the drawing lookahead');
+  }
+
+  for (const name of ['draw_slot_current', 'draw_slot_ring']) {
+    const body = functionBody(name);
+    assert.match(body, /bool timeBased = na\(projectedRightIndex\)/);
+    assert.match(body, /= nz\(projectedRightIndex, sessionRightIndex\)/);
+  }
+  assert.match(functionBody('draw_slot_forecast'), /bool timeBased = not chart\.is_range/);
+  for (const prefix of ['s1', 's2', 'weeklyProfile', 'monthlyProfile']) {
+    assert.match(source, new RegExp(`int ${prefix}ProjectedRightIndex = range_projected_right_index\\(`));
+    assert.match(source, new RegExp(`draw_slot_forecast\\([^\\n]+, ${prefix}ExtensionBars,`));
+  }
+  assert.doesNotMatch(source, /futureRightEdge/);
 });
