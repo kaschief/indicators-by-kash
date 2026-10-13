@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { createHarness, source, section, executedFunctions } from './lib/elderwand-harness.mjs';
+import { createHarness, source, section, executedFunctions } from './harness.mjs';
 
 const anchorKeys = ['yearly', 'quarterly', 'monthly', 'weekly', 'rolling', 'daily', 'ny', 'nyEarlyHigh', 'nyEarlyLow'];
 const names = ['Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Rolling', 'Daily', 'NY', 'NY Early High', 'NY Early Low'];

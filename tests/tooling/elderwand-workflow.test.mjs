@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { runElderwandCheck, infrastructure, testFiles } from './check-elderwand.mjs';
+import { runElderwandCheck, infrastructure, testFiles } from '../../scripts/check-elderwand.mjs';
 
 test('staged gate verifies all test infrastructure and runs tests against the index', () => {
   const inspected = [];
@@ -30,7 +30,7 @@ test('local gate reads working source and propagates test failure, interruption 
 test('staged source loader reads the index blob instead of the working Pine file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'elderwand-index-reader-'));
   const fixture = '// exact staged fixture, different from working source';
-  const adapter = new URL('./lib/elderwand-harness.mjs', import.meta.url).href;
+  const adapter = new URL('../../indicators/19-elderwand/tests/harness.mjs', import.meta.url).href;
   writeFileSync(join(dir, 'git'), '#!/bin/sh\n[ "$1" = "show" ] || exit 9\n[ "$2" = ":indicators/19-elderwand/code/elderwand.pine" ] || exit 8\nprintf "%s" "$ELDERWAND_FIXTURE_SOURCE"\n', { mode: 0o755 });
   try {
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `import { source } from ${JSON.stringify(adapter)}; process.stdout.write(source);`], {
@@ -43,7 +43,7 @@ test('staged source loader reads the index blob instead of the working Pine file
 // Fake Git/Node executables exercise hook routing without staging or creating a repository.
 function hookFixture(changed, status = 0) {
   const dir = mkdtempSync(join(tmpdir(), 'elderwand-hook-'));
-  const hook = readFileSync(new URL('../.husky/pre-commit', import.meta.url), 'utf8');
+  const hook = readFileSync(new URL('../../.husky/pre-commit', import.meta.url), 'utf8');
   writeFileSync(join(dir, 'pre-commit'), hook);
   writeFileSync(join(dir, 'git'), '#!/bin/sh\ncase "$1" in\n  diff) printf "%s\\n" "$ELDERWAND_FIXTURE_CHANGED" ;;\n  show) printf "%s\\n" \'indicator("elderwand •")\' ;;\n  *) exit 9 ;;\nesac\n', { mode: 0o755 });
   writeFileSync(join(dir, 'node'), '#!/bin/sh\nprintf "%s\\n" "$*" > "$ELDERWAND_FIXTURE_LOG"\nexit "$ELDERWAND_FIXTURE_STATUS"\n', { mode: 0o755 });

@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-export const testFiles = ['scripts/check-elderwand.test.mjs', 'scripts/check-elderwand-workflow.test.mjs'];
-export const infrastructure = ['scripts/check-elderwand.mjs', 'scripts/lib/elderwand-harness.mjs', '.husky/pre-commit', ...testFiles];
+export const testFiles = ['indicators/19-elderwand/tests/functions.test.mjs', 'tests/tooling/elderwand-workflow.test.mjs'];
+export const infrastructure = ['scripts/check-elderwand.mjs', 'indicators/19-elderwand/tests/harness.mjs', '.husky/pre-commit', ...testFiles];
 
 export function runElderwandCheck({
   staged = false,

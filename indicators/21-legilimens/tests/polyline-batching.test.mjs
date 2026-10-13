@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine', import.meta.url), 'utf8');
-const host = readFileSync(new URL('../indicators/21-legilimens/code/legilimens.pine', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../code/libraries/legilimens-presentation-library.pine', import.meta.url), 'utf8');
+const host = readFileSync(new URL('../code/legilimens.pine', import.meta.url), 'utf8');
 
 // Execute the Pine batching functions with drawing/coordinate adapters; this is not Pine compilation.
 const context = vm.createContext({
@@ -495,7 +495,7 @@ for (const name of ['SOURCE_WEEKLY', 'SOURCE_MONTHLY', 'DELTA_TIER_VISIBILITY_BU
 context.sourceSpec = (sources, key) => sources.find(item => item.key === key);
 for (const name of ['focusSourceAllowed', 'focusDateAllowsProfile', 'focusPriceDistance', 'focusHistoryCutoff', 'focusCandidateOutranks', 'retainFocusCandidate', 'focusOccurrenceKey', 'focusComparisonIndices', 'focusRenderDecision', 'focusedCandidates', 'appendFocusedItems', 'deltaTierSideVisible', 'profileFocusPrices', 'cacheFocusProfile']) compile(name);
 
-const orchestrationSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
+const orchestrationSource = readFileSync(new URL('../code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
 context.nyMinuteBoundaryValue = (value, minute) => Math.floor(value / 86400000) * 86400000 + minute * 60000;
 context.tradingDayKeyValue = value => Math.floor(value / 86400000);
 context.RenderDecision = { new: (shouldRender, primaryPlus, pairedHeadings) => ({ shouldRender, primaryPlus, pairedHeadings }) };
@@ -844,7 +844,7 @@ test('Date archive retains target-era profiles even when many newer sessions are
 });
 
 test('deeper Rolling Weekly/Monthly history preserves recent period boundaries and sample membership across DST', () => {
-  const orchestration = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
+  const orchestration = readFileSync(new URL('../code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
   const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
   const parts = value => Object.fromEntries(formatter.formatToParts(new Date(value)).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
   context.NY_TIMEZONE = 'America/New_York';
@@ -948,7 +948,7 @@ test('disabling Extended preserves NY Early and IVB in the combined mode', () =>
 });
 
 function useActualProfileAnalytics() {
-  const analyticsSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
+  const analyticsSource = readFileSync(new URL('../code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
   context.array.max = values => Math.max(...values);
   for (const [, name, value] of analyticsSource.matchAll(/^const (?:int|float) (VALUE_AREA_PERCENT|OUTLIER_\w+|LOW_VOLUME_\w+) = (.+)$/gm)) {
     context[name] = vm.runInContext(value, context);
@@ -1224,7 +1224,7 @@ test('cache admission, occurrence keys, backward Replay and chart geometry preve
 });
 
 function useFormationIndex() {
-  const profileSource = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
+  const profileSource = readFileSync(new URL('../code/libraries/legilimens-profile-library.pine', import.meta.url), 'utf8');
   Object.assign(context.map, { copy: values => new Map(values), size: values => values.size, clear: values => values.clear() });
   for (const [, name, value] of profileSource.matchAll(/^const int (FORMATION_\w+) = (.+)$/gm)) context[name] = Number(value);
   for (const typeName of ['PrintPeak', 'FormationIndex']) {

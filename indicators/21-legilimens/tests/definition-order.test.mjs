@@ -4,10 +4,10 @@ import test from 'node:test';
 
 // Pine resolves user-defined functions top-down (CE10271), which the source adapters do not model.
 const files = [
-  '../indicators/21-legilimens/code/legilimens.pine',
-  '../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine',
-  '../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine',
-  '../indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine',
+  '../code/legilimens.pine',
+  '../code/libraries/legilimens-profile-library.pine',
+  '../code/libraries/legilimens-profile-orchestration-library.pine',
+  '../code/libraries/legilimens-presentation-library.pine',
 ];
 
 function callsBeforeDefinition(source) {

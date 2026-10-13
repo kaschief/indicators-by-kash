@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkSource, NAMESPACE_NAMES, RESERVED_NAMES, selectSources } from "./check-pine-identifiers.mjs";
+import { checkSource, NAMESPACE_NAMES, RESERVED_NAMES, selectSources } from "../../scripts/check-pine-identifiers.mjs";
 
 const names = source => checkSource(source).map(finding => finding.value);
 for (const name of new Set([...RESERVED_NAMES, ...NAMESPACE_NAMES])) {
@@ -93,7 +93,7 @@ test("CLI fails for a forbidden declaration", () => {
     try {
         const file = join(dir, "fixture.pine");
         writeFileSync(file, "text = 1\n");
-        const result = spawnSync(process.execPath, [new URL('./check-pine-identifiers.mjs', import.meta.url).pathname, file], { encoding: "utf8" });
+        const result = spawnSync(process.execPath, [new URL('../../scripts/check-pine-identifiers.mjs', import.meta.url).pathname, file], { encoding: "utf8" });
         assert.equal(result.status, 1);
         assert.match(result.stderr, /fixture\.pine:1:1: forbidden variable name 'text'/);
     } finally { rmSync(dir, { recursive: true, force: true }); }

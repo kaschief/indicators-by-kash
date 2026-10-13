@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../indicators/09-pulse/code/pulse.pine', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../code/pulse.pine', import.meta.url), 'utf8');
 const body = name => source.match(new RegExp(`^${name}\\([^\\n]+\\) =>\\n([\\s\\S]*?)(?=^\\S)`, 'm'))[1].trimEnd();
 const expression = code => code.replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!').replace(/\bmath\./g, 'Math.');
 

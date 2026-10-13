@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../indicators/09-pulse/code/pulse.pine', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../code/pulse.pine', import.meta.url), 'utf8');
 const toJavaScript = expression => expression.replace(/\band\b/g, '&&').replace(/\bor\b/g, '||').replace(/\bnot\b/g, '!');
 const assignment = name => {
   const match = source.match(new RegExp(`^\\s*${name} = (.+)$`, 'm'));

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../indicators/18-parallax/code/parallax.pine', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../code/parallax.pine', import.meta.url), 'utf8');
 const functionBody = name => {
   const body = source.match(new RegExp(`^${name}\\([\\s\\S]*?\\) =>\\n([\\s\\S]*?)(?=^\\S)`, 'm'))?.[1];
   assert.ok(body, `${name} must exist`);

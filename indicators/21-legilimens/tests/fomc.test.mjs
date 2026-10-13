@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const host = readFileSync(new URL('../indicators/21-legilimens/code/legilimens.pine', import.meta.url), 'utf8');
-const orchestration = readFileSync(new URL('../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
+const host = readFileSync(new URL('../code/legilimens.pine', import.meta.url), 'utf8');
+const orchestration = readFileSync(new URL('../code/libraries/legilimens-profile-orchestration-library.pine', import.meta.url), 'utf8');
 const nyClock = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric',
   hour: 'numeric', minute: 'numeric', hourCycle: 'h23',

@@ -49,7 +49,7 @@ node scripts/check-pine-identifiers.mjs --staged
 node scripts/check-pine-identifiers.mjs --all
 
 # Checker regression tests:
-node --test scripts/check-pine-identifiers.test.mjs
+node --test tests/tooling/pine-identifiers.test.mjs
 ```
 
 A failure prints the filename, line, column, declaration role, offending name, and restriction category, and exits nonzero. A whole-file check includes older declarations in a touched file; there is no allowlist or baseline exemption. An all-files audit can therefore identify old policy violations without proving that those scripts fail TradingView compilation. Do not expand a focused task into unrelated source/library migrations merely to clear that audit.

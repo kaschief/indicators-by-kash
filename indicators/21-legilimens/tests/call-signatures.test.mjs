@@ -5,10 +5,10 @@ import test from 'node:test';
 // Static Pine contract check: the source adapters coerce values freely, so they cannot catch
 // arity or literal-type mismatches that TradingView rejects at compile time.
 const FILES = {
-  host: '../indicators/21-legilimens/code/legilimens.pine',
-  legilimensProfile: '../indicators/21-legilimens/code/libraries/legilimens-profile-library.pine',
-  legilimensOrchestration: '../indicators/21-legilimens/code/libraries/legilimens-profile-orchestration-library.pine',
-  legilimensPresentation: '../indicators/21-legilimens/code/libraries/legilimens-presentation-library.pine',
+  host: '../code/legilimens.pine',
+  legilimensProfile: '../code/libraries/legilimens-profile-library.pine',
+  legilimensOrchestration: '../code/libraries/legilimens-profile-orchestration-library.pine',
+  legilimensPresentation: '../code/libraries/legilimens-presentation-library.pine',
 };
 
 function stripComments(source) {

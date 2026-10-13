@@ -6,7 +6,7 @@ export const sourcePath = 'indicators/19-elderwand/code/elderwand.pine';
 export const executedFunctions = new Set();
 export const source = process.env.ELDERWAND_TEST_STAGED === '1'
   ? execFileSync('git', ['show', `:${sourcePath}`], { encoding: 'utf8' })
-  : readFileSync(new URL(`../../${sourcePath}`, import.meta.url), 'utf8');
+  : readFileSync(new URL(`../../../${sourcePath}`, import.meta.url), 'utf8');
 
 // This adapter executes Elderwand's source, not Pine's runtime. Unsupported syntax
 // throws; TradingView series rollback, built-in VWAP, and drawing limits need chart QA.
