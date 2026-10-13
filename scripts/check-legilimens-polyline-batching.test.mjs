@@ -926,7 +926,7 @@ test('every Delta and LVN tier keeps its profile label and developing suffix', (
 });
 
 test('disabling Extended preserves NY Early and IVB in the combined mode', () => {
-  for (const [, name, value] of host.matchAll(/^const string (PROFILE_EMOJI_\w+) = (.+)$/gm)) context[name] = vm.runInContext(value, context);
+  for (const [, name, value] of host.matchAll(/^const string (PROFILE_EMOJI_\w+|LABEL_\w+) = (.+)$/gm)) context[name] = vm.runInContext(value, context);
   for (const key of ['MODE_NY_EARLY', 'MODE_NY_EARLY_IVB', 'MODE_IVB']) {
     context[key] = vm.runInContext(host.match(new RegExp(`^${key} = (.+)$`, 'm'))[1], context);
   }
