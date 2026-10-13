@@ -269,6 +269,8 @@ TOOLTIP_FADE_RETRACE = "Controls reached retracement levels and used IVB extensi
 TOOLTIP_FADE_MITIGATION = "Fade each completed boundary after Duration. Discarded provisional IVB boundaries fade at 16:00 NY."
 TOOLTIP_FADE_DURATION = "Delay for mitigation and individual Rafael/Asia Open retracement fades."
 
+TOOLTIP_RETRACEMENT_FORECAST = "Forecast\nDraws each unreached Rafael and Asia Open 0.5 and 0.618 ahead, once the first extreme is taken.\n\nOnly Within ADR\nHides levels outside today's Globex open ± 5-day ADR × multiplier, matching the adr indicator's Globex Open."
+
 TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
 TOOLTIP_FOCUS_COUNT = "Per session type."
 TOOLTIP_FOCUS_ANCHOR = "Manual ranks from the Price level."
@@ -279,6 +281,10 @@ NY_EARLY_END_MIN = 540
 // IVB session window (NY minutes) - shared by the session config and the extension statistics
 IVB_START_MIN = 570
 IVB_END_MIN = 600
+
+// Globex open ± average daily range band, read as the adr indicator's Globex Open.
+ADR_LOOKBACK_DAYS = 5
+ADR_DAILY_TIMEFRAME = "D"
 
 // Asia Open uses standard 1-minute OHLC on Range charts so synthetic gap-fill bars do not widen it.
 ASIA_OPEN_START_MIN = 1080
@@ -416,6 +422,10 @@ focusAnchorPrice = focusAnchorMode == FOCUS_ANCHOR_MANUAL and focusManualPricePl
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show completed levels; Rafael and Asia Open also keep their untouched boundaries visible\nUnmitigated: Show persistent lines for untouched levels")
 enableProvisionalRetracements = input.bool(true, "Enable Provisional Retracements", group=GROUP_MITIGATION, tooltip="Track Rafael and Asia Open 0.5 / 0.618 returns from the first provisional overnight mitigation.")
 confirmedMitigationReplacementTrigger = input.string(REPLACEMENT_TRIGGER_618, "Confirmed mitigation replacement trigger", options=[REPLACEMENT_TRIGGER_618, REPLACEMENT_TRIGGER_50], group=GROUP_MITIGATION, active=enableProvisionalRetracements, tooltip="After confirmation, 0.618 replaces on the first inward 0.618 crossing. 0.5 waits for the midpoint.")
+retracementForecastEnabled = input.bool(false, "Forecast 0.5 / 0.618", inline="retracement_forecast", group=GROUP_MITIGATION, active=mitigationMode == SESSION_MITIGATED)
+retracementForecastActive = retracementForecastEnabled and mitigationMode == SESSION_MITIGATED
+forecastWithinAdrEnabled = input.bool(true, "Only Within ADR", inline="retracement_forecast", group=GROUP_MITIGATION, active=retracementForecastActive)
+forecastAdrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="retracement_forecast", group=GROUP_MITIGATION, active=retracementForecastActive and forecastWithinAdrEnabled, tooltip=TOOLTIP_RETRACEMENT_FORECAST)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INPUTS - Display
@@ -548,6 +558,8 @@ var array<SessionData> highOverlapCandidates = array.new<SessionData>()
 var array<SessionData> lowOverlapCandidates = array.new<SessionData>()
 var line focusAnchorLine = na
 var label focusAnchorLabel = na
+var array<line> retracementForecastLines = array.new<line>()
+var array<label> retracementForecastLabels = array.new<label>()
 
 // Cached parsed deviation zones (Pine Script doesn't support nested collections)
 var array<DeviationZone> cachedDeviations_0129 = na
@@ -1111,6 +1123,28 @@ sessionLifecycleComplete(SessionData sess) =>
     bool replacementPending = provisionalLifecycle and sess.retraceOriginProvisional and (originConfirmed or oppositeConfirmedReplacementSide(sess) != 0)
     bool traversalPending = provisionalLifecycle and sess.retraceOriginSide != 0 and not sess.retraceTraversalCompleted
     boundariesComplete and retracementsComplete and not replacementPending and not traversalPending
+
+// The level Phase 4 is still waiting on for the active retracement leg; na once reached or unanchored.
+retracementForecastLevel(SessionData sess, bool isMidLevel) =>
+    bool legActive = provisionalRetracementsEnabled(sess.sessionIndex) ? sess.retraceOriginSide != 0 and not sess.retraceTraversalCompleted : sess.highMitigated or sess.lowMitigated
+    bool reached = isMidLevel ? sess.midMitigated : sess.retrace618Mitigated
+    bool eligible = alwaysTrackMitigation(sess.sessionIndex) and sess.deviationMode != OPT_HIDDEN and legActive and not reached
+    eligible ? (isMidLevel ? sess.midLevel : sess.retraceLevel618) : na
+
+// Drawn last on the bar so the reservation sees every other object already on the chart.
+drawRetracementForecast(SessionData sess, bool isMidLevel, float bandLow, float bandHigh) =>
+    float level = retracementForecastLevel(sess, isMidLevel)
+    bool withinAdr = not forecastWithinAdrEnabled or (level >= bandLow and level <= bandHigh)
+    int drawingBudget = FOCUS_DRAWING_LIMIT - FOCUS_DRAWING_HEADROOM
+    int labelCost = showAllLabels ? MITIGATION_REMINDER_MAX_PER_LINE + 1 : 0
+    bool fitsBudget = array.size(line.all) < drawingBudget and array.size(label.all) + labelCost <= drawingBudget
+    if not na(level) and withinAdr and fitsBudget
+        string retraceTag = isMidLevel ? LABEL_RETRACE_50 : LABEL_RETRACE_618
+        array.push(retracementForecastLines, line.new(sess.actualEndTime, level, time, level, color=sess.mitigationColor, style=line.style_dotted, width=isMidLevel ? MITIGATION_50_LINE_WIDTH : MITIGATION_618_LINE_WIDTH, xloc=xloc.bar_time))
+        if showAllLabels
+            for tag in tile_line_labels(sess.actualEndBar, bar_index, level, retraceTag, sess.retraceLabelTextColor, sess.retraceLabelBgColor)
+                array.push(retracementForecastLabels, tag)
+            array.push(retracementForecastLabels, label.new(time, level, retraceTag, style=label.style_label_left, textcolor=sess.retraceLabelTextColor, size=globalLabelSize, color=sess.retraceLabelBgColor, xloc=xloc.bar_time))
 
 // Range candles have no fixed duration, so their confirmation endpoint is the current candle.
 ivbConfirmationEndTime(int confirmedBarTime, int provisionalTime, int currentBarTime, bool isRange, int chartBarMs) =>
@@ -1980,6 +2014,15 @@ if validChartContext and bar_index > 0 and currentDayKey != currentDayKey[1]
 [htf30mClose, htf30mTime] = request.security(ticker.standard(syminfo.tickerid), "30", [close[1], time[1]], lookahead=barmerge.lookahead_on)
 htf30mDayKey = na(htf30mTime) ? 0 : dayKey(htf30mTime)
 
+// Bar Replay can omit the developing daily candle, so the trading day falls back to its own first bar.
+[dailyCandleTradingDay, dailyCandleOpen, averageRangeThroughCandle, averageRangeBeforeCandle] = request.security(ticker.standard(syminfo.tickerid), ADR_DAILY_TIMEFRAME, [time_tradingday, open, ta.sma(high - low, ADR_LOOKBACK_DAYS), ta.sma(high - low, ADR_LOOKBACK_DAYS)[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+var float tradingDayOpen = na
+if ta.change(time("D")) != 0
+    tradingDayOpen := open
+bool dailyCandleCurrent = dailyCandleTradingDay == time_tradingday
+float currentDayOpen = dailyCandleCurrent ? dailyCandleOpen : tradingDayOpen
+float currentDayAverageRange = dailyCandleCurrent ? averageRangeBeforeCandle : averageRangeThroughCandle
+
 // Accumulate the complete Asia session in the standard 1-minute context. A stateful lower-timeframe
 // expression preserves intermediate bars that request.security() would otherwise sample away.
 [standardAsiaBodyHigh, standardAsiaBodyLow, standardAsiaWickHigh, standardAsiaWickLow, standardAsiaHighTime, standardAsiaLowTime, standardAsiaDayKey, standardAsiaStartTime] = request.security(ticker.standard(syminfo.tickerid), STANDARD_SESSION_SOURCE_TF, sessionPriceState(ASIA_OPEN_START_MIN, ASIA_OPEN_END_MIN), lookahead=barmerge.lookahead_off)
@@ -2399,6 +2442,11 @@ if validChartContext and barstate.islast
 
 // IVB-based retracement requires IVB enabled and in the active filter.
 ivbFeatureAvailable = opening_0930_1000 != OPT_HIDDEN and isInFilter(IDX_IVB)
+
+// Forecasts are rebuilt last on each last-bar tick; clearing them first keeps them out of the
+// counts Phase 4 growth and Focus admission rely on.
+deleteLines(retracementForecastLines)
+deleteLabels(retracementForecastLabels)
 
 if validChartContext and array.size(lifecycleSessions) > 0
     array.clear(completedLifecycleIndices)
@@ -3008,6 +3056,19 @@ if validChartContext and (enableIvbExtensionGlow or fadeCompletedRetracements)
                         useTime = map.get(ivbExtensionUseTimes, lineKey)
                         if useTime > 0 and (not canGlowSession or time >= useTime + ivbGlowWindowMs)
                             completeIvbExtensionUse(sess, i)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 6: RETRACEMENT FORECAST - Unreached Rafael and Asia Open 0.5 / 0.618, newest first
+// ═══════════════════════════════════════════════════════════════════════════
+
+if validChartContext and barstate.islast and retracementForecastActive and showAllLines and array.size(sessions) > 0
+    float adrHalfWidth = currentDayAverageRange * forecastAdrMultiplier
+    float forecastBandLow = currentDayOpen - adrHalfWidth
+    float forecastBandHigh = currentDayOpen + adrHalfWidth
+    for sessionPosition = array.size(sessions) - 1 to 0
+        SessionData forecastSess = array.get(sessions, sessionPosition)
+        drawRetracementForecast(forecastSess, true, forecastBandLow, forecastBandHigh)
+        drawRetracementForecast(forecastSess, false, forecastBandLow, forecastBandHigh)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COLOR REFERENCE TABLE - Dynamic display based on active sessions

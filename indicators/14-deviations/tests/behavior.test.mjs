@@ -438,3 +438,124 @@ describe('Deviations Asia + Rafael Focus', () => {
     assert.ok(result.live('box').length > 100, 'the scenario is dense enough to matter');
   });
 });
+
+// ── Asia + Rafael retracement forecast ───────────────────────────────────────
+
+describe('Deviations Asia + Rafael retracement forecast', () => {
+  const forecastFrom = day(18, 0, 27, 9);
+  const forecastRun = (inputs = {}) => deviations({ at: day(11), chart: '15', from: forecastFrom, inputs: { focusDirection: '↕ Around', focusSessionCount: 20, retracementForecastEnabled: true, ...inputs } });
+  const forecastLines = result => result.global('retracementForecastLines').filter(isLive);
+  const windows = { 'Asia Open': 3 * HOUR, Rafael: 4 * HOUR };
+  const BAR = 15 * MINUTE;
+
+  // Expected unreached levels, from the candles: wick midpoint and the 0.618 back from the first
+  // extreme taken, untouched after the origin bar. A replaced leg also counts its own start bar.
+  function expectedForecasts(result) {
+    const expected = [];
+    for (const [name, length] of Object.entries(windows)) {
+      for (const sess of sessionsOf(result, name)) {
+        if (!sess.retraceOriginSide || sess.retraceTraversalCompleted || Number.isNaN(sess.actualEndTime)) continue;
+        const range = wickRange(sess.startTime, sess.startTime + length);
+        const height = range.high - range.low;
+        const retracingUp = sess.retraceOriginSide === -1;
+        const legStart = Number.isNaN(sess.retraceLegStartBar) ? sess.retraceOriginBar : sess.retraceLegStartBar;
+        const from = Math.max(result.bars.time[sess.retraceOriginBar] + BAR, result.bars.time[legStart]);
+        const after = candlesBetween(from, lastBarTime(result) + BAR);
+        const levels = [(range.high + range.low) / 2, retracingUp ? range.low + height * 0.618 : range.high - height * 0.618];
+        for (const level of levels) {
+          const touched = after.some(c => (retracingUp ? c.high >= level : c.low <= level));
+          if (!touched) expected.push({ name, start: sess.endTime, level, sess });
+        }
+      }
+    }
+    return expected;
+  }
+  const keyOf = (start, level) => `${formatNy(start)} @ ${level.toFixed(4)}`;
+
+  test('Forecast draws every unreached Rafael and Asia Open 0.5 and 0.618 dotted from the session end to the current bar, tagged "0.5" / "0.618" inline and at its end', () => {
+    const result = forecastRun({ forecastWithinAdrEnabled: false });
+    const expected = expectedForecasts(result);
+    assert.ok(expected.length > 3, 'the scenario has unreached levels to forecast');
+    const drawn = forecastLines(result);
+    assert.deepEqual(drawn.map(ln => keyOf(ln.x1, ln.y1)).sort(), expected.map(entry => keyOf(entry.start, entry.level)).sort());
+    for (const ln of drawn) {
+      const owner = expected.find(entry => keyOf(entry.start, entry.level) === keyOf(ln.x1, ln.y1)).sess;
+      assert.equal(ln.style, 'line.style_dotted');
+      assert.notEqual(ln.extend, 'extend.right');
+      assert.equal(ln.x2, lastBarTime(result), 'stops at the current bar');
+      assert.equal(ln.color, owner.mitigationColor, 'session mitigation color');
+    }
+    const forecastLabels = result.global('retracementForecastLabels').filter(isLive);
+    for (const entry of expected) {
+      const isMid = close(entry.level, (entry.sess.wickHigh + entry.sess.wickLow) / 2);
+      const onLevel = forecastLabels.filter(lbl => close(lbl.y, entry.level));
+      assert.ok(onLevel.length > 0, `${keyOf(entry.start, entry.level)} has inline tags`);
+      for (const lbl of onLevel) {
+        assert.equal(lbl.text, isMid ? '0.5' : '0.618');
+        assert.equal(lbl.textcolor, entry.sess.retraceLabelTextColor);
+        assert.equal(lbl.color, entry.sess.retraceLabelBgColor);
+      }
+      assert.equal(onLevel.filter(lbl => lbl.x === lastBarTime(result) && lbl.style === 'label.style_label_left').length, 1, `${keyOf(entry.start, entry.level)} has its end tag at the current bar`);
+    }
+  });
+
+  test('Only Within ADR keeps just the levels inside Globex open ± 5-day ADR × multiplier', () => {
+    const multiplier = 0.5;
+    const tradingDayOf = t => { const p = localParts(t + 6 * HOUR, 'America/New_York'); return p.year * 10000 + p.month * 100 + p.day; };
+    const days = new Map();
+    for (const c of market.candles) {
+      const key = tradingDayOf(c.time);
+      const d = days.get(key) ?? { open: c.open, high: -Infinity, low: Infinity };
+      d.high = Math.max(d.high, c.high);
+      d.low = Math.min(d.low, c.low);
+      days.set(key, d);
+    }
+    const keys = [...days.keys()].sort((a, b) => a - b);
+    const today = keys.indexOf(tradingDayOf(day(11)));
+    const adr = keys.slice(today - 5, today).reduce((sum, key) => sum + days.get(key).high - days.get(key).low, 0) / 5;
+    const open = days.get(keys[today]).open;
+    const [bandLow, bandHigh] = [open - adr * multiplier, open + adr * multiplier];
+
+    const unfiltered = forecastLines(forecastRun({ forecastWithinAdrEnabled: false })).map(ln => keyOf(ln.x1, ln.y1) + '|' + ln.y1);
+    const filtered = forecastLines(forecastRun({ forecastAdrMultiplier: multiplier })).map(ln => keyOf(ln.x1, ln.y1));
+    const inside = unfiltered.filter(entry => { const level = Number(entry.split('|')[1]); return level >= bandLow && level <= bandHigh; }).map(entry => entry.split('|')[0]);
+    assert.ok(inside.length > 0 && inside.length < unfiltered.length, 'the band keeps some levels and drops others');
+    assert.deepEqual(filtered.sort(), inside.sort());
+  });
+
+  test('turning Forecast on leaves every other drawing exactly as it was', () => {
+    const shape = (result, exclude) => ['box', 'line', 'label'].flatMap(kind => result.live(kind).filter(object => !exclude.has(object)).map(object => `${kind} ${JSON.stringify([object.x1 ?? object.left ?? object.x, object.y1 ?? object.top ?? object.y, object.x2 ?? object.right, object.y2 ?? object.bottom, object.text, object.color, object.style])}`)).sort();
+    const off = forecastRun({ retracementForecastEnabled: false });
+    const on = forecastRun({ forecastWithinAdrEnabled: false });
+    const forecastObjects = new Set([...on.global('retracementForecastLines'), ...on.global('retracementForecastLabels')]);
+    assert.deepEqual(shape(on, forecastObjects), shape(off, new Set()));
+  });
+
+  test('Forecast stays inside the 500-drawing limits with every session in Both mode and 20 Focus sessions', () => {
+    const both = Object.fromEntries(['2130_0129', '1800_2100', '0600_0900', '0500_0915', '0930_1000'].flatMap(key => [[`opening_${key}`, 'Both'], [`opening_${key}_showLabels`, 'Both']]));
+    const result = forecastRun({ ...both, quickFilter: 'All', forecastWithinAdrEnabled: false });
+    for (const kind of ['box', 'line', 'label']) {
+      const removed = result.all(kind).filter(object => object.garbageCollected);
+      assert.equal(removed.length, 0, `${removed.length} ${kind}s were dropped by the ${kind} limit`);
+    }
+  });
+
+  test('Bar Replay draws the same forecasts as a live chart, and a Range chart forecasts its own unreached levels', () => {
+    const live = forecastLines(forecastRun({ forecastWithinAdrEnabled: false })).map(ln => keyOf(ln.x1, ln.y1)).sort();
+    const replay = forecastLines(deviations({ at: day(11), chart: '15', from: forecastFrom, mode: 'replay', inputs: { focusDirection: '↕ Around', focusSessionCount: 20, retracementForecastEnabled: true, forecastWithinAdrEnabled: false } })).map(ln => keyOf(ln.x1, ln.y1)).sort();
+    assert.deepEqual(replay, live);
+    const range = deviations({ at: day(11), chart: 'R180', hoursOfChart: 24 * 3, inputs: { retracementForecastEnabled: true, forecastWithinAdrEnabled: false } });
+    const drawn = forecastLines(range);
+    assert.ok(drawn.length > 0, 'Range chart draws forecasts');
+    const owners = [...sessionsOf(range, 'Asia Open'), ...sessionsOf(range, 'Rafael')];
+    for (const ln of drawn) {
+      const owner = owners.find(sess => sess.actualEndTime === ln.x1 && (close(sess.midLevel, ln.y1) || close(sess.retraceLevel618, ln.y1)));
+      assert.ok(owner, `forecast ${keyOf(ln.x1, ln.y1)} belongs to a session`);
+      assert.equal(close(owner.midLevel, ln.y1) ? owner.midMitigated : owner.retrace618Mitigated, false, 'only unreached levels');
+    }
+  });
+
+  test('Unmitigated mode draws no forecast', () => {
+    assert.equal(forecastLines(forecastRun({ mitigationMode: 'Unmitigated', forecastWithinAdrEnabled: false })).length, 0);
+  });
+});
