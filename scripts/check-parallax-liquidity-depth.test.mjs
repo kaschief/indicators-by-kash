@@ -617,7 +617,44 @@ test('Bar Replay keeps HTF opens and Hide Completed on the replay candle', () =>
     assert.match(source, new RegExp(`${prefix}PeriodChange != 0\\n        ${prefix}PeriodOpen := open`));
     assert.match(source, new RegExp(`resolve_slot_timing\\(${prefix}Safe, ${prefix}RequestedTime, ${prefix}RequestedOpen, ${prefix}PeriodOpen, `));
   }
-  assert.match(source, /^int profileVisibilityTime = barstate\.isrealtime \? math\.max\(time, na\(time_close\) \? timenow : math\.min\(timenow, time_close\)\) : nz\(time_close, time\)$/m);
+  assert.match(source, /^bool formingCandle = barstate\.isrealtime or \(barstate\.islast and na\(time_close\)\)$/m);
+  assert.match(source, /^int profileVisibilityTime = formingCandle \? math\.max\(time, na\(time_close\) \? timenow : math\.min\(timenow, time_close\)\) : nz\(time_close, time\)$/m);
+});
+
+const visibilityClock = ({ isRealtime, isLast, time, timeClose, timenow }) => {
+  const formingCandle = isRealtime || (isLast && timeClose == null);
+  if (!formingCandle) return timeClose ?? time;
+  return Math.max(time, timeClose == null ? timenow : Math.min(timenow, timeClose));
+};
+const minutes = (hour, minute) => (hour * 60 + minute) * 60000;
+const nyeEnd = minutes(9, 0);
+const hidesCompleted = referenceTime => referenceTime >= nyeEnd;
+const projectsLiveEdge = (isRange, referenceTime, futureBarTimes = []) =>
+  isRange && nyeEnd > referenceTime && !futureBarTimes.some(futureTime => futureTime >= nyeEnd);
+
+test('a forming Range candle that opened before a session end follows the live clock', () => {
+  const forming = { isLast: true, time: minutes(8, 55), timeClose: null, timenow: minutes(9, 1) };
+  for (const isRealtime of [true, false]) {
+    const clock = visibilityClock({ ...forming, isRealtime });
+    assert.equal(hidesCompleted(clock), true, `NYE is completed at 09:01 (realtime=${isRealtime})`);
+    assert.equal(projectsLiveEdge(true, clock), false, 'a completed NYE ends at 09:00 instead of being projected');
+  }
+  const beforeEnd = visibilityClock({ ...forming, isRealtime: true, timenow: minutes(8, 58) });
+  assert.equal(hidesCompleted(beforeEnd), false);
+  assert.equal(projectsLiveEdge(true, beforeEnd), true, 'NYE is still live at 08:58 and projects past price');
+  assert.equal(projectsLiveEdge(true, beforeEnd, [minutes(8, 59), minutes(9, 0)]), false,
+    'an end TradingView can already place within the cap keeps its exact time');
+});
+
+test('time charts and Bar Replay keep their previous session-end clock', () => {
+  const closedBar = { isRealtime: false, isLast: true, time: minutes(8, 59), timeClose: minutes(9, 0), timenow: minutes(15, 0) };
+  assert.equal(visibilityClock(closedBar), minutes(9, 0), 'a closed last bar uses its close time');
+  const replayCandle = { isRealtime: true, isLast: true, time: minutes(8, 50), timeClose: minutes(8, 55), timenow: minutes(15, 0) };
+  assert.equal(visibilityClock(replayCandle), minutes(8, 55), 'Replay clamps the wall clock to the candle close');
+  assert.equal(hidesCompleted(visibilityClock(replayCandle)), false);
+  const historicalBar = { isRealtime: false, isLast: false, time: minutes(8, 50), timeClose: null, timenow: minutes(15, 0) };
+  assert.equal(visibilityClock(historicalBar), minutes(8, 50), 'only the last bar reads the clock');
+  assert.equal(projectsLiveEdge(false, minutes(8, 0)), false, 'time charts never project');
 });
 
 test('Range charts cap live profile edges by bar count on a duration log scale', () => {
@@ -631,8 +668,9 @@ test('Range charts cap live profile edges by bar count on a duration log scale',
 
   assert.match(functionBody('range_extension_bars'),
     /math\.max\(1, int\(math\.round\(monthlyBars \* math\.log\(1 \+ durationSeconds \/ RANGE_EXTENSION_UNIT_SECONDS\) \/ monthlyScale\)\)\)/);
-  assert.match(functionBody('range_projected_right_index'),
-    /^chart\.is_range and not na\(rightTime\) and rightTime > time \? bar_index \+ extensionBars : na$/);
+  const projectionBody = functionBody('range_projected_right_index');
+  assert.match(projectionBody, /if chart\.is_range and not na\(rightTime\) and rightTime > referenceTime\n\s+projectedIndex := bar_index \+ extensionBars/);
+  assert.match(projectionBody, /for futureBars = 1 to extensionBars\n\s+int futureTime = time\("", bars_back=-futureBars\)\n\s+if not na\(futureTime\) and futureTime >= rightTime\n\s+projectedIndex := na/);
   assert.match(functionBody('range_forecast_edges'), /^\[bar_index \+ extensionBars, bar_index \+ 2 \* extensionBars\]$/);
 
   const monthSeconds = 2628003;
@@ -656,5 +694,64 @@ test('Range charts cap live profile edges by bar count on a duration log scale',
     assert.match(source, new RegExp(`int ${prefix}ProjectedRightIndex = range_projected_right_index\\(`));
     assert.match(source, new RegExp(`draw_slot_forecast\\([^\\n]+, ${prefix}ExtensionBars,`));
   }
-  assert.doesNotMatch(source, /futureRightEdge/);
+  assert.match(functionBody('resolve_fib_label_edge'), /bool futureRightEdge = timeBasedLines and direction > 0 and anchorTime > referenceTime/);
+  const projectionCalls = source.match(/range_projected_right_index\((?!int )[^\n]*\)/g) ?? [];
+  assert.equal(projectionCalls.length, 5);
+  projectionCalls.forEach(call => assert.match(call, /, profileVisibilityTime\)$/, 'live edges and Hide Completed share one clock'));
+});
+
+test('Forecast mode is one Off / Next / All dropdown with no legacy Show checkbox', () => {
+  assert.match(source, /^forecastMode = input\.string\(FORECAST_MODE_OFF, "", options=\[FORECAST_MODE_OFF, FORECAST_MODE_NEXT, FORECAST_MODE_ALL\], inline="forecast_slots", group=GROUP_FORECAST\)$/m);
+  assert.doesNotMatch(source, /showNextRangeForecast/);
+  assert.match(functionBody('scheduled_profile_forecast_visible'), /^\s*forecastActive and config\.forecastEnabled/m);
+  assert.match(functionBody('full_period_forecast_visible'), /^forecastActive and config\.forecastEnabled/);
+  assert.match(functionBody('next_forecast_visible'), /^forecastActive and slotEnabled and valid$/);
+});
+
+test('Next mode narrows session forecasts before drawing budgets and Forecast LD read them', () => {
+  const selectorBody = functionBody('soonest_scheduled_forecast_start');
+  assert.match(selectorBody, /if profile\.config\.forecastEnabled and profile\.runtimeState\.valid/);
+  assert.match(selectorBody, /math\.min\(soonestStart, candidateStart\)/);
+  const nextGate = source.indexOf('if forecastNextOnly\n');
+  assert.ok(nextGate > source.indexOf('array<ScheduledProfile> scheduledProfiles = array.from('));
+  assert.ok(nextGate < source.indexOf('forecastZoneCount += profileRuntime.forecastVisible'));
+  assert.match(source, /profileRuntime\.forecastVisible := profileRuntime\.forecastVisible and profileRuntime\.forecastStartTime == soonestForecastStart/);
+  assert.doesNotMatch(source, /^bool (?:s1|s2|weeklyProfile|monthlyProfile)ForecastVisible = [^\n]*forecastNextOnly/m);
+});
+
+test('Next mode walks one weekday session by session with every forecast ticked and Daily in Globex', () => {
+  const hour = 60;
+  const profiles = [
+    { name: 'Daily', start: 18 * hour, lead: 24 * hour, fullPeriod: true },
+    { name: 'Overnight', start: 0, lead: 7 * hour },
+    { name: 'NY Early', start: 6 * hour, lead: 3 * hour },
+    { name: 'NY AM', start: 8 * hour, lead: 4 * hour },
+    { name: 'NY PM', start: 12 * hour, lead: 4 * hour },
+    { name: 'IVB', start: 9 * hour, lead: hour },
+    { name: 'IVB+', start: 9 * hour, lead: 90 },
+  ];
+  const nextStart = (now, start) => (now < start ? start : start + 24 * hour);
+  const allModeVisible = (profile, now, forecastStart) =>
+    profile.fullPeriod || (now >= forecastStart - profile.lead && now < forecastStart);
+  const nextModeVisible = now => {
+    const starts = profiles.map(profile => nextStart(now, profile.start));
+    const soonestStart = Math.min(...starts);
+    return profiles
+      .filter((profile, index) => allModeVisible(profile, now, starts[index]) && starts[index] === soonestStart)
+      .map(profile => profile.name);
+  };
+  const expected = [
+    [12, 18, ['Daily']],
+    [18, 24, ['Overnight']],
+    [0, 3, []],
+    [3, 6, ['NY Early']],
+    [6, 8, ['NY AM']],
+    [8, 9, ['IVB', 'IVB+']],
+    [9, 12, ['NY PM']],
+  ];
+  for (const [fromHour, toHour, names] of expected) {
+    for (let now = fromHour * hour; now < toHour * hour; now += 15) {
+      assert.deepEqual(nextModeVisible(now), names, `${Math.floor(now / hour)}:${String(now % hour).padStart(2, '0')}`);
+    }
+  }
 });
