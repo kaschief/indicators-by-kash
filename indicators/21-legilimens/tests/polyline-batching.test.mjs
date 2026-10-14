@@ -80,7 +80,7 @@ function compile(name, returnsValue = true, inputSource = source) {
   while (blocks.length) { output.push('}'); blocks.pop(); }
   vm.runInContext(`function ${name}(${parameters}) {\n${output.join('\n')}\n}`, context, { filename: `${name}.pine-adapter.js` });
 }
-for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaRowMask', 'highestDeltaMarkerGlyph', 'formationTimeSuffix', 'priceFormationTime', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
+for (const name of ['prepareProfileAnalysisCache', 'profileAnalysis', 'profileOutlierPeaks', 'profileLowVolumeCandidates', 'retainCompletedAnalyses', 'highestDeltaRow', 'highestDeltaRowMask', 'highestDeltaMarkerGlyph', 'highestDeltaCapsLabel', 'formationTimeSuffix', 'priceFormationTime', 'rankPendingOutlierLevels', 'deltaTierLineStyle', 'developingControlled', 'developingProfileVisible', 'visibleDeltaTierSideCount', 'maximumCoreObjectCostsPerProfile', 'profileCapacityForObjectLimit', 'maximumProfileCapacity', 'chartTimeAtOffset', 'profileBaselineTime', 'profileOuterTime', 'deltaOuterTime', 'rowPassesDeltaFilter', 'appendDeltaRowPoints', 'deltaLayerIndex', 'histogramRegionRows', 'profilePolylineLayout', 'profilePolylineRegions', 'newProfilePolylineBatch', 'profilePolylineColor', 'canDrawPolyline', 'flushProfilePolylineLayer', 'flushProfilePolylineBatch', 'profilePolylineBounds', 'profilePolylineBatchCompatible', 'appendProfilePolylineRegion', 'processProfilePolylineBatch', 'profilePolylineCost']) compile(name);
 
 for (const [, name, value] of source.matchAll(/^const (?:int|float|string) (FIB_LOCATION_\w+|LEVEL_MARKER_GLYPH|LOW_VOLUME_LEVEL_RANK|LOW_VOLUME_LINE_WIDTH) = (.+)$/gm)) {
   context[name] = vm.runInContext(value, context);
@@ -926,7 +926,7 @@ test('every Delta and LVN tier keeps its profile label and developing suffix', (
 });
 
 test('disabling Extended preserves NY Early and IVB in the combined mode', () => {
-  for (const [, name, value] of host.matchAll(/^const string (PROFILE_EMOJI_\w+|LABEL_\w+) = (.+)$/gm)) context[name] = vm.runInContext(value, context);
+  for (const [, name, value] of host.matchAll(/^const string (PROFILE_EMOJI_\w+) = (.+)$/gm)) context[name] = vm.runInContext(value, context);
   for (const key of ['MODE_NY_EARLY', 'MODE_NY_EARLY_IVB', 'MODE_IVB']) {
     context[key] = vm.runInContext(host.match(new RegExp(`^${key} = (.+)$`, 'm'))[1], context);
   }
@@ -1325,7 +1325,20 @@ test('LVN formation time uses the dominant print at the structure price and is o
 });
 
 test('highest Delta rows: Border width, Caps label and Highest Only histogram rows', () => {
-  assert.match(source, /string markerLabel = ranked.containsHighestDeltaRow and config.delta.highestDeltaCaps \? str.upper\(baseMarkerLabel\) : baseMarkerLabel/);
+  assert.match(source, /string markerLabel = ranked.containsHighestDeltaRow and config.delta.highestDeltaCaps \? highestDeltaCapsLabel\(baseMarkerLabel, source\) : baseMarkerLabel/);
+  const originalStr = context.str;
+  context.str = { ...originalStr, upper: value => value.toUpperCase(), replace: (value, target, replacement) => value.replace(target, replacement) };
+  try {
+    const ivb = { labelName: 'IVB', highestDeltaCapsMark: '°' };
+    assert.equal(context.highestDeltaCapsLabel('IVB @09:42 · 1.4×', ivb), 'IVB° @09:42 · 1.4×', 'the mark follows the name, ahead of time and ratio');
+    assert.equal(context.highestDeltaCapsLabel('IVB ⁺ (dev)', ivb), 'IVB° ⁺ (DEV)');
+    assert.equal(context.highestDeltaCapsLabel('Globex', { labelName: 'Globex', highestDeltaCapsMark: '' }), 'GLOBEX', 'other profiles only uppercase');
+  } finally {
+    context.str = originalStr;
+  }
+  assert.match(host, /^const string IVB_HIGHEST_DELTA_CAPS_MARK = "°"$/m);
+  assert.match(host, /SourceSpec\.new\(SOURCE_IVB, SOURCE_IVB, SOURCE_IVB, [^\n]+, highestDeltaCapsMark=IVB_HIGHEST_DELTA_CAPS_MARK\)/);
+  assert.equal((host.match(/highestDeltaCapsMark=/g) || []).length, 1, 'only IVB carries a Caps mark');
   assert.match(source, /int zoneBorderWidth = ranked.containsHighestDeltaRow \? config.delta.highestDeltaBorderWidth : fibLocationBorderWidth\(/);
   assert.match(source, /renderZoneFill\(state, profile.endTime, levelEndTime, zoneLow, zoneHigh, clearFill, config.delta.highestDeltaBorderWidth, outlineColor, config\)/);
   assert.match(source, /if pending.markerGlyph != ""\n\s+queueLevelMarker/, 'extended hollow outlines draw no marker');
