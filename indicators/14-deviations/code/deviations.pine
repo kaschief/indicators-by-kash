@@ -271,9 +271,10 @@ TOOLTIP_FADE_DURATION = "Delay for mitigation and individual Rafael/Asia Open re
 
 TOOLTIP_RETRACEMENT_FORECAST = "Forecast\nDraws each unreached Rafael and Asia Open 0.5 and 0.618 ahead, once the first extreme is taken.\n\nOnly Within ADR\nHides levels outside today's Globex open ± 5-day ADR × multiplier, matching the adr indicator's Globex Open."
 
-TOOLTIP_FOCUS = "Surfaces distant untouched Rafael and Asia Open levels on top of the recent sessions, nearest first."
-TOOLTIP_FOCUS_COUNT = "Per session type."
-TOOLTIP_FOCUS_ANCHOR = "Manual ranks from the Price level."
+TOOLTIP_FOCUS = "Mode selects Price, Date, or Price + Date for Rafael and Asia Open. Sessions caps Focus selections per session type, subject to loaded history and drawing capacity.\n\nFocus Sessions Only hides the normal current and prior Rafael and Asia Open sessions, freeing capacity for Focus selections. Date modes can then select recent completed sessions. Off keeps normal sessions visible with drawing priority."
+TOOLTIP_FOCUS_PRICE = "Direction: Above / Around / Below the anchor. Untouched levels rank first, then nearest.\n\nCurrent Price follows the latest close. Manual uses the adjacent level. These controls apply to Price and Price + Date."
+TOOLTIP_FOCUS_START_DATE = "Start date: Year / Month / Day.\n\nBetween includes both selected trading dates. Sessions qualify when they overlap this window."
+TOOLTIP_FOCUS_END_DATE = "End date: Year / Month / Day.\n\nOn or Before uses the completed session covering midday on End Date, or the latest before it. Between includes the full Start and End trading dates: 18:00 New York on the preceding day through 18:00 on End Date. Invalid dates or Start after End disable Focus. Dates must be present in loaded chart history."
 
 NY_EARLY_START_MIN = 360
 NY_EARLY_END_MIN = 540
@@ -348,7 +349,13 @@ TOOLTIP_PRICE_MODE = "Show numeric prices for Rafael, Asia Open and IVB projecti
 TOOLTIP_CUSTOM_PRICES = "Used when Prices is Custom. Choose which categories show numeric prices."
 TOOLTIP_LABEL_MASTER = "Temporarily show active prices and use Small labels without changing saved settings."
 
-FOCUS_DIRECTION_OFF = "Off"
+FOCUS_MODE_OFF = "Off"
+FOCUS_MODE_PRICE = "Price"
+FOCUS_MODE_DATE = "Date"
+FOCUS_MODE_PRICE_AND_DATE = "Price + Date"
+FOCUS_DATES_ON_OR_BEFORE = "On or Before"
+FOCUS_DATES_BETWEEN = "Between"
+FOCUS_TRADING_DAY_START_HOUR = 18
 FOCUS_DIRECTION_BELOW = "↓ Below"
 FOCUS_DIRECTION_ABOVE = "↑ Above"
 FOCUS_DIRECTION_AROUND = "↕ Around"
@@ -401,15 +408,44 @@ ivbProjectionShowPrice = input.bool(false, "IVB Projections", inline="quick_pric
 // INPUTS - Quick Filter: Asia and Rafael Focus
 // ═══════════════════════════════════════════════════════════════════════════
 
-focusDirection = input.string(FOCUS_DIRECTION_OFF, "Asia + Rafael Focus", options=[FOCUS_DIRECTION_OFF, FOCUS_DIRECTION_ABOVE, FOCUS_DIRECTION_AROUND, FOCUS_DIRECTION_BELOW], inline="focus_mode", group=GROUP_FOCUS, tooltip=TOOLTIP_FOCUS)
-focusActive = focusDirection != FOCUS_DIRECTION_OFF
-focusSessionCount = input.int(3, "Sessions", options=[1, 2, 3, 4, 5, 10, 15, 20], inline="focus_mode", group=GROUP_FOCUS, active=focusActive, tooltip=TOOLTIP_FOCUS_COUNT)
-focusAnchorMode = input.string(FOCUS_ANCHOR_PRICE, "Anchor", options=[FOCUS_ANCHOR_PRICE, FOCUS_ANCHOR_MANUAL], inline="focus_anchor", group=GROUP_FOCUS, active=focusActive, tooltip=TOOLTIP_FOCUS_ANCHOR)
-focusManualAnchorSelected = focusActive and focusAnchorMode == FOCUS_ANCHOR_MANUAL
-focusManualPrice = input.price(0.0, "Price", inline="focus_anchor", group=GROUP_FOCUS, active=focusManualAnchorSelected)
-focusAnchorColor = input.color(color.new(color.rgb(242, 54, 69), 0), LABEL_FOCUS_ANCHOR_COLOR, inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorSelected)
-focusAnchorWidth = input.int(2, "", options=[1, 2, 3, 4, 5], inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorSelected)
-focusAnchorLabelOffset = input.int(300, "Offset", minval=0, maxval=500, inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorSelected, tooltip="Shift the Manual anchor label this many bars into the right margin.")
+validFocusDate(int yearValue, int monthValue, int dayValue) =>
+    bool leapYear = yearValue % 4 == 0 and (yearValue % 100 != 0 or yearValue % 400 == 0)
+    bool thirtyDayMonth = monthValue == 4 or monthValue == 6 or monthValue == 9 or monthValue == 11
+    int maximumDay = monthValue == 2 ? (leapYear ? 29 : 28) : thirtyDayMonth ? 30 : 31
+    monthValue >= 1 and monthValue <= 12 and dayValue >= 1 and dayValue <= maximumDay
+
+focusTradingDayStart(int yearValue, int monthValue, int dayValue) =>
+    timestamp(NY_TIMEZONE, yearValue, monthValue, dayValue - 1, FOCUS_TRADING_DAY_START_HOUR, 0)
+
+focusMode = input.string(FOCUS_MODE_OFF, "Asia + Rafael Focus", options=[FOCUS_MODE_OFF, FOCUS_MODE_PRICE, FOCUS_MODE_DATE, FOCUS_MODE_PRICE_AND_DATE], inline="focus_mode", group=GROUP_FOCUS)
+focusSelected = focusMode != FOCUS_MODE_OFF
+focusPriceSelected = focusMode == FOCUS_MODE_PRICE or focusMode == FOCUS_MODE_PRICE_AND_DATE
+focusDateSelected = focusMode == FOCUS_MODE_DATE or focusMode == FOCUS_MODE_PRICE_AND_DATE
+focusSessionCount = input.int(3, "Sessions", options=[1, 2, 3, 4, 5, 10, 15, 20], inline="focus_mode", group=GROUP_FOCUS, active=focusSelected)
+focusSessionsOnly = input.bool(false, "Focus Sessions Only", inline="focus_mode", group=GROUP_FOCUS, active=focusSelected, tooltip=TOOLTIP_FOCUS)
+focusDirection = input.string(FOCUS_DIRECTION_AROUND, "Price", options=[FOCUS_DIRECTION_ABOVE, FOCUS_DIRECTION_AROUND, FOCUS_DIRECTION_BELOW], inline="focus_price", group=GROUP_FOCUS, active=focusPriceSelected)
+focusAnchorMode = input.string(FOCUS_ANCHOR_PRICE, "", options=[FOCUS_ANCHOR_PRICE, FOCUS_ANCHOR_MANUAL], inline="focus_price", group=GROUP_FOCUS, active=focusPriceSelected)
+focusManualAnchorChosen = focusPriceSelected and focusAnchorMode == FOCUS_ANCHOR_MANUAL
+focusManualPrice = input.price(0.0, "", inline="focus_price", group=GROUP_FOCUS, active=focusManualAnchorChosen, tooltip=TOOLTIP_FOCUS_PRICE)
+focusDateFilter = input.string(FOCUS_DATES_ON_OR_BEFORE, "Dates", options=[FOCUS_DATES_ON_OR_BEFORE, FOCUS_DATES_BETWEEN], inline="focus_date_filter", group=GROUP_FOCUS, active=focusDateSelected)
+focusBetweenSelected = focusDateSelected and focusDateFilter == FOCUS_DATES_BETWEEN
+focusStartYear = input.int(2026, "Start", options=[2021, 2022, 2023, 2024, 2025, 2026], inline="focus_start_date", group=GROUP_FOCUS, active=focusBetweenSelected)
+focusStartMonth = input.int(9, "", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], inline="focus_start_date", group=GROUP_FOCUS, active=focusBetweenSelected)
+focusStartDay = input.int(1, "", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], inline="focus_start_date", group=GROUP_FOCUS, active=focusBetweenSelected, tooltip=TOOLTIP_FOCUS_START_DATE)
+focusEndYear = input.int(2026, "End", options=[2021, 2022, 2023, 2024, 2025, 2026], inline="focus_end_date", group=GROUP_FOCUS, active=focusDateSelected)
+focusEndMonth = input.int(9, "", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], inline="focus_end_date", group=GROUP_FOCUS, active=focusDateSelected)
+focusEndDay = input.int(23, "", options=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], inline="focus_end_date", group=GROUP_FOCUS, active=focusDateSelected, tooltip=TOOLTIP_FOCUS_END_DATE)
+focusDatesOrdered = focusStartYear * 10000 + focusStartMonth * 100 + focusStartDay <= focusEndYear * 10000 + focusEndMonth * 100 + focusEndDay
+focusDateInputsValid = not focusDateSelected or (validFocusDate(focusEndYear, focusEndMonth, focusEndDay) and (not focusBetweenSelected or (validFocusDate(focusStartYear, focusStartMonth, focusStartDay) and focusDatesOrdered)))
+focusActive = focusSelected and focusDateInputsValid
+focusUsesPrice = focusActive and focusPriceSelected
+focusUsesDate = focusActive and focusDateSelected
+focusDateEnd = focusUsesDate ? (focusBetweenSelected ? focusTradingDayStart(focusEndYear, focusEndMonth, focusEndDay + 1) - 1 : timestamp(NY_TIMEZONE, focusEndYear, focusEndMonth, focusEndDay, 12, 0)) : na
+focusDateStart = focusUsesDate and focusBetweenSelected ? focusTradingDayStart(focusStartYear, focusStartMonth, focusStartDay) : na
+focusManualAnchorSelected = focusActive and focusManualAnchorChosen
+focusAnchorColor = input.color(color.new(color.rgb(242, 54, 69), 0), LABEL_FOCUS_ANCHOR_COLOR, inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorChosen)
+focusAnchorWidth = input.int(2, "", options=[1, 2, 3, 4, 5], inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorChosen)
+focusAnchorLabelOffset = input.int(300, "Offset", minval=0, maxval=500, inline="focus_anchor_style", group=GROUP_FOCUS, active=focusManualAnchorChosen, tooltip="Shift the Manual anchor label this many bars into the right margin.")
 
 // An unplaced manual anchor falls back to price so Focus still ranks.
 focusManualPricePlaced = not na(focusManualPrice) and focusManualPrice > 0
@@ -422,7 +458,7 @@ focusAnchorPrice = focusAnchorMode == FOCUS_ANCHOR_MANUAL and focusManualPricePl
 mitigationMode = input.string(SESSION_MITIGATED, "Mode", options=[SESSION_MITIGATED, SESSION_UNMITIGATED], group=GROUP_MITIGATION, tooltip="Mitigated: Show completed levels; Rafael and Asia Open also keep their untouched boundaries visible\nUnmitigated: Show persistent lines for untouched levels")
 enableProvisionalRetracements = input.bool(true, "Enable Provisional Retracements", group=GROUP_MITIGATION, tooltip="Track Rafael and Asia Open 0.5 / 0.618 returns from the first provisional overnight mitigation.")
 confirmedMitigationReplacementTrigger = input.string(REPLACEMENT_TRIGGER_618, "Confirmed mitigation replacement trigger", options=[REPLACEMENT_TRIGGER_618, REPLACEMENT_TRIGGER_50], group=GROUP_MITIGATION, active=enableProvisionalRetracements, tooltip="After confirmation, 0.618 replaces on the first inward 0.618 crossing. 0.5 waits for the midpoint.")
-retracementForecastEnabled = input.bool(false, "Forecast 0.5 / 0.618", inline="retracement_forecast", group=GROUP_MITIGATION, active=mitigationMode == SESSION_MITIGATED)
+retracementForecastEnabled = input.bool(true, "Forecast 0.5 / 0.618", inline="retracement_forecast", group=GROUP_MITIGATION, active=mitigationMode == SESSION_MITIGATED)
 retracementForecastActive = retracementForecastEnabled and mitigationMode == SESSION_MITIGATED
 forecastWithinAdrEnabled = input.bool(true, "Only Within ADR", inline="retracement_forecast", group=GROUP_MITIGATION, active=retracementForecastActive)
 forecastAdrMultiplier = input.float(1.0, "×", minval=0.5, maxval=3.0, step=0.1, inline="retracement_forecast", group=GROUP_MITIGATION, active=retracementForecastActive and forecastWithinAdrEnabled, tooltip=TOOLTIP_RETRACEMENT_FORECAST)
@@ -796,6 +832,9 @@ alwaysTrackMitigation(int idx) =>
 
 focusManaged(int idx) =>
     focusActive and alwaysTrackMitigation(idx)
+
+hidesDevelopingSession(int idx) =>
+    focusSessionsOnly and focusManaged(idx)
 
 focusSessionIsRendered(SessionData sess) =>
     bool rendered = false
@@ -1508,7 +1547,10 @@ nearerFocusDistance(float current, float levelPrice, float anchorPrice) =>
     float candidate = not na(levelPrice) and focusDirectionMatches(levelPrice, anchorPrice) ? math.abs(anchorPrice - levelPrice) : na
     na(candidate) ? current : na(current) ? candidate : math.min(current, candidate)
 
-focusSessionRank(SessionData sess, float anchorPrice) =>
+focusDateAllowsSession(SessionData sess) =>
+    not focusUsesDate or (sess.startTime <= focusDateEnd and (na(focusDateStart) or sess.endTime > focusDateStart))
+
+focusPriceRank(SessionData sess, float anchorPrice) =>
     float nearestUntouched = na
     if not sess.highMitigated
         nearestUntouched := nearerFocusDistance(nearestUntouched, sess.dominantHigh, anchorPrice)
@@ -1520,6 +1562,15 @@ focusSessionRank(SessionData sess, float anchorPrice) =>
         nearest := nearerFocusDistance(nearest, sess.dominantHigh, anchorPrice)
         nearest := nearerFocusDistance(nearest, sess.dominantLow, anchorPrice)
     [nearest, hasUntouchedLevel]
+
+focusSessionRank(SessionData sess, float anchorPrice) =>
+    float distance = float(focusDateEnd - sess.startTime)
+    bool hasUntouchedLevel = true
+    if focusUsesPrice
+        [priceDistance, priceHasUntouchedLevel] = focusPriceRank(sess, anchorPrice)
+        distance := priceDistance
+        hasUntouchedLevel := priceHasUntouchedLevel
+    [distance, hasUntouchedLevel]
 
 focusCandidateOutranks(FocusCandidate candidate, FocusCandidate other) =>
     candidate.hasUntouchedLevel != other.hasUntouchedLevel ? candidate.hasUntouchedLevel : candidate.distance != other.distance ? candidate.distance < other.distance : candidate.endTime > other.endTime
@@ -1543,12 +1594,12 @@ retainFocusCandidate(array<FocusCandidate> ranked, FocusCandidate candidate, int
         if array.size(ranked) > focusCount
             array.pop(ranked)
 
-collectFocusCandidates(array<SessionData> source, array<FocusCandidate> combined, array<FocusCandidate> rankedByType, int sessionIndex, float anchorPrice, int focusCount) =>
+collectFocusCandidates(array<SessionData> source, array<FocusCandidate> combined, array<FocusCandidate> rankedByType, map<int, bool> recentKeys, int sessionIndex, float anchorPrice, int focusCount) =>
     array.clear(rankedByType)
     if array.size(source) > 0
         for sourceIndex = 0 to array.size(source) - 1
             SessionData sess = array.get(source, sourceIndex)
-            if sess.sessionIndex == sessionIndex
+            if sess.sessionIndex == sessionIndex and not (focusUsesDate and map.contains(recentKeys, sess.startTime)) and focusDateAllowsSession(sess)
                 [distance, hasUntouchedLevel] = focusSessionRank(sess, anchorPrice)
                 if not na(distance)
                     retainFocusCandidate(rankedByType, FocusCandidate.new(hasUntouchedLevel, distance, sourceIndex, sess.endTime), focusCount)
@@ -2228,7 +2279,7 @@ if validChartContext and array.size(activeSessions) > 0
             if liveGeometryChanged
                 // Calculate projected end time based on session's end minute
                 projectedEndTime = crossesMidnight and barMinutes >= sessCfg.startMin ? currentDayStart + 24 * 60 * 60 * 1000 + sessCfg.endMin * 60 * 1000 : currentDayStart + sessCfg.endMin * 60 * 1000
-                if sess.deviationMode == OPT_HIDDEN
+                if sess.deviationMode == OPT_HIDDEN or hidesDevelopingSession(idx)
                     sess.endTime := projectedEndTime
                     sess.endBar := bar_index
                 else if na(sess.endBar)
@@ -2926,14 +2977,15 @@ if validChartContext and focusActive and barstate.islast and array.size(sessions
             [potentialLifecycleLineCount, potentialLifecycleLabelCount] = sessionPotentialLifecycleDrawingCounts(lifecycleSess)
             nonFocusGrowthLineCount += math.max(0, potentialLifecycleLineCount - currentLifecycleLineCount)
             nonFocusGrowthLabelCount += math.max(0, potentialLifecycleLabelCount - currentLifecycleLabelCount)
-    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_0129, focusAnchorPrice, focusSessionCount)
-    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, IDX_ASIA_OPEN, focusAnchorPrice, focusSessionCount)
     // The recent view comes first so it can never lose its slots to a better-ranked distant level.
-    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_0129, completedSessionSlots(activeSessions, IDX_0129, maxSessions))
-    collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_ASIA_OPEN, completedSessionSlots(activeSessions, IDX_ASIA_OPEN, maxSessions))
+    if not focusSessionsOnly
+        collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_0129, completedSessionSlots(activeSessions, IDX_0129, maxSessions))
+        collectRecentFocusSessions(sessions, selectedFocusIndices, IDX_ASIA_OPEN, completedSessionSlots(activeSessions, IDX_ASIA_OPEN, maxSessions))
     for selectedIndex in selectedFocusIndices
         SessionData recentSess = array.get(sessions, selectedIndex)
         map.put(selectedFocusSessionKeys, recentSess.startTime, true)
+    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, selectedFocusSessionKeys, IDX_0129, focusAnchorPrice, focusSessionCount)
+    collectFocusCandidates(sessions, focusCandidatesCache, focusRankedCache, selectedFocusSessionKeys, IDX_ASIA_OPEN, focusAnchorPrice, focusSessionCount)
     for candidate in focusCandidatesCache
         SessionData candidateSess = array.get(sessions, candidate.sourceIndex)
         int candidateKey = candidateSess.startTime

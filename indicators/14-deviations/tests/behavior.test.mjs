@@ -404,7 +404,7 @@ describe('Deviations Asia + Rafael Focus', () => {
   const focusFrom = day(18, 0, 27, 9);
 
   test('↕ Around keeps the 3 recent Asia Open and Rafael sessions and adds the 3 nearest with untouched levels', () => {
-    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusDirection: '↕ Around' } });
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Price' } });
     const anchor = result.bars.close[result.lastIndex];
     const lefts = new Set(result.live('box').map(box => box.left));
     const windows = { 'Asia Open': [18 * 60, 21 * 60], Rafael: [21 * 60 + 30, 25 * 60 + 30] };
@@ -429,7 +429,7 @@ describe('Deviations Asia + Rafael Focus', () => {
 
   test('every session in Both mode with labels and 20 Focus sessions stays inside the 500-drawing limits', () => {
     const both = Object.fromEntries(['2130_0129', '1800_2100', '0600_0900', '0500_0915', '0930_1000'].flatMap(key => [[`opening_${key}`, 'Both'], [`opening_${key}_showLabels`, 'Both']]));
-    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { ...both, quickFilter: 'All', focusDirection: '↕ Around', focusSessionCount: 20 } });
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { ...both, quickFilter: 'All', focusMode: 'Price', focusSessionCount: 20 } });
     for (const kind of ['box', 'line', 'label']) {
       const removed = result.all(kind).filter(object => object.garbageCollected);
       assert.equal(removed.length, 0, `${removed.length} ${kind}s were dropped by the ${kind} limit`);
@@ -439,11 +439,90 @@ describe('Deviations Asia + Rafael Focus', () => {
   });
 });
 
+// ── Asia + Rafael Date Focus ─────────────────────────────────────────────────
+
+describe('Deviations Asia + Rafael Date Focus', () => {
+  const focusFrom = day(18, 0, 27, 9);
+  const focusTypes = ['Asia Open', 'Rafael'];
+  const endDate = { focusEndYear: 2026, focusEndMonth: 10, focusEndDay: 1 };
+  const between = { ...endDate, focusDateFilter: 'Between', focusStartYear: 2026, focusStartMonth: 9, focusStartDay: 29 };
+  const drawnStarts = (result, name) => {
+    const lefts = new Set(result.live('box').map(box => box.left));
+    return sessionsOf(result, name).filter(sess => lefts.has(sess.startTime)).map(sess => sess.startTime);
+  };
+  const asNy = starts => [...starts].sort((a, b) => a - b).map(formatNy);
+
+  test('On or Before keeps the 3 recent sessions and adds the 3 latest opening on or before midday on End', () => {
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', ...endDate } });
+    for (const name of focusTypes) {
+      const starts = sessionsOf(result, name).map(sess => sess.startTime);
+      const recent = starts.slice(-3);
+      const focused = starts.filter(start => start <= day(12, 0, 1) && !recent.includes(start)).slice(-3);
+      assert.equal(focused.length, 3, `${name}: enough history before End`);
+      assert.deepEqual(asNy(drawnStarts(result, name)), asNy(new Set([...focused, ...recent])), name);
+    }
+  });
+
+  test('Between keeps every session from 18:00 NY before Start through 18:00 NY on End', () => {
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', focusSessionCount: 10, ...between } });
+    for (const name of focusTypes) {
+      const sessions = sessionsOf(result, name);
+      const recent = sessions.slice(-3).map(sess => sess.startTime);
+      const inWindow = sessions.filter(sess => sess.startTime < day(18, 0, 1) && sess.endTime > day(18, 0, 28, 9)).map(sess => sess.startTime);
+      assert.equal(inWindow.length, 3, `${name}: three trading dates in the window`);
+      assert.deepEqual(asNy(drawnStarts(result, name)), asNy(new Set([...inWindow, ...recent])), name);
+    }
+  });
+
+  test('Price + Date ranks only inside the date window', () => {
+    const priceOnly = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Price', focusSessionsOnly: true, focusSessionCount: 10 } });
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Price + Date', focusSessionsOnly: true, focusSessionCount: 10, ...between } });
+    for (const name of focusTypes) {
+      const drawn = drawnStarts(result, name);
+      assert.ok(drawn.length > 0 && drawn.every(start => start < day(18, 0, 1) && start >= day(18, 0, 28, 9)), `${name}: only window sessions`);
+      assert.ok(drawnStarts(priceOnly, name).some(start => !drawn.includes(start)), `${name}: the window changes the selection`);
+    }
+  });
+
+  test('Focus Sessions Only hides the recent and developing sessions', () => {
+    const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', focusSessionsOnly: true, ...endDate } });
+    for (const name of focusTypes) {
+      const starts = sessionsOf(result, name).map(sess => sess.startTime);
+      assert.deepEqual(asNy(drawnStarts(result, name)), asNy(starts.filter(start => start <= day(12, 0, 1)).slice(-3)), name);
+    }
+    const developing = deviations({ at: day(23, 30, 7), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', focusSessionsOnly: true, ...endDate } });
+    const rafael = sessionStarting(developing, 'Rafael', day(21, 30, 7));
+    assert.equal(coreBoxes(rafael).length + zoneBoxes(rafael).length, 0, 'developing Rafael is hidden');
+    const normal = deviations({ at: day(23, 30, 7), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', ...endDate } });
+    assert.ok(coreBoxes(sessionStarting(normal, 'Rafael', day(21, 30, 7))).length > 0, 'developing Rafael shows without Focus Sessions Only');
+  });
+
+  test('invalid dates or Start after End switch Focus off', () => {
+    const off = deviations({ at: day(11), chart: '15', from: focusFrom });
+    for (const inputs of [{ ...endDate, focusEndMonth: 2, focusEndDay: 30 }, { ...between, focusStartMonth: 10, focusStartDay: 2 }]) {
+      const result = deviations({ at: day(11), chart: '15', from: focusFrom, inputs: { focusMode: 'Date', focusSessionsOnly: true, ...inputs } });
+      for (const name of focusTypes) assert.deepEqual(drawnStarts(result, name), drawnStarts(off, name), name);
+    }
+  });
+
+  test('Bar Replay matches a live chart, and a Range chart selects by the same dates', () => {
+    const inputs = { focusMode: 'Date', focusSessionsOnly: true, ...between };
+    const live = deviations({ at: day(11), chart: '15', from: focusFrom, inputs });
+    const replay = deviations({ at: day(11), chart: '15', from: focusFrom, mode: 'replay', inputs });
+    const range = deviations({ at: day(11), chart: 'R180', from: focusFrom, inputs });
+    for (const name of focusTypes) {
+      assert.deepEqual(drawnStarts(replay, name), drawnStarts(live, name), `${name}: replay`);
+      const rangeDrawn = drawnStarts(range, name);
+      assert.ok(rangeDrawn.length > 0 && rangeDrawn.every(start => start < day(18, 0, 1) && start >= day(18, 0, 28, 9)), `${name}: range window`);
+    }
+  });
+});
+
 // ── Asia + Rafael retracement forecast ───────────────────────────────────────
 
 describe('Deviations Asia + Rafael retracement forecast', () => {
   const forecastFrom = day(18, 0, 27, 9);
-  const forecastRun = (inputs = {}) => deviations({ at: day(11), chart: '15', from: forecastFrom, inputs: { focusDirection: '↕ Around', focusSessionCount: 20, retracementForecastEnabled: true, ...inputs } });
+  const forecastRun = (inputs = {}) => deviations({ at: day(11), chart: '15', from: forecastFrom, inputs: { focusMode: 'Price', focusSessionCount: 20, retracementForecastEnabled: true, ...inputs } });
   const forecastLines = result => result.global('retracementForecastLines').filter(isLive);
   const windows = { 'Asia Open': 3 * HOUR, Rafael: 4 * HOUR };
   const BAR = 15 * MINUTE;
@@ -542,7 +621,7 @@ describe('Deviations Asia + Rafael retracement forecast', () => {
 
   test('Bar Replay draws the same forecasts as a live chart, and a Range chart forecasts its own unreached levels', () => {
     const live = forecastLines(forecastRun({ forecastWithinAdrEnabled: false })).map(ln => keyOf(ln.x1, ln.y1)).sort();
-    const replay = forecastLines(deviations({ at: day(11), chart: '15', from: forecastFrom, mode: 'replay', inputs: { focusDirection: '↕ Around', focusSessionCount: 20, retracementForecastEnabled: true, forecastWithinAdrEnabled: false } })).map(ln => keyOf(ln.x1, ln.y1)).sort();
+    const replay = forecastLines(deviations({ at: day(11), chart: '15', from: forecastFrom, mode: 'replay', inputs: { focusMode: 'Price', focusSessionCount: 20, retracementForecastEnabled: true, forecastWithinAdrEnabled: false } })).map(ln => keyOf(ln.x1, ln.y1)).sort();
     assert.deepEqual(replay, live);
     const range = deviations({ at: day(11), chart: 'R180', hoursOfChart: 24 * 3, inputs: { retracementForecastEnabled: true, forecastWithinAdrEnabled: false } });
     const drawn = forecastLines(range);
