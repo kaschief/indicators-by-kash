@@ -322,6 +322,33 @@ describe('Legilimens in Bar Replay (15m)', () => {
   });
 });
 
+describe('Legilimens Date Focus with Extend Unmitigated (15m Globex)', () => {
+  // History from 20 August so the 14 September profiles are loaded.
+  const focusMarket = cmeMarket({ start: nyTime(2026, 8, 20, 18) });
+  const GLOBEX = profileMode('🌙');
+  const focusRun = inputs => runIndicator(program, {
+    market: focusMarket, chart: { type: 'time', tf: '15' }, from: AT - 30 * 24 * HOUR, until: AT, mode: 'live',
+    inputs: { anchorMode: GLOBEX, extendUnmitigated: true, ...inputs },
+  });
+  const extendedToNow = result => result.live('line').filter(level => level.x2 > AT - HOUR);
+  const levelKey = level => `${formatNy(level.x1)} ${level.y1}`;
+  const focusCutoff = nyTime(2026, 9, 15);
+
+  test('Date Focus adds older profiles without changing which levels extend: every level uses today\'s ADR band', () => {
+    const unfocused = focusRun({ withinAdrMultiplier: 3 });
+    const focused = focusRun({ withinAdrMultiplier: 3, focusMode: unfocused.inputs.get('focusMode').options.find(option => option.name === 'date'), focusYear: 2026, focusMonth: 9, focusDay: 14 });
+    const recent = result => extendedToNow(result).filter(level => level.x1 >= focusCutoff).map(levelKey).sort();
+    assert.ok(recent(unfocused).length > 0, 'current profiles extend');
+    assert.deepEqual(recent(focused), recent(unfocused), 'current profiles extend exactly as with Focus off');
+    const [todayLow, todayHigh] = [focused.global('adrBandLow'), focused.global('adrBandHigh')];
+    assert.ok(todayLow != null && todayHigh != null, 'today\'s band is set');
+    assert.deepEqual([todayLow, todayHigh], [unfocused.global('adrBandLow'), unfocused.global('adrBandHigh')], 'Date Focus does not move the band');
+    const focusedLevels = extendedToNow(focused).filter(level => level.x1 < focusCutoff);
+    assert.ok(focusedLevels.length > 0, 'focused profiles extend');
+    for (const level of extendedToNow(focused)) assert.ok(level.y1 >= todayLow && level.y1 <= todayHigh, `${levelKey(level)} inside today's band`);
+  });
+});
+
 describe('Legilimens drawing budget', () => {
   test('50 prior RTH profiles with every level on keep the newest that fit and nothing is dropped by TradingView limits', () => {
     const result = legilimens({

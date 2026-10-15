@@ -1161,18 +1161,8 @@ test('Delta rows follow tracked zone visibility; weaker tiers and other sources 
   assert.match(source, /trackedZoneEndTime\(state, pending\.sourceName, pending\.profileStartTime, pending\.eligibilityTime, pending\.price, config\.interactions, context\)/);
 });
 
-test('ADR band: day-band union selects today, a focus day, or a Between range', () => {
-  compile('adrBandBounds', true, host);
-  const starts = [100, 200, 300, 400];
-  const lows = [10, null, 30, 40];
-  const highs = [20, null, 35, 60];
-  const bounds = (windowStart, windowEnd) => [...context.adrBandBounds(starts, lows, highs, windowStart, windowEnd)];
-  assert.deepEqual(bounds(450, 450), [40, 60], 'the current bar uses the latest day');
-  assert.deepEqual(bounds(350, 350), [30, 35], 'a focus time uses the day containing it');
-  assert.deepEqual(bounds(150, 350), [10, 35], 'Between unions every overlapping day and skips days without a band');
-  assert.deepEqual(bounds(250, 250), [null, null], 'a day without five completed ranges filters nothing');
-  assert.deepEqual(bounds(50, 50), [null, null], 'times before the first recorded day filter nothing');
-  assert.deepEqual([...context.adrBandBounds([], [], [], 1, 1)], [null, null]);
+test('ADR band: no per-day band history, so the focus date never selects the band', () => {
+  assert.doesNotMatch(host, /adrBandBounds|adrDayStartTimes|ADR_BAND_RETAINED_DAYS/);
 });
 
 test('host wires the ADR band for every extendable profile into the presentation library', () => {
